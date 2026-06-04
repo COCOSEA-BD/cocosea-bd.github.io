@@ -51,7 +51,7 @@ let SVCS=[
   {key:'quarantine',name:'Kiểm dịch'},{key:'co',name:'C/O'},
   {key:'fumi',name:'Fumi'},{key:'stuffing',name:'Đóng hàng tại bãi'},
   {key:'trucking',name:'Trucking'},{key:'ddl',name:'DDL'},
-  {key:'docfee',name:'Phí chứng từ XK'},
+  {key:'docfee',name:'Phí chứng từ xuất khẩu'},
 ];
 const CURRENCIES=['USD','VND','EUR','JPY','CNY','KRW'];
 const TASKS=[
@@ -194,6 +194,11 @@ let cache = { xuat: [], nhap: [], partners: {}, users: [] };
 let listeners = [];
 
 function can(perm){ return ROLES[currentProfile?.role||'viewer'].perms[perm]||false; }
+function isLotLocked(id, tt){
+  if(!id||!tt) return false;
+  const r=(cache[tt]||[]).find(x=>x._id===id);
+  return r&&r.locked===true;
+}
 
 /* ─────────────────────────────────────────────
    TOAST NOTIFICATION
@@ -519,7 +524,7 @@ function renderLotTable(tt){
     const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
     const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
     const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
-    return`<tr class="${isUrgent?'tr-urgent':''}">`+cols.map(c=>{
+    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}">`+cols.map(c=>{
       if(c.k==='bookingNo'){
         const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
         return`<td><button class="plink" style="font-weight:600" onclick="openDetail('${r._id}','${tt}')">${r.bookingNo||'—'}</button>${urgDot}</td>`;
@@ -529,8 +534,9 @@ function renderLotTable(tt){
       if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')">${sn}</button></td>`;}
       return`<td>${r[c.k]||'—'}</td>`;
     }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
-      <button class="rac grn" onclick="openLot('${r._id}','${tt}')" title="Sửa" ${can('editLot')?'':'disabled'}><i class="ti ti-edit"></i></button>
-      <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa" ${can('deleteLot')?'':'disabled'}><i class="ti ti-trash"></i></button>
+      ${r.locked?'<span title="Lô hàng đã khóa" style="padding:4px;color:var(--red)"><i class="ti ti-lock" style="font-size:14px"></i></span>':''}
+      <button class="rac grn" onclick="openLot('${r._id}','${tt}')" title="Sửa" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i></button>
+      <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa" ${can('deleteLot')&&!r.locked?'':'disabled'}><i class="ti ti-trash"></i></button>
     </div></td></tr>`;
   }).join('');
 }
@@ -586,7 +592,11 @@ function renderDetailPanel(r,tt){
       }).join('')}
     </div>
     <div style="margin-top:1rem;display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
+      <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
+      ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')">
+        <i class="ti ${r.locked?'ti-lock-open':'ti-lock'}"></i> ${r.locked?'Mở khóa':'Khóa lô hàng'}
+      </button>`:''}
+      ${r.locked?'<span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:500"><i class="ti ti-lock" style="font-size:14px"></i>Lô hàng đã được khóa — chỉ Admin mới mở được</span>':''}
     </div>`;
   }
 
@@ -627,7 +637,14 @@ function renderDetailPanel(r,tt){
     bodyHtml=`<div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;font-weight:600;display:grid;grid-template-columns:24px 1fr 1fr 28px;gap:8px;padding:3px 10px;margin-bottom:4px"><div></div><div>Dịch vụ</div><div>Mô tả / Ghi chú</div><div></div></div>
     <div style="display:grid;grid-template-columns:24px 1fr 1fr 95px 95px 28px;gap:6px;padding:2px 10px;margin-bottom:3px;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div>Chi phí vào</div><div>Trạng thái DN</div><div></div></div>
     <div id="detailSvcGrid">${SVCS.map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')}</div>
-    <div style="margin-top:8px"><button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button></div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
+      <label class="btn" style="cursor:pointer" title="Upload file Debit Note để kiểm tra">
+        <i class="ti ti-upload"></i> Upload Debit Note
+        <input type="file" id="dnUploadInput_${r._id}" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleDnUpload(this,'${r._id}','${tt}')"/>
+      </label>
+      ${r.dnFile?'<span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--green);background:var(--green-bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border-light)"><i class="ti ti-file-check" style="font-size:13px"></i>'+r.dnFile+'</span>':''}
+    </div>
     <div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailSvc()"><i class="ti ti-check"></i> Lưu dịch vụ</button></div>`;
   }
 
@@ -699,7 +716,7 @@ function renderDetailPanel(r,tt){
           const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===(sv.invoice||'Yes')?' selected':'')+'>'+v+'</option>';}).join('');
           const amt=sv.amount||(sv.price||0)*(sv.qty||1);
           const isWaived=(sv.invoice||'Yes')==='Waived';
-          return '<tr style="'+(isWaived?'opacity:.45':'')+'"><td style="'+tdS+';font-weight:500">'+s.name+'<br>'+(sv.desc?'<span style="font-size:10px;color:var(--text-secondary)">'+sv.desc+'</span>':'')+'</td>'
+          return '<tr style="'+(isWaived?'opacity:.45':'')+'"><td style="'+tdS+';font-weight:500">'+'<input type="text" id="invname_'+s.key+'" value="'+(sv.customName||s.name)+'" style="font-size:12px;font-weight:500;border:none;background:transparent;padding:0;outline:none;width:100%"/>'+(sv.desc?'<div style="font-size:10px;color:var(--text-secondary)">'+sv.desc+'</div>':'')+'</td>'
             +'<td style="'+tdS+';text-align:right;font-weight:600">'+(sv.price||0).toLocaleString()+'</td>'
             +'<td style="'+tdS+'"><strong>'+(sv.cur||'USD')+'</strong></td>'
             +'<td style="'+tdS+';text-align:right">'+(sv.qty||1)+'</td>'
@@ -762,8 +779,10 @@ async function saveInvoiceSettings(){
   SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
     const vat=g('invvat_'+s.key)?.value||'0%';
     const inv=g('invinv_'+s.key)?.value||'Yes';
+    const customName=g('invname_'+s.key)?.value||'';
     svcs[s.key].vat=vat;
     svcs[s.key].invoice=inv;
+    if(customName&&customName!==s.name) svcs[s.key].customName=customName;
   });
   setLoading(true,'Đang lưu...');
   try{
@@ -1181,9 +1200,10 @@ function rebuildInvoicePreview(){
     const amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
     const desc=sv.desc||'';
     const vat=sv.vat||'0%';
+    const displayName=svcs[s.key]?.customName||s.name;
     return `<tr>
       <td style="${tdL};color:#666;width:28px">${i+1}</td>
-      <td style="${tdL}"><strong>${s.name}</strong>${desc?'<br><span style="font-size:10.5px;color:#888">'+desc+'</span>':''}</td>
+      <td style="${tdL}"><strong>${displayName}</strong>${desc?'<br><span style="font-size:10.5px;color:#888">'+desc+'</span>':''}</td>
       <td style="${tdR};font-weight:400">${(sv.price||0).toLocaleString()}</td>
       <td style="${tdL}">${sv.cur||'USD'}</td>
       <td style="${tdL};color:#888">${vat}</td>
@@ -1311,8 +1331,8 @@ function rebuildInvoicePreview(){
       </thead>
       <tbody>${chargeRows}</tbody>
       ${totalRows}
-      <tr><td colspan="8" style="padding:6px 10px;background:#f5f9ff;text-align:right;font-size:11px;color:#555;font-style:italic">${numToWords(grandVND)}</td></tr>
       ${grandRow}
+      <tr><td colspan="8" style="padding:7px 12px;background:#f0f5fc;text-align:right;font-size:11.5px;color:#1a4b8c;font-style:italic;border-top:1px solid #c8d8f0"><em>Bằng chữ: ${numToWords(grandWithVAT)}</em></td></tr>
     </table>
 
     <!-- NOTICE -->
@@ -2052,6 +2072,8 @@ td{padding:7px 10px;border-bottom:1px solid var(--border-light);vertical-align:m
 tr:last-child td{border-bottom:none}
 tr:hover td{background:var(--bg-secondary)}
 .tr-urgent td{background:rgba(250,238,218,.25)!important}
+.tr-locked td{background:rgba(252,235,235,.18)!important}
+.tr-locked td:first-child{border-left:3px solid var(--red)}
 /* BADGES */
 .bdg{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10.5px;font-weight:500}
 .bdg-g{background:var(--green-bg);color:var(--green-dark)}.bdg-b{background:var(--blue-bg);color:var(--blue-text)}
@@ -2466,6 +2488,54 @@ window.saveInvoiceSettings=saveInvoiceSettings;
 window.openDebitNotePopup=openDebitNotePopup;
 window.refreshInvPreview=refreshInvPreview;
 window.rebuildInvoicePreview=rebuildInvoicePreview;
+
+async function toggleLotLock(id, tt){
+  if(currentProfile?.role!=='admin'){toast('Chỉ Admin mới có quyền khóa/mở lô hàng','error');return;}
+  const r=cache[tt].find(x=>x._id===id);
+  if(!r)return;
+  const newLocked=!r.locked;
+  const action=newLocked?'Khóa':'Mở khóa';
+  if(!confirm(action+' lô hàng '+r.bookingNo+'?'))return;
+  setLoading(true,(newLocked?'Đang khóa...':'Đang mở khóa...'));
+  try{
+    await fsSet(colName(tt),id,{locked:newLocked,lockedAt:Date.now(),lockedBy:currentUser.email});
+    toast((newLocked?'Đã khóa':'Đã mở khóa')+' lô hàng: '+r.bookingNo);
+    const fresh=cache[tt].find(x=>x._id===id)||r;
+    renderDetailPanel(Object.assign({},fresh,{locked:newLocked}),tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+window.toggleLotLock=toggleLotLock;
+function handleDnUpload(input, id, tt){
+  const file=input.files[0];
+  if(!file)return;
+  const maxMB=10;
+  if(file.size>maxMB*1024*1024){toast('File quá lớn (max '+maxMB+'MB)','error');return;}
+  // Store file name in Firestore (actual file would need Firebase Storage)
+  // For now, store filename as indicator that DN was uploaded
+  const fileName=file.name;
+  setLoading(true,'Đang lưu thông tin...');
+  fsSet(colName(tt), id, {dnFile:fileName, dnUploadedAt:Date.now(), dnUploadedBy:currentUser.email, updatedAt:Date.now()})
+    .then(function(){
+      toast('Đã ghi nhận file: '+fileName);
+      // Also auto-update svcStatus to Đã lên DN for enabled services
+      const r=cache[tt].find(x=>x._id===id)||{};
+      const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+      let changed=false;
+      Object.keys(svcs).forEach(function(k){
+        if(svcs[k].on&&(!svcs[k].svcStatus||svcs[k].svcStatus==='')){
+          svcs[k].svcStatus='Đã lên DN'; changed=true;
+        }
+      });
+      if(changed) return fsSet(colName(tt),id,{svcs,updatedAt:Date.now()});
+    })
+    .catch(function(e){toast('Lỗi: '+e.message,'error');})
+    .finally(function(){setLoading(false);});
+}
+
+window.handleDnUpload=handleDnUpload;
+
 window.saveContSeal=saveContSeal;
 window.saveUserRole=saveUserRole;
 window.previewRoleChange=previewRoleChange;
@@ -2507,6 +2577,77 @@ setTimeout(function(){
     if(msg)msg.textContent='Không thể kết nối. Kiểm tra mạng và thử lại.';
   }
 },8000);
+
+// ═══════════════════════════════════════════
+// EXCEL EXPORT FUNCTIONS
+// ═══════════════════════════════════════════
+function exportExcel(tt){
+  if(!can('export')){toast('Không có quyền xuất Excel','error');return;}
+  var XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải thư viện Excel, vui lòng thử lại...','error');return;}
+  var cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
+  var wb=XLSX.utils.book_new();
+  // Sheet 1: Danh sách lô hàng
+  var ws1=[cols.map(function(c){return c.l;}).concat(['Dịch vụ đã chọn','Trạng thái DN','Tổng doanh thu'])];
+  cache[tt].forEach(function(r){
+    var activeSvcs=SVCS.filter(function(s){return r.svcs&&r.svcs[s.key]&&r.svcs[s.key].on;});
+    var svcNames=activeSvcs.map(function(s){return s.name;}).join(', ');
+    var svcStatuses=activeSvcs.map(function(s){return r.svcs[s.key].svcStatus||'';}).filter(Boolean).join(', ');
+    var rv={};
+    activeSvcs.forEach(function(s){
+      var sv=r.svcs[s.key];
+      if(sv.invoice==='Waived'||sv.invoice==='No')return;
+      var cur=sv.cur||'USD';
+      var amt=sv.amount||(sv.price||0)*(sv.qty||1);
+      rv[cur]=(rv[cur]||0)+amt;
+    });
+    var rvStr=Object.entries(rv).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' + ')||'—';
+    var row=cols.map(function(c){return r[c.k]||'';});
+    row.push(svcNames||'—', svcStatuses||'—', rvStr);
+    ws1.push(row);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ws1), tt==='xuat'?'Xuất khẩu':'Nhập khẩu');
+  // Sheet 2: Chi tiết dịch vụ
+  var ws2=[['Booking No','MBL No','Tên hàng','Dịch vụ','Mô tả','Price','Curr','Vol','Unit','Amount','VAT','Invoice','PM Term','Party','Chi phí vào','Trạng thái DN']];
+  cache[tt].forEach(function(r){
+    SVCS.filter(function(s){return r.svcs&&r.svcs[s.key]&&r.svcs[s.key].on;}).forEach(function(s){
+      var sv=r.svcs[s.key];
+      ws2.push([r.bookingNo,r.mblNo,r.tenHang,s.name,sv.desc||'',sv.price||0,sv.cur||'USD',sv.qty||1,sv.unit||'Unit',sv.amount||0,sv.vat||'0%',sv.invoice||'Yes',sv.pmterm||'Prepaid',sv.party||'',sv.cost||0,sv.svcStatus||'']);
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ws2), 'Chi tiết dịch vụ');
+  XLSX.writeFile(wb, 'TradeFlow_'+tt+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  toast('Đã xuất Excel thành công');
+}
+
+function exportExcelDebt(){
+  if(!can('export')){toast('Không có quyền','error');return;}
+  var XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải thư viện Excel...','error');return;}
+  var wb=XLSX.utils.book_new();
+  var allR=[...cache.xuat.map(function(r){return Object.assign({},r,{loai:'Xuất'});}),
+            ...cache.nhap.map(function(r){return Object.assign({},r,{loai:'Nhập'});})];
+  var ws=[['Booking No','Loại','ETD','Shipper','Consignee','Trạng thái','Dịch vụ','Price','Curr','Vol','Amount','VAT','Invoice','Chi phí vào']];
+  allR.forEach(function(r){
+    var svcs=Object.entries(r.svcs||{}).filter(function(e){return e[1].on;});
+    if(svcs.length){
+      svcs.forEach(function(e){
+        var k=e[0],sv=e[1];
+        var sName=SVCS.find(function(s){return s.key===k;})?.name||k;
+        ws.push([r.bookingNo,r.loai,r.etd,r.shipper||r.supplier||'',r.cnee||r.consignee||'',r.status,sName,sv.price||0,sv.cur||'USD',sv.qty||1,sv.amount||0,sv.vat||'0%',sv.invoice||'Yes',sv.cost||0]);
+      });
+    } else {
+      ws.push([r.bookingNo,r.loai,r.etd,r.shipper||r.supplier||'',r.cnee||r.consignee||'',r.status,'—','—','—','—','—','—','—','—']);
+    }
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ws), 'Công nợ tổng hợp');
+  XLSX.writeFile(wb, 'TradeFlow_CongNo_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  toast('Đã xuất Excel');
+}
+
+window.exportExcel=exportExcel;
+window.exportExcelDebt=exportExcelDebt;
+
 </script>
 </body>
 </html>
