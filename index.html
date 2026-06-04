@@ -156,6 +156,7 @@ const XCOLS_LIST=[
   {k:'typeCont',l:'Type Cont'},
   {k:'etd',l:'ETD'},
   {k:'eta',l:'ETA'},
+  {k:'cutoff',l:'Cut Off',type:'cutoff'},
   {k:'carrier',l:'Carrier',partner:true},
   {k:'vessel',l:'Vessel'},
   {k:'voy',l:'Voy'},
@@ -172,6 +173,7 @@ const NCOLS_LIST=[
   {k:'typeCont',l:'Type Cont'},
   {k:'etd',l:'ETD'},
   {k:'eta',l:'ETA'},
+  {k:'cutoff',l:'Cut Off',type:'cutoff'},
   {k:'carrier',l:'Carrier',partner:true},
   {k:'vessel',l:'Vessel'},
   {k:'voy',l:'Voy'},
@@ -184,6 +186,7 @@ const XCOLS=[
   {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},{k:'carrier',l:'Carrier',partner:true},
   {k:'shipper',l:'Shipper',partner:true},{k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
+  {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
   {k:'pol',l:'POL',type:'port'},{k:'pod',l:'POD',type:'port'},
   {k:'cargoType',l:'Loại hàng',type:'cargoType'},
   {k:'typeCont',l:'Type Cont',type:'typeCont'},
@@ -196,6 +199,7 @@ const NCOLS=[
   {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},{k:'carrier',l:'Carrier',partner:true},
   {k:'supplier',l:'Nhà cung cấp',partner:true},{k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
+  {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
   {k:'pol',l:'POL',type:'port'},{k:'pod',l:'POD',type:'port'},
   {k:'cargoType',l:'Loại hàng',type:'cargoType'},
   {k:'typeCont',l:'Type Cont',type:'typeCont'},
@@ -538,6 +542,18 @@ function toggleSort(tt){
   renderLotTable(tt);
 }
 
+function calcDefaultCutoff(etdStr, dayOffset, time){
+  if(!etdStr) return '';
+  try{
+    const d=new Date(etdStr);
+    d.setDate(d.getDate()+(dayOffset||0));
+    const yyyy=d.getFullYear();
+    const mm=String(d.getMonth()+1).padStart(2,'0');
+    const dd=String(d.getDate()).padStart(2,'0');
+    return yyyy+'-'+mm+'-'+dd+(time?' '+time:'');
+  }catch(e){return '';}
+}
+
 function getDefaultEtdFrom(){
   const d=new Date(); d.setDate(d.getDate()-1);
   return d.toISOString().slice(0,10);
@@ -585,6 +601,14 @@ function renderLotTable(tt){
       if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${tc}</span>`:'—'}</td>`;}
       if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')">${sn}</button></td>`;}
       if(c.k==='tenHang') return`<td style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r[c.k]||''}">${r[c.k]||'—'}</td>`;
+      if(c.type==='cutoff'){
+        const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
+        const si=r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00');
+        return`<td style="font-size:11px;white-space:nowrap;line-height:1.7">
+          <div><span style="color:var(--text-tertiary);font-size:9.5px">CY</span> <span style="font-weight:500">${cy||'—'}</span></div>
+          <div><span style="color:var(--text-tertiary);font-size:9.5px">SI</span> <span style="font-weight:500">${si||'—'}</span></div>
+        </td>`;
+      }
       return`<td>${r[c.k]||'—'}</td>`;
     }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
       ${r.locked?'<span title="Lô hàng đã khóa" style="padding:4px;color:var(--red)"><i class="ti ti-lock" style="font-size:14px"></i></span>':''}
@@ -635,7 +659,7 @@ function renderDetailPanel(r,tt){
 
   if(detailTab==='info'){
     const allCols=tt==='xuat'?XCOLS:NCOLS;
-    const skipList=['bookingNo','status'];
+    const skipList=['bookingNo','status','cutoffCY','cutoffSI','polCountry','podCountry'];
     bodyHtml=`<div class="detail-grid">
       ${allCols.filter(c=>!skipList.includes(c.k)).map(c=>{
         let val=r[c.k]||'—';
@@ -645,6 +669,17 @@ function renderDetailPanel(r,tt){
         return`<div class="detail-field"><div class="detail-label">${c.l}</div><div class="detail-val">${val}</div></div>`;
       }).join('')}
     </div>
+    <!-- Cut Off section -->
+    ${(r.cutoffCY||r.cutoffSI||r.etd)?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:8px;padding:.6rem .85rem">
+        <div style="font-size:9.5px;color:#856a00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Cut Off CY</div>
+        <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
+      </div>
+      <div style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:8px;padding:.6rem .85rem">
+        <div style="font-size:9.5px;color:#856a00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Cut Off SI</div>
+        <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
+      </div>
+    </div>`:''}
     <div style="margin-top:1rem;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
       ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')">
@@ -689,7 +724,7 @@ function renderDetailPanel(r,tt){
     const svcs=r.svcs||{};
     Object.keys(svcs).forEach(k=>{if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name)SVCS.push({key:k,name:svcs[k]._name,custom:true});});
     bodyHtml=`<div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;font-weight:600;display:grid;grid-template-columns:24px 1fr 1fr 28px;gap:8px;padding:3px 10px;margin-bottom:4px"><div></div><div>Dịch vụ</div><div>Mô tả / Ghi chú</div><div></div></div>
-    <div style="display:grid;grid-template-columns:24px 1fr 1fr 95px 95px 28px;gap:6px;padding:2px 10px;margin-bottom:3px;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div>Chi phí vào</div><div>Trạng thái DN</div><div></div></div>
+    <div style="display:grid;grid-template-columns:22px 150px 1fr 70px 70px 75px 60px 100px 90px 26px;gap:5px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div>Đơn giá</div><div>SL</div><div>Thành tiền</div><div>Curr</div><div>NCC</div><div>Trạng thái</div><div></div></div>
     <div id="detailSvcGrid">${SVCS.map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')}</div>
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
@@ -811,10 +846,15 @@ function renderDetailPanel(r,tt){
       // Cost rows (manual items)
       const costInputRows=items.map(function(it,i){
         const curOpts=CURRENCIES.map(function(c){return'<option'+(c===(it.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
+        const unitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(it.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
+        const calcAmt=((it.price||it.amt||0)*(it.qty||1)).toLocaleString();
         return '<tr>'
           +'<td style="'+tdS+'"><input type="text" id="cname_'+i+'" value="'+(it.name||'')+'" placeholder="Tên chi phí" style="font-size:12px;width:100%"/></td>'
-          +'<td style="'+tdS+'"><input type="number" id="camt_'+i+'" value="'+(it.amt||'')+'" placeholder="0" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:90px;text-align:right"/></td>'
-          +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:70px">'+curOpts+'</select></td>'
+          +'<td style="'+tdS+';text-align:right"><input type="number" id="cprice_'+i+'" value="'+(it.price||it.amt||'')+'" placeholder="Đơn giá" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:85px;text-align:right"/></td>'
+          +'<td style="'+tdS+';text-align:right"><input type="number" id="cqty_'+i+'" value="'+(it.qty||1)+'" placeholder="1" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:55px;text-align:right"/></td>'
+          +'<td style="'+tdS+'"><select id="cunit_'+i+'" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
+          +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="camt_display_'+i+'">'+calcAmt+'</td>'
+          +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:65px">'+curOpts+'</select></td>'
           +'<td style="'+tdS+';text-align:center"><button class="rac red" onclick="removeCostingItem('+i+')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
         +'</tr>';
       }).join('');
@@ -862,7 +902,7 @@ function renderDetailPanel(r,tt){
         +'</div>'
         +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-bottom:.5rem">'
           +'<table style="width:100%;border-collapse:collapse"><thead><tr>'
-            +'<th style="'+thS+'">Chi phí</th><th style="'+thS+';text-align:right">Số tiền</th><th style="'+thS+'">Curr</th><th style="'+thS+'"></th>'
+            +'<th style="'+thS+'">Chi phí</th><th style="'+thS+';text-align:right">Đơn giá</th><th style="'+thS+';text-align:right">SL</th><th style="'+thS+'">Đơn vị</th><th style="'+thS+';text-align:right">Thành tiền</th><th style="'+thS+'">Curr</th><th style="'+thS+'"></th>'
           +'</tr></thead>'
           +'<tbody id="costingBody">'+(autoCostRows||'')+(costInputRows||'<tr><td colspan="4" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>')+'</tbody>'
         +'</table></div>'
@@ -953,7 +993,7 @@ function addCustomSvcDetail(){
   const s={key,name:'Dịch vụ mới',custom:true};
   SVCS.push(s);
   const div=document.createElement('div');
-  div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcStatus:''});
+  div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcQty:1,svcCur:'USD',svcSupplier:'',svcStatus:''});
   g('detailSvcGrid').appendChild(div.firstChild);
   ['sd_','scost_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=false;});
   const tg=g('tg_'+key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
@@ -1026,9 +1066,14 @@ async function saveDetailSvc(){
     const on=tg.classList.contains('on');
     const desc=g('sd_'+s.key)?.value||'';
     const cost=parseFloat(g('scost_'+s.key)?.value)||0;
+    const svcQty=parseFloat(g('sqty_'+s.key)?.value)||1;
+    const svcCur=g('svcur_'+s.key)?.value||'USD';
+    const svcSupplier=g('ssup_'+s.key)?.value||'';
     const svcStatus=g('sstatus_'+s.key)?.value||'';
     const prev=existing[s.key]||{};
-    svcs[s.key]={on,desc,cost,svcStatus,price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0};
+    svcs[s.key]={on,desc,cost,svcQty,svcCur,svcSupplier,svcStatus,
+      price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',
+      vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0};
     if(s.custom)svcs[s.key]._name=g('sname_'+s.key)?.value||s.name;
   });
   setLoading(true,'Đang lưu...');
@@ -1108,6 +1153,11 @@ function openLot(id, tt){
     const val=r[c.k]||'';
     const full=(c.k==='tenHang'||c.k==='shipper'||c.k==='supplier'||c.k==='pol'||c.k==='pod')?' full':'';
     if(c.type==='select') return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+    if(c.type==='cutoffField'){
+      const etdVal=r['etd']||'';
+      const defaultVal=r[c.k]||calcDefaultCutoff(etdVal,-2,'11:00');
+      return`<div class="fi${full}"><label class="lbl">${c.l} <span style="font-size:9px;color:var(--text-tertiary)">(mặc định ETD-2 11:00)</span></label><input type="text" id="f_${c.k}" value="${defaultVal}" placeholder="yyyy-mm-dd 11:00"/></div>`;
+    }
     if(c.type==='port'){
       const portKey=c.k; // 'pol' or 'pod'
       const countryKey=portKey+'Country'; // 'polCountry' or 'podCountry'
@@ -1120,9 +1170,19 @@ function openLot(id, tt){
     if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
     if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
     if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
-    return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"/></div>`;
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"${c.k==='etd'?' oninput="updateEtdCutoffs()"':''}/></div>`;
   }).join('');
   openOv('lotOv');
+}
+
+function updateEtdCutoffs(){
+  const etdEl=g('f_etd');
+  const cyEl=g('f_cutoffCY');
+  const siEl=g('f_cutoffSI');
+  if(!etdEl) return;
+  const etd=etdEl.value;
+  if(cyEl&&!cyEl.value) cyEl.value=calcDefaultCutoff(etd,-2,'11:00');
+  if(siEl&&!siEl.value) siEl.value=calcDefaultCutoff(etd,-2,'11:00');
 }
 
 function updateContOpts(){
@@ -1560,19 +1620,42 @@ function printDN(){
 function printInvoice(){ printDN(); }
 const SVC_STATUSES=['','Đã lên DN','Xác nhận','Đã thanh toán'];
 
+function getSvcSupplierOpts(selected){
+  const suppliers=Object.values(cache.partners||{}).map(function(p){return p.shortname;});
+  return '<option value="">— NCC —</option>'+suppliers.map(function(s){return'<option'+(s===selected?' selected':'')+'>'+s+'</option>';}).join('');
+}
+
+function calcSvcAmt(key){
+  const cost=parseFloat(g('scost_'+key)?.value)||0;
+  const qty=parseFloat(g('sqty_'+key)?.value)||1;
+  const amt=cost*qty;
+  const amtEl=g('samt_'+key);
+  if(amtEl) amtEl.textContent=amt?amt.toLocaleString():'—';
+}
+
 function svcRowHTML(s, sv){
   sv=sv||{on:false,desc:''};
   const isCustom=s.custom||false;
   const svcStatus=sv.svcStatus||'';
   const cost=sv.cost||'';
-  const statusOpts=SVC_STATUSES.map(function(st){return '<option value="'+st+'"'+(st===svcStatus?' selected':'')+'>'+( st||'Chưa lên DN')+'</option>';}).join('');
-  return`<div style="display:grid;grid-template-columns:24px 1fr 1fr 95px 95px 28px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:7px 10px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
+  const qty=sv.svcQty||1;
+  const cur=sv.svcCur||'USD';
+  const supplier=sv.svcSupplier||'';
+  const statusOpts=SVC_STATUSES.map(function(st){return'<option value="'+st+'"'+(st===svcStatus?' selected':'')+'>'+( st||'Chưa lên DN')+'</option>';}).join('');
+  const curOpts=CURRENCIES.map(function(c){return'<option'+(c===cur?' selected':'')+'>'+c+'</option>';}).join('');
+  const supplierOpts=getSvcSupplierOpts(supplier);
+  const amt=cost&&qty?(parseFloat(cost)*parseFloat(qty)).toLocaleString():'—';
+  return`<div style="display:grid;grid-template-columns:22px 150px 1fr 70px 70px 75px 60px 100px 90px 26px;gap:5px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
     <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
-    <div style="display:flex;align-items:center;gap:4px;min-width:0">
-      ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:500;flex:1;min-width:0" oninput="renameSvc('${s.key}',this.value)"/>`:`<span style="font-size:12px;font-weight:500">${s.name}</span>`}
+    <div style="display:flex;align-items:center;gap:3px;min-width:0">
+      ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:500;flex:1;min-width:0" oninput="renameSvc('${s.key}',this.value)"/>`:`<span style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.name}</span>`}
     </div>
-    <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả..." ${sv.on?'':'disabled'} style="font-size:11.5px"/>
-    <input type="number" id="scost_${s.key}" value="${cost}" placeholder="CP đầu vào" ${sv.on?'':'disabled'} style="font-size:11px" title="Chi phí đầu vào"/>
+    <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả..." ${sv.on?'':'disabled'} style="font-size:11px"/>
+    <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Chi phí đơn giá đầu vào"/>
+    <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
+    <span id="samt_${s.key}" style="font-size:11px;font-weight:600;color:var(--red);text-align:right">${amt}</span>
+    <select id="svcur_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${curOpts}</select>
+    <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
     <select id="sstatus_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${statusOpts}</select>
     <div style="display:flex;justify-content:flex-end">
       ${isCustom?`<button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>`:'<div></div>'}
@@ -1604,7 +1687,8 @@ function renameSvc(key, newName){
 function toggleSvc(key){
   const tg=g('tg_'+key); const on=tg.classList.contains('on');
   tg.classList.toggle('on',!on); tg.classList.toggle('off',on);
-  ['sd_','scost_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=on;});
+  ['sd_','scost_','sqty_','svcur_','ssup_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=on;});
+  calcSvcAmt(key);
 }
 
 async function saveSvc(){
@@ -2664,6 +2748,8 @@ async function saveBankAccounts(){
 
 window.renderSettings=renderSettings;
 window.updatePortOptions=updatePortOptions;
+window.calcDefaultCutoff=calcDefaultCutoff;
+window.updateEtdCutoffs=updateEtdCutoffs;
 window.toggleSort=toggleSort;
 window.getDefaultEtdFrom=getDefaultEtdFrom;
 window.getDefaultEtdTo=getDefaultEtdTo;
@@ -2730,6 +2816,7 @@ function handleDnUpload(input, id, tt){
 
 window.handleDnUpload=handleDnUpload;
 
+window.calcSvcAmt=calcSvcAmt;
 window.saveContSeal=saveContSeal;
 window.saveUserRole=saveUserRole;
 window.previewRoleChange=previewRoleChange;
@@ -2819,10 +2906,15 @@ function renderCostingRows(items){
   });
   const manualRows=items.map(function(it,i){
     const curOpts=CURRENCIES.map(function(c){return'<option'+(c===(it.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
+    const unitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(it.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
+    const calcAmt=((it.price||it.amt||0)*(it.qty||1)).toLocaleString();
     return '<tr>'
       +'<td style="'+tdS+'"><input type="text" id="cname_'+i+'" value="'+(it.name||'')+'" placeholder="Tên chi phí" style="font-size:12px;width:100%"/></td>'
-      +'<td style="'+tdS+'"><input type="number" id="camt_'+i+'" value="'+(it.amt||'')+'" placeholder="0" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:90px;text-align:right"/></td>'
-      +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:70px">'+curOpts+'</select></td>'
+      +'<td style="'+tdS+';text-align:right"><input type="number" id="cprice_'+i+'" value="'+(it.price||it.amt||'')+'" placeholder="Đơn giá" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:85px;text-align:right"/></td>'
+      +'<td style="'+tdS+';text-align:right"><input type="number" id="cqty_'+i+'" value="'+(it.qty||1)+'" placeholder="1" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:55px;text-align:right"/></td>'
+      +'<td style="'+tdS+'"><select id="cunit_'+i+'" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
+      +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="camt_display_'+i+'">'+calcAmt+'</td>'
+      +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:65px">'+curOpts+'</select></td>'
       +'<td style="'+tdS+';text-align:center"><button class="rac red" onclick="removeCostingItem('+i+')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
     +'</tr>';
   }).join('');
@@ -2842,11 +2934,16 @@ function updateCostingTotal(){
     if(!byCur[cur])byCur[cur]=0;
     byCur[cur]+=sv.cost;
   });
-  // Manual items
+  // Manual items: use price * qty
   const items=_tempCosting||((r.costing||{}).items||[]);
   items.forEach(function(_,i){
-    const amt=parseFloat(g('camt_'+i)?.value)||0;
+    const price=parseFloat(g('cprice_'+i)?.value)||0;
+    const qty=parseFloat(g('cqty_'+i)?.value)||1;
     const cur=g('ccur_'+i)?.value||'USD';
+    const amt=price*qty;
+    // Update display cell
+    const dispEl=g('camt_display_'+i);
+    if(dispEl) dispEl.textContent=amt?amt.toLocaleString():'—';
     if(!byCur[cur])byCur[cur]=0;
     byCur[cur]+=amt;
   });
@@ -2862,12 +2959,17 @@ async function saveCosting(){
   const items=_tempCosting||((r.costing||{}).items||[]);
   // Read current input values
   const savedItems=items.map(function(it,i){
+    const price=parseFloat(g('cprice_'+i)?.value)||it.price||it.amt||0;
+    const qty=parseFloat(g('cqty_'+i)?.value)||it.qty||1;
     return {
       name:g('cname_'+i)?.value||it.name||'',
-      amt:parseFloat(g('camt_'+i)?.value)||it.amt||0,
+      price,
+      qty,
+      amt:price*qty,
+      unit:g('cunit_'+i)?.value||it.unit||'Cont',
       cur:g('ccur_'+i)?.value||it.cur||'USD'
     };
-  }).filter(function(it){return it.name||it.amt;});
+  }).filter(function(it){return it.name||it.price;});
   const note=g('costingNote')?.value||'';
   const costing={items:savedItems,note,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
   setLoading(true,'Đang lưu costing...');
@@ -3166,12 +3268,14 @@ function runCostingReport(){
     SVCS.forEach(s=>{
       const sv=svcs[s.key];
       if(!sv||!sv.on||!sv.cost)return;
-      const cur=sv.cur||'USD';
-      costByCur[cur]=(costByCur[cur]||0)+sv.cost;
+      const cur=sv.svcCur||sv.cur||'USD';
+      const costAmt=(sv.cost||0)*(sv.svcQty||1);
+      costByCur[cur]=(costByCur[cur]||0)+costAmt;
     });
     costItems.forEach(it=>{
       const cur=it.cur||'USD';
-      costByCur[cur]=(costByCur[cur]||0)+(it.amt||0);
+      const amt=it.price?it.price*(it.qty||1):(it.amt||0);
+      costByCur[cur]=(costByCur[cur]||0)+amt;
     });
 
     // Accumulate grand
