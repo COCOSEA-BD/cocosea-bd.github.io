@@ -97,7 +97,7 @@ const ROLES={
 // Ports grouped by country for cascading selection
 const PORTS_BY_COUNTRY={
   'Vietnam':['Cat Lai, HCMC','Cai Mep, BR-VT','Da Nang','Hai Phong','Quy Nhon','Nha Trang','Can Tho','Vung Tau'],
-  'China':['Shanghai, CN','Ningbo, CN','Guangzhou, CN','Shenzhen, CN','Tianjin, CN','Qingdao, CN','Xiamen, CN','Dalian, CN','Lianyungang, CN','Nanjing, CN','Wuhan, CN','Chongqing, CN','Yantian, CN','Nansha, CN','Shekou, CN'],
+  'China':['Shanghai, CN','Ningbo, CN','Guangzhou, CN','Shenzhen, CN','Tianjin, CN','Qingdao, CN','Xiamen, CN','Dalian, CN','Lianyungang, CN','Nanjing, CN','Wuhan, CN','Chongqing, CN','Yantian, CN','Nansha, CN','Shekou, CN','Zhenjiang, CN','Zhanjiang, CN'],
   'Singapore':['Singapore'],
   'Malaysia':['Port Klang, MY','Tanjung Pelepas, MY','Penang, MY','Johor Bahru, MY','Kuantan, MY'],
   'Thailand':['Laem Chabang, TH','Bangkok, TH','Map Ta Phut, TH'],
@@ -528,7 +528,7 @@ function renderLot(tt){
     <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}><i class="ti ti-plus"></i> Thêm lô hàng</button>
   </div>
   <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
-  <div class="table-card"><div class="table-wrap"><table><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>`;
+  <div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>`;
   renderLotTable(tt);
 }
 
@@ -601,6 +601,8 @@ function renderLotTable(tt){
       if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${tc}</span>`:'—'}</td>`;}
       if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')">${sn}</button></td>`;}
       if(c.k==='tenHang') return`<td style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r[c.k]||''}">${r[c.k]||'—'}</td>`;
+      if(c.k==='etd') return`<td class="td-etd">${r.etd||'—'}</td>`;
+      if(c.k==='eta') return`<td style="color:var(--text-secondary)">${r.eta||'—'}</td>`;
       if(c.type==='cutoff'){
         const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
         const si=r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00');
@@ -860,15 +862,23 @@ function renderDetailPanel(r,tt){
       }).join('');
 
       // Auto-costs from svc.cost
-      const autoCostRows=Object.values(svcs).filter(function(sv){return sv.on&&sv.cost;}).map(function(sv,i){
-        const svc=SVCS.find(function(s){return svcs[s.key]===sv;})||{name:'—'};
-        return '<tr style="opacity:.7">'
-          +'<td style="'+tdS+';font-size:11.5px">'+svc.name+' <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
-          +'<td style="'+tdS+';text-align:right;font-size:11.5px">'+(sv.cost||0).toLocaleString()+'</td>'
-          +'<td style="'+tdS+'">'+( sv.cur||'USD')+'</td>'
-          +'<td></td>'
+      // Auto-costs from svc.cost (now editable)
+      const autoCostRows=SVCS.filter(function(s){const sv=svcs[s.key];return sv&&sv.on&&sv.cost;}).map(function(s){
+        const sv=svcs[s.key];
+        const svcAmt=(sv.cost||0)*(sv.svcQty||1);
+        const autoCurOpts=CURRENCIES.map(function(c){return'<option'+(c===(sv.svcCur||sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
+        const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
+        return '<tr>'
+          +'<td style="'+tdS+';font-size:11.5px"><span style="font-weight:500">'+s.name+'</span> <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
+          +'<td style="'+tdS+'"><input type="number" id="autoprice_'+s.key+'" value="'+(sv.cost||0)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:85px;text-align:right"/></td>'
+          +'<td style="'+tdS+'"><input type="number" id="autoqty_'+s.key+'" value="'+(sv.svcQty||1)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:55px;text-align:right"/></td>'
+          +'<td style="'+tdS+'"><select id="autounit_'+s.key+'" style="font-size:11px;width:80px">'+autoUnitOpts+'</select></td>'
+          +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="autoamt_'+s.key+'">'+svcAmt.toLocaleString()+'</td>'
+          +'<td style="'+tdS+'"><select id="autocur_'+s.key+'" onchange="updateCostingTotal()" style="font-size:11px;width:65px">'+autoCurOpts+'</select></td>'
+          +'<td style="'+tdS+';font-size:10px;color:var(--text-tertiary)"><i class="ti ti-link" title="Từ dịch vụ"></i></td>'
         +'</tr>';
       }).join('');
+
 
       // Summary table
       const summaryRows=allCurs.map(function(cur){
@@ -2344,6 +2354,14 @@ tr:hover td{background:var(--bg-secondary)}
 .tr-urgent td{background:rgba(250,238,218,.25)!important}
 .tr-locked td{background:rgba(252,235,235,.18)!important}
 .tr-locked td:first-child{border-left:3px solid var(--red)}
+/* Striped rows */
+.lot-table tbody tr:nth-child(even) td{background:var(--bg-secondary)}
+.lot-table tbody tr:nth-child(odd) td{background:var(--bg-primary)}
+.lot-table tbody tr.tr-urgent:nth-child(even) td,.lot-table tbody tr.tr-urgent:nth-child(odd) td{background:rgba(250,238,218,.3)!important}
+.lot-table tbody tr.tr-locked:nth-child(even) td,.lot-table tbody tr.tr-locked:nth-child(odd) td{background:rgba(252,235,235,.18)!important}
+/* ETD column highlight */
+.lot-table td.td-etd{background:rgba(24,95,165,.07)!important;font-weight:600;color:var(--blue)}
+.lot-table tbody tr:hover td{background:rgba(15,110,86,.06)!important}
 /* BADGES */
 .bdg{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10.5px;font-weight:500}
 .bdg-g{background:var(--green-bg);color:var(--green-dark)}.bdg-b{background:var(--blue-bg);color:var(--blue-text)}
@@ -2897,11 +2915,17 @@ function renderCostingRows(items){
   SVCS.forEach(function(s){
     const sv=svcs[s.key];
     if(!sv||!sv.on||!sv.cost)return;
-    autoCostRows+='<tr style="opacity:.7">'
-      +'<td style="'+tdS+';font-size:11.5px">'+s.name+' <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
-      +'<td style="'+tdS+';text-align:right;font-size:11.5px">'+(sv.cost||0).toLocaleString()+'</td>'
-      +'<td style="'+tdS+'">'+(sv.cur||'USD')+'</td>'
-      +'<td></td>'
+    const svcAmt=(sv.cost||0)*(sv.svcQty||1);
+    const autoCurOpts=CURRENCIES.map(function(c){return'<option'+(c===(sv.svcCur||sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
+    const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
+    autoCostRows+='<tr>'
+      +'<td style="'+tdS+';font-size:11.5px"><span style="font-weight:500">'+s.name+'</span> <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
+      +'<td style="'+tdS+'"><input type="number" id="autoprice_'+s.key+'" value="'+(sv.cost||0)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:85px;text-align:right"/></td>'
+      +'<td style="'+tdS+'"><input type="number" id="autoqty_'+s.key+'" value="'+(sv.svcQty||1)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:55px;text-align:right"/></td>'
+      +'<td style="'+tdS+'"><select id="autounit_'+s.key+'" style="font-size:11px;width:80px">'+autoUnitOpts+'</select></td>'
+      +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="autoamt_'+s.key+'">'+svcAmt.toLocaleString()+'</td>'
+      +'<td style="'+tdS+'"><select id="autocur_'+s.key+'" onchange="updateCostingTotal()" style="font-size:11px;width:65px">'+autoCurOpts+'</select></td>'
+      +'<td style="'+tdS+';font-size:10px;color:var(--text-tertiary)"><i class="ti ti-link" title="Từ dịch vụ"></i></td>'
     +'</tr>';
   });
   const manualRows=items.map(function(it,i){
@@ -2926,13 +2950,21 @@ function updateCostingTotal(){
   const r=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
   const svcs=r.svcs||{};
   const byCur={};
-  // Auto from svcs
+  // Auto from svcs - read editable inputs if rendered, else use saved values
   SVCS.forEach(function(s){
     const sv=svcs[s.key];
     if(!sv||!sv.on||!sv.cost)return;
-    const cur=sv.cur||'USD';
+    const priceEl=g('autoprice_'+s.key);
+    const qtyEl=g('autoqty_'+s.key);
+    const curEl=g('autocur_'+s.key);
+    const price=priceEl?parseFloat(priceEl.value)||0:(sv.cost||0);
+    const qty=qtyEl?parseFloat(qtyEl.value)||1:(sv.svcQty||1);
+    const cur=curEl?curEl.value:(sv.svcCur||sv.cur||'USD');
+    const costAmt=price*qty;
+    const amtEl=g('autoamt_'+s.key);
+    if(amtEl) amtEl.textContent=costAmt?costAmt.toLocaleString():'—';
     if(!byCur[cur])byCur[cur]=0;
-    byCur[cur]+=sv.cost;
+    byCur[cur]+=costAmt;
   });
   // Manual items: use price * qty
   const items=_tempCosting||((r.costing||{}).items||[]);
@@ -2955,7 +2987,22 @@ function updateCostingTotal(){
 }
 
 async function saveCosting(){
+  // First, save any edited auto-cost values back to svcs
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  let svcChanged=false;
+  SVCS.forEach(function(s){
+    const sv=svcs[s.key];
+    if(!sv||!sv.on||!sv.cost)return;
+    const priceEl=g('autoprice_'+s.key);
+    const qtyEl=g('autoqty_'+s.key);
+    if(priceEl){ sv.cost=parseFloat(priceEl.value)||sv.cost; svcChanged=true; }
+    if(qtyEl){ sv.svcQty=parseFloat(qtyEl.value)||sv.svcQty; svcChanged=true; }
+  });
+  if(svcChanged){
+    try{ await fsSet(colName(detailTt),detailId,{svcs}); }catch(e){}
+  }
+  // eslint placeholder
   const items=_tempCosting||((r.costing||{}).items||[]);
   // Read current input values
   const savedItems=items.map(function(it,i){
