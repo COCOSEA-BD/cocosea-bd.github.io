@@ -11,7 +11,26 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.full.min.js"></script>
+<script>
+// Load XLSX with multiple CDN fallbacks
+(function(){
+  var cdns=[
+    'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js',
+    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'
+  ];
+  var idx=0;
+  function tryLoad(){
+    if(window.XLSX||idx>=cdns.length)return;
+    var s=document.createElement('script');
+    s.src=cdns[idx++];
+    s.onload=function(){console.log('XLSX loaded from',s.src);};
+    s.onerror=function(){console.warn('XLSX CDN failed, trying next...');tryLoad();};
+    document.head.appendChild(s);
+  }
+  tryLoad();
+})();
+</script>
 <script>
 
 // 🔴 THAY THẾ ĐOẠN NÀY bằng config từ Firebase Console của bạn
@@ -25,6 +44,13 @@ const firebaseConfig = {
   appId:             "1:584531594212:web:e903aebef7396ebf2115f1"
 };
 
+// Ensure XLSX is loaded
+if(!window.XLSX){
+  var s=document.createElement('script');
+  s.src='https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';
+  s.onload=function(){console.log('XLSX loaded via fallback');};
+  document.head.appendChild(s);
+}
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
@@ -321,16 +347,23 @@ function startListeners(){
   });
 
   // Users
-  // Load custom permissions if saved
-  db.collection('_config').doc('permissions').get().then(function(snap){
+  // Live-sync permissions from Firestore (persists across F5)
+  const uPerm=db.collection('_config').doc('permissions').onSnapshot(function(snap){
     if(snap.exists){
       const saved=snap.data().roles||{};
       ['operator','accountant','doc','cus','viewer'].forEach(function(role){
         if(saved[role]) Object.assign(ROLES[role].perms, saved[role]);
       });
       if(currentTab==='users') renderUsers();
+      updateSidebar();
     }
-  }).catch(function(){});
+  },function(){});
+
+  // Ocean freight rates (realtime)
+  db.collection('ocean_rates').onSnapshot(function(snap){
+    cache.ocean=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+    if(currentTab==='ocean') renderOcean();
+  },function(){cache.ocean=[];});
 
   const u4 = db.collection('users').onSnapshot(snap => {
     const profiles = snap.docs.map(d=>({_docId:d.id,...d.data()}));
@@ -404,7 +437,7 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  ['xuat','nhap','deadline','cong-no','doi-tac','users','settings'].forEach(id=>{
+  ['xuat','nhap','deadline','cong-no','doi-tac','users','ocean','settings'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
@@ -415,6 +448,7 @@ function goTab(t){
   if(t==='cong-no') renderDebt();
   if(t==='doi-tac') renderPartners();
   if(t==='users') renderUsers();
+  if(t==='ocean') renderOcean();
   if(t==='settings') renderSettings();
 }
 
@@ -470,6 +504,7 @@ function renderLot(tt){
   </div>
   <div class="toolbar">
     <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier..." oninput="renderLotTable('${tt}')"/></div>
+    <button class="btn sm" id="sortBtn_${tt}" onclick="toggleSort('${tt}')" title="Sắp xếp theo ETD" style="font-size:12px;white-space:nowrap"><i class="ti ti-arrows-sort"></i> ETD <span id="sortDir_${tt}">↑</span></button>
     <select id="fst_${tt}" style="width:140px" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả trạng thái</option>
       <option>Đang xử lý</option><option>Đã nhập info</option>
@@ -487,6 +522,16 @@ function renderLot(tt){
   </div>
   <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
   <div class="table-card"><div class="table-wrap"><table><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>`;
+  renderLotTable(tt);
+}
+
+// Sort state per tab
+var sortState={xuat:{key:'etd',dir:1},nhap:{key:'etd',dir:1}};
+
+function toggleSort(tt){
+  sortState[tt].dir*=-1;
+  const el=g('sortDir_'+tt);
+  if(el)el.textContent=sortState[tt].dir===1?'↑':'↓';
   renderLotTable(tt);
 }
 
@@ -516,6 +561,10 @@ function renderLotTable(tt){
     const matchEtdFrom=!etdFrom||!r.etd||(r.etd>=etdFrom);
     const matchEtdTo=!etdTo||!r.etd||(r.etd<=etdTo);
     return matchQ&&matchS&&matchEtdFrom&&matchEtdTo;
+  }).sort(function(a,b){
+    const dir=(sortState[tt]||{dir:1}).dir;
+    const av=a.etd||''; const bv=b.etd||'';
+    return dir*(av<bv?-1:av>bv?1:0);
   });
   const today=new Date();today.setHours(0,0,0,0);
   g('th_'+tt).innerHTML='<tr>'+cols.map(c=>`<th>${c.l}</th>`).join('')+'<th style="text-align:center">Thao tác</th></tr>';
@@ -1950,7 +1999,7 @@ function togglePermEdit(role, perm){
 async function savePermissions(){
   // Save the custom permissions to Firestore so all users get updated roles
   const permsSnapshot={};
-  ['operator','doc','cus','viewer'].forEach(function(role){
+  ['operator','accountant','doc','cus','viewer'].forEach(function(role){
     permsSnapshot[role]=Object.assign({},ROLES[role].perms);
   });
   setLoading(true,'Đang lưu phân quyền...');
@@ -2236,6 +2285,7 @@ tr:hover td{background:var(--bg-secondary)}
     <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> Đối tác</button>
     <div class="sb-section" style="margin-top:.4rem">Hệ thống</div>
     <button class="sb-item" id="sb-users" onclick="goTab('users')"><i class="ti ti-users"></i> Người dùng</button>
+    <button class="sb-item" id="sb-ocean" onclick="goTab('ocean')"><i class="ti ti-anchor"></i> Ocean Freight</button>
     <button class="sb-item" id="sb-settings" onclick="goTab('settings')"><i class="ti ti-settings"></i> Cài đặt</button>
     <div class="sb-footer">
       <div class="user-row">
@@ -2265,10 +2315,14 @@ tr:hover td{background:var(--bg-secondary)}
       <div id="page-cong-no" style="display:none"></div>
       <div id="page-doi-tac" style="display:none"></div>
       <div id="page-users" style="display:none"></div>
+      <div id="page-ocean" style="display:none"></div>
       <div id="page-settings" style="display:none"></div>
     </div>
   </div>
 </div>
+
+<!-- OCEAN FREIGHT RATE MODAL -->
+<div class="ov" id="oceanOv" style="padding:.75rem"></div>
 
 <!-- EMAIL COMPOSE MODAL -->
 <div class="ov" id="emailOv" style="padding:.75rem"></div>
@@ -2471,6 +2525,7 @@ async function saveBankAccounts(){
 
 window.renderSettings=renderSettings;
 window.updatePortOptions=updatePortOptions;
+window.toggleSort=toggleSort;
 window.getDefaultEtdFrom=getDefaultEtdFrom;
 window.getDefaultEtdTo=getDefaultEtdTo;
 window.clearEtdFilter=clearEtdFilter;
@@ -2578,13 +2633,226 @@ setTimeout(function(){
   }
 },8000);
 
+/* ═══════════════════════════════════════════════════════
+   MODULE: OCEAN FREIGHT RATES
+═══════════════════════════════════════════════════════ */
+let oceanEditId=null;
+const CONT_TYPE_OPTS=['20DC','40HC','20RF','40RH','CBM','40OT','45HC'];
+
+function renderOcean(){
+  const pg=g('page-ocean');
+  const today=new Date().toISOString().slice(0,10);
+  const rates=cache.ocean||[];
+
+  // Filters
+  const fPol=g('ofPol')?.value||'';
+  const fPod=g('ofPod')?.value||'';
+  const fCont=g('ofCont')?.value||'';
+  const fCarrier=g('ofCarrier')?.value||'';
+  const fValid=g('ofValid')?.checked;
+
+  const filtered=rates.filter(function(r){
+    if(fPol&&!(r.pol||'').toLowerCase().includes(fPol.toLowerCase()))return false;
+    if(fPod&&!(r.pod||'').toLowerCase().includes(fPod.toLowerCase()))return false;
+    if(fCont&&r.contType!==fCont)return false;
+    if(fCarrier&&!(r.carrier||'').toLowerCase().includes(fCarrier.toLowerCase()))return false;
+    if(fValid){if(!r.validTo||r.validTo<today)return false;}
+    return true;
+  }).sort(function(a,b){return (a.pol+a.pod)<(b.pol+b.pod)?-1:1;});
+
+  const thS='padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap';
+  const tdS='padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+
+  const now=today;
+  const rows=filtered.map(function(r){
+    const isExpired=r.validTo&&r.validTo<now;
+    const expiring=r.validTo&&!isExpired&&(r.validTo<=new Date(Date.now()+7*86400000).toISOString().slice(0,10));
+    const validBadge=isExpired
+      ?'<span class="bdg bdg-red" style="font-size:10px">Hết hạn</span>'
+      :expiring
+        ?'<span class="bdg bdg-a" style="font-size:10px">Sắp hết</span>'
+        :'<span class="bdg bdg-g" style="font-size:10px">Còn hiệu lực</span>';
+    const isRf=r.contType&&r.contType.includes('R');
+    return '<tr style="'+(isExpired?'opacity:.55;':'')+'">'
+      +'<td style="'+tdS+';font-weight:600;color:var(--blue)">'+r.pol+'</td>'
+      +'<td style="'+tdS+';font-weight:600;color:var(--green)">'+r.pod+'</td>'
+      +'<td style="'+tdS+'"><span class="bdg '+(isRf?'bdg-b':'bdg-gr')+'">'+r.contType+'</span></td>'
+      +'<td style="'+tdS+';text-align:right;font-weight:700;font-size:13px">'+(r.price||0).toLocaleString()+'</td>'
+      +'<td style="'+tdS+'"><strong>'+(r.currency||'USD')+'</strong></td>'
+      +'<td style="'+tdS+'">'+(r.carrier||'—')+'</td>'
+      +'<td style="'+tdS+';font-size:11px;color:var(--text-secondary)">'+(r.validFrom||'—')+'</td>'
+      +'<td style="'+tdS+';font-size:11px;color:var(--text-secondary)">'+(r.validTo||'—')+'</td>'
+      +'<td style="'+tdS+'">'+validBadge+'</td>'
+      +'<td style="'+tdS+';max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary);font-size:11px">'+(r.note||'—')+'</td>'
+      +'<td style="'+tdS+';text-align:center">'
+        +'<div style="display:flex;gap:3px;justify-content:center">'
+          +'<button class="rac grn" data-id="'+r._id+'" onclick="openOceanEdit(this.dataset.id)" title="Sửa"><i class="ti ti-edit"></i></button>'
+          +'<button class="rac red" data-id="'+r._id+'" onclick="delOceanRate(this.dataset.id)" title="Xóa"><i class="ti ti-trash"></i></button>'
+        +'</div>'
+      +'</td>'
+    +'</tr>';
+  }).join('');
+
+  const validCount=rates.filter(function(r){return r.validTo&&r.validTo>=today;}).length;
+  const expCount=rates.filter(function(r){return r.validTo&&r.validTo<today;}).length;
+
+  pg.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">'
+      +'<div><div style="font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px"><i class="ti ti-anchor" style="font-size:16px;color:var(--blue)"></i>Ocean Freight Rates</div>'
+        +'<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">'+rates.length+' bảng giá &nbsp;|&nbsp; <span style="color:var(--green)">'+validCount+' còn hiệu lực</span>&nbsp;|&nbsp;<span style="color:var(--red)">'+expCount+' hết hạn</span></div>'
+      +'</div>'
+      +'<button class="btn pri" onclick="openOceanEdit(null)"><i class="ti ti-plus"></i> Thêm bảng giá</button>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:.65rem .85rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-bottom:.75rem">'
+      +'<input type="text" id="ofPol" placeholder="POL..." style="width:110px;font-size:12px" oninput="renderOcean()"/>'
+      +'<input type="text" id="ofPod" placeholder="POD..." style="width:110px;font-size:12px" oninput="renderOcean()"/>'
+      +'<select id="ofCont" style="width:90px;font-size:12px" onchange="renderOcean()"><option value="">Tất cả cont</option>'+CONT_TYPE_OPTS.map(function(c){return'<option>'+c+'</option>';}).join('')+'</select>'
+      +'<input type="text" id="ofCarrier" placeholder="Carrier..." style="width:110px;font-size:12px" oninput="renderOcean()"/>'
+      +'<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" id="ofValid" onchange="renderOcean()"/> Chỉ còn hiệu lực</label>'
+      +'<button class="btn sm" onclick="exportOceanExcel()"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+    +'</div>'
+    +'<div class="table-card"><div class="table-wrap" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr>'
+        +'<th style="'+thS+'">POL</th><th style="'+thS+'">POD</th><th style="'+thS+'">Type Cont</th>'
+        +'<th style="'+thS+';text-align:right">Price</th><th style="'+thS+'">Curr</th>'
+        +'<th style="'+thS+'">Carrier</th><th style="'+thS+'">Valid From</th><th style="'+thS+'">Valid To</th>'
+        +'<th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Ghi chú</th><th style="'+thS+'"></th>'
+      +'</tr></thead>'
+      +'<tbody>'+(rows||'<tr><td colspan="11" style="padding:1.5rem;text-align:center;color:var(--text-secondary)">Chưa có bảng giá nào</td></tr>')+'</tbody>'
+    +'</table></div></div>';
+}
+
+function openOceanEdit(id){
+  oceanEditId=id;
+  const r=id?(cache.ocean||[]).find(function(x){return x._id===id;})||{}:{};
+  const today=new Date().toISOString().slice(0,10);
+  const in30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+
+  const countryOpts='<option value="">— Quốc gia —</option>'+PORT_COUNTRIES.map(function(c){return'<option>'+c+'</option>';}).join('');
+  const savedPolCountry=r.polCountry||'';
+  const savedPodCountry=r.podCountry||'';
+  const polPorts=(savedPolCountry&&PORTS_BY_COUNTRY[savedPolCountry])||PORTS;
+  const podPorts=(savedPodCountry&&PORTS_BY_COUNTRY[savedPodCountry])||PORTS;
+
+  g('oceanOv').innerHTML=`
+  <div class="modal" style="max-width:620px">
+    <div class="mhdr"><div class="mtitle">${id?'Sửa bảng giá':'Thêm bảng giá Ocean Freight'}</div><button class="rac" onclick="closeOv('oceanOv')"><i class="ti ti-x"></i></button></div>
+    <div class="fg">
+      <div class="fi full" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label class="lbl">POL — Quốc gia</label>
+          <select id="oPolCountry" onchange="updateOceanPorts('pol')" style="font-size:12px;margin-bottom:5px">
+            ${PORT_COUNTRIES.map(c=>`<option${c===savedPolCountry?' selected':''}>${c}</option>`).join('')}
+          </select>
+          <label class="lbl">POL — Cảng</label>
+          <select id="oPol">${polPorts.map(p=>`<option${p===(r.pol||'')?' selected':''}>${p}</option>`).join('')}</select>
+        </div>
+        <div>
+          <label class="lbl">POD — Quốc gia</label>
+          <select id="oPodCountry" onchange="updateOceanPorts('pod')" style="font-size:12px;margin-bottom:5px">
+            ${PORT_COUNTRIES.map(c=>`<option${c===savedPodCountry?' selected':''}>${c}</option>`).join('')}
+          </select>
+          <label class="lbl">POD — Cảng</label>
+          <select id="oPod">${podPorts.map(p=>`<option${p===(r.pod||'')?' selected':''}>${p}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="fi"><label class="lbl">Type Cont</label>
+        <select id="oContType">${CONT_TYPE_OPTS.map(c=>`<option${c===(r.contType||'20DC')?' selected':''}>${c}</option>`).join('')}</select>
+      </div>
+      <div class="fi"><label class="lbl">Giá cước</label><input type="number" id="oPrice" value="${r.price||''}" min="0" placeholder="0"/></div>
+      <div class="fi"><label class="lbl">Tiền tệ</label>
+        <select id="oCurrency">${CURRENCIES.map(c=>`<option${c===(r.currency||'USD')?' selected':''}>${c}</option>`).join('')}</select>
+      </div>
+      <div class="fi"><label class="lbl">Carrier</label><input type="text" id="oCarrier" value="${r.carrier||''}" placeholder="Tên hãng tàu"/></div>
+      <div class="fi"><label class="lbl">Valid From</label><input type="date" id="oValidFrom" value="${r.validFrom||today}"/></div>
+      <div class="fi"><label class="lbl">Valid To</label><input type="date" id="oValidTo" value="${r.validTo||in30}"/></div>
+      <div class="fi full"><label class="lbl">Ghi chú</label><input type="text" id="oNote" value="${r.note||''}" placeholder="Transit time, điều kiện, đặc biệt..."/></div>
+    </div>
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('oceanOv')">Hủy</button>
+      <button class="btn pri" onclick="saveOceanRate()"><i class="ti ti-check"></i> Lưu</button>
+    </div>
+  </div>`;
+  openOv('oceanOv');
+}
+
+function updateOceanPorts(side){
+  const cEl=g('o'+side.charAt(0).toUpperCase()+side.slice(1)+'Country');
+  const pEl=g('o'+side.charAt(0).toUpperCase()+side.slice(1));
+  if(!cEl||!pEl)return;
+  const ports=PORTS_BY_COUNTRY[cEl.value]||PORTS;
+  pEl.innerHTML=ports.map(function(p){return'<option>'+p+'</option>';}).join('');
+}
+
+async function saveOceanRate(){
+  const pol=g('oPol')?.value||''; const pod=g('oPod')?.value||'';
+  if(!pol||!pod){toast('Chọn POL và POD','error');return;}
+  const price=parseFloat(g('oPrice')?.value)||0;
+  if(!price){toast('Nhập giá cước','error');return;}
+  const validFrom=g('oValidFrom')?.value||'';
+  const validTo=g('oValidTo')?.value||'';
+  if(validTo&&validFrom&&validTo<validFrom){toast('Valid To phải sau Valid From','error');return;}
+  const rec={
+    pol,pod,
+    polCountry:g('oPolCountry')?.value||'',
+    podCountry:g('oPodCountry')?.value||'',
+    contType:g('oContType')?.value||'20DC',
+    price,
+    currency:g('oCurrency')?.value||'USD',
+    carrier:g('oCarrier')?.value||'',
+    validFrom,validTo,
+    note:g('oNote')?.value||'',
+    updatedAt:Date.now(),
+    updatedBy:currentUser?.email||''
+  };
+  const docId=oceanEditId||('OF_'+Date.now());
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet('ocean_rates',docId,rec);
+    toast(oceanEditId?'Đã cập nhật bảng giá':'Đã thêm bảng giá mới');
+    closeOv('oceanOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+async function delOceanRate(id){
+  if(!confirm('Xóa bảng giá này?'))return;
+  setLoading(true,'Đang xóa...');
+  try{await fsDel('ocean_rates',id);toast('Đã xóa');}
+  catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+function exportOceanExcel(){
+  const XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải Excel...','error');setTimeout(exportOceanExcel,2000);return;}
+  const wb=XLSX.utils.book_new();
+  const ws=[['POL','POD','Type Cont','Price','Currency','Carrier','Valid From','Valid To','Ghi chú']];
+  (cache.ocean||[]).forEach(function(r){
+    ws.push([r.pol,r.pod,r.contType,r.price,r.currency,r.carrier,r.validFrom,r.validTo,r.note]);
+  });
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ws),'Ocean Freight');
+  XLSX.writeFile(wb,'OceanFreight_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+
+window.renderOcean=renderOcean;
+window.openOceanEdit=openOceanEdit;
+window.updateOceanPorts=updateOceanPorts;
+window.saveOceanRate=saveOceanRate;
+window.delOceanRate=delOceanRate;
+window.exportOceanExcel=exportOceanExcel;
+
 // ═══════════════════════════════════════════
 // EXCEL EXPORT FUNCTIONS
 // ═══════════════════════════════════════════
 function exportExcel(tt){
   if(!can('export')){toast('Không có quyền xuất Excel','error');return;}
   var XLSX=window.XLSX;
-  if(!XLSX){toast('Đang tải thư viện Excel, vui lòng thử lại...','error');return;}
+  if(!XLSX){
+    toast('Đang tải Excel... thử lại sau 2 giây','error');
+    setTimeout(function(){exportExcel(tt);},2000);
+    return;
+  }
   var cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
   var wb=XLSX.utils.book_new();
   // Sheet 1: Danh sách lô hàng
@@ -2623,7 +2891,7 @@ function exportExcel(tt){
 function exportExcelDebt(){
   if(!can('export')){toast('Không có quyền','error');return;}
   var XLSX=window.XLSX;
-  if(!XLSX){toast('Đang tải thư viện Excel...','error');return;}
+  if(!XLSX){setTimeout(function(){exportExcelDebt();},2000);return;}
   var wb=XLSX.utils.book_new();
   var allR=[...cache.xuat.map(function(r){return Object.assign({},r,{loai:'Xuất'});}),
             ...cache.nhap.map(function(r){return Object.assign({},r,{loai:'Nhập'});})];
