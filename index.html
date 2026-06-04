@@ -1,0 +1,2512 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TradeFlow — Xuất Nhập Khẩu</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.x/dist/tabler-icons.min.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
+
+<!-- ✅ BƯỚC DUY NHẤT BẠN CẦN THAY: dán Firebase config của bạn vào đây -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.full.min.js"></script>
+<script>
+
+// 🔴 THAY THẾ ĐOẠN NÀY bằng config từ Firebase Console của bạn
+// Firebase Console → Project Settings → Your apps → Web app → SDK setup
+const firebaseConfig = {
+  apiKey:            "AIzaSyC4FhWQLmGGEtNTLk_ZYeJNnypEUoopxXU",
+  authDomain:        "cocosea-6b51d.firebaseapp.com",
+  projectId:         "cocosea-6b51d",
+  storageBucket:     "cocosea-6b51d.firebasestorage.app",
+  messagingSenderId: "584531594212",
+  appId:             "1:584531594212:web:e903aebef7396ebf2115f1"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db   = firebase.firestore();
+
+// Default bank accounts (admin can edit in Firestore _config/banks)
+window._bankAccounts=[
+  {beneficiary:'',account:'',bank:''},
+];
+
+// Load bank accounts from Firestore
+function loadBankAccounts(){
+  db.collection('_config').doc('banks').get().then(function(snap){
+    if(snap.exists&&snap.data().accounts){
+      window._bankAccounts=snap.data().accounts;
+    }
+  }).catch(function(){});
+}
+
+/* ─────────────────────────────────────────────
+   CONSTANTS
+───────────────────────────────────────────── */
+let SVCS=[
+  {key:'freight',name:'Cước vận tải QT'},{key:'customs',name:'Thông quan'},
+  {key:'quarantine',name:'Kiểm dịch'},{key:'co',name:'C/O'},
+  {key:'fumi',name:'Fumi'},{key:'stuffing',name:'Đóng hàng tại bãi'},
+  {key:'trucking',name:'Trucking'},{key:'ddl',name:'DDL'},
+  {key:'docfee',name:'Phí chứng từ XK'},
+];
+const CURRENCIES=['USD','VND','EUR','JPY','CNY','KRW'];
+const TASKS=[
+  {key:'mbl',label:'Nhập MBL No'},{key:'cnee',label:'Nhập thông tin Cnee'},
+  {key:'updn',label:'Up Debit Note'},{key:'price',label:'Fill giá dịch vụ'},
+  {key:'send',label:'Gửi Debit Note cho khách hàng'},
+];
+const SB={'Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple','Chờ xác nhận':'bdg-gr'};
+const ROLES={
+  admin:{label:'Admin',cls:'role-admin',perms:{addLot:true,editLot:true,deleteLot:true,editSvc:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:true,managePartners:true,export:true}},
+  operator:{label:'Operator',cls:'role-op',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:true,export:true}},
+  accountant:{label:'Accountant',cls:'role-acc',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:false,export:true}},
+  doc:{label:'Doc',cls:'role-doc',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
+  cus:{label:'Cus',cls:'role-cus',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
+  viewer:{label:'Viewer',cls:'role-view',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
+};
+// Ports grouped by country for cascading selection
+const PORTS_BY_COUNTRY={
+  'Vietnam':['Cat Lai, HCMC','Cai Mep, BR-VT','Da Nang','Hai Phong','Quy Nhon','Nha Trang','Can Tho','Vung Tau'],
+  'China':['Shanghai, CN','Ningbo, CN','Guangzhou, CN','Shenzhen, CN','Tianjin, CN','Qingdao, CN','Xiamen, CN','Dalian, CN','Lianyungang, CN','Nanjing, CN','Wuhan, CN','Chongqing, CN','Yantian, CN','Nansha, CN','Shekou, CN'],
+  'Singapore':['Singapore'],
+  'Malaysia':['Port Klang, MY','Tanjung Pelepas, MY','Penang, MY','Johor Bahru, MY','Kuantan, MY'],
+  'Thailand':['Laem Chabang, TH','Bangkok, TH','Map Ta Phut, TH'],
+  'Indonesia':['Jakarta, ID','Surabaya, ID','Belawan, ID','Semarang, ID','Makassar, ID'],
+  'Philippines':['Manila, PH','Cebu, PH','Davao, PH','Batangas, PH'],
+  'Cambodia':['Phnom Penh, KH','Sihanoukville, KH'],
+  'Myanmar':['Yangon, MM','Thilawa, MM'],
+  'South Korea':['Busan, KR','Incheon, KR','Gwangyang, KR','Ulsan, KR'],
+  'Japan':['Tokyo, JP','Osaka, JP','Nagoya, JP','Yokohama, JP','Kobe, JP','Hakata, JP','Shimizu, JP'],
+  'Taiwan':['Kaohsiung, TW','Taichung, TW','Keelung, TW'],
+  'Hong Kong':['Hong Kong'],
+  'India':['Mumbai, IN','Chennai, IN','Nhava Sheva, IN','Kolkata, IN','Mundra, IN','Visakhapatnam, IN','Cochin, IN'],
+  'Sri Lanka':['Colombo, LK'],
+  'Bangladesh':['Chittagong, BD'],
+  'Pakistan':['Karachi, PK'],
+  'UAE':['Dubai, AE','Abu Dhabi, AE','Sharjah, AE','Jebel Ali, AE'],
+  'Saudi Arabia':['Jeddah, SA','Dammam, SA','Riyadh, SA'],
+  'Qatar':['Doha, QA'],
+  'Netherlands':['Rotterdam, NL','Amsterdam, NL'],
+  'Germany':['Hamburg, DE','Bremen, DE','Bremerhaven, DE'],
+  'Belgium':['Antwerp, BE','Ghent, BE','Zeebrugge, BE'],
+  'UK':['Felixstowe, UK','Southampton, UK','London Gateway, UK','Liverpool, UK','Glasgow, UK'],
+  'France':['Le Havre, FR','Marseille, FR','Dunkirk, FR'],
+  'Spain':['Barcelona, ES','Valencia, ES','Bilbao, ES','Algeciras, ES'],
+  'Italy':['Genoa, IT','Naples, IT','Livorno, IT','Trieste, IT'],
+  'Greece':['Piraeus, GR','Thessaloniki, GR'],
+  'Turkey':['Istanbul, TR','Mersin, TR','Izmir, TR'],
+  'Poland':['Gdansk, PL','Gdynia, PL'],
+  'Russia':['Vladivostok, RU','St. Petersburg, RU','Novorossiysk, RU'],
+  'USA':['Los Angeles, US','Long Beach, US','New York, US','Seattle, US','Houston, US','Savannah, US','Charleston, US','Oakland, US','Miami, US','Baltimore, US','Norfolk, US'],
+  'Canada':['Vancouver, CA','Montreal, CA','Halifax, CA','Toronto, CA'],
+  'Mexico':['Manzanillo, MX','Lazaro Cardenas, MX','Veracruz, MX'],
+  'Brazil':['Santos, BR','Rio de Janeiro, BR','Paranagua, BR'],
+  'Chile':['Valparaiso, CL','San Antonio, CL'],
+  'Australia':['Sydney, AU','Melbourne, AU','Brisbane, AU','Fremantle, AU','Adelaide, AU'],
+  'New Zealand':['Auckland, NZ','Tauranga, NZ'],
+  'South Africa':['Durban, ZA','Cape Town, ZA'],
+  'Kenya':['Mombasa, KE'],
+  'Egypt':['Alexandria, EG','Port Said, EG','Damietta, EG'],
+  'Morocco':['Casablanca, MA','Tangier, MA'],
+};
+const PORTS=Object.values(PORTS_BY_COUNTRY).flat();
+const PORT_COUNTRIES=Object.keys(PORTS_BY_COUNTRY);
+const CONT_TYPES={
+  'Hàng khô':['20DC','40HC'],
+  'Hàng lạnh':['20RF','40RH'],
+  'LCL':['CBM'],
+};
+// Columns shown in the main list table (compact)
+const XCOLS_LIST=[
+  {k:'bookingNo',l:'Booking No'},
+  {k:'mblNo',l:'MBL No'},
+  {k:'shipper',l:'Shipper',partner:true},
+  {k:'vol',l:'Vol'},
+  {k:'typeCont',l:'Type Cont'},
+  {k:'carrier',l:'Carrier',partner:true},
+  {k:'vessel',l:'Vessel'},
+  {k:'voy',l:'Voy'},
+  {k:'etd',l:'ETD'},
+  {k:'eta',l:'ETA'},
+  {k:'pol',l:'POL'},
+  {k:'pod',l:'POD'},
+  {k:'status',l:'Trạng thái'},
+];
+const NCOLS_LIST=[
+  {k:'bookingNo',l:'Booking No'},
+  {k:'mblNo',l:'MBL No'},
+  {k:'supplier',l:'Nhà cung cấp',partner:true},
+  {k:'vol',l:'Vol'},
+  {k:'typeCont',l:'Type Cont'},
+  {k:'carrier',l:'Carrier',partner:true},
+  {k:'vessel',l:'Vessel'},
+  {k:'voy',l:'Voy'},
+  {k:'etd',l:'ETD'},
+  {k:'eta',l:'ETA'},
+  {k:'pol',l:'POL'},
+  {k:'pod',l:'POD'},
+  {k:'status',l:'Trạng thái'},
+];
+// All columns used in the edit form
+const XCOLS=[
+  {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},{k:'carrier',l:'Carrier',partner:true},
+  {k:'shipper',l:'Shipper',partner:true},{k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
+  {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
+  {k:'pol',l:'POL',type:'port'},{k:'pod',l:'POD',type:'port'},
+  {k:'cargoType',l:'Loại hàng',type:'cargoType'},
+  {k:'typeCont',l:'Type Cont',type:'typeCont'},
+  {k:'vol',l:'Vol'},
+  {k:'tenHang',l:'Tên hàng'},
+  {k:'soTkhai',l:'Số T.Khai'},{k:'cnee',l:'Cnee'},{k:'fwd',l:'FWD',partner:true},
+  {k:'status',l:'Trạng thái',type:'select',opts:['Đang xử lý','Đã nhập info','Đã lên debit','Đang vận chuyển','Đã giao']}
+];
+const NCOLS=[
+  {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},{k:'carrier',l:'Carrier',partner:true},
+  {k:'supplier',l:'Nhà cung cấp',partner:true},{k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
+  {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
+  {k:'pol',l:'POL',type:'port'},{k:'pod',l:'POD',type:'port'},
+  {k:'cargoType',l:'Loại hàng',type:'cargoType'},
+  {k:'typeCont',l:'Type Cont',type:'typeCont'},
+  {k:'vol',l:'Vol'},
+  {k:'tenHang',l:'Tên hàng'},
+  {k:'soTkhai',l:'Số T.Khai'},{k:'consignee',l:'Consignee'},{k:'fwd',l:'FWD',partner:true},
+  {k:'status',l:'Trạng thái',type:'select',opts:['Đang xử lý','Đã nhập info','Đã lên debit','Đang vận chuyển','Đã nhận']}
+];
+
+/* ─────────────────────────────────────────────
+   STATE
+───────────────────────────────────────────── */
+let currentUser = null;   // Firebase Auth user
+let currentProfile = null; // Firestore user profile {role, name, ...}
+let currentTab = 'xuat';
+let lotIdx = null; let svcIdx = null; let taskIdx = null;
+let partnerIdx = null; let partnerIsNew = false; let userEditIdx = null;
+let deadlineDays = 5;
+
+// Local cache (kept in sync via onSnapshot)
+let cache = { xuat: [], nhap: [], partners: {}, users: [] };
+
+// Firestore listeners (unsubscribe functions)
+let listeners = [];
+
+function can(perm){ return ROLES[currentProfile?.role||'viewer'].perms[perm]||false; }
+
+/* ─────────────────────────────────────────────
+   TOAST NOTIFICATION
+───────────────────────────────────────────── */
+function toast(msg, type='success'){
+  const t=document.createElement('div');
+  t.className='toast toast-'+type;
+  t.innerHTML=`<i class="ti ti-${type==='success'?'circle-check':'alert-circle'}"></i> ${msg}`;
+  document.getElementById('toastArea').appendChild(t);
+  setTimeout(()=>t.classList.add('show'),10);
+  setTimeout(()=>{t.classList.remove('show');setTimeout(()=>t.remove(),300);},3000);
+}
+
+/* ─────────────────────────────────────────────
+   LOADING OVERLAY
+───────────────────────────────────────────── */
+function setLoading(on, msg='Đang tải...'){
+  const el=document.getElementById('loadingOverlay');
+  el.style.display=on?'flex':'none';
+  document.getElementById('loadingMsg').textContent=msg;
+}
+
+/* ─────────────────────────────────────────────
+   AUTH
+───────────────────────────────────────────── */
+auth.onAuthStateChanged(async (user) => {
+  if (user) {
+    currentUser = user;
+    setLoading(true,'Đang tải dữ liệu...');
+    try {
+      // Try all possible doc ID formats for the user profile
+      const emailKey = user.email.replace(/\./g,'_').replace(/@/g,'@');
+      const emailKeyDot = user.email.replace(/\./g,'_');
+      const snap = await db.collection('users').get();
+      const profiles = snap.docs.map(d=>({_docId:d.id,...d.data()}));
+      cache.users = profiles;
+      // Find profile: by email field, or by UID doc ID, or by email-based doc ID
+      currentProfile = profiles.find(p=>p.email===user.email)
+        || profiles.find(p=>p.uid===user.uid)
+        || profiles.find(p=>p._docId===user.uid)
+        || profiles.find(p=>p._docId===emailKeyDot)
+        || profiles.find(p=>p._docId===emailKey)
+        || null;
+      if(!currentProfile){
+        // No profile found - log details for debugging
+        console.warn('TradeFlow: No profile found for', user.email, '(UID:', user.uid+')');
+        console.warn('Available docs:', profiles.map(p=>p._docId+'/'+p.email).join(', '));
+        // Default to viewer - admin should create profile in Firestore
+        currentProfile = {role:'viewer',name:user.displayName||user.email,avatar:(user.email||'??').slice(0,2).toUpperCase(),email:user.email};
+      } else {
+        console.log('TradeFlow: Profile found, role=', currentProfile.role, 'docId=', currentProfile._docId);
+      }
+    } catch(e) {
+      console.error('Profile load error:', e);
+      currentProfile = {role:'admin',name:user.email,avatar:user.email.slice(0,2).toUpperCase(),email:user.email};
+    }
+    startListeners();
+    showApp();
+    setLoading(false);
+  } else {
+    currentUser = null; currentProfile = null;
+    stopListeners();
+    showLogin();
+  }
+});
+
+async function doLogin(){
+  const email = g('loginEmail').value.trim();
+  const pass  = g('loginPass').value;
+  if(!email||!pass){ toast('Vui lòng nhập email và mật khẩu','error'); return; }
+  setLoading(true,'Đang đăng nhập...');
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+  } catch(e) {
+    setLoading(false);
+    toast('Email hoặc mật khẩu không đúng','error');
+  }
+}
+
+async function doLogout(){
+  stopListeners();
+  await auth.signOut();
+  toast('Đã đăng xuất');
+}
+
+/* ─────────────────────────────────────────────
+   FIRESTORE REALTIME LISTENERS
+───────────────────────────────────────────── */
+function startListeners(){
+  loadBankAccounts();
+  stopListeners();
+
+  // Lô hàng xuất
+  const u1 = db.collection('lots_xuat').onSnapshot(snap => {
+    cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
+    cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+    if(currentTab==='xuat') renderLotTable('xuat');
+    if(detailId&&detailTt==='xuat'&&g('detailPanel').classList.contains('open')){
+      const fresh=cache.xuat.find(x=>x._id===detailId);
+      if(fresh) renderDetailPanel(fresh,'xuat');
+    }
+    updateSidebar();
+  });
+
+  const u2 = db.collection('lots_nhap').onSnapshot(snap => {
+    cache.nhap = snap.docs.map(d=>({_id:d.id,...d.data()}));
+    cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+    if(currentTab==='nhap') renderLotTable('nhap');
+    if(detailId&&detailTt==='nhap'&&g('detailPanel').classList.contains('open')){
+      const fresh=cache.nhap.find(x=>x._id===detailId);
+      if(fresh) renderDetailPanel(fresh,'nhap');
+    }
+    updateSidebar();
+  });
+
+  const u3 = db.collection('partners').onSnapshot(snap => {
+    cache.partners = {};
+    snap.docs.forEach(d=>{ cache.partners[d.id]={shortname:d.id,...d.data()}; });
+    if(currentTab==='doi-tac') renderPartners();
+  });
+
+  // Users
+  // Load custom permissions if saved
+  db.collection('_config').doc('permissions').get().then(function(snap){
+    if(snap.exists){
+      const saved=snap.data().roles||{};
+      ['operator','accountant','doc','cus','viewer'].forEach(function(role){
+        if(saved[role]) Object.assign(ROLES[role].perms, saved[role]);
+      });
+      if(currentTab==='users') renderUsers();
+    }
+  }).catch(function(){});
+
+  const u4 = db.collection('users').onSnapshot(snap => {
+    const profiles = snap.docs.map(d=>({_docId:d.id,...d.data()}));
+    cache.users = profiles;
+    // Refresh currentProfile if it updated
+    if(currentUser){
+      const emailKeyDot = currentUser.email.replace(/\./g,'_');
+      const fresh = profiles.find(p=>p.email===currentUser.email)
+        || profiles.find(p=>p.uid===currentUser.uid)
+        || profiles.find(p=>p._docId===currentUser.uid)
+        || profiles.find(p=>p._docId===emailKeyDot);
+      if(fresh) currentProfile = fresh;
+    }
+    if(currentTab==='users') renderUsers();
+    updateSidebar();
+  });
+
+  listeners = [u1,u2,u3,u4];
+}
+function stopListeners(){ listeners.forEach(u=>u&&u()); listeners=[]; }
+
+/* ─────────────────────────────────────────────
+   FIRESTORE HELPERS
+───────────────────────────────────────────── */
+const colName = tt => tt==='xuat'?'lots_xuat':'lots_nhap';
+
+async function fsSet(colPath, docId, data){
+  await db.collection(colPath).doc(docId).set(data, {merge:true});
+}
+async function fsDel(colPath, docId){
+  await db.collection(colPath).doc(docId).delete();
+}
+
+function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+
+/* ─────────────────────────────────────────────
+   UI HELPERS
+───────────────────────────────────────────── */
+function g(id){ return document.getElementById(id); }
+function openOv(id){ g(id).classList.add('open'); }
+function closeOv(id){ g(id).classList.remove('open'); }
+
+function showLogin(){
+  setLoading(false);
+  g('loginWrap').style.display='flex';
+  g('appShell').style.display='none';
+}
+function showApp(){
+  setLoading(false);
+  g('loginWrap').style.display='none';
+  g('appShell').style.display='flex';
+  updateSidebar();
+  goTab('xuat');
+}
+
+function updateSidebar(){
+  const u=currentProfile; if(!u)return;
+  const r=ROLES[u.role||'viewer'];
+  console.log('TradeFlow: user='+u.email+' role='+u.role+' docId='+u._docId);
+  g('sbAvatar').textContent=u.avatar||'??';
+  g('sbName').textContent=u.name||u.email||'';
+  g('sbEmail').textContent=currentUser?.email||'';
+  g('sbRole').innerHTML=`<span class="${r.cls}">${r.label}</span>`;
+  const alerts=getDeadlineAlerts();
+  const dot=g('deadlineBadge');
+  if(alerts.length){dot.style.display='';dot.textContent=alerts.length;}else dot.style.display='none';
+}
+
+/* ─────────────────────────────────────────────
+   NAVIGATION
+───────────────────────────────────────────── */
+function goTab(t){
+  currentTab=t;
+  ['xuat','nhap','deadline','cong-no','doi-tac','users','settings'].forEach(id=>{
+    g('page-'+id).style.display=id===t?'':'none';
+    g('sb-'+id)?.classList.toggle('active',id===t);
+  });
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','users':'Người dùng'};
+  g('pageTitle').textContent=titles[t]||t;
+  if(t==='xuat'||t==='nhap') renderLot(t);
+  if(t==='deadline') renderDeadline();
+  if(t==='cong-no') renderDebt();
+  if(t==='doi-tac') renderPartners();
+  if(t==='users') renderUsers();
+  if(t==='settings') renderSettings();
+}
+
+/* ─────────────────────────────────────────────
+   THEME
+───────────────────────────────────────────── */
+function toggleTheme(){
+  const dark=document.documentElement.getAttribute('data-theme')==='dark';
+  document.documentElement.setAttribute('data-theme',dark?'light':'dark');
+  g('themeIcon').className=dark?'ti ti-sun-moon':'ti ti-moon';
+  localStorage.setItem('tf_theme',dark?'light':'dark');
+}
+(()=>{
+  const t=localStorage.getItem('tf_theme')||'light';
+  document.documentElement.setAttribute('data-theme',t);
+})();
+
+/* ─────────────────────────────────────────────
+   DEADLINE
+───────────────────────────────────────────── */
+function getDeadlineAlerts(){
+  const today=new Date();today.setHours(0,0,0,0);
+  const alerts=[];
+  [...cache.xuat,...cache.nhap].forEach(r=>{
+    ['etd','eta'].forEach(f=>{
+      if(!r[f])return;
+      const d=new Date(r[f]);d.setHours(0,0,0,0);
+      const diff=Math.ceil((d-today)/86400000);
+      if(diff>=0&&diff<=deadlineDays) alerts.push({type:f,days:diff,r});
+    });
+    const incomplete=TASKS.filter(t=>!r.tasks?.[t.key]);
+    if(incomplete.length&&r.status!=='Đã giao'&&r.status!=='Đã nhận')
+      alerts.push({type:'task',incompleteTasks:incomplete,r});
+  });
+  return alerts;
+}
+
+/* ─────────────────────────────────────────────
+   LOT LIST
+───────────────────────────────────────────── */
+function renderLot(tt){
+  const rows=cache[tt];
+  const done=rows.filter(r=>r.status==='Đã giao'||r.status==='Đã nhận').length;
+  const transit=rows.filter(r=>r.status==='Đang vận chuyển').length;
+  const tasksDone=rows.filter(r=>r.tasks&&TASKS.every(t=>r.tasks[t.key])).length;
+  const pg=g('page-'+tt);
+  pg.innerHTML=`
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-label"><i class="ti ti-packages"></i> Tổng lô hàng</div><div class="stat-val">${rows.length}</div></div>
+    <div class="stat-card"><div class="stat-label"><i class="ti ti-circle-check"></i> ${tt==='xuat'?'Đã giao':'Đã nhận'}</div><div class="stat-val sv-g">${done}</div></div>
+    <div class="stat-card"><div class="stat-label"><i class="ti ti-ship"></i> Đang vận chuyển</div><div class="stat-val sv-b">${transit}</div></div>
+    <div class="stat-card"><div class="stat-label"><i class="ti ti-checklist"></i> Hoàn tất công việc</div><div class="stat-val sv-g">${tasksDone}<span style="font-size:13px;font-weight:400;color:var(--text-secondary)">/${rows.length}</span></div></div>
+  </div>
+  <div class="toolbar">
+    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier..." oninput="renderLotTable('${tt}')"/></div>
+    <select id="fst_${tt}" style="width:140px" onchange="renderLotTable('${tt}')">
+      <option value="">Tất cả trạng thái</option>
+      <option>Đang xử lý</option><option>Đã nhập info</option>
+      <option>Đã lên debit</option><option>Đang vận chuyển</option><option>${tt==='xuat'?'Đã giao':'Đã nhận'}</option>
+    </select>
+    <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);flex-shrink:0">
+      <i class="ti ti-calendar" style="font-size:13px"></i>
+      <input type="date" id="etdFrom_${tt}" value="${getDefaultEtdFrom()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
+      <span>→</span>
+      <input type="date" id="etdTo_${tt}" value="${getDefaultEtdTo()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
+      <button class="btn sm" onclick="clearEtdFilter('${tt}')" title="Tất cả"><i class="ti ti-calendar-off"></i></button>
+    </div>
+    <button class="btn" onclick="exportExcel('${tt}')" ${can('export')?'':'disabled'}><i class="ti ti-file-spreadsheet"></i> Excel</button>
+    <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}><i class="ti ti-plus"></i> Thêm lô hàng</button>
+  </div>
+  <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
+  <div class="table-card"><div class="table-wrap"><table><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>`;
+  renderLotTable(tt);
+}
+
+function getDefaultEtdFrom(){
+  const d=new Date(); d.setDate(d.getDate()-1);
+  return d.toISOString().slice(0,10);
+}
+function getDefaultEtdTo(){
+  const d=new Date(); d.setDate(d.getDate()+20);
+  return d.toISOString().slice(0,10);
+}
+function clearEtdFilter(tt){
+  const f=g('etdFrom_'+tt); const t=g('etdTo_'+tt);
+  if(f)f.value=''; if(t)t.value='';
+  renderLotTable(tt);
+}
+
+function renderLotTable(tt){
+  const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
+  const q=(g('srch_'+tt)?.value||'').toLowerCase();
+  const fs=g('fst_'+tt)?.value||'';
+  const etdFrom=g('etdFrom_'+tt)?.value||'';
+  const etdTo=g('etdTo_'+tt)?.value||'';
+  const rows=cache[tt].filter(r=>{
+    const matchQ=Object.values(r).some(v=>(v+'').toLowerCase().includes(q));
+    const matchS=!fs||r.status===fs;
+    const matchEtdFrom=!etdFrom||!r.etd||(r.etd>=etdFrom);
+    const matchEtdTo=!etdTo||!r.etd||(r.etd<=etdTo);
+    return matchQ&&matchS&&matchEtdFrom&&matchEtdTo;
+  });
+  const today=new Date();today.setHours(0,0,0,0);
+  g('th_'+tt).innerHTML='<tr>'+cols.map(c=>`<th>${c.l}</th>`).join('')+'<th style="text-align:center">Thao tác</th></tr>';
+  if(!rows.length){g('tb_'+tt).innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;return;}
+  g('tb_'+tt).innerHTML=rows.map(r=>{
+    const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
+    const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
+    const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
+    return`<tr class="${isUrgent?'tr-urgent':''}">`+cols.map(c=>{
+      if(c.k==='bookingNo'){
+        const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
+        return`<td><button class="plink" style="font-weight:600" onclick="openDetail('${r._id}','${tt}')">${r.bookingNo||'—'}</button>${urgDot}</td>`;
+      }
+      if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
+      if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${tc}</span>`:'—'}</td>`;}
+      if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')">${sn}</button></td>`;}
+      return`<td>${r[c.k]||'—'}</td>`;
+    }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
+      <button class="rac grn" onclick="openLot('${r._id}','${tt}')" title="Sửa" ${can('editLot')?'':'disabled'}><i class="ti ti-edit"></i></button>
+      <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa" ${can('deleteLot')?'':'disabled'}><i class="ti ti-trash"></i></button>
+    </div></td></tr>`;
+  }).join('');
+}
+
+/* ─── DETAIL PANEL: click Booking No → slide-in panel with tabs ─── */
+let detailId=null, detailTt=null, detailTab='info';
+
+function openDetail(id, tt){
+  detailId=id; detailTt=tt;
+  detailTab='info';
+  const r=cache[tt].find(x=>x._id===id)||{};
+  renderDetailPanel(r,tt);
+  g('detailPanel').classList.add('open');
+  g('detailBackdrop').classList.add('open');
+}
+
+function closeDetail(){
+  g('detailPanel').classList.remove('open');
+  g('detailBackdrop').classList.remove('open');
+}
+
+function switchDetailTab(tab){
+  detailTab=tab;
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  renderDetailPanel(r,detailTt);
+}
+
+function renderDetailPanel(r,tt){
+  // Tab buttons
+  const tabs=[
+    {k:'info',label:'Chi tiết',icon:'ti-info-circle'},
+    {k:'cont',label:'Cont/Seal',icon:'ti-container'},
+    {k:'svc',label:'Dịch vụ',icon:'ti-clipboard-list'},
+    {k:'price',label:'Fill giá',icon:'ti-currency-dollar'},
+    {k:'invoice',label:'Invoice',icon:'ti-file-invoice'},
+  ];
+  const tabsHtml=tabs.map(t=>`<button class="dtab${detailTab===t.k?' active':''}" onclick="switchDetailTab('${t.k}')"><i class="ti ${t.icon}" style="font-size:13px"></i> ${t.label}</button>`).join('');
+
+  // Header
+  const statusBadge=`<span class="bdg ${SB[r.status]||'bdg-gr'}">${r.status||'—'}</span>`;
+  let bodyHtml='';
+
+  if(detailTab==='info'){
+    const allCols=tt==='xuat'?XCOLS:NCOLS;
+    const skipList=['bookingNo','status'];
+    bodyHtml=`<div class="detail-grid">
+      ${allCols.filter(c=>!skipList.includes(c.k)).map(c=>{
+        let val=r[c.k]||'—';
+        if(c.k==='typeCont'&&r[c.k]){const isRf=r[c.k].includes('R');val=`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${r[c.k]}</span>`;}
+        else if(c.k==='cargoType'&&r[c.k]){val=`<span class="bdg ${r[c.k]==='Hàng lạnh'?'bdg-b':'bdg-a'}">${r[c.k]}</span>`;}
+        else if(c.k==='status'){val=`<span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>`;}
+        return`<div class="detail-field"><div class="detail-label">${c.l}</div><div class="detail-val">${val}</div></div>`;
+      }).join('')}
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
+    </div>`;
+  }
+
+  else if(detailTab==='cont'){
+    const vol=parseInt(r.vol)||1;
+    const contList=r.containers||[];
+    let rows='';
+    for(let i=0;i<Math.max(vol,contList.length||1);i++){
+      const c=contList[i]||{};
+      rows+='<tr>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light);color:var(--text-secondary);font-size:11px">'+(i+1)+'</td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="cno_'+i+'" value="'+(c.no||'')+'" placeholder="ABCU1234567" style="font-size:12px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"/></td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="cseal_'+i+'" value="'+(c.seal||'')+'" placeholder="Seal number" style="font-size:12px"/></td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="ctype_'+i+'" value="'+(c.type||r.typeCont||'')+'" placeholder="20DC/40HC..." style="font-size:12px;width:70px"/></td>'
+        +'</tr>';
+    }
+    bodyHtml='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">'
+      +'<div style="font-size:12px;color:var(--text-secondary)">Số lượng container: <strong>'+vol+'</strong> (chỉnh trong mục Sửa lô hàng → Vol)</div>'
+      +'</div>'
+      +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
+      +'<table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr>'
+        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">#</th>'
+        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Container No</th>'
+        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Seal No</th>'
+        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Type</th>'
+      +'</tr></thead>'
+      +'<tbody>'+rows+'</tbody></table></div>'
+      +'<div style="margin-top:1rem;display:flex;justify-content:flex-end">'
+        +'<button class="btn pri" onclick="saveContSeal()"><i class="ti ti-check"></i> Lưu</button>'
+      +'</div>';
+  }
+
+    else if(detailTab==='svc'){
+    // Restore custom svcs
+    const svcs=r.svcs||{};
+    Object.keys(svcs).forEach(k=>{if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name)SVCS.push({key:k,name:svcs[k]._name,custom:true});});
+    bodyHtml=`<div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;font-weight:600;display:grid;grid-template-columns:24px 1fr 1fr 28px;gap:8px;padding:3px 10px;margin-bottom:4px"><div></div><div>Dịch vụ</div><div>Mô tả / Ghi chú</div><div></div></div>
+    <div style="display:grid;grid-template-columns:24px 1fr 1fr 95px 95px 28px;gap:6px;padding:2px 10px;margin-bottom:3px;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div>Chi phí vào</div><div>Trạng thái DN</div><div></div></div>
+    <div id="detailSvcGrid">${SVCS.map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')}</div>
+    <div style="margin-top:8px"><button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button></div>
+    <div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailSvc()"><i class="ti ti-check"></i> Lưu dịch vụ</button></div>`;
+  }
+
+  else if(detailTab==='price'){
+    if(!can('fillPrice')){bodyHtml='<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền fill giá</div></div>';}
+    else {
+      const svcs=r.svcs||{};
+      const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
+      if(!allOn.length){bodyHtml='<div class="empty-state"><i class="ti ti-clipboard-list"></i>Chưa có dịch vụ nào được bật. Vào tab "Dịch vụ" để chọn trước.</div>';}
+      else {
+        const thStyle='padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;background:var(--bg-secondary);white-space:nowrap';
+        const thRStyle=thStyle+';text-align:right';
+        const hdr='<table id="fpTable" style="width:100%;border-collapse:collapse;font-size:12px">'
+          +'<thead><tr>'
+          +'<th style="'+thStyle+'">Service</th>'
+          +'<th style="'+thRStyle+'">Price</th>'
+          +'<th style="'+thStyle+'">Curr</th>'
+          +'<th style="'+thRStyle+'">Vol</th>'
+          +'<th style="'+thStyle+'">Unit</th>'
+          +'<th style="'+thRStyle+'">Amount</th>'
+          +'<th style="'+thStyle+'">Invoice</th>'
+          +'<th style="'+thStyle+'">PM Term</th>'
+          +'<th style="'+thStyle+'">Party</th>'
+          +'</tr></thead><tbody>';
+        const tdStyle='padding:7px 10px;border-bottom:1px solid var(--border-light);vertical-align:middle';
+        const tdRStyle=tdStyle+';text-align:right;font-weight:600';
+        const r2=cache[detailTt].find(x=>x._id===detailId)||{};
+        const partyName=r2.shipper||r2.supplier||r2.cnee||'';
+        const rows2=allOn.map(function(s){
+          const sv=svcs[s.key]||{};
+          const curOpts=CURRENCIES.map(function(c){return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
+          const unitOpts=['Cont','Bill','Shipment'].map(function(u){return '<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
+          const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===(sv.invoice||'Yes')?' selected':'')+'>'+v+'</option>';}).join('');
+          const pmOpts=['Prepaid','Collect'].map(function(v){return '<option'+(v===(sv.pmterm||'Prepaid')?' selected':'')+'>'+v+'</option>';}).join('');
+          const desc=sv.desc?'<div style="font-size:10px;color:var(--text-secondary);margin-top:2px">'+sv.desc+'</div>':'';
+          return '<tr>'
+            +'<td style="'+tdStyle+'"><div style="font-weight:500">'+s.name+'</div>'+desc+'</td>'
+            +'<td style="'+tdRStyle+'"><input type="number" id="fpp_'+s.key+'" value="'+(sv.price||'')+'" min="0" placeholder="0" oninput="updDetailFpTotal()" style="font-size:12px;text-align:right;width:90px"/></td>'
+            +'<td style="'+tdStyle+'"><select id="fpcur_'+s.key+'" onchange="updDetailFpTotal()" style="font-size:12px;width:68px">'+curOpts+'</select></td>'
+            +'<td style="'+tdRStyle+'"><input type="number" id="fpq_'+s.key+'" value="'+(sv.qty||1)+'" min="0" placeholder="1" oninput="updDetailFpTotal()" style="font-size:12px;text-align:right;width:52px"/></td>'
+            +'<td style="'+tdStyle+'"><select id="fpu_'+s.key+'" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
+            +'<td style="'+tdRStyle+';color:var(--blue)" id="fpamt_'+s.key+'">—</td>'
+            +'<td style="'+tdStyle+'"><select id="fpinv_'+s.key+'" style="font-size:12px;width:72px">'+invOpts+'</select></td>'
+            +'<td style="'+tdStyle+'"><select id="fppm_'+s.key+'" style="font-size:12px;width:78px">'+pmOpts+'</select></td>'
+            +'<td style="'+tdStyle+';font-size:11px;font-weight:500;color:var(--text-secondary)"><input type="text" id="fpparty_'+s.key+'" value="'+(sv.party||partyName)+'" style="font-size:11px;width:80px"/></td>'
+            +'</tr>';
+        }).join('');
+        bodyHtml=hdr+rows2+'</tbody></table>'
+          +'<div id="fpTot" style="margin-top:.75rem;padding:8px 12px;background:var(--bg-secondary);border-radius:8px;font-size:12px;border:1px solid var(--border-light);display:flex;gap:1.5rem;flex-wrap:wrap"></div>'
+          +'<div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailFillPrice()"><i class="ti ti-check"></i> Lưu giá</button></div>';
+      }
+    }
+  }
+
+  else if(detailTab==='invoice'){
+    if(!can('viewInvoice')){bodyHtml='<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền xem Invoice</div></div>';}
+    else {
+      const svcs=r.svcs||{};
+      Object.keys(svcs).forEach(k=>{ if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name) SVCS.push({key:k,name:svcs[k]._name,custom:true}); });
+      const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
+      if(!allOn.length){
+        bodyHtml='<div class="empty-state"><i class="ti ti-clipboard-list"></i>Chưa có dịch vụ. Vào tab Dịch vụ để chọn trước.</div>';
+      } else {
+        const tdS='padding:6px 9px;border-bottom:1px solid var(--border-light);vertical-align:middle;font-size:12px';
+        const thS='padding:7px 9px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px;text-align:left;white-space:nowrap';
+        const rows=allOn.map(function(s){
+          const sv=svcs[s.key]||{};
+          const vatOpts=['0%','8%','10%'].map(function(v){return '<option'+(v===(sv.vat||'0%')?' selected':'')+'>'+v+'</option>';}).join('');
+          const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===(sv.invoice||'Yes')?' selected':'')+'>'+v+'</option>';}).join('');
+          const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+          const isWaived=(sv.invoice||'Yes')==='Waived';
+          return '<tr style="'+(isWaived?'opacity:.45':'')+'"><td style="'+tdS+';font-weight:500">'+s.name+'<br>'+(sv.desc?'<span style="font-size:10px;color:var(--text-secondary)">'+sv.desc+'</span>':'')+'</td>'
+            +'<td style="'+tdS+';text-align:right;font-weight:600">'+(sv.price||0).toLocaleString()+'</td>'
+            +'<td style="'+tdS+'"><strong>'+(sv.cur||'USD')+'</strong></td>'
+            +'<td style="'+tdS+';text-align:right">'+(sv.qty||1)+'</td>'
+            +'<td style="'+tdS+'">'+(sv.unit||'Unit')+'</td>'
+            +'<td style="'+tdS+';text-align:right;color:var(--blue);font-weight:600">'+amt.toLocaleString()+'</td>'
+            +'<td style="'+tdS+'"><select id="invvat_'+s.key+'" style="font-size:11.5px;width:60px">'+vatOpts+'</select></td>'
+            +'<td style="'+tdS+'"><select id="invinv_'+s.key+'" style="font-size:11.5px;width:65px" onchange="refreshInvPreview()">'+invOpts+'</select></td>'
+            +'</tr>';
+        }).join('');
+
+        bodyHtml='<div style="margin-bottom:.75rem;font-size:11px;color:var(--text-secondary)"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-1px"></i> Chọn VAT và trạng thái Invoice cho từng dịch vụ. Waived = không hiện trong Debit Note.</div>'
+          +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-bottom:1rem">'
+          +'<table style="width:100%;border-collapse:collapse"><thead><tr>'
+            +'<th style="'+thS+'">Dịch vụ</th>'
+            +'<th style="'+thS+';text-align:right">Price</th>'
+            +'<th style="'+thS+'">Curr</th>'
+            +'<th style="'+thS+';text-align:right">Vol</th>'
+            +'<th style="'+thS+'">Unit</th>'
+            +'<th style="'+thS+';text-align:right">Amount</th>'
+            +'<th style="'+thS+'">VAT</th>'
+            +'<th style="'+thS+'">Invoice</th>'
+          +'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+          +'<div style="display:flex;justify-content:flex-end;gap:8px">'
+            +'<button class="btn pri" onclick="saveInvoiceSettings()"><i class="ti ti-device-floppy"></i> Lưu cài đặt</button>'
+            +'<button class="btn red" onclick="openDebitNotePopup()"><i class="ti ti-file-invoice"></i> Xuất Debit Note</button>'
+          +'</div>';
+      }
+    }
+  }
+
+  g('detailPanel').innerHTML=`
+  <div class="detail-hdr">
+    <div>
+      <div style="font-size:15px;font-weight:600">${r.bookingNo||'—'} ${statusBadge}</div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${r.shipper||r.supplier||''} ${r.pol&&r.pod?'| '+r.pol+' → '+r.pod:''}</div>
+    </div>
+    <button class="rac" onclick="closeDetail()" style="font-size:18px;flex-shrink:0"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="dtabs">${tabsHtml}</div>
+  <div class="detail-body">${bodyHtml}</div>`;
+
+  // After render, update fp total if on price tab
+  if(detailTab==='price') setTimeout(updDetailFpTotal, 50);
+}
+
+function addCustomSvcDetail(){
+  const key='custom_'+Date.now();
+  const s={key,name:'Dịch vụ mới',custom:true};
+  SVCS.push(s);
+  const div=document.createElement('div');
+  div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcStatus:''});
+  g('detailSvcGrid').appendChild(div.firstChild);
+  ['sd_','scost_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=false;});
+  const tg=g('tg_'+key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
+}
+
+async function saveInvoiceSettings(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
+    const vat=g('invvat_'+s.key)?.value||'0%';
+    const inv=g('invinv_'+s.key)?.value||'Yes';
+    svcs[s.key].vat=vat;
+    svcs[s.key].invoice=inv;
+  });
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã lưu cài đặt Invoice');
+    const fresh=cache[detailTt].find(x=>x._id===detailId)||r;
+    renderDetailPanel(fresh,detailTt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+function refreshInvPreview(){
+  // Just visual feedback - actual save on button click
+}
+
+function openDebitNotePopup(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  // Save current VAT/invoice settings first (in-memory, won't block if not saved)
+  const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
+    if(g('invvat_'+s.key)) svcs[s.key].vat=g('invvat_'+s.key).value;
+    if(g('invinv_'+s.key)) svcs[s.key].invoice=g('invinv_'+s.key).value;
+  });
+  const tempR=Object.assign({},r,{svcs});
+  openInvoice(detailId, detailTt, tempR);
+}
+
+async function saveContSeal(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const vol=parseInt(r.vol)||1;
+  const containers=[];
+  for(let i=0;i<Math.max(vol,1);i++){
+    const no=g('cno_'+i)?.value?.trim()||'';
+    const seal=g('cseal_'+i)?.value?.trim()||'';
+    const type=g('ctype_'+i)?.value?.trim()||'';
+    containers.push({no,seal,type});
+  }
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(detailTt),detailId,{containers,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã lưu thông tin container/seal');
+    const fresh=cache[detailTt].find(x=>x._id===detailId)||r;
+    fresh.containers=containers;
+    renderDetailPanel(fresh,detailTt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+async function saveDetailSvc(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const existing=JSON.parse(JSON.stringify(r.svcs||{}));
+  const svcs={};
+  SVCS.forEach(s=>{
+    const tg=g('tg_'+s.key);if(!tg)return;
+    const on=tg.classList.contains('on');
+    const desc=g('sd_'+s.key)?.value||'';
+    const cost=parseFloat(g('scost_'+s.key)?.value)||0;
+    const svcStatus=g('sstatus_'+s.key)?.value||'';
+    const prev=existing[s.key]||{};
+    svcs[s.key]={on,desc,cost,svcStatus,price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0};
+    if(s.custom)svcs[s.key]._name=g('sname_'+s.key)?.value||s.name;
+  });
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã lưu dịch vụ');
+    const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
+    renderDetailPanel(fresh,detailTt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+function updDetailFpTotal(){
+  const r=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
+  const svcs=r.svcs||{};
+  const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
+  const byCur={};
+  allOn.forEach(function(s){
+    const price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
+    const qty=parseFloat(g('fpq_'+s.key)&&g('fpq_'+s.key).value)||1;
+    const cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'USD';
+    const amount=price*qty;
+    // Update Amount cell
+    const amtEl=g('fpamt_'+s.key);
+    if(amtEl) amtEl.textContent=amount?amount.toLocaleString():'—';
+    if(!byCur[cur])byCur[cur]=0;
+    byCur[cur]+=amount;
+  });
+  const tot=g('fpTot');if(!tot)return;
+  let html='';
+  Object.keys(byCur).forEach(function(c){
+    html+='<span><strong>TOTAL '+c+'</strong>: <strong style="color:var(--blue);font-size:13px">'+byCur[c].toLocaleString()+' '+c+'</strong></span>';
+  });
+  tot.innerHTML=html||'—';
+}
+
+async function saveDetailFillPrice(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
+    svcs[s.key].price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
+    svcs[s.key].cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'USD';
+    const qty=parseFloat(g('fpq_'+s.key)&&g('fpq_'+s.key).value)||1;
+    svcs[s.key].qty=qty;
+    svcs[s.key].amount=svcs[s.key].price*qty;
+    svcs[s.key].unit=(g('fpu_'+s.key)&&g('fpu_'+s.key).value)||'Cont';
+    svcs[s.key].invoice=(g('fpinv_'+s.key)&&g('fpinv_'+s.key).value)||'Yes';
+    svcs[s.key].pmterm=(g('fppm_'+s.key)&&g('fppm_'+s.key).value)||'Prepaid';
+    svcs[s.key].party=(g('fpparty_'+s.key)&&g('fpparty_'+s.key).value)||'';
+  });
+  setLoading(true,'Đang lưu giá...');
+  try{
+    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã lưu giá dịch vụ');
+    const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
+    renderDetailPanel(fresh,detailTt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+/* ─────────────────────────────────────────────
+   LOT CRUD (Firestore)
+───────────────────────────────────────────── */
+function openLot(id, tt){
+  lotIdx=id; currentTab=tt;
+  const cols=tt==='xuat'?XCOLS:NCOLS;
+  const r=id?cache[tt].find(x=>x._id===id)||{}:{};
+  g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'xuất khẩu':'nhập khẩu');
+  g('lotSub').textContent=id?(r.bookingNo||''):'';
+  const pC=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname);
+  const pS=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname);
+  const pF=Object.values(cache.partners).filter(p=>p.type==='fwd').map(p=>p.shortname);
+  const pAll=Object.values(cache.partners).map(p=>p.shortname);
+  const initCargo=r.cargoType||'Hàng khô';
+  const initCont=r.typeCont||'';
+  g('lotFields').innerHTML=cols.map(c=>{
+    const val=r[c.k]||'';
+    const full=(c.k==='tenHang'||c.k==='shipper'||c.k==='supplier'||c.k==='pol'||c.k==='pod')?' full':'';
+    if(c.type==='select') return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+    if(c.type==='port'){
+      const portKey=c.k; // 'pol' or 'pod'
+      const countryKey=portKey+'Country'; // 'polCountry' or 'podCountry'
+      const savedCountry=r[countryKey]||'';
+      const portsForCountry=savedCountry&&PORTS_BY_COUNTRY[savedCountry]?PORTS_BY_COUNTRY[savedCountry]:PORTS;
+      const countryOpts='<option value="">— Chọn quốc gia —</option>'+PORT_COUNTRIES.map(cn=>`<option${cn===savedCountry?' selected':''}>${cn}</option>`).join('');
+      const portOpts='<option value="">— Chọn cảng —</option>'+portsForCountry.map(p=>`<option${p===val?' selected':''}>${p}</option>`).join('');
+      return`<div class="fi${full}"><label class="lbl">${c.l}</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><select id="f_${countryKey}" onchange="updatePortOptions('${portKey}','${countryKey}')" style="font-size:12px">${countryOpts}</select><select id="f_${portKey}">${portOpts}</select></div></div>`;
+    }
+    if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
+    if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
+    if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"/></div>`;
+  }).join('');
+  openOv('lotOv');
+}
+
+function updateContOpts(){
+  const cargo=g('f_cargoType')?.value||'Hàng khô';
+  const opts=CONT_TYPES[cargo]||[];
+  const sel=g('f_typeCont');
+  if(sel) sel.innerHTML=opts.map(o=>`<option>${o}</option>`).join('');
+}
+
+function updatePortOptions(portKey, countryKey){
+  const countryEl=g('f_'+countryKey);
+  const portEl=g('f_'+portKey);
+  if(!countryEl||!portEl)return;
+  const country=countryEl.value;
+  const ports=country&&PORTS_BY_COUNTRY[country]?PORTS_BY_COUNTRY[country]:PORTS;
+  portEl.innerHTML='<option value="">— Chọn cảng —</option>'+ports.map(p=>`<option>${p}</option>`).join('');
+}
+
+async function saveLot(){
+  const cols=currentTab==='xuat'?XCOLS:NCOLS;
+  const existing=lotIdx?cache[currentTab].find(x=>x._id===lotIdx):null;
+  const rec={svcs:existing?.svcs||{},tasks:existing?.tasks||{}};
+  cols.forEach(c=>{const el=g('f_'+c.k);if(el)rec[c.k]=el.value;});
+  // Save country selections for port cascade
+  ['pol','pod'].forEach(pk=>{const el=g('f_'+pk+'Country');if(el)rec[pk+'Country']=el.value;});
+  rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
+  if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; }
+  const docId=lotIdx||genId();
+  setLoading(true,'Đang lưu...');
+  try {
+    await fsSet(colName(currentTab), docId, rec);
+    toast('Đã lưu lô hàng');
+    closeOv('lotOv');
+  } catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+
+async function delLot(id, tt){
+  if(!can('deleteLot'))return;
+  if(!confirm('Xóa lô hàng này? Thao tác không thể hoàn tác.'))return;
+  setLoading(true,'Đang xóa...');
+  try { await fsDel(colName(tt),id); toast('Đã xóa'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+
+/* ─────────────────────────────────────────────
+   MODULE: CHỌN DỊCH VỤ (select + mô tả only)
+───────────────────────────────────────────── */
+function openSvc(id, tt){
+  if(!can('editSvc'))return;
+  svcIdx=id; currentTab=tt;
+  const r=cache[tt].find(x=>x._id===id)||{};
+  g('svcTitle').textContent='Dịch vụ lô hàng';
+  g('svcSub').textContent=(r.bookingNo||'')+(r.shipper?' — '+r.shipper:r.supplier?' — '+r.supplier:'');
+  renderSvcGrid(r.svcs||{});
+  openOv('svcOv');
+}
+
+/* MODULE: FILL GIÁ */
+function openFillPrice(id, tt){
+  if(!can('fillPrice')){ toast('Không có quyền fill giá','error'); return; }
+  svcIdx=id; currentTab=tt;
+  const r=cache[tt].find(x=>x._id===id)||{};
+  const svcs=r.svcs||{};
+  Object.keys(svcs).forEach(k=>{ if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name) SVCS.push({key:k,name:svcs[k]._name,custom:true}); });
+  const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
+  g('fpTitle').textContent='Fill giá dịch vụ';
+  g('fpSub').textContent=(r.bookingNo||'')+(r.shipper?' — '+r.shipper:r.supplier?' — '+r.supplier:'');
+  if(!allOn.length){
+    g('fpGrid').innerHTML='<div style="text-align:center;padding:1.5rem;color:var(--text-secondary);font-size:12px">Chưa có dịch vụ nào được bật. Vào "Dịch vụ" để chọn trước.</div>';
+    openOv('fpOv'); return;
+  }
+  let rows='';
+  allOn.forEach(function(s){
+    const sv=svcs[s.key]||{};
+    const curOpts=CURRENCIES.map(function(c){ return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>'; }).join('');
+    rows+='<div style="display:grid;grid-template-columns:160px 110px 110px 90px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:7px 8px;margin-bottom:4px;border:1px solid var(--border-light)">'
+      +'<span style="font-size:12px;font-weight:500">'+s.name+'</span>'
+      +'<input type="number" id="fpc_'+s.key+'" value="'+(sv.cost||'')+'" min="0" placeholder="0" oninput="updFpTotal()" style="font-size:12px"/>'
+      +'<input type="number" id="fpp_'+s.key+'" value="'+(sv.price||'')+'" min="0" placeholder="0" oninput="updFpTotal()" style="font-size:12px"/>'
+      +'<select id="fpcur_'+s.key+'" onchange="updFpTotal()" style="font-size:12px">'+curOpts+'</select>'
+      +'</div>';
+  });
+  g('fpGrid').innerHTML='<div style="display:grid;grid-template-columns:160px 110px 110px 90px;gap:6px;padding:4px 8px;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div>Dịch vụ</div><div>Cost đầu vào</div><div>Giá KH</div><div>Tiền tệ</div></div>'+rows+'<div id="fpTot" style="margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;font-size:12px;border:1px solid var(--border-light)"></div>';
+  updFpTotal();
+  openOv('fpOv');
+}
+
+function updFpTotal(){
+  const r=cache[currentTab]&&cache[currentTab].find(function(x){return x._id===svcIdx;})||{};
+  const svcs=r.svcs||{};
+  const allOn=SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;});
+  const byCur={};
+  allOn.forEach(function(s){
+    const cost=parseFloat(g('fpc_'+s.key)&&g('fpc_'+s.key).value)||0;
+    const price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
+    const cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'USD';
+    if(!byCur[cur])byCur[cur]={cost:0,price:0};
+    byCur[cur].cost+=cost; byCur[cur].price+=price;
+  });
+  const tot=g('fpTot'); if(!tot)return;
+  let html='';
+  Object.keys(byCur).forEach(function(c){
+    const v=byCur[c];
+    const ln=v.price-v.cost;
+    html+='<span style="margin-right:1rem">'+c+': Cost <strong style="color:var(--red)">'+v.cost.toLocaleString()+'</strong> | Giá KH <strong style="color:var(--green)">'+v.price.toLocaleString()+'</strong> | LN <strong style="color:'+(ln>=0?'var(--green)':'var(--red)')+'">'+((ln>=0?'+':'')+ln.toLocaleString())+'</strong></span>';
+  });
+  tot.innerHTML=html||'—';
+}
+
+async function saveFillPrice(){
+  const r=cache[currentTab].find(function(x){return x._id===svcIdx;})||{};
+  const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;}).forEach(function(s){
+    svcs[s.key].cost=parseFloat(g('fpc_'+s.key)&&g('fpc_'+s.key).value)||0;
+    svcs[s.key].price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
+    svcs[s.key].cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'USD';
+  });
+  setLoading(true,'Đang lưu giá...');
+  try {
+    await fsSet(colName(currentTab), svcIdx, {svcs, updatedAt:Date.now(), updatedBy:currentUser.email});
+    toast('Đã lưu giá dịch vụ'); closeOv('fpOv');
+  } catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+
+/* MODULE: INVOICE / DEBIT NOTE */
+function openInvoice(id, tt, tempR){
+  if(!can('viewInvoice')){ toast('Không có quyền xem Invoice','error'); return; }
+  svcIdx=id; currentTab=tt;
+  const r=cache[tt].find(x=>x._id===id)||{};
+
+  // Validate required fields
+  const missing=[];
+  if(!r.mblNo) missing.push('MBL No');
+  if(!r.soTkhai) missing.push('Số tờ khai');
+  if(!(r.cnee||r.consignee)) missing.push('Cnee/Consignee');
+  if(missing.length){
+    toast('Thiếu thông tin: '+missing.join(', '),'error');
+    return;
+  }
+
+  const svcs=r.svcs||{};
+  Object.keys(svcs).forEach(k=>{ if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name) SVCS.push({key:k,name:svcs[k]._name,custom:true}); });
+  // Filter: only services with invoice=Yes (exclude Waived & No)
+  const activeSvcs=SVCS.filter(s=>svcs[s.key]?.on && svcs[s.key]?.invoice!=='Waived' && svcs[s.key]?.invoice!=='No');
+  const allActiveSvcs=SVCS.filter(s=>svcs[s.key]?.on); // for summary
+
+  const shipperName=r.shipper||r.supplier||'';
+  const sp=cache.partners[shipperName]||{};
+  const cnNm=r.cnee||r.consignee||'';
+  const cp=cache.partners[cnNm]||{};
+  const now=new Date();
+  const dateStr=now.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).replace(/ /g,'-');
+  const dnNo='DN'+now.getFullYear().toString().slice(-2)+String(now.getMonth()+1).padStart(2,'0')+Math.floor(Math.random()*900000+100000);
+  const containers=(r.containers||[]).filter(c=>c.no).map(c=>c.no).join(', ');
+
+  // Build charges grouped by VAT rate for subtotals
+  // ROE = exchange rate (default 26390)
+  const defaultROE=26390;
+
+  g('invOv').innerHTML=`
+  <div class="modal" style="max-width:820px">
+    <div class="mhdr">
+      <div class="mtitle">Invoice / Debit Note — ${r.bookingNo||''}</div>
+      <button class="rac" onclick="closeOv('invOv')"><i class="ti ti-x"></i></button>
+    </div>
+
+    <!-- Exchange rate input -->
+    <div style="display:flex;align-items:center;gap:12px;padding:.65rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-bottom:1rem">
+      <i class="ti ti-currency-dollar" style="font-size:16px;color:var(--text-secondary)"></i>
+      <span style="font-size:12.5px;color:var(--text-secondary)">Tỷ giá USD/VND:</span>
+      <input type="number" id="roeInput" value="${defaultROE}" min="1" style="width:100px;font-size:13px;font-weight:600" oninput="rebuildInvoicePreview()"/>
+      <span style="font-size:12px;color:var(--text-secondary)">VND/USD</span>
+      <span style="font-size:11px;color:var(--text-tertiary);margin-left:auto">Nhập tỷ giá để tính tổng VND</span>
+    </div>
+
+    <!-- Invoice preview area -->
+    <div id="invPreviewArea"></div>
+
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('invOv')">Đóng</button>
+      <button class="btn blu" onclick="sendEmailDN('${id}','${tt}')"><i class="ti ti-mail"></i> Tạo Email</button>
+      <button class="btn pri" onclick="printDN()"><i class="ti ti-printer"></i> In / PDF</button>
+    </div>
+  </div>`;
+
+  openOv('invOv');
+
+  // Store data for rebuild
+  window._dnData={r,svcs,activeSvcs,allActiveSvcs,sp,cp,cnNm,dateStr,dnNo,containers,tt};
+  rebuildInvoicePreview();
+}
+
+function rebuildInvoicePreview(){
+  const d=window._dnData; if(!d)return;
+  const {r,svcs,activeSvcs,allActiveSvcs,sp,cp,cnNm,dateStr,dnNo,containers}=d;
+  const roe=parseFloat(g('roeInput')?.value)||26390;
+
+  // Calculate totals by currency, split by VAT rate
+  const byCur={};
+  const vatGroups={'0%':0,'8%':0,'10%':0};
+  activeSvcs.forEach(s=>{
+    const sv=svcs[s.key];
+    const cur=sv.cur||'USD';
+    const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+    const amtVND=cur==='VND'?amt:Math.round(amt*roe);
+    if(!byCur[cur])byCur[cur]=0;
+    byCur[cur]+=amt;
+    const vat=sv.vat||'0%';
+    if(vatGroups[vat]===undefined)vatGroups[vat]=0;
+    vatGroups[vat]+=amtVND;
+  });
+
+  // Convert all to VND for grand total
+  let grandVND=0;
+  Object.entries(byCur).forEach(([cur,amt])=>{
+    if(cur==='VND') grandVND+=amt;
+    else if(cur==='USD') grandVND+=Math.round(amt*roe);
+    else grandVND+=Math.round(amt*roe);
+  });
+
+  // Number to words (VND)
+  function numToWords(n){
+    n=Math.round(n);
+    if(n===0)return'Không đồng';
+    const units=['','một','hai','ba','bốn','năm','sáu','bảy','tám','chín'];
+    const teens=['mười','mười một','mười hai','mười ba','mười bốn','mười lăm','mười sáu','mười bảy','mười tám','mười chín'];
+    function readGroup(g){
+      let s='';
+      const h=Math.floor(g/100),t=Math.floor((g%100)/10),u=g%10;
+      if(h){s+=units[h]+' trăm ';}
+      if(t>1){s+=units[t]+' mươi ';if(u)s+=units[u]+' ';}
+      else if(t===1){s+=(u?teens[u]:teens[0])+' ';}
+      else if(u&&h)s+='lẻ '+units[u]+' ';
+      else if(u)s+=units[u]+' ';
+      return s;
+    }
+    const parts=[];
+    const labels=['','nghìn','triệu','tỷ'];
+    let temp=n,i=0;
+    while(temp>0){parts.unshift({v:temp%1000,l:labels[i]});temp=Math.floor(temp/1000);i++;}
+    let result='';
+    parts.forEach(p=>{if(p.v)result+=readGroup(p.v)+(p.l?' '+p.l+' ':'');});
+    return result.trim().replace(/\s+/g,' ').charAt(0).toUpperCase()+result.trim().slice(1)+' đồng';
+  }
+
+  // Bank accounts from config or default
+  const banks=window._bankAccounts||[
+    {beneficiary:'',account:'',bank:''},
+  ];
+
+  const sectionHdr='background:#1a4b8c;color:#fff;padding:7px 10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px';
+  const tdL='padding:7px 10px;border-bottom:1px solid #e8e8e0;font-size:11.5px;vertical-align:top';
+  const tdR='padding:7px 10px;border-bottom:1px solid #e8e8e0;font-size:11.5px;text-align:right;font-weight:600';
+
+  const chargeRows=activeSvcs.map((s,i)=>{
+    const sv=svcs[s.key];
+    const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+    const amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
+    const desc=sv.desc||'';
+    const vat=sv.vat||'0%';
+    return `<tr>
+      <td style="${tdL};color:#666;width:28px">${i+1}</td>
+      <td style="${tdL}"><strong>${s.name}</strong>${desc?'<br><span style="font-size:10.5px;color:#888">'+desc+'</span>':''}</td>
+      <td style="${tdR};font-weight:400">${(sv.price||0).toLocaleString()}</td>
+      <td style="${tdL}">${sv.cur||'USD'}</td>
+      <td style="${tdL};color:#888">${vat}</td>
+      <td style="${tdR}">${sv.qty||1}</td>
+      <td style="${tdL}">${sv.unit||'Unit'}</td>
+      <td style="${tdR};color:#1a4b8c">${amtVND.toLocaleString()}</td>
+    </tr>`;
+  }).join('');;
+
+  // Subtotals by VAT rate (already in VND)
+  const sub0=vatGroups['0%']||0;
+  const sub8=vatGroups['8%']||0;
+  const sub10=vatGroups['10%']||0;
+  const vatAmt=Math.round(sub8*0.08+sub10*0.10);
+  const grandWithVAT=Math.round(grandVND+vatAmt);
+
+  let totalRows='';
+  if(sub0) totalRows+=`<tr><td colspan="7" style="padding:5px 10px;text-align:right;font-size:11.5px;color:#666">Sub Total (0%)</td><td style="${tdR};color:#333">${sub0.toLocaleString()}</td></tr>`;
+  if(sub8) totalRows+=`<tr><td colspan="7" style="padding:5px 10px;text-align:right;font-size:11.5px;color:#666">Sub Total (8%)</td><td style="${tdR};color:#333">${sub8.toLocaleString()}</td></tr>`;
+  if(sub10) totalRows+=`<tr><td colspan="7" style="padding:5px 10px;text-align:right;font-size:11.5px;color:#666">Sub Total (10%)</td><td style="${tdR};color:#333">${sub10.toLocaleString()}</td></tr>`;
+  if(vatAmt) totalRows+=`<tr><td colspan="7" style="padding:5px 10px;text-align:right;font-size:11.5px;color:#666">VAT Amount (VND)</td><td style="${tdR};color:#e07000">${vatAmt.toLocaleString()}</td></tr>`;
+
+  const grandRow=`<tr style="background:#1a4b8c">
+    <td colspan="7" style="padding:8px 10px;color:#fff;font-weight:700;font-size:12px">GRAND TOTAL (VND)</td>
+    <td style="padding:8px 10px;color:#fff;font-weight:700;font-size:13px;text-align:right">${grandWithVAT.toLocaleString()}</td>
+  </tr>`;
+
+  const bankRows=banks.map(b=>`<tr>
+    <td style="${tdL}">${b.beneficiary||''}</td>
+    <td style="${tdL};font-weight:600">${b.account||''}</td>
+    <td style="${tdL}">${b.bank||''}</td>
+  </tr>`).join('');
+
+  const html=`<div id="dnPrintArea" style="font-family:Arial,sans-serif;font-size:12px;color:#1a1a18;background:#fff;padding:0">
+    <!-- HEADER -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:16px 20px 12px;border-bottom:3px solid #1a4b8c;margin-bottom:0">
+      <div>
+        <div style="font-size:18px;font-weight:800;color:#1a4b8c;letter-spacing:.5px">COCOSEA CO., LTD</div>
+        <div style="font-size:11px;color:#666;margin-top:3px">Keep Going . Keep Growing</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:22px;font-weight:800;color:#1a4b8c;letter-spacing:1px">DEBIT NOTE</div>
+        <div style="font-size:10px;color:#666;letter-spacing:.5px">STATEMENT OF CHARGES</div>
+      </div>
+    </div>
+
+    <!-- DN NO / DATE / JOB ID -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid #e8e8e0">
+      <div style="padding:10px 14px;border-right:1px solid #e8e8e0">
+        <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.5px;font-weight:700">Debit No</div>
+        <div style="font-size:14px;font-weight:700;color:#1a4b8c;margin-top:3px">${dnNo}</div>
+      </div>
+      <div style="padding:10px 14px;border-right:1px solid #e8e8e0">
+        <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.5px;font-weight:700">Debit Date</div>
+        <div style="font-size:14px;font-weight:700;color:#1a4b8c;margin-top:3px">${dateStr}</div>
+      </div>
+      <div style="padding:10px 14px">
+        <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.5px;font-weight:700">Booking No</div>
+        <div style="font-size:14px;font-weight:700;color:#1a4b8c;margin-top:3px">${r.bookingNo||'—'}</div>
+      </div>
+    </div>
+
+    <!-- BILLING TO (Shipper = the one billed) -->
+    <div style="${sectionHdr}">Billing To</div>
+    <table style="width:100%;border-collapse:collapse">
+      <tr><td style="${tdL};width:100px;color:#666;font-weight:600">Customer</td><td style="${tdL};font-weight:700">${sp.fullname||shipperName||'—'}</td></tr>
+      <tr>
+        <td style="${tdL};color:#666;font-weight:600">Tax ID</td><td style="${tdL}">${sp.mst||'—'}
+          <span style="margin-left:2rem;color:#666;font-weight:600">Language</span> <span style="margin-left:.5rem">Vi</span></td>
+      </tr>
+      <tr><td style="${tdL};color:#666;font-weight:600">Address</td><td style="${tdL}">${sp.addr||'—'}</td></tr>
+    </table>
+
+    <!-- SHIPMENT DETAIL -->
+    <div style="${sectionHdr};margin-top:4px">Shipment Detail</div>
+    <table style="width:100%;border-collapse:collapse">
+      <tr><td style="${tdL};width:120px;color:#666;font-weight:600">Shipper</td><td style="${tdL}">${sp.fullname||shipperName||'—'}</td></tr>
+      <tr><td style="${tdL};color:#666;font-weight:600">Consignee</td><td style="${tdL}">${cp.fullname||cnNm||'—'}</td></tr>
+      <tr>
+        <td style="${tdL};color:#666;font-weight:600">B/L No</td>
+        <td style="${tdL}"><strong>${r.mblNo||'—'}</strong>
+          <span style="margin-left:2rem;color:#666;font-weight:600">Volume</span>
+          <span style="margin-left:.5rem">${r.vol||''}${r.typeCont?' × '+r.typeCont:''}</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="${tdL};color:#666;font-weight:600">Vessel</td>
+        <td style="${tdL}">${r.vessel||'—'}${r.voy?' V.'+r.voy:''}
+          <span style="margin-left:2rem;color:#666;font-weight:600">Commodity</span>
+          <span style="margin-left:.5rem">${r.tenHang||'—'}</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="${tdL};color:#666;font-weight:600">POL</td>
+        <td style="${tdL}">${r.pol||'—'}
+          <span style="margin-left:2rem;color:#666;font-weight:600">POD</span>
+          <span style="margin-left:.5rem">${r.pod||'—'}</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="${tdL};color:#666;font-weight:600">Số T.Khai</td>
+        <td style="${tdL}">${r.soTkhai||'—'}
+          <span style="margin-left:2rem;color:#666;font-weight:600">ETD/ETA</span>
+          <span style="margin-left:.5rem">${r.etd||'—'} / ${r.eta||'—'}</span>
+        </td>
+      </tr>
+      ${containers?`<tr><td style="${tdL};color:#666;font-weight:600">Container(s)</td><td style="${tdL}">${containers}</td></tr>`:''}
+    </table>
+
+    <!-- CHARGE DETAIL -->
+    <div style="${sectionHdr};margin-top:4px;display:flex;justify-content:space-between;align-items:center">
+      <span>Charge Detail</span>
+      <span style="font-size:10px;font-weight:400">ROE: ${roe.toLocaleString()} VND/USD</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:#e8f0fb">
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0;width:28px">No.</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0">Service Item</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:right;border-bottom:1px solid #c8d8f0">Price</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0">Curr</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0;width:40px">VAT</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:right;border-bottom:1px solid #c8d8f0;width:40px">Qty</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0;width:55px">Unit</th>
+        <th style="padding:7px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:right;border-bottom:1px solid #c8d8f0">Amount (VND)</th>
+      </thead>
+      <tbody>${chargeRows}</tbody>
+      ${totalRows}
+      <tr><td colspan="8" style="padding:6px 10px;background:#f5f9ff;text-align:right;font-size:11px;color:#555;font-style:italic">${numToWords(grandVND)}</td></tr>
+      ${grandRow}
+    </table>
+
+    <!-- NOTICE -->
+    <div style="margin-top:8px;padding:10px 14px;background:#fffbea;border:1px solid #f0d060;border-radius:6px">
+      <div style="font-weight:700;font-size:11px;color:#856a00;margin-bottom:4px">NOTICE</div>
+      <div style="font-size:10.5px;color:#856a00">• Payment deadline: ATD +7 days or follow your service contract.</div>
+      <div style="font-size:10.5px;color:#856a00">• Invoice will be issued after your confirmation.</div>
+    </div>
+
+    <!-- BANK ACCOUNT -->
+    <div style="${sectionHdr};margin-top:8px">Bank Account</div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:#e8f0fb">
+        <th style="padding:6px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0">Beneficiary</th>
+        <th style="padding:6px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0">Account Number</th>
+        <th style="padding:6px 10px;font-size:10px;font-weight:700;color:#1a4b8c;text-align:left;border-bottom:1px solid #c8d8f0">Bank</th>
+      </thead>
+      <tbody>${bankRows||'<tr><td colspan="3" style="padding:8px 10px;font-size:11px;color:#999;text-align:center">Chưa cấu hình tài khoản ngân hàng — vào Cài đặt để thêm</td></tr>'}</tbody>
+    </table>
+
+    <!-- FOOTER -->
+    <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:#1a4b8c;border-radius:0 0 4px 4px">
+      <span style="color:#fff;font-weight:700;font-size:12px">COCOSEA CO., LTD</span>
+      <span style="color:rgba(255,255,255,.8);font-size:10.5px">Thank you for shipping with us</span>
+    </div>
+  </div>`;
+
+  const area=g('invPreviewArea');
+  if(area) area.innerHTML=html;
+}
+
+
+function printDN(){
+  const a=g('dnPrintArea'); if(!a)return;
+  const w=window.open('','_blank');
+  w.document.write('<!DOCTYPE html><html><head><title>Debit Note</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a18;background:#fff}@media print{body{margin:0}@page{margin:10mm}}</style></head><body>'+a.outerHTML+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(function(){w.print();},600);
+}
+function printInvoice(){ printDN(); }
+const SVC_STATUSES=['','Đã lên DN','Xác nhận','Đã thanh toán'];
+
+function svcRowHTML(s, sv){
+  sv=sv||{on:false,desc:''};
+  const isCustom=s.custom||false;
+  const svcStatus=sv.svcStatus||'';
+  const cost=sv.cost||'';
+  const statusOpts=SVC_STATUSES.map(function(st){return '<option value="'+st+'"'+(st===svcStatus?' selected':'')+'>'+( st||'Chưa lên DN')+'</option>';}).join('');
+  return`<div style="display:grid;grid-template-columns:24px 1fr 1fr 95px 95px 28px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:7px 10px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
+    <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
+    <div style="display:flex;align-items:center;gap:4px;min-width:0">
+      ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:500;flex:1;min-width:0" oninput="renameSvc('${s.key}',this.value)"/>`:`<span style="font-size:12px;font-weight:500">${s.name}</span>`}
+    </div>
+    <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả..." ${sv.on?'':'disabled'} style="font-size:11.5px"/>
+    <input type="number" id="scost_${s.key}" value="${cost}" placeholder="CP đầu vào" ${sv.on?'':'disabled'} style="font-size:11px" title="Chi phí đầu vào"/>
+    <select id="sstatus_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${statusOpts}</select>
+    <div style="display:flex;justify-content:flex-end">
+      ${isCustom?`<button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>`:'<div></div>'}
+    </div>
+  </div>`;
+}
+
+
+function addCustomSvc(){
+  const key='custom_'+Date.now();
+  const s={key,name:'Dịch vụ mới',custom:true};
+  SVCS.push(s);
+  const div=document.createElement('div');
+  div.innerHTML=svcRowHTML(s,{on:true,cost:0,price:0,desc:'',cur:'USD'});
+  g('svcGrid').appendChild(div.firstChild);
+  const el=g('sd_'+key);if(el)el.disabled=false;
+  const tg=g('tg_'+key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
+}
+
+function removeSvc(key){
+  const idx=SVCS.findIndex(s=>s.key===key);
+  if(idx>-1) SVCS.splice(idx,1);
+  const el=g('srow_'+key); if(el) el.remove();
+}
+
+function renameSvc(key, newName){
+  const s=SVCS.find(x=>x.key===key); if(s) s.name=newName;
+}
+function toggleSvc(key){
+  const tg=g('tg_'+key); const on=tg.classList.contains('on');
+  tg.classList.toggle('on',!on); tg.classList.toggle('off',on);
+  ['sd_','scost_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=on;});
+}
+
+async function saveSvc(){
+  const r=cache[currentTab].find(x=>x._id===svcIdx)||{};
+  const existing=JSON.parse(JSON.stringify(r.svcs||{}));
+  const svcs={};
+  SVCS.forEach(s=>{
+    const tg=g('tg_'+s.key);if(!tg)return;
+    const on=tg.classList.contains('on');
+    const desc=g('sd_'+s.key)?.value||'';
+    const prev=existing[s.key]||{};
+    svcs[s.key]={on,desc,cost:prev.cost||0,price:prev.price||0,cur:prev.cur||'USD'};
+    if(s.custom) svcs[s.key]._name=g('sname_'+s.key)?.value||s.name;
+  });
+  setLoading(true,'Đang lưu dịch vụ...');
+  try {
+    await fsSet(colName(currentTab), svcIdx, {svcs, updatedAt:Date.now(), updatedBy:currentUser.email});
+    toast('Đã lưu dịch vụ'); closeOv('svcOv');
+  } catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+function previewDN(){
+  const r=cache[currentTab].find(x=>x._id===svcIdx)||{};
+  const rows=SVCS.filter(s=>r.svcs?.[s.key]?.on).map(s=>({...s,...r.svcs[s.key]}));
+  const byCur={};rows.forEach(r2=>{if(!byCur[r2.cur])byCur[r2.cur]=0;byCur[r2.cur]+=r2.price;});
+  const now=new Date().toLocaleDateString('vi-VN');
+  const dnNo='DN-'+Date.now().toString().slice(-6);
+  const cnNm=r.cnee||r.consignee||'—';
+  const pi=cache.partners[cnNm]||null;
+  g('dnPreview').innerHTML=`<div style="background:var(--bg-secondary);border-radius:8px;padding:1.25rem;font-size:12px;border:1px solid var(--border-light)" id="dnPrintArea">
+    <div style="display:flex;justify-content:space-between;margin-bottom:1rem;padding-bottom:.85rem;border-bottom:1px solid var(--border-light)">
+      <div><div style="font-size:20px;font-weight:700;color:var(--green);letter-spacing:1px">DEBIT NOTE</div><div style="font-size:11px;color:var(--text-secondary);margin-top:3px">Số: <strong>${dnNo}</strong> | Ngày: ${now}</div></div>
+      <div style="text-align:right;font-size:11px;line-height:2;color:var(--text-secondary)"><div>Booking No: <strong style="color:var(--text-primary)">${r.bookingNo||'—'}</strong></div><div>MBL No: <strong style="color:var(--text-primary)">${r.mblNo||'—'}</strong></div><div>Số T.Khai: <strong style="color:var(--text-primary)">${r.soTkhai||'—'}</strong></div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">
+      <div style="background:var(--bg-primary);border-radius:8px;padding:.75rem 1rem;border:1px solid var(--border-light)">
+        <div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;font-weight:600">Khách hàng</div>
+        <div style="font-weight:600">${pi?pi.fullname:cnNm}</div>
+        ${pi?`<div style="font-size:11px;color:var(--text-secondary)">MST: ${pi.mst||'—'}</div><div style="font-size:11px;color:var(--text-secondary)">${pi.addr||'—'}</div>`:''}
+      </div>
+      <div style="background:var(--bg-primary);border-radius:8px;padding:.75rem 1rem;border:1px solid var(--border-light)">
+        <div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;font-weight:600">Thông tin lô hàng</div>
+        <div style="font-size:11.5px;line-height:1.9">
+          <div><span style="color:var(--text-secondary)">Hành trình:</span> <strong>${r.pol||'—'} → ${r.pod||'—'}</strong></div>
+          <div><span style="color:var(--text-secondary)">Vessel/Voy:</span> <strong>${r.vessel||'—'} / ${r.voy||'—'}</strong></div>
+          <div><span style="color:var(--text-secondary)">Tên hàng:</span> <strong>${r.tenHang||'—'}</strong></div>
+          <div><span style="color:var(--text-secondary)">ETD/ETA:</span> <strong>${r.etd||'—'} / ${r.eta||'—'}</strong></div>
+        </div>
+      </div>
+    </div>
+    <div style="border:1px solid var(--border-light);border-radius:6px;overflow:hidden">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg-secondary)">${['#','Dịch vụ','Mô tả','Đơn giá','Tiền tệ'].map(h=>`<th style="padding:6px 9px;font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left">${h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((rw,i)=>`<tr><td style="padding:6px 9px;border-bottom:1px solid var(--border-light);color:var(--text-secondary)">${i+1}</td><td style="padding:6px 9px;border-bottom:1px solid var(--border-light);font-weight:600">${rw.name}</td><td style="padding:6px 9px;border-bottom:1px solid var(--border-light);color:var(--text-secondary)">${rw.desc||'—'}</td><td style="padding:6px 9px;border-bottom:1px solid var(--border-light);font-weight:600">${rw.price.toLocaleString()}</td><td style="padding:6px 9px;border-bottom:1px solid var(--border-light)"><span class="bdg bdg-b">${rw.cur}</span></td></tr>`).join('')}</tbody>
+      </table>
+      <div style="padding:10px 12px;display:flex;flex-direction:column;align-items:flex-end;gap:4px;border-top:1px solid var(--border-light);background:var(--bg-secondary)">
+        ${Object.entries(byCur).map(([c,v])=>`<div>Tổng <span class="bdg bdg-b">${c}</span>: <strong style="color:var(--green);font-size:15px">${v.toLocaleString()} ${c}</strong></div>`).join('')}
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);font-style:italic;margin-top:.85rem;padding-top:.75rem;border-top:1px solid var(--border-light)">* Vui lòng thanh toán trong vòng 15 ngày kể từ ngày phát hành.</div>
+  </div>`;
+  openOv('dnOv');
+}
+function printDN(){
+  const a=g('dnPrintArea'); if(!a)return;
+  const w=window.open('','_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>Debit Note</title><style>body{font-family:Arial,sans-serif;padding:28px;font-size:12px;color:#1a1a18}strong{font-weight:600}.bdg-b{background:#E6F1FB;color:#0C447C;padding:2px 7px;border-radius:20px;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:7px 9px}th{background:#f7f7f5;font-weight:600;text-align:left}</style></head><body>${a.innerHTML}</body></html>`);
+  w.document.close(); w.focus(); setTimeout(()=>w.print(),500);
+}
+
+/* ─────────────────────────────────────────────
+   TASKS
+───────────────────────────────────────────── */
+function openTask(id, tt){
+  taskIdx=id; currentTab=tt;
+  const r=cache[tt].find(x=>x._id===id)||{}; const tks=r.tasks||{};
+  g('taskSub').textContent=(r.bookingNo||'')+(r.shipper?' — '+r.shipper:r.supplier?' — '+r.supplier:'');
+  g('taskList').innerHTML=TASKS.map(t=>{const done=tks[t.key]||false;return`<div class="task-row"><div class="task-chk ${done?'done':''}" id="tc_${t.key}" onclick="toggleTask('${t.key}')">${done?'<i class="ti ti-check" style="font-size:11px"></i>':''}</div><span class="task-lbl ${done?'done':''}" id="tl_${t.key}">${t.label}</span></div>`;}).join('');
+  renderTaskProg(tks); openOv('taskOv');
+}
+function toggleTask(key){
+  const chk=g('tc_'+key); const lbl=g('tl_'+key);
+  const done=chk.classList.contains('done');
+  chk.classList.toggle('done',!done); chk.innerHTML=!done?'<i class="ti ti-check" style="font-size:11px"></i>':'';
+  lbl.classList.toggle('done',!done);
+  const tks={}; TASKS.forEach(t=>{tks[t.key]=g('tc_'+t.key)?.classList.contains('done');});
+  renderTaskProg(tks);
+}
+function renderTaskProg(tks){
+  const done=TASKS.filter(t=>tks[t.key]).length; const pct=Math.round(done/TASKS.length*100);
+  g('taskProg').innerHTML=`<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-secondary);margin-bottom:6px"><span>Tiến độ</span><span>${done}/${TASKS.length} — ${pct}%</span></div><div style="height:6px;border-radius:3px;background:var(--bg-tertiary);overflow:hidden"><div style="width:${pct}%;height:100%;border-radius:3px;background:${pct===100?'var(--green)':'var(--blue)'};transition:width .3s"></div></div>${pct===100?'<div style="margin-top:8px;font-size:11.5px;color:var(--green);font-weight:500"><i class="ti ti-circle-check"></i> Tất cả công việc đã hoàn thành!</div>':''}`;
+}
+async function saveTask(){
+  const tks={}; TASKS.forEach(t=>{tks[t.key]=g('tc_'+t.key)?.classList.contains('done')||false;});
+  setLoading(true,'Đang lưu...');
+  try {
+    await fsSet(colName(currentTab), taskIdx, {tasks:tks, updatedAt:Date.now(), updatedBy:currentUser.email});
+    toast('Đã lưu checklist'); closeOv('taskOv');
+  } catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+
+/* ─────────────────────────────────────────────
+   DEADLINE PAGE
+───────────────────────────────────────────── */
+function renderDeadline(){
+  const alerts=getDeadlineAlerts();
+  const etdA=alerts.filter(a=>a.type==='etd');
+  const etaA=alerts.filter(a=>a.type==='eta');
+  const taskA=alerts.filter(a=>a.type==='task');
+  g('page-deadline').innerHTML=`
+  <div class="dl-settings">
+    <i class="ti ti-settings" style="font-size:16px;color:var(--text-secondary)"></i>
+    <span style="font-size:12.5px;color:var(--text-secondary)">Cảnh báo trước:</span>
+    <input type="number" id="ddInput" value="${deadlineDays}" min="1" max="30" style="width:64px" oninput="deadlineDays=parseInt(this.value)||5;renderDeadline();updateSidebar()"/>
+    <span style="font-size:12.5px;color:var(--text-secondary)">ngày</span>
+    <span style="font-size:11.5px;color:var(--text-secondary);margin-left:auto">${alerts.length} cảnh báo hoạt động</span>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
+    <div>
+      <div class="sec-label"><i class="ti ti-calendar-event"></i> ETD sắp đến hạn (${etdA.length})</div>
+      ${etdA.length?etdA.map(a=>`<div class="alert-item ${a.days<=2?'danger':a.days<=4?'warn':'info'}"><i class="ti ti-calendar-event ai"></i><div><div class="alert-title">${a.r.bookingNo} — ${a.r.shipper||a.r.supplier||''}</div><div class="alert-sub">ETD: <strong>${a.r.etd}</strong> | Còn <strong>${a.days} ngày</strong></div><div class="alert-sub">${a.r.pol||''} → ${a.r.pod||''}</div></div></div>`).join(''):'<div class="empty-state" style="padding:1rem"><i class="ti ti-checks"></i>Không có ETD sắp đến hạn</div>'}
+    </div>
+    <div>
+      <div class="sec-label"><i class="ti ti-anchor"></i> ETA sắp đến hạn (${etaA.length})</div>
+      ${etaA.length?etaA.map(a=>`<div class="alert-item ${a.days<=2?'danger':a.days<=4?'warn':'info'}"><i class="ti ti-anchor ai"></i><div><div class="alert-title">${a.r.bookingNo} — ${a.r.cnee||a.r.consignee||''}</div><div class="alert-sub">ETA: <strong>${a.r.eta}</strong> | Còn <strong>${a.days} ngày</strong></div><div class="alert-sub">${a.r.tenHang||'—'} → ${a.r.pod||'—'}</div></div></div>`).join(''):'<div class="empty-state" style="padding:1rem"><i class="ti ti-checks"></i>Không có ETA sắp đến hạn</div>'}
+    </div>
+  </div>
+  <div class="sec-label" style="margin-bottom:.6rem"><i class="ti ti-checklist"></i> Công việc chưa hoàn thành (${taskA.length} lô)</div>
+  ${taskA.length?`<div class="table-card"><div class="table-wrap"><table><thead><tr><th>Booking No</th><th>Trạng thái</th><th>ETD</th><th>Đối tác</th><th>Việc còn thiếu</th></tr></thead><tbody>${taskA.map(a=>`<tr><td style="font-weight:600">${a.r.bookingNo}</td><td><span class="bdg ${SB[a.r.status]||'bdg-gr'}">${a.r.status}</span></td><td>${a.r.etd||'—'}</td><td>${a.r.shipper||a.r.supplier||'—'}</td><td><div class="pill-row">${a.incompleteTasks.map(t=>`<span class="bdg bdg-r">${t.label}</span>`).join('')}</div></td></tr>`).join('')}</tbody></table></div></div>`:'<p style="font-size:12.5px;color:var(--text-secondary)">Tất cả lô hàng đang hoạt động đã hoàn thành công việc.</p>'}`;
+}
+
+/* ─────────────────────────────────────────────
+   DEBT PAGE
+───────────────────────────────────────────── */
+function renderDebt(){
+  const pg=g('page-cong-no');
+  if(!can('viewCost')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền truy cập</div></div>';return;}
+
+  // Get all lots
+  const allR=[...cache.xuat.map(r=>({...r,loai:'Xuất'})),...cache.nhap.map(r=>({...r,loai:'Nhập'}))];
+
+  // Unique shippers
+  const shippers=[...new Set(allR.map(r=>r.shipper||r.supplier||'').filter(Boolean))].sort();
+
+  // Date range defaults
+  const today=new Date().toISOString().slice(0,10);
+  const monthAgo=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+
+  pg.innerHTML=
+    '<div style="font-weight:600;font-size:14px;margin-bottom:1rem">Báo cáo công nợ theo Shipper</div>'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+      +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">Shipper:</label>'
+      +'<select id="cnReportShipper" style="width:160px;font-size:12px"><option value="">Tất cả</option>'
+      +shippers.map(s=>'<option>'+s+'</option>').join('')+'</select>'
+      +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">ETD từ:</label>'
+      +'<input type="date" id="cnFrom" value="'+monthAgo+'" style="font-size:12px;width:128px"/>'
+      +'<label style="font-size:12px;color:var(--text-secondary)">đến:</label>'
+      +'<input type="date" id="cnTo" value="'+today+'" style="font-size:12px;width:128px"/>'
+      +'<button class="btn pri" onclick="runDebtReport()"><i class="ti ti-chart-bar"></i> Chạy báo cáo</button>'
+      +'<button class="btn" onclick="exportExcelDebt()"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
+    +'</div>'
+    +'<div id="cnReportResult"></div>';
+
+  runDebtReport();
+}
+
+function runDebtReport(){
+  const filterShipper=g('cnReportShipper')?.value||'';
+  const from=g('cnFrom')?.value||'';
+  const to=g('cnTo')?.value||'';
+  const allR=[...cache.xuat.map(r=>({...r,loai:'Xuất'})),...cache.nhap.map(r=>({...r,loai:'Nhập'}))];
+
+  const filtered=allR.filter(r=>{
+    const sh=r.shipper||r.supplier||'';
+    const matchSh=!filterShipper||sh===filterShipper;
+    const matchFrom=!from||!r.etd||(r.etd>=from);
+    const matchTo=!to||!r.etd||(r.etd<=to);
+    return matchSh&&matchFrom&&matchTo;
+  });
+
+  if(!filtered.length){
+    g('cnReportResult').innerHTML='<div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu trong khoảng thời gian này.</div>';
+    return;
+  }
+
+  // Group by shipper
+  const byShipper={};
+  filtered.forEach(function(r){
+    const sh=r.shipper||r.supplier||'(Không rõ)';
+    if(!byShipper[sh])byShipper[sh]={rows:[],totals:{}};
+    byShipper[sh].rows.push(r);
+    // Sum from svcs where invoice=Yes
+    const svcs=r.svcs||{};
+    Object.values(svcs).forEach(function(sv){
+      if(!sv.on||sv.invoice==='Waived'||sv.invoice==='No')return;
+      const cur=sv.cur||'USD';
+      const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+      if(!byShipper[sh].totals[cur])byShipper[sh].totals[cur]=0;
+      byShipper[sh].totals[cur]+=amt;
+    });
+  });
+
+  const thS='padding:7px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap';
+  const tdS='padding:6px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+
+  let html='';
+  Object.entries(byShipper).forEach(function(entry){
+    const sh=entry[0]; const data=entry[1];
+    const totalStr=Object.entries(data.totals).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' + ')||'—';
+
+    const rows=data.rows.map(function(r){
+      const svcs=r.svcs||{};
+      const invSvcs=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice!=='Waived'&&e[1].invoice!=='No';});
+      const rowTotal={};
+      invSvcs.forEach(function(e){const sv=e[1];const cur=sv.cur||'USD';const amt=sv.amount||(sv.price||0)*(sv.qty||1);if(!rowTotal[cur])rowTotal[cur]=0;rowTotal[cur]+=amt;});
+      const rowTotalStr=Object.entries(rowTotal).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'—';
+      return '<tr>'
+        +'<td style="'+tdS+';font-weight:600">'+r.bookingNo+'</td>'
+        +'<td style="'+tdS+'"><span class="bdg '+(r.loai==='Xuất'?'bdg-b':'bdg-a')+'">'+r.loai+'</span></td>'
+        +'<td style="'+tdS+'">'+(r.etd||'—')+'</td>'
+        +'<td style="'+tdS+'">'+(r.mblNo||'—')+'</td>'
+        +'<td style="'+tdS+'">'+(r.pol||'—')+' → '+(r.pod||'—')+'</td>'
+        +'<td style="'+tdS+'"><span class="bdg '+(SB[r.status]||'bdg-gr')+'">'+r.status+'</span></td>'
+        +'<td style="'+tdS+';color:var(--green);font-weight:600">'+rowTotalStr+'</td>'
+        +'</tr>';
+    }).join('');
+
+    html+='<div style="margin-bottom:1rem;border:1px solid var(--border-light);border-radius:10px;overflow:hidden;background:var(--bg-primary)">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;padding:.65rem 1rem;background:var(--bg-secondary);border-bottom:1px solid var(--border-light)">'
+        +'<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px"><i class="ti ti-building-factory" style="font-size:14px;color:var(--text-secondary)"></i>'+sh+'</div>'
+        +'<div style="font-size:12px"><span style="color:var(--text-secondary)">'+data.rows.length+' lô</span> &nbsp;|&nbsp; Tổng: <strong style="color:var(--green)">'+totalStr+'</strong></div>'
+      +'</div>'
+      +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
+        +'<thead><tr><th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Doanh thu (Invoice)</th></tr></thead>'
+        +'<tbody>'+rows+'</tbody>'
+      +'</table></div>'
+    +'</div>';
+  });
+
+  // Grand summary
+  const grandTotals={};
+  filtered.forEach(function(r){
+    const svcs=r.svcs||{};
+    Object.values(svcs).forEach(function(sv){
+      if(!sv.on||sv.invoice==='Waived'||sv.invoice==='No')return;
+      const cur=sv.cur||'USD';
+      const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+      if(!grandTotals[cur])grandTotals[cur]=0;
+      grandTotals[cur]+=amt;
+    });
+  });
+  const grandStr=Object.entries(grandTotals).map(function(e){return '<strong style="color:var(--green)">'+e[1].toLocaleString()+' '+e[0]+'</strong>';}).join(' + ')||'0';
+  html='<div style="padding:.65rem 1rem;background:var(--green-bg);border:1px solid var(--border-light);border-radius:8px;margin-bottom:.75rem;font-size:12.5px;display:flex;gap:1rem;align-items:center"><i class="ti ti-chart-bar" style="color:var(--green)"></i> <span>Tổng hợp kỳ: '+filtered.length+' lô hàng &nbsp;|&nbsp; Tổng doanh thu: '+grandStr+'</span></div>'+html;
+
+  g('cnReportResult').innerHTML=html;
+}
+
+// OLD function renderDebt kept for compatibility - now points to new one
+// eslint-disable-next-line no-unused-vars
+
+function renderPartners(){
+  const pg=g('page-doi-tac');
+  if(!can('managePartners')){pg.innerHTML=`<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền truy cập</div></div>`;return;}
+  const tLabel={carrier:'Hãng tàu / Carrier',shipper:'Shipper / Nhà XK',fwd:'Forwarder (FWD)',supplier:'Nhà cung cấp / NK'};
+  const tIcon={carrier:'ti-ship',shipper:'ti-building-factory',fwd:'ti-truck',supplier:'ti-package-import'};
+  const allTypes=['carrier','shipper','fwd','supplier'];
+  const total=Object.keys(cache.partners).length;
+  pg.innerHTML=`
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+    <div>
+      <div style="font-weight:600;font-size:14px">Danh sách đối tác</div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${total} đối tác</div>
+    </div>
+    <button class="btn pri" onclick="openPartnerModal(null)"><i class="ti ti-plus"></i> Thêm đối tác</button>
+  </div>
+  ${allTypes.map(t=>{
+    const list=Object.values(cache.partners).filter(p=>p.type===t).sort((a,b)=>a.shortname.localeCompare(b.shortname));
+    return`<div style="margin-bottom:1.25rem">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:.5rem">
+        <div style="width:26px;height:26px;border-radius:6px;background:var(--bg-secondary);border:0.5px solid var(--border-light);display:flex;align-items:center;justify-content:center"><i class="ti ${tIcon[t]}" style="font-size:13px;color:var(--text-secondary)"></i></div>
+        <span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px">${tLabel[t]}</span>
+        <span style="font-size:10px;color:var(--text-tertiary);background:var(--bg-secondary);padding:1px 7px;border-radius:20px;border:0.5px solid var(--border-light)">${list.length}</span>
+      </div>
+      <div style="border:0.5px solid var(--border-light);border-radius:10px;overflow:hidden;background:var(--bg-primary)">
+        ${list.length?list.map((p,i)=>`
+        <div style="display:grid;grid-template-columns:110px 1fr 140px 140px 32px;gap:0;align-items:stretch;border-bottom:${i<list.length-1?'0.5px solid var(--border-light)':'none'};cursor:pointer" onclick="togglePartnerRow('${p.shortname}')" id="prow_${p.shortname}">
+          <div style="padding:9px 12px;display:flex;align-items:center;gap:7px;border-right:0.5px solid var(--border-light)">
+            <div style="width:28px;height:28px;border-radius:6px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--green);flex-shrink:0">${p.shortname.slice(0,2).toUpperCase()}</div>
+            <span style="font-weight:600;font-size:12.5px;color:var(--green)">${p.shortname}</span>
+          </div>
+          <div style="padding:9px 12px;display:flex;flex-direction:column;justify-content:center;border-right:0.5px solid var(--border-light)">
+            <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.fullname||'—'}</div>
+            <div style="font-size:10.5px;color:var(--text-secondary);margin-top:1px">MST: ${p.mst||'—'}</div>
+          </div>
+          <div style="padding:9px 12px;display:flex;flex-direction:column;justify-content:center;border-right:0.5px solid var(--border-light)">
+            <div style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><i class="ti ti-mail" style="font-size:11px"></i>${p.email||'—'}</div>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:4px"><i class="ti ti-phone" style="font-size:11px"></i>${p.phone||'—'}</div>
+          </div>
+          <div style="padding:9px 12px;display:flex;flex-direction:column;justify-content:center;border-right:0.5px solid var(--border-light)">
+            <div style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><i class="ti ti-user" style="font-size:11px"></i>${p.contact||'—'}</div>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:4px"><i class="ti ti-map-pin" style="font-size:11px"></i><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">${p.addr||'—'}</span></div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:center;padding:0 4px">
+            <i class="ti ti-chevron-right" style="font-size:14px;color:var(--text-tertiary)" id="pchev_${p.shortname}"></i>
+          </div>
+        </div>
+        <div id="pdetail_${p.shortname}" style="display:none;border-bottom:${i<list.length-1?'0.5px solid var(--border-light)':'none'};background:var(--bg-secondary)">
+          <div style="padding:.75rem 1.25rem;display:flex;align-items:center;justify-content:space-between">
+            <div style="font-size:11.5px;color:var(--text-secondary);display:grid;grid-template-columns:1fr 1fr;gap:8px 24px">
+              <div><span style="color:var(--text-tertiary)">Short name:</span> <strong>${p.shortname}</strong></div>
+              <div><span style="color:var(--text-tertiary)">Loại:</span> ${tLabel[t]}</div>
+              <div><span style="color:var(--text-tertiary)">Tên đầy đủ:</span> ${p.fullname||'—'}</div>
+              <div><span style="color:var(--text-tertiary)">MST:</span> ${p.mst||'—'}</div>
+              <div><span style="color:var(--text-tertiary)">Email:</span> ${p.email||'—'}</div>
+              <div><span style="color:var(--text-tertiary)">Điện thoại:</span> ${p.phone||'—'}</div>
+              <div style="grid-column:1/-1"><span style="color:var(--text-tertiary)">Địa chỉ:</span> ${p.addr||'—'}</div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0;margin-left:1rem">
+              <button class="btn" onclick="event.stopPropagation();openPartnerModal('${p.shortname}')"><i class="ti ti-edit"></i> Sửa</button>
+              <button class="btn red" onclick="event.stopPropagation();delPartner('${p.shortname}')" style="font-size:12px"><i class="ti ti-trash"></i></button>
+            </div>
+          </div>
+        </div>`).join('')
+        :`<div style="padding:1.25rem;text-align:center;color:var(--text-secondary);font-size:12px"><i class="ti ti-circle-dashed" style="font-size:18px;display:block;margin-bottom:6px"></i>Chưa có ${tLabel[t]}</div>`}
+      </div>
+    </div>`;
+  }).join('')}`;
+}
+
+function togglePartnerRow(name){
+  const detail=g('pdetail_'+name);
+  const chev=g('pchev_'+name);
+  if(!detail)return;
+  const isOpen=detail.style.display!=='none';
+  // Close all others first
+  document.querySelectorAll('[id^="pdetail_"]').forEach(el=>{el.style.display='none';});
+  document.querySelectorAll('[id^="pchev_"]').forEach(el=>{el.className='ti ti-chevron-right';el.style.fontSize='14px';el.style.color='var(--text-tertiary)';});
+  if(!isOpen){
+    detail.style.display='block';
+    chev.className='ti ti-chevron-down';
+    chev.style.color='var(--green)';
+  }
+}
+function openPartnerView(name){if(cache.partners[name])openPartnerModal(name);else toast('Chưa có thông tin: '+name,'error');}
+function openPartnerModal(name){
+  partnerIdx=name; partnerIsNew=!name;
+  const p=name?cache.partners[name]:{};
+  g('partnerTitle').textContent=name?'Chỉnh sửa: '+name:'Thêm đối tác mới';
+  g('partnerFields').innerHTML=`
+    <div class="fi"><label class="lbl">Short name (ID)</label><input type="text" id="pf_sn" value="${p.shortname||''}" ${name?'readonly':''}/></div>
+    <div class="fi"><label class="lbl">Loại đối tác</label><select id="pf_type"><option value="carrier"${p.type==='carrier'?' selected':''}>Carrier</option><option value="shipper"${p.type==='shipper'?' selected':''}>Shipper</option><option value="fwd"${p.type==='fwd'?' selected':''}>Forwarder</option><option value="supplier"${p.type==='supplier'?' selected':''}>Nhà cung cấp</option></select></div>
+    <div class="fi full"><label class="lbl">Tên công ty đầy đủ</label><input type="text" id="pf_fn" value="${p.fullname||''}"/></div>
+    <div class="fi"><label class="lbl">MST</label><input type="text" id="pf_mst" value="${p.mst||''}"/></div>
+    <div class="fi full"><label class="lbl">Địa chỉ</label><input type="text" id="pf_addr" value="${p.addr||''}"/></div>
+    <div class="fi"><label class="lbl">Email</label><input type="email" id="pf_email" value="${p.email||''}"/></div>
+    <div class="fi"><label class="lbl">Người liên hệ</label><input type="text" id="pf_contact" value="${p.contact||''}"/></div>
+    <div class="fi"><label class="lbl">Điện thoại</label><input type="tel" id="pf_phone" value="${p.phone||''}"/></div>`;
+  openOv('partnerOv');
+}
+async function savePartner(){
+  const sn=g('pf_sn').value.trim(); if(!sn){toast('Nhập tên viết tắt','error');return;}
+  const rec={type:g('pf_type').value,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,contact:g('pf_contact').value,phone:g('pf_phone').value,updatedAt:Date.now()};
+  setLoading(true,'Đang lưu...');
+  try { await fsSet('partners',sn,rec); toast('Đã lưu đối tác'); closeOv('partnerOv'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+async function delPartner(name){
+  if(!confirm('Xóa đối tác '+name+'?'))return;
+  setLoading(true);
+  try { await fsDel('partners',name); toast('Đã xóa đối tác'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+
+/* ─────────────────────────────────────────────
+   USERS (Firestore + Firebase Auth)
+───────────────────────────────────────────── */
+// Editable permission matrix state (in-memory, admin can save to Firestore)
+let editingPerms = false;
+
+function renderUsers(){
+  const pg=g('page-users');
+  if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div style="font-weight:600">Chỉ Admin mới quản lý được người dùng</div></div>';return;}
+
+  const PERM_LABELS={
+    addLot:'Thêm lô hàng',
+    editLot:'Sửa lô hàng',
+    deleteLot:'Xóa lô hàng',
+    editSvc:'Chọn dịch vụ',
+    fillPrice:'Fill giá dịch vụ',
+    viewCost:'Xem chi phí',
+    viewInvoice:'Xem & xuất Invoice',
+    manageUsers:'Quản lý người dùng',
+    managePartners:'Quản lý đối tác',
+    export:'Xuất Excel',
+  };
+  const ROLE_KEYS=['operator','accountant','doc','cus','viewer']; // admin is always full - not editable
+  const ROLE_LIST=['admin','operator','accountant','doc','cus','viewer'];
+
+  // ── User list ──
+  const userRows=cache.users.map(function(u,i){
+    const r=ROLES[u.role||'viewer'];
+    const isSelf=u.email===currentUser?.email;
+    const roleOpts=ROLE_LIST.map(function(rk){return '<option value="'+rk+'"'+(rk===(u.role||'viewer')?' selected':'')+'>'+ROLES[rk].label+'</option>';}).join('');
+    return '<tr'+(isSelf?' style="background:var(--green-bg)"':'')+'>'
+      +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light)">'
+        +'<div style="display:flex;align-items:center;gap:8px">'
+          +'<div style="width:32px;height:32px;border-radius:50%;background:var(--bg-secondary);border:1px solid var(--border-light);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">'+(u.avatar||'??')+'</div>'
+          +'<div><div style="font-weight:500;font-size:12.5px">'+(u.name||u.email)+(isSelf?' <span style="font-size:10px;color:var(--green)">(bạn)</span>':'')+'</div>'
+          +'<div style="font-size:10.5px;color:var(--text-secondary)">'+(u.email||'')+'</div></div>'
+        +'</div>'
+      +'</td>'
+      +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light)">'
+        +(isSelf
+          ? '<span class="'+r.cls+'">'+r.label+'</span>'
+          : '<select id="urole_'+i+'" style="font-size:12px;width:100px" onchange="previewRoleChange('+i+',this.value)">'+roleOpts+'</select>')
+      +'</td>'
+      +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light);font-size:11px;color:var(--text-tertiary)">'+(u.updatedAt?new Date(u.updatedAt).toLocaleDateString('vi-VN'):'—')+'</td>'
+      +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light);text-align:center">'
+        +'<div style="display:flex;gap:3px;justify-content:center">'
+          +'<button class="rac grn" onclick="openUserEdit('+i+')" title="Sửa thông tin"><i class="ti ti-edit"></i></button>'
+          +(!isSelf?'<button class="rac" onclick="saveUserRole('+i+')" title="Lưu vai trò" style="color:#854F0B"><i class="ti ti-device-floppy"></i></button>':'')
+        +'</div>'
+      +'</td>'
+    +'</tr>';
+  }).join('');
+
+  // ── Permission matrix ──
+  const permRows=Object.entries(PERM_LABELS).map(function(entry){
+    const k=entry[0]; const label=entry[1];
+    const cells=ROLE_LIST.map(function(role){
+      const isAdmin=role==='admin';
+      const hasIt=ROLES[role].perms[k];
+      if(isAdmin){
+        // Admin always has all perms, not editable
+        return '<td style="text-align:center;padding:7px 6px;border-bottom:1px solid var(--border-light)"><i class="ti ti-circle-check" style="color:var(--green);font-size:17px"></i></td>';
+      }
+      if(editingPerms){
+        return '<td style="text-align:center;padding:6px;border-bottom:1px solid var(--border-light)">'
+          +'<button class="perm-toggle '+(hasIt?'on':'off')+'" id="pt_'+role+'_'+k+'" onclick="togglePermEdit(this.dataset.role,this.dataset.perm)" data-role="'+role+'" data-perm="'+k+'"></button>'
+          +'</td>';
+      } else {
+        return '<td style="text-align:center;padding:7px 6px;border-bottom:1px solid var(--border-light)">'
+          +(hasIt?'<i class="ti ti-circle-check" style="color:var(--green);font-size:17px"></i>':'<i class="ti ti-circle-x" style="color:var(--text-tertiary);font-size:17px"></i>')
+          +'</td>';
+      }
+    }).join('');
+    return '<tr><td style="padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12.5px">'+label+'</td>'+cells+'</tr>';
+  }).join('');
+
+  const thStyle='padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;text-align:center';
+
+  pg.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">'
+      +'<div><div style="font-weight:600;font-size:14px">Quản lý người dùng</div><div style="font-size:11px;color:var(--text-secondary);margin-top:2px">'+cache.users.length+' tài khoản</div></div>'
+      +'<button class="btn pri" onclick="openUserEdit(null)"><i class="ti ti-plus"></i> Thêm người dùng</button>'
+    +'</div>'
+
+    // User table
+    +'<div class="table-card" style="margin-bottom:1.5rem"><div class="table-wrap"><table style="width:100%;border-collapse:collapse;font-size:12.5px">'
+      +'<thead><tr>'
+        +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;text-align:left">Người dùng</th>'
+        +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px">Vai trò</th>'
+        +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px">Cập nhật</th>'
+        +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;text-align:center">Thao tác</th>'
+      +'</tr></thead>'
+      +'<tbody>'+userRows+'</tbody>'
+    +'</table></div></div>'
+
+    // Permission matrix
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">'
+      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px"><i class="ti ti-shield-check" style="font-size:14px"></i>Bảng phân quyền theo module</div>'
+      +'<div style="display:flex;gap:6px">'
+        +(editingPerms
+          ? '<button class="btn" onclick="cancelPermEdit()">Hủy</button><button class="btn pri" onclick="savePermissions()"><i class="ti ti-check"></i> Lưu phân quyền</button>'
+          : '<button class="btn" onclick="startPermEdit()"><i class="ti ti-edit"></i> Chỉnh sửa phân quyền</button>')
+      +'</div>'
+    +'</div>'
+    +'<div class="table-card"><div class="table-wrap" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr>'
+        +'<th style="'+thStyle+';text-align:left;min-width:160px">Module / Quyền</th>'
+        +ROLE_LIST.map(function(rk){return '<th style="'+thStyle+';min-width:90px"><span class="'+ROLES[rk].cls+'">'+ROLES[rk].label+'</span></th>';}).join('')
+      +'</tr></thead>'
+      +'<tbody>'+permRows+'</tbody>'
+    +'</table></div></div>'
+    +(editingPerms?'<div style="margin-top:8px;font-size:11px;color:var(--text-secondary)"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-1px"></i> Bấm vào ô để bật/tắt quyền. Bấm "Lưu phân quyền" để áp dụng cho tất cả người dùng.</div>':'');
+}
+
+function previewRoleChange(idx, newRole){
+  // Just visual preview - actual save on click of save icon
+}
+
+async function saveUserRole(idx){
+  const u=cache.users[idx];
+  const sel=g('urole_'+idx);
+  if(!sel)return;
+  const newRole=sel.value;
+  if(newRole===u.role){toast('Vai trò không thay đổi');return;}
+  setLoading(true,'Đang cập nhật vai trò...');
+  try{
+    const docId=u._docId||u.email.replace(/\./g,'_');
+    await fsSet('users',docId,{role:newRole,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã cập nhật vai trò: '+ROLES[newRole].label);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+function startPermEdit(){
+  editingPerms=true;
+  renderUsers();
+}
+
+function cancelPermEdit(){
+  editingPerms=false;
+  renderUsers();
+}
+
+function togglePermEdit(role, perm){
+  if(role==='admin')return; // admin always full
+  ROLES[role].perms[perm]=!ROLES[role].perms[perm];
+  const btn=g('pt_'+role+'_'+perm);
+  if(btn){btn.classList.toggle('on',ROLES[role].perms[perm]);btn.classList.toggle('off',!ROLES[role].perms[perm]);}
+  // Update can() result for current user if their role changed
+  updateSidebar();
+}
+
+async function savePermissions(){
+  // Save the custom permissions to Firestore so all users get updated roles
+  const permsSnapshot={};
+  ['operator','doc','cus','viewer'].forEach(function(role){
+    permsSnapshot[role]=Object.assign({},ROLES[role].perms);
+  });
+  setLoading(true,'Đang lưu phân quyền...');
+  try{
+    await fsSet('_config','permissions',{roles:permsSnapshot,updatedAt:Date.now(),updatedBy:currentUser.email});
+    editingPerms=false;
+    toast('Đã lưu phân quyền thành công');
+    renderUsers();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+function openUserEdit(idx){
+  userEditIdx=idx; const u=idx!==null?cache.users[idx]:{};
+  g('userEditTitle').textContent=idx!==null?'Chỉnh sửa: '+(u.name||u.email):'Thêm người dùng mới';
+  g('userEditFields').innerHTML=`
+    <div class="fi full"><label class="lbl">Email (dùng để đăng nhập)</label><input type="email" id="uf_email" value="${u.email||''}" ${idx!==null?'readonly':''}/></div>
+    <div class="fi"><label class="lbl">Họ và tên</label><input type="text" id="uf_name" value="${u.name||''}"/></div>
+    <div class="fi"><label class="lbl">Avatar (2 ký tự)</label><input type="text" id="uf_av" value="${u.avatar||''}" maxlength="2"/></div>
+    <div class="fi"><label class="lbl">Vai trò</label><select id="uf_role"><option value="admin"${(u.role||'viewer')==='admin'?' selected':''}>Admin</option><option value="operator"${u.role==='operator'?' selected':''}>Operator</option><option value="accountant"${u.role==='accountant'?' selected':''}>Accountant</option><option value="doc"${u.role==='doc'?' selected':''}>Doc</option><option value="cus"${u.role==='cus'?' selected':''}>Cus</option><option value="viewer"${(u.role||'viewer')==='viewer'?' selected':''}>Viewer</option></select></div>
+    ${idx===null?`<div class="fi"><label class="lbl">Mật khẩu ban đầu</label><input type="password" id="uf_pass" placeholder="Tối thiểu 6 ký tự"/></div>`:''}
+    <div class="fi-note full" style="grid-column:1/-1;font-size:11px;color:var(--text-secondary);padding:.5rem .75rem;background:var(--bg-secondary);border-radius:6px">
+      ${idx===null?'Tài khoản Firebase Auth sẽ được tạo tự động. Người dùng có thể đổi mật khẩu sau khi đăng nhập.':'Vai trò và thông tin hồ sơ sẽ được cập nhật. Mật khẩu quản lý qua Firebase Console hoặc chức năng đổi mật khẩu.'}
+    </div>`;
+  openOv('userEditOv');
+}
+async function saveUser(){
+  const name=g('uf_name').value.trim(); const email=g('uf_email').value.trim();
+  const role=g('uf_role').value; const av=g('uf_av').value.slice(0,2).toUpperCase()||name.slice(0,2).toUpperCase()||'??';
+  if(!email){toast('Nhập email','error');return;}
+  if(!name){toast('Nhập họ tên','error');return;}
+  setLoading(true,'Đang tạo người dùng...');
+  try {
+    let uid=null;
+    if(userEditIdx===null){
+      // Creating new user
+      const pass=g('uf_pass')?.value||'';
+      if(pass.length<6){toast('Mật khẩu tối thiểu 6 ký tự','error');setLoading(false);return;}
+      // Step 1: Create Firebase Auth account
+      const cred=await auth.createUserWithEmailAndPassword(email, pass);
+      uid=cred.user.uid;
+      // Step 2: Save profile to Firestore using UID as document ID (most reliable)
+      const docId=uid||email.replace(/\./g,'_');
+      await fsSet('users', docId, {uid,email,name,role,avatar:av,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
+      toast('Đã tạo người dùng: '+email+' ('+ROLES[role].label+')');
+    } else {
+      // Editing existing user
+      const u=cache.users[userEditIdx];
+      const docId=u._docId||u.uid||u.email.replace(/\./g,'_');
+      await fsSet('users', docId, {email,name,role,avatar:av,updatedAt:Date.now(),updatedBy:currentUser?.email||''});
+      toast('Đã cập nhật: '+name);
+    }
+    closeOv('userEditOv');
+  } catch(e){
+    if(e.code==='auth/email-already-in-use'){
+      toast('Email đã có tài khoản Firebase. Dùng chức năng Sửa để thay đổi role.','error');
+    } else {
+      toast('Lỗi: '+e.message,'error');
+    }
+  }
+  setLoading(false);
+}
+
+
+</script>
+
+<style>
+:root{--bg-primary:#fff;--bg-secondary:#f7f7f5;--bg-tertiary:#f0efe9;--text-primary:#1a1a18;--text-secondary:#6b6b65;--text-tertiary:#9b9b93;--border-light:rgba(0,0,0,0.10);--green:#0F6E56;--green-dark:#085041;--green-bg:#E1F5EE;--blue:#185FA5;--blue-bg:#E6F1FB;--blue-text:#0C447C;--amber-bg:#FAEEDA;--amber-text:#633806;--red:#A32D2D;--red-bg:#FCEBEB;--red-text:#791F1F;--gray-bg:#F1EFE8;--gray-text:#444441;--radius-md:8px;--radius-lg:12px}
+[data-theme="dark"]{--bg-primary:#1e1e1c;--bg-secondary:#262624;--bg-tertiary:#2e2e2b;--text-primary:#e8e8e2;--text-secondary:#9b9b93;--text-tertiary:#6b6b65;--border-light:rgba(255,255,255,0.09);--green-bg:#04342C;--blue-bg:#042C53;--amber-bg:#412402;--red-bg:#501313}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;font-size:13px;color:var(--text-primary);background:var(--bg-tertiary);min-height:100vh}
+/* LOGIN */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg-tertiary)}
+.login-card{background:var(--bg-primary);border-radius:var(--radius-lg);border:1px solid var(--border-light);padding:2.5rem 2rem;width:100%;max-width:380px;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.login-logo{display:flex;align-items:center;gap:10px;margin-bottom:1.75rem;justify-content:center}
+.login-logo-ic{width:42px;height:42px;background:var(--green);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:21px}
+/* LAYOUT */
+.shell{display:flex;min-height:100vh}
+.sidebar{width:220px;flex-shrink:0;background:var(--bg-primary);border-right:1px solid var(--border-light);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto}
+.sb-logo{display:flex;align-items:center;gap:9px;padding:1.2rem 1rem .9rem}
+.sb-logo-ic{width:30px;height:30px;background:var(--green);border-radius:7px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0}
+.sb-divider{height:1px;background:var(--border-light);margin:.2rem .75rem}
+.sb-section{padding:.55rem .75rem .2rem;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.6px}
+.sb-item{display:flex;align-items:center;gap:8px;padding:7px 10px;margin:1px .5rem;border-radius:var(--radius-md);cursor:pointer;color:var(--text-secondary);font-size:12.5px;border:none;background:transparent;width:calc(100% - 1rem);text-align:left;position:relative;transition:all .15s}
+.sb-item:hover{background:var(--bg-secondary);color:var(--text-primary)}
+.sb-item.active{background:var(--green-bg);color:var(--green);font-weight:500}
+.sb-item .ti{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+.sb-badge{margin-left:auto;background:var(--red-bg);color:var(--red-text);font-size:10px;font-weight:600;padding:1px 5px;border-radius:20px}
+.sb-footer{margin-top:auto;padding:.75rem .5rem;border-top:1px solid var(--border-light)}
+.user-row{display:flex;align-items:center;gap:8px;padding:8px;border-radius:var(--radius-md);cursor:default}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{background:var(--bg-primary);border-bottom:1px solid var(--border-light);padding:.6rem 1.5rem;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:10}
+.content{padding:1.25rem 1.5rem;flex:1}
+/* BTNS */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:var(--radius-md);border:1px solid var(--border-light);background:var(--bg-primary);cursor:pointer;font-size:12.5px;color:var(--text-primary);font-family:inherit;transition:all .15s;white-space:nowrap}
+.btn:hover{background:var(--bg-secondary)}.btn:disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+.btn.pri{background:var(--green);border-color:var(--green);color:#fff}.btn.pri:hover{background:var(--green-dark)}
+.btn.red{background:var(--red);border-color:var(--red);color:#fff!important}.btn.red:hover{background:#791F1F}
+.btn.sm{padding:4px 9px;font-size:11.5px}
+/* STATS */
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem}
+.stat-card{background:var(--bg-primary);border-radius:var(--radius-lg);border:1px solid var(--border-light);padding:.9rem 1rem}
+.stat-label{font-size:11px;color:var(--text-secondary);margin-bottom:4px;display:flex;align-items:center;gap:5px}
+.stat-val{font-size:22px;font-weight:600}.sv-g{color:var(--green)}.sv-b{color:var(--blue)}.sv-a{color:#854F0B}
+/* TOOLBAR */
+.toolbar{display:flex;align-items:center;gap:8px;margin-bottom:.9rem;flex-wrap:wrap}
+.search-wrap{flex:1;min-width:180px;position:relative}
+.search-wrap .ti{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text-tertiary);font-size:15px;pointer-events:none}
+.search-wrap input{padding-left:30px}
+input,select,textarea{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:6px 10px;font-size:12.5px;color:var(--text-primary);font-family:inherit;width:100%;outline:none;transition:border-color .15s}
+input:focus,select:focus{border-color:var(--green)}
+/* SYNC BAR */
+.sync-bar{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--green);background:var(--green-bg);padding:5px 10px;border-radius:var(--radius-md);margin-bottom:.75rem}
+/* TABLE */
+.table-card{background:var(--bg-primary);border-radius:var(--radius-lg);border:1px solid var(--border-light);overflow:hidden}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{background:var(--bg-secondary);padding:8px 10px;text-align:left;font-weight:600;font-size:10px;color:var(--text-secondary);border-bottom:1px solid var(--border-light);white-space:nowrap;text-transform:uppercase;letter-spacing:.5px}
+td{padding:7px 10px;border-bottom:1px solid var(--border-light);vertical-align:middle;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg-secondary)}
+.tr-urgent td{background:rgba(250,238,218,.25)!important}
+/* BADGES */
+.bdg{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10.5px;font-weight:500}
+.bdg-g{background:var(--green-bg);color:var(--green-dark)}.bdg-b{background:var(--blue-bg);color:var(--blue-text)}
+.bdg-a{background:var(--amber-bg);color:var(--amber-text)}.bdg-r{background:var(--red-bg);color:var(--red-text)}
+.bdg-gr{background:var(--gray-bg);color:var(--gray-text)}.bdg-tl{background:var(--green-bg);color:var(--green)}
+.bdg-purple{background:#EEEDFE;color:#3C3489}
+.role-admin{background:var(--amber-bg);color:var(--amber-text);font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.role-op{background:var(--blue-bg);color:var(--blue-text);font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.role-view{background:var(--gray-bg);color:var(--gray-text);font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.role-doc{background:#E1F5EE;color:#085041;font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.role-acc{background:#EEEDFE;color:#3C3489;font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.role-cus{background:#FBEAF0;color:#72243E;font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.rac.blu:hover{color:var(--blue);background:var(--blue-bg)}
+.rac{display:inline-flex;align-items:center;justify-content:center;background:transparent;border:none;cursor:pointer;color:var(--text-secondary);font-size:15px;padding:4px;border-radius:6px;transition:all .15s}
+.rac:hover{background:var(--bg-secondary)}.rac:disabled{opacity:.3;cursor:not-allowed}
+.rac.grn:hover{color:var(--green);background:var(--green-bg)}.rac.red:hover{color:var(--red);background:var(--red-bg)}
+.pill-row{display:flex;flex-wrap:wrap;gap:3px}
+.pill{font-size:10px;padding:1px 6px;border-radius:20px;background:var(--green-bg);color:var(--green);font-weight:500}
+.tprog{display:flex;align-items:center;gap:5px;cursor:pointer}
+.tprog-bar{width:44px;height:5px;border-radius:3px;background:var(--bg-tertiary);overflow:hidden}
+.tprog-fill{height:100%;border-radius:3px;transition:width .3s}
+.plink{cursor:pointer;color:var(--green);font-weight:500;font-size:11.5px;border-bottom:1px dashed var(--green);background:none;border-left:none;border-right:none;border-top:none;padding:0;font-family:inherit}
+/* ALERTS */
+.alert-item{border-radius:var(--radius-md);padding:.7rem .9rem;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px;border:1px solid}
+.alert-item.warn{background:var(--amber-bg);border-color:#EF9F27}
+.alert-item.danger{background:var(--red-bg);border-color:#F09595}
+.alert-item.info{background:var(--blue-bg);border-color:#85B7EB}
+.alert-item .ai{font-size:16px;flex-shrink:0;margin-top:1px}
+.alert-item.warn .ai{color:#854F0B}.alert-item.danger .ai{color:var(--red)}.alert-item.info .ai{color:var(--blue)}
+.alert-title{font-weight:600;font-size:12px}.alert-sub{font-size:11px;color:var(--text-secondary);margin-top:2px}
+.partner-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:var(--radius-lg);padding:.85rem 1rem}
+.sec-label{font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem;display:flex;align-items:center;gap:5px}
+.dl-settings{display:flex;align-items:center;gap:10px;background:var(--bg-secondary);border-radius:var(--radius-md);padding:.65rem 1rem;margin-bottom:1.25rem;border:1px solid var(--border-light)}
+.debt-period{border:1px solid var(--border-light);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:12px;background:var(--bg-primary)}
+.debt-period-hdr{background:var(--bg-secondary);padding:.65rem 1rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-light)}
+.debt-period-foot{padding:.6rem 1rem;background:var(--bg-secondary);display:flex;gap:.75rem;flex-wrap:wrap;font-size:11.5px;border-top:1px solid var(--border-light)}
+.empty-state{text-align:center;padding:2rem 1rem;color:var(--text-secondary)}
+.empty-state .ti{font-size:30px;display:block;margin-bottom:.5rem;color:var(--text-tertiary)}
+.access-denied{text-align:center;padding:3rem 1rem;color:var(--text-secondary)}
+.access-denied .ti{font-size:40px;display:block;margin-bottom:.75rem;color:var(--text-tertiary)}
+/* PERM TOGGLE */
+.perm-toggle{width:36px;height:20px;border-radius:10px;border:none;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;padding:0}
+.perm-toggle.on{background:var(--green)}.perm-toggle.off{background:var(--border-light)}
+.perm-toggle::after{content:'';position:absolute;top:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.perm-toggle.on::after{left:19px}.perm-toggle.off::after{left:3px}
+/* DETAIL PANEL */
+.detail-panel{position:fixed;top:0;right:min(-780px,-95vw);width:min(780px,95vw);height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:right .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
+.detail-panel.open{right:0}
+.detail-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:149}
+.detail-backdrop.open{display:block}
+.detail-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:1.25rem 1.25rem .75rem;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:var(--bg-primary);z-index:1}
+.dtabs{display:flex;gap:3px;padding:.5rem 1.25rem;border-bottom:1px solid var(--border-light);background:var(--bg-secondary);overflow-x:auto}
+.dtab{padding:5px 12px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-size:12px;font-weight:500;color:var(--text-secondary);white-space:nowrap;display:flex;align-items:center;gap:5px;font-family:inherit;transition:all .15s}
+.dtab:hover{background:var(--bg-primary);color:var(--text-primary)}
+.dtab.active{background:var(--bg-primary);color:var(--green);border:1px solid var(--border-light)}
+.detail-body{padding:1.25rem}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.detail-field{background:var(--bg-secondary);border-radius:8px;padding:.6rem .85rem;border:0.5px solid var(--border-light)}
+.detail-label{font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
+.detail-val{font-size:12.5px;font-weight:500;color:var(--text-primary)}
+/* OVERLAYS */
+.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;align-items:flex-start;justify-content:center;padding:2rem 1rem;overflow-y:auto}
+.ov.open{display:flex}
+.modal{background:var(--bg-primary);border-radius:var(--radius-lg);border:1px solid var(--border-light);padding:1.5rem;width:100%;margin:auto;box-shadow:0 8px 32px rgba(0,0,0,.12)}
+.mhdr{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.25rem}
+.mtitle{font-size:15px;font-weight:600}.msub{font-size:11px;color:var(--text-secondary);margin-top:3px}
+.fg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.fi{display:flex;flex-direction:column;gap:4px}.fi.full{grid-column:1/-1}
+.lbl{font-size:10.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+.mftr{display:flex;justify-content:flex-end;gap:8px;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border-light)}
+/* SVC */
+.svc-hdr{display:grid;grid-template-columns:20px 155px 1fr 95px 95px 85px 28px;gap:6px;padding:3px 8px;font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px}
+.svc-row-grid{display:grid;grid-template-columns:20px 155px 1fr 95px 95px 85px 28px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:var(--radius-md);padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)}
+.tgl{width:28px;height:16px;border-radius:8px;border:none;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;padding:0}
+.tgl.on{background:var(--green)}.tgl.off{background:#ccc}
+.tgl::after{content:'';position:absolute;top:2px;width:12px;height:12px;background:#fff;border-radius:50%;transition:left .15s}
+.tgl.on::after{left:14px}.tgl.off::after{left:2px}
+.dn-table-wrap{border:1px solid var(--border-light);border-radius:var(--radius-md);overflow:hidden}
+.dn-table{width:100%;border-collapse:collapse;font-size:12px}
+.dn-table th{background:var(--bg-secondary);padding:6px 9px;font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase}
+.dn-table td{padding:6px 9px;border-bottom:1px solid var(--border-light);vertical-align:middle}
+.dn-table tr:last-child td{border-bottom:none}
+/* TASKS */
+.task-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light)}
+.task-row:last-child{border-bottom:none}
+.task-chk{width:17px;height:17px;border-radius:5px;border:1.5px solid var(--border-light);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s}
+.task-chk.done{background:var(--green);border-color:var(--green);color:#fff}
+.task-lbl{font-size:12.5px;flex:1}.task-lbl.done{text-decoration:line-through;color:var(--text-secondary)}
+/* UA */
+.ua{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0}
+/* LOADING OVERLAY */
+#loadingOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+.loading-spinner{width:36px;height:36px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loadingMsg{color:#fff;font-size:13px;font-weight:500}
+/* TOAST */
+#toastArea{position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{display:flex;align-items:center;gap:8px;padding:.65rem 1rem;border-radius:var(--radius-md);font-size:12.5px;font-weight:500;opacity:0;transform:translateY(10px);transition:all .25s;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast-success{background:var(--green);color:#fff}
+.toast-error{background:var(--red);color:#fff}
+/* THEME BTN */
+.theme-btn{background:none;border:1px solid var(--border-light);border-radius:var(--radius-md);padding:5px 8px;cursor:pointer;color:var(--text-secondary);font-size:16px;display:flex;align-items:center}
+.theme-btn:hover{background:var(--bg-secondary)}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:var(--border-light);border-radius:3px}
+</style>
+</head>
+<body>
+
+<!-- LOADING OVERLAY -->
+<div id="loadingOverlay" style="display:flex">
+  <div class="loading-spinner"></div>
+  <div id="loadingMsg">Đang kết nối Firebase...</div>
+</div>
+
+<!-- TOAST AREA -->
+<div id="toastArea"></div>
+
+<!-- LOGIN -->
+<div id="loginWrap" class="login-wrap" style="display:none">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-ic"><i class="ti ti-ship"></i></div>
+      <div>
+        <div style="font-size:18px;font-weight:700">TradeFlow</div>
+        <div style="font-size:11px;color:var(--text-secondary)">Import / Export Management</div>
+      </div>
+    </div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:.25rem">Đăng nhập</div>
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1.25rem">Sử dụng tài khoản được cấp bởi Admin</div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="fi"><label class="lbl">Email</label><input type="email" id="loginEmail" placeholder="email@company.vn" onkeydown="if(event.key==='Enter')g('loginPass').focus()"/></div>
+      <div class="fi"><label class="lbl">Mật khẩu</label><input type="password" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"/></div>
+      <button class="btn pri" style="justify-content:center;margin-top:.25rem" onclick="doLogin()"><i class="ti ti-login"></i> Đăng nhập</button>
+    </div>
+    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border-light);font-size:11px;color:var(--text-tertiary);text-align:center">
+      <i class="ti ti-shield-check" style="font-size:14px;vertical-align:-2px;color:var(--green)"></i> Xác thực qua Firebase Authentication
+    </div>
+  </div>
+</div>
+
+<!-- APP SHELL -->
+<div id="appShell" class="shell" style="display:none">
+  <aside class="sidebar">
+    <div class="sb-logo">
+      <div class="sb-logo-ic"><i class="ti ti-ship"></i></div>
+      <div>
+        <div style="font-size:13px;font-weight:700">TradeFlow</div>
+        <div style="font-size:10px;color:var(--text-secondary)">v2.0 — Firebase</div>
+      </div>
+    </div>
+    <div class="sb-divider"></div>
+    <div class="sb-section">Hàng hóa</div>
+    <button class="sb-item" id="sb-xuat" onclick="goTab('xuat')"><i class="ti ti-arrow-up-right"></i> Xuất khẩu</button>
+    <button class="sb-item" id="sb-nhap" onclick="goTab('nhap')"><i class="ti ti-arrow-down-left"></i> Nhập khẩu</button>
+    <div class="sb-section" style="margin-top:.4rem">Vận hành</div>
+    <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-bell"></i> Nhắc nhở<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
+    <button class="sb-item" id="sb-cong-no" onclick="goTab('cong-no')"><i class="ti ti-chart-bar"></i> Công nợ</button>
+    <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> Đối tác</button>
+    <div class="sb-section" style="margin-top:.4rem">Hệ thống</div>
+    <button class="sb-item" id="sb-users" onclick="goTab('users')"><i class="ti ti-users"></i> Người dùng</button>
+    <button class="sb-item" id="sb-settings" onclick="goTab('settings')"><i class="ti ti-settings"></i> Cài đặt</button>
+    <div class="sb-footer">
+      <div class="user-row">
+        <div class="ua" id="sbAvatar" style="background:var(--green-bg);color:var(--green)">??</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="sbName"></div>
+          <div style="font-size:10px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="sbEmail"></div>
+          <div id="sbRole" style="margin-top:2px"></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div style="font-size:14px;font-weight:600" id="pageTitle">Xuất khẩu</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:11px;color:var(--green);display:flex;align-items:center;gap:4px"><i class="ti ti-wifi" style="font-size:14px"></i> Realtime</span>
+        <button class="theme-btn" onclick="toggleTheme()"><i class="ti ti-sun-moon" id="themeIcon"></i></button>
+        <button class="btn sm red" onclick="doLogout()"><i class="ti ti-logout"></i> Đăng xuất</button>
+      </div>
+    </div>
+    <div class="content">
+      <div id="page-xuat"></div>
+      <div id="page-nhap" style="display:none"></div>
+      <div id="page-deadline" style="display:none"></div>
+      <div id="page-cong-no" style="display:none"></div>
+      <div id="page-doi-tac" style="display:none"></div>
+      <div id="page-users" style="display:none"></div>
+      <div id="page-settings" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- EMAIL COMPOSE MODAL -->
+<div class="ov" id="emailOv" style="padding:.75rem"></div>
+
+<!-- DETAIL PANEL -->
+<div id="detailBackdrop" class="detail-backdrop" onclick="closeDetail()"></div>
+<div id="detailPanel" class="detail-panel"></div>
+
+<!-- MODALS -->
+<div class="ov" id="lotOv">
+  <div class="modal" style="max-width:700px">
+    <div class="mhdr"><div><div class="mtitle" id="lotTitle"></div><div class="msub" id="lotSub"></div></div><button class="rac" onclick="closeOv('lotOv')"><i class="ti ti-x"></i></button></div>
+    <div class="fg" id="lotFields"></div>
+    <div class="mftr"><button class="btn" onclick="closeOv('lotOv')">Hủy</button><button class="btn pri" onclick="saveLot()"><i class="ti ti-check"></i> Lưu vào Firestore</button></div>
+  </div>
+</div>
+
+<div class="ov" id="svcOv">
+  <div class="modal" style="max-width:580px">
+    <div class="mhdr"><div><div class="mtitle" id="svcTitle"></div><div class="msub" id="svcSub"></div></div><button class="rac" onclick="closeOv('svcOv')"><i class="ti ti-x"></i></button></div>
+    <div style="display:grid;grid-template-columns:24px 1fr 1fr 28px;gap:8px;padding:3px 10px;font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px">
+      <div></div><div>Dịch vụ</div><div>Mô tả / Ghi chú</div><div></div>
+    </div>
+    <div id="svcGrid"></div>
+    <div style="margin-top:8px"><button class="btn" onclick="addCustomSvc()" style="font-size:12px"><i class="ti ti-plus"></i> Thêm dịch vụ khác</button></div>
+    <div class="mftr"><button class="btn" onclick="closeOv('svcOv')">Hủy</button><button class="btn pri" onclick="saveSvc()"><i class="ti ti-check"></i> Lưu dịch vụ</button></div>
+  </div>
+</div>
+
+<div class="ov" id="fpOv">
+  <div class="modal" style="max-width:600px">
+    <div class="mhdr"><div><div class="mtitle" id="fpTitle">Fill giá dịch vụ</div><div class="msub" id="fpSub"></div></div><button class="rac" onclick="closeOv('fpOv')"><i class="ti ti-x"></i></button></div>
+    <div id="fpGrid"></div>
+    <div class="mftr"><button class="btn" onclick="closeOv('fpOv')">Hủy</button><button class="btn pri" onclick="saveFillPrice()"><i class="ti ti-check"></i> Lưu giá</button></div>
+  </div>
+</div>
+
+<div class="ov" id="invOv" style="padding:.75rem">
+</div>
+
+<div class="ov" id="taskOv">
+  <div class="modal" style="max-width:440px">
+    <div class="mhdr"><div><div class="mtitle">Checklist công việc</div><div class="msub" id="taskSub"></div></div><button class="rac" onclick="closeOv('taskOv')"><i class="ti ti-x"></i></button></div>
+    <div id="taskList"></div>
+    <div id="taskProg" style="margin-top:1rem;padding-top:.85rem;border-top:1px solid var(--border-light)"></div>
+    <div class="mftr"><button class="btn pri" onclick="saveTask()"><i class="ti ti-check"></i> Lưu</button></div>
+  </div>
+</div>
+
+<div class="ov" id="partnerOv">
+  <div class="modal" style="max-width:580px">
+    <div class="mhdr"><div><div class="mtitle" id="partnerTitle"></div></div><button class="rac" onclick="closeOv('partnerOv')"><i class="ti ti-x"></i></button></div>
+    <div class="fg" id="partnerFields"></div>
+    <div class="mftr"><button class="btn" onclick="closeOv('partnerOv')">Hủy</button><button class="btn pri" onclick="savePartner()"><i class="ti ti-check"></i> Lưu</button></div>
+  </div>
+</div>
+
+<div class="ov" id="dnOv">
+  <div class="modal" style="max-width:700px">
+    <div class="mhdr"><div class="mtitle">Debit Note — Preview</div><button class="rac" onclick="closeOv('dnOv')"><i class="ti ti-x"></i></button></div>
+    <div id="dnPreview"></div>
+    <div class="mftr"><button class="btn" onclick="closeOv('dnOv')">Đóng</button><button class="btn pri" onclick="printDN()"><i class="ti ti-printer"></i> In / Lưu PDF</button></div>
+  </div>
+</div>
+
+<div class="ov" id="userEditOv">
+  <div class="modal" style="max-width:500px">
+    <div class="mhdr"><div><div class="mtitle" id="userEditTitle"></div></div><button class="rac" onclick="closeOv('userEditOv')"><i class="ti ti-x"></i></button></div>
+    <div class="fg" id="userEditFields"></div>
+    <div class="mftr"><button class="btn" onclick="closeOv('userEditOv')">Hủy</button><button class="btn pri" onclick="saveUser()"><i class="ti ti-check"></i> Lưu</button></div>
+  </div>
+</div>
+
+<script>
+function sendEmailDN(id, tt){
+  const r=cache[tt||currentTab].find(x=>x._id===(id||svcIdx))||{};
+  const cnNm=r.cnee||r.consignee||'';
+  const cp=cache.partners[cnNm]||{};
+  const sp=cache.partners[r.shipper||r.supplier||'']||{};
+  const toEmail=cp.email||'';
+  const ccEmail=sp.email||'';
+  const defSubject='[DEBIT NOTE] '+r.bookingNo+' - '+(r.mblNo||'')+' - '+(r.pol||'')+' → '+(r.pod||'');
+  const defBody='Dear '+(cp.contact||'Sir/Madam')+',\n\n'
+    +'Hope this email finds you well.\n\n'
+    +'Please find enclosed our Debit Note for the below shipment. Kindly review and arrange payment accordingly.\n\n'
+    +'────────────────────────────────\n'
+    +'  Booking No : '+r.bookingNo+'\n'
+    +'  MBL No     : '+(r.mblNo||'—')+'\n'
+    +'  Vessel     : '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'\n'
+    +'  Route      : '+(r.pol||'—')+' → '+(r.pod||'—')+'\n'
+    +'  ETD / ETA  : '+(r.etd||'—')+' / '+(r.eta||'—')+'\n'
+    +'────────────────────────────────\n\n'
+    +'Should you have any questions, please do not hesitate to contact us.\n\n'
+    +'Best regards,\nCOCOSEA CO., LTD\nKeep Going . Keep Growing';
+
+  // Show email compose modal
+  g('emailOv').innerHTML=`
+  <div class="modal" style="max-width:640px">
+    <div class="mhdr"><div class="mtitle"><i class="ti ti-mail" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>Soạn Email Debit Note</div><button class="rac" onclick="closeOv('emailOv')"><i class="ti ti-x"></i></button></div>
+    <div class="fg" style="gap:10px">
+      <div class="fi full"><label class="lbl">To</label><input type="email" id="emailTo" value="${toEmail}" placeholder="email@customer.com"/></div>
+      <div class="fi full"><label class="lbl">CC</label><input type="email" id="emailCc" value="${ccEmail}" placeholder="cc@company.com"/></div>
+      <div class="fi full"><label class="lbl">Subject</label><input type="text" id="emailSubject" value="${defSubject}"/></div>
+      <div class="fi full"><label class="lbl">Nội dung</label><textarea id="emailBody" rows="12" style="font-family:monospace;font-size:12px;resize:vertical">${defBody}</textarea></div>
+      <div class="fi full">
+        <div style="padding:.6rem .85rem;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary);display:flex;align-items:center;gap:8px">
+          <i class="ti ti-paperclip" style="font-size:14px;color:var(--text-secondary)"></i>
+          <span>File đính kèm: <strong>DebitNote_${r.bookingNo}.pdf</strong> (xuất PDF trước khi gửi)</span>
+        </div>
+      </div>
+    </div>
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('emailOv')">Hủy</button>
+      <button class="btn" onclick="downloadEmlFile('${id||svcIdx}','${tt||currentTab}')"><i class="ti ti-download"></i> Tải file .eml</button>
+      <button class="btn blu" onclick="openMailClient()"><i class="ti ti-send"></i> Mở Mail Client</button>
+    </div>
+  </div>`;
+  openOv('emailOv');
+}
+
+function openMailClient(){
+  const to=g('emailTo')?.value||'';
+  const cc=g('emailCc')?.value||'';
+  const subj=g('emailSubject')?.value||'';
+  const body=g('emailBody')?.value||'';
+  let mailto='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body);
+  if(cc) mailto+='&cc='+encodeURIComponent(cc);
+  window.open(mailto,'_blank');
+  toast('Đã mở ứng dụng email. Vui lòng đính kèm file PDF thủ công.');
+}
+
+function downloadEmlFile(id, tt){
+  const r=cache[tt||currentTab].find(x=>x._id===id)||{};
+  const to=g('emailTo')?.value||'';
+  const cc=g('emailCc')?.value||'';
+  const subj=g('emailSubject')?.value||'';
+  const body=g('emailBody')?.value||'';
+  let emlContent='MIME-Version: 1.0\nDate: '+new Date().toUTCString()+'\n';
+  emlContent+='From: COCOSEA CO., LTD <noreply@cocosea.vn>\n';
+  emlContent+='To: '+to+'\n';
+  if(cc) emlContent+='Cc: '+cc+'\n';
+  emlContent+='Subject: '+subj+'\n';
+  emlContent+='Content-Type: text/plain; charset=UTF-8\n\n';
+  emlContent+=body;
+  const blob=new Blob([emlContent],{type:'message/rfc822'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='DebitNote_'+(r.bookingNo||'').replace(/[^A-Za-z0-9-]/g,'_')+'.eml'; a.click();
+  setTimeout(function(){URL.revokeObjectURL(url);},1000);
+  toast('Đã tải file .eml — mở bằng Outlook/Thunderbird để gửi.');
+}
+
+function renderSettings(){
+  const pg=g('page-settings');
+  if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Chỉ Admin mới truy cập được cài đặt</div></div>';return;}
+  const banks=window._bankAccounts||[{beneficiary:'',account:'',bank:''}];
+  let bankRows=banks.map(function(b,i){
+    return '<div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;margin-bottom:6px;align-items:center">'
+      +'<input type="text" id="bben_'+i+'" value="'+b.beneficiary+'" placeholder="Tên thụ hưởng" style="font-size:12px"/>'
+      +'<input type="text" id="bacc_'+i+'" value="'+b.account+'" placeholder="Số TK" style="font-size:12px"/>'
+      +'<input type="text" id="bbank_'+i+'" value="'+b.bank+'" placeholder="Ngân hàng" style="font-size:12px"/>'
+      +'<button class="rac red" onclick="removeBankRow('+i+')" title="Xóa"><i class="ti ti-trash"></i></button>'
+      +'</div>';
+  }).join('');
+
+  pg.innerHTML='<div style="font-weight:600;font-size:14px;margin-bottom:1.25rem">Cài đặt hệ thống</div>'
+
+    // Bank accounts section
+    +'<div class="table-card" style="padding:1.25rem;margin-bottom:1.25rem">'
+      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-building-bank" style="font-size:14px"></i>Tài khoản ngân hàng</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;padding:3px 0;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px"><div>Tên thụ hưởng</div><div>Số tài khoản</div><div>Ngân hàng</div><div></div></div>'
+      +'<div id="bankRowsContainer">'+bankRows+'</div>'
+      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
+        +'<button class="btn" onclick="addBankRow()"><i class="ti ti-plus"></i> Thêm tài khoản</button>'
+        +'<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>'
+      +'</div>'
+    +'</div>';
+}
+
+function addBankRow(){
+  window._bankAccounts=(window._bankAccounts||[]).concat([{beneficiary:'',account:'',bank:''}]);
+  renderSettings();
+}
+function removeBankRow(idx){
+  window._bankAccounts=(window._bankAccounts||[]).filter(function(_,i){return i!==idx;});
+  renderSettings();
+}
+async function saveBankAccounts(){
+  const accounts=(window._bankAccounts||[]).map(function(_,i){
+    return {beneficiary:g('bben_'+i)?.value||'',account:g('bacc_'+i)?.value||'',bank:g('bbank_'+i)?.value||''};
+  });
+  window._bankAccounts=accounts;
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet('_config','banks',{accounts,updatedAt:Date.now()});
+    toast('Đã lưu tài khoản ngân hàng');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+window.renderSettings=renderSettings;
+window.updatePortOptions=updatePortOptions;
+window.getDefaultEtdFrom=getDefaultEtdFrom;
+window.getDefaultEtdTo=getDefaultEtdTo;
+window.clearEtdFilter=clearEtdFilter;
+window.runDebtReport=runDebtReport;
+window.openDebitNotePopup=window.openDebitNotePopup||function(){};
+window.addBankRow=addBankRow;
+window.removeBankRow=removeBankRow;
+window.saveBankAccounts=saveBankAccounts;
+window.downloadEmlFile=downloadEmlFile;
+window.openMailClient=openMailClient;
+window.sendEmailDN=sendEmailDN;
+window.openMailClient=openMailClient;
+window.downloadEmlFile=downloadEmlFile;
+window.saveInvoiceSettings=saveInvoiceSettings;
+window.openDebitNotePopup=openDebitNotePopup;
+window.refreshInvPreview=refreshInvPreview;
+window.rebuildInvoicePreview=rebuildInvoicePreview;
+window.saveContSeal=saveContSeal;
+window.saveUserRole=saveUserRole;
+window.previewRoleChange=previewRoleChange;
+window.startPermEdit=startPermEdit;
+window.cancelPermEdit=cancelPermEdit;
+window.togglePermEdit=togglePermEdit;
+window.savePermissions=savePermissions;
+window.switchDetailTab=switchDetailTab;
+window.closeDetail=closeDetail;
+window.saveDetailSvc=saveDetailSvc;
+window.saveDetailFillPrice=saveDetailFillPrice;
+window.updDetailFpTotal=updDetailFpTotal;
+window.addCustomSvcDetail=addCustomSvcDetail;
+
+// Close overlay on backdrop click
+document.querySelectorAll('.ov').forEach(ov=>{ov.addEventListener('click',e=>{if(e.target===ov)ov.classList.remove('open');});});
+// Expose g globally
+window.g = id => document.getElementById(id);
+// Safe dispatcher - handles onclick before module loads
+window._call = function(fn, args) {
+  args = args || [];
+  if (typeof window[fn] === 'function') {
+    return window[fn].apply(null, args);
+  } else {
+    // Module not loaded yet, retry after short delay
+    setTimeout(function(){ if(typeof window[fn]==='function') window[fn].apply(null,args); }, 500);
+  }
+};
+// Init theme icon
+(()=>{const t=localStorage.getItem('tf_theme')||'light';const el=document.getElementById('themeIcon');if(el)el.className=t==='dark'?'ti ti-moon':'ti ti-sun-moon';})();
+// Fallback: if Firebase doesn't respond in 8s, show login anyway
+setTimeout(function(){
+  var overlay=document.getElementById('loadingOverlay');
+  var login=document.getElementById('loginWrap');
+  if(overlay&&overlay.style.display!=='none'&&login&&login.style.display==='none'){
+    overlay.style.display='none';
+    login.style.display='flex';
+    var msg=document.getElementById('loadingMsg');
+    if(msg)msg.textContent='Không thể kết nối. Kiểm tra mạng và thử lại.';
+  }
+},8000);
+</script>
+</body>
+</html>
