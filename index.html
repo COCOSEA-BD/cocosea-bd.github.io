@@ -198,7 +198,7 @@ const XCOLS=[
   {k:'typeCont',l:'Type Cont',type:'typeCont'},
   {k:'vol',l:'Vol'},
   {k:'tenHang',l:'Tên hàng'},
-  {k:'soTkhai',l:'Số T.Khai'},{k:'cnee',l:'Cnee'},{k:'fwd',l:'FWD',partner:true},
+  {k:'soTkhai',l:'Số T.Khai'},{k:'maChiCuc',l:'Mã chi cục'},{k:'phanLuong',l:'Phân luồng'},{k:'cnee',l:'Cnee'},{k:'fwd',l:'FWD',partner:true},
   {k:'status',l:'Trạng thái',type:'select',opts:['Đang xử lý','Đã nhập info','Đã lên debit','Đang vận chuyển','Đã giao']}
 ];
 const NCOLS=[
@@ -725,11 +725,15 @@ function renderDetailPanel(r,tt){
       +'</tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
       +'<div style="margin-top:.5rem;padding:6px 10px;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:12px;color:var(--text-secondary)">'
-        +'Total G.W: <strong id="totalGW">—</strong> KG'
+        +'Total G.W: <strong id="totalGW">'+((r.containers||[]).reduce(function(s,c){return s+(c.gw||0);},0)||0).toLocaleString()+'</strong> KG'
       +'</div>'
-    +'<div style="margin-top:.75rem;display:flex;justify-content:flex-end">'
-        +'<button class="btn pri" onclick="saveContSeal()"><i class="ti ti-check"></i> Lưu</button>'
-      +'</div>';
+    +'<div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center">'
+      +'<div style="display:flex;gap:8px">'
+        +'<button class="btn" onclick="showKhaiEport()" title="Xuất nội dung khai eport"><i class="ti ti-file-export"></i> Khai Eport</button>'
+        +'<button class="btn" onclick="showCheckEport()" title="Danh sách container để check eport"><i class="ti ti-clipboard-check"></i> Check Eport</button>'
+      +'</div>'
+      +'<button class="btn pri" onclick="saveContSeal()"><i class="ti ti-check"></i> Lưu</button>'
+    +'</div>';
   }
 
     else if(detailTab==='svc'){
@@ -907,14 +911,14 @@ function renderDetailPanel(r,tt){
 
 
       // Summary table
-      const clr2=totalProfitVND>=0?'var(--green)':'var(--red)';
       const summaryRows='<tr style="background:var(--bg-secondary)">'
         +'<td style="'+tdS+';font-weight:700;font-size:13px">VND</td>'
-        +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700;font-size:13px">'+totalRevVND.toLocaleString()+'</td>'
-        +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700;font-size:13px">'+totalCostVND.toLocaleString()+'</td>'
-        +'<td style="'+tdS+';text-align:right;font-weight:800;font-size:15px;color:'+clr2+'">'+(totalProfitVND>=0?'+':'')+totalProfitVND.toLocaleString()+'</td>'
-        +'<td style="'+tdS+';text-align:center"><span style="padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;background:'+(totalProfitVND>=0?'var(--green-bg)':'rgba(220,53,69,.1)')+';color:'+clr2+'">'+marginPct+'%</span></td>'
+        +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700;font-size:13px" id="sumRevCell">'+totalRevVND.toLocaleString()+'</td>'
+        +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700;font-size:13px" id="sumCostCell">—</td>'
+        +'<td style="'+tdS+';text-align:right;font-weight:800;font-size:15px" id="sumProfitCell">—</td>'
+        +'<td style="'+tdS+';text-align:center" id="sumMarginCell"><span style="padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;background:var(--bg-secondary);color:var(--text-secondary)">—</span></td>'
       +'</tr>';
+
 
       bodyHtml=
         // Revenue section
@@ -1418,13 +1422,13 @@ function openInvoice(id, tt, tempR){
   openOv('invOv');
 
   // Store data for rebuild
-  window._dnData={r,svcs,activeSvcs,allActiveSvcs,sp,cp,cnNm,dateStr,dnNo,containers,tt};
+  window._dnData={r,svcs,activeSvcs,svcsYes,svcsNo,allActiveSvcs,sp,cp,cnNm,dateStr,dnNo,containers,tt};
   rebuildInvoicePreview();
 }
 
 function rebuildInvoicePreview(){
   const d=window._dnData; if(!d)return;
-  const {r,svcs,activeSvcs,allActiveSvcs,sp,cp,cnNm,dateStr,dnNo,containers}=d;
+  const {r,svcs,activeSvcs,svcsYes,svcsNo,allActiveSvcs,sp,cp,cnNm,dateStr,dnNo,containers}=d;
   const roe=parseFloat(g('roeInput')?.value)||26390;
 
   // Calculate totals by currency, split by VAT rate
@@ -2636,6 +2640,9 @@ tr:hover td{background:var(--bg-secondary)}
   </div>
 </div>
 
+<!-- EPORT MODAL -->
+<div class="ov" id="eportOv" style="padding:.75rem"></div>
+
 <!-- OCEAN FREIGHT RATE MODAL -->
 <div class="ov" id="oceanOv" style="padding:.75rem"></div>
 
@@ -3120,9 +3127,23 @@ function updateCostingTotal(){
 
   const tot=g('costingTotals');
   if(tot)tot.innerHTML='Tổng chi phí: <strong style="color:var(--red);font-size:13px">'+totalVND.toLocaleString()+' VND</strong>';
-  // Also update tfoot cell if present
+  // Update tfoot cell
   const cell=g('costingTotalCell');
   if(cell)cell.textContent=totalVND.toLocaleString();
+  // Update profit summary
+  const costCell=g('sumCostCell');
+  const profitCell=g('sumProfitCell');
+  const marginCell=g('sumMarginCell');
+  const revCell=g('sumRevCell');
+  if(costCell||profitCell){
+    const revVND=revCell?parseInt((revCell.textContent||'0').replace(/[^0-9-]/g,''))||0:0;
+    const profit=revVND-totalVND;
+    const margin=revVND>0?Math.round(profit/revVND*100):0;
+    const clr=profit>=0?'var(--green)':'var(--red)';
+    if(costCell){costCell.textContent=totalVND.toLocaleString();}
+    if(profitCell){profitCell.textContent=(profit>=0?'+':'')+profit.toLocaleString();profitCell.style.color=clr;}
+    if(marginCell){marginCell.innerHTML='<span style="padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;background:'+(profit>=0?'var(--green-bg)':'rgba(220,53,69,.1)')+';color:'+clr+'">'+margin+'%</span>';}
+  }
 }
 
 async function saveCosting(){
@@ -3559,6 +3580,56 @@ function exportCostingExcel(){
 window.renderCostingReport=renderCostingReport;
 window.runCostingReport=runCostingReport;
 window.exportCostingExcel=exportCostingExcel;
+
+function showKhaiEport(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const containers=(r.containers||[]).filter(function(c){return c.no;});
+  const contLines=containers.map(function(c){
+    return (c.no||'—')+' / '+(c.seal||'—')+' / '+(c.gw?c.gw.toLocaleString()+'.00':'—');
+  }).join('\n');
+
+  const text='Thông tin khai eport / Vô sổ tàu :\n'
+    +'------------------------\n'
+    +'Booking: '+(r.bookingNo||'—')+'\n'
+    +'Tên tàu: '+(r.vessel||'—')+(r.voy?' V.'+(r.voy):'')+'\n'
+    +'Hạ cảng: '+(r.pol||'—')+'\n'
+    +'Giờ cắt máng: '+(r.cutoffCY||'—')+'\n'
+    +'----\n'
+    +'Mst: '+(function(){const sp=cache.partners[r.shipper||r.supplier||''];return sp?sp.mst||'—':'—';})()+'\n'
+    +'Số tờ khai: '+(r.soTkhai||'—')+'\n'
+    +'Mã chi cục: '+(r.maChiCuc||'—')+'\n'
+    +'Phân luồng: '+(r.phanLuong||'—')+'\n'
+    +'Cont/ Seal / Netweight:\n'
+    +contLines;
+
+  showEportModal('Khai Eport', text);
+}
+
+function showCheckEport(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const containers=(r.containers||[]).filter(function(c){return c.no;});
+  const text=containers.map(function(c){return c.no;}).join(', ');
+  showEportModal('Check Eport — Danh sách Container', text);
+}
+
+function showEportModal(title, text){
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:600px">
+    <div class="mhdr"><div class="mtitle">${title}</div><button class="rac" onclick="closeOv('eportOv')"><i class="ti ti-x"></i></button></div>
+    <div style="margin-bottom:.75rem">
+      <textarea id="eportText" rows="14" style="font-family:'Courier New',monospace;font-size:12.5px;line-height:1.7;resize:vertical;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:8px;padding:.75rem 1rem;color:var(--text-primary)">${text}</textarea>
+    </div>
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('eportOv')">Đóng</button>
+      <button class="btn" onclick="navigator.clipboard.writeText(g('eportText').value).then(function(){toast('Đã copy!')})"><i class="ti ti-copy"></i> Copy</button>
+    </div>
+  </div>`;
+  openOv('eportOv');
+}
+
+window.showKhaiEport=showKhaiEport;
+window.showCheckEport=showCheckEport;
+window.showEportModal=showEportModal;
 
 // ═══════════════════════════════════════════
 // EXCEL EXPORT FUNCTIONS
