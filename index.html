@@ -653,6 +653,8 @@ function switchDetailTab(tab){
 function renderDetailPanel(r,tt){
   // Tab buttons
   const canSeePricing=can('fillPrice')||can('viewCost')||can('viewInvoice');
+  // Redirect if doc/cus somehow lands on pricing tab
+  if(!canSeePricing && ['price','costing','invoice'].includes(detailTab)) detailTab='svc';
   const tabs=[
     {k:'info',label:'Chi tiết',icon:'ti-info-circle'},
     {k:'cont',label:'Cont/Seal',icon:'ti-container'},
@@ -3879,46 +3881,163 @@ window.showEportModal=showEportModal;
 // ═══════════════════════════════════════════
 function exportExcel(tt){
   if(!can('export')){toast('Không có quyền xuất Excel','error');return;}
-  var XLSX=window.XLSX;
-  if(!XLSX){
-    toast('Đang tải Excel... thử lại sau 2 giây','error');
-    setTimeout(function(){exportExcel(tt);},2000);
-    return;
+  const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
+  const lots=cache[tt]||[];
+  const today=new Date().toLocaleDateString('vi-VN');
+  const tabLabel=tt==='xuat'?'Xuất khẩu':'Nhập khẩu';
+
+  // Color palette
+  const C={
+    green:'#0F6E56', greenLight:'#E8F5F0', greenMid:'#d0ece6',
+    blue:'#1a4b8c', blueLight:'#EEF4FB',
+    gray:'#F5F5F3', grayDark:'#666', border:'#D0D0C8',
+    white:'#FFFFFF', yellow:'#FFFBE6', red:'#FFF0F0',
+  };
+
+  // Status color map
+  function statusBg(s){
+    if(s==='Đã giao'||s==='Đã nhận')return C.greenLight;
+    if(s==='Đang vận chuyển')return C.blueLight;
+    if(s==='Đã lên debit')return '#F3E8FF';
+    if(s==='Đã nhập info')return '#E8F7FF';
+    if(s==='Xóa CB')return C.red;
+    return C.yellow;
   }
-  var cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
-  var wb=XLSX.utils.book_new();
-  // Sheet 1: Danh sách lô hàng
-  var ws1=[cols.map(function(c){return c.l;}).concat(['Dịch vụ đã chọn','Trạng thái DN','Tổng doanh thu'])];
-  cache[tt].forEach(function(r){
-    var activeSvcs=SVCS.filter(function(s){return r.svcs&&r.svcs[s.key]&&r.svcs[s.key].on;});
-    var svcNames=activeSvcs.map(function(s){return s.name;}).join(', ');
-    var svcStatuses=activeSvcs.map(function(s){return r.svcs[s.key].svcStatus||'';}).filter(Boolean).join(', ');
-    var rv={};
-    activeSvcs.forEach(function(s){
-      var sv=r.svcs[s.key];
-      if(sv.invoice==='Waived'||sv.invoice==='No')return;
-      var cur=sv.cur||'USD';
-      var amt=sv.amount||(sv.price||0)*(sv.qty||1);
-      rv[cur]=(rv[cur]||0)+amt;
+
+  const td=(val,bg,bold,align,color,border)=>`<td style="padding:6px 9px;border:1px solid ${border||C.border};background:${bg||C.white};font-weight:${bold?700:400};text-align:${align||'left'};color:${color||'#1a1a18'};font-size:11.5px;white-space:nowrap">${val??''}</td>`;
+  const th=(val,bg)=>`<th style="padding:7px 9px;border:1px solid ${bg||C.green};background:${bg||C.green};color:#fff;font-weight:700;font-size:11px;text-align:left;white-space:nowrap">${val}</th>`;
+
+  // Build rows - each lot = 1 main row + service detail rows
+  let rowsHtml='';
+  const roe=26390;
+  lots.forEach((r,idx)=>{
+    const bg=idx%2===0?C.white:C.gray;
+    const sv=r.svcs||{};
+    const activeSvcs=SVCS.filter(s=>sv[s.key]?.on);
+    // Revenue: invoice=Yes+No not Waived
+    let revVND=0;
+    activeSvcs.forEach(s=>{
+      const v=sv[s.key]; if(v.invoice==='Waived')return;
+      const a=v.amount||(v.price||0)*(v.qty||1);
+      revVND+=(v.cur||'USD')==='VND'?a:Math.round(a*roe);
     });
-    var rvStr=Object.entries(rv).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' + ')||'—';
-    var row=cols.map(function(c){return r[c.k]||'';});
-    row.push(svcNames||'—', svcStatuses||'—', rvStr);
-    ws1.push(row);
+    const contStr=(r.vol||'')+'×'+(r.typeCont||'');
+    rowsHtml+=`<tr>
+      ${td(idx+1,bg,false,'center',C.grayDark)}
+      ${td(r.bookingNo,bg,true,'left',C.blue)}
+      ${td(r.mblNo,bg)}
+      ${td(r.shipper||r.supplier||'',bg)}
+      ${td(r.tenHang,bg)}
+      ${td(contStr,bg,false,'center')}
+      ${td(r.etd,bg,true,'center',C.green)}
+      ${td(r.eta,bg,false,'center',C.grayDark)}
+      ${td(r.pol,bg)}
+      ${td(r.pod,bg)}
+      ${td(r.carrier,bg)}
+      ${td(r.vessel||'',bg)}
+      ${td(activeSvcs.length,bg,false,'center')}
+      ${td(revVND?revVND.toLocaleString()+'₫':'—',bg,true,'right',revVND?C.green:C.grayDark)}
+      ${td('<span style="padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;background:'+statusBg(r.status)+';color:'+C.blue+'">'+r.status+'</span>',bg)}
+    </tr>`;
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ws1), tt==='xuat'?'Xuất khẩu':'Nhập khẩu');
-  // Sheet 2: Chi tiết dịch vụ
-  var ws2=[['Booking No','MBL No','Tên hàng','Dịch vụ','Mô tả','Price','Curr','Vol','Unit','Amount','VAT','Invoice','PM Term','Party','Chi phí vào','Trạng thái DN']];
-  cache[tt].forEach(function(r){
-    SVCS.filter(function(s){return r.svcs&&r.svcs[s.key]&&r.svcs[s.key].on;}).forEach(function(s){
-      var sv=r.svcs[s.key];
-      ws2.push([r.bookingNo,r.mblNo,r.tenHang,s.name,sv.desc||'',sv.price||0,sv.cur||'USD',sv.qty||1,sv.unit||'Unit',sv.amount||0,sv.vat||'0%',sv.invoice||'Yes',sv.pmterm||'Prepaid',sv.party||'',sv.cost||0,sv.svcStatus||'']);
+
+  // Summary stats
+  const totalVol=lots.reduce((s,r)=>s+(parseInt(r.vol)||0),0);
+  const totalRev=lots.reduce((r0,r)=>{
+    const sv=r.svcs||{};
+    SVCS.filter(s=>sv[s.key]?.on&&sv[s.key]?.invoice!=='Waived').forEach(s=>{
+      const v=sv[s.key];const a=v.amount||(v.price||0)*(v.qty||1);
+      r0+=(v.cur||'USD')==='VND'?a:Math.round(a*roe);
+    });return r0;
+  },0);
+
+  const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head><meta charset="UTF-8"/>
+<style>
+  body{font-family:Calibri,Arial,sans-serif;font-size:12px}
+  table{border-collapse:collapse;width:100%}
+</style>
+</head>
+<body>
+<!-- Header banner -->
+<table style="width:100%;margin-bottom:12px;border-collapse:collapse">
+  <tr>
+    <td style="background:${C.green};color:#fff;padding:14px 20px;font-size:20px;font-weight:800;letter-spacing:1px;width:60%">COCOSEA CO., LTD</td>
+    <td style="background:${C.blue};color:#fff;padding:14px 20px;font-size:16px;font-weight:700;text-align:right">DANH SÁCH LÔ HÀNG<br><span style="font-size:11px;font-weight:400;opacity:.8">${tabLabel} — Xuất ngày ${today}</span></td>
+  </tr>
+</table>
+<!-- Summary row -->
+<table style="margin-bottom:14px;border-collapse:collapse">
+  <tr>
+    <td style="background:${C.greenLight};border:1px solid ${C.greenMid};padding:8px 20px;font-weight:600;font-size:12px;color:${C.green}">Tổng lô hàng: <strong>${lots.length}</strong></td>
+    <td style="width:12px"></td>
+    <td style="background:${C.blueLight};border:1px solid #c8d8f0;padding:8px 20px;font-weight:600;font-size:12px;color:${C.blue}">Tổng Vol: <strong>${totalVol} Cont</strong></td>
+    <td style="width:12px"></td>
+    <td style="background:#F3E8FF;border:1px solid #d8c0f0;padding:8px 20px;font-weight:600;font-size:12px;color:#5B21B6">Tổng doanh thu: <strong>${totalRev.toLocaleString()} VND</strong></td>
+  </tr>
+</table>
+<!-- Main table -->
+<table>
+  <thead>
+    <tr>
+      ${th('#')} ${th('Booking No')} ${th('MBL No')} ${th('Shipper')}
+      ${th('Tên hàng')} ${th('Vol/Type')} ${th('ETD')} ${th('ETA')}
+      ${th('POL')} ${th('POD')} ${th('Carrier')} ${th('Vessel')}
+      ${th('Số DV')} ${th('Doanh thu (VND)')} ${th('Trạng thái')}
+    </tr>
+  </thead>
+  <tbody>${rowsHtml}</tbody>
+  <tfoot>
+    <tr>
+      <td colspan="5" style="padding:8px 9px;border:1px solid ${C.green};background:${C.green};color:#fff;font-weight:700;text-align:right">TOTAL</td>
+      <td style="padding:8px 9px;border:1px solid ${C.green};background:${C.green};color:#fff;font-weight:700;text-align:center">${totalVol}</td>
+      <td colspan="7" style="padding:8px 9px;border:1px solid ${C.green};background:${C.green}"></td>
+      <td style="padding:8px 9px;border:1px solid ${C.green};background:#d0ece6;color:${C.green};font-weight:800;text-align:right">${totalRev.toLocaleString()}</td>
+      <td style="padding:8px 9px;border:1px solid ${C.green};background:${C.green}"></td>
+    </tr>
+  </tfoot>
+</table>
+<!-- Service detail sheet hint -->
+<br/>
+<table style="margin-top:16px">
+  <thead><tr>
+    ${th('Booking No','#5B21B6')} ${th('Dịch vụ','#5B21B6')} ${th('Đơn giá','#5B21B6')} ${th('Curr','#5B21B6')} ${th('Vol','#5B21B6')} ${th('Unit','#5B21B6')} ${th('Amount','#5B21B6')} ${th('VAT','#5B21B6')} ${th('Invoice','#5B21B6')} ${th('Party','#5B21B6')}
+  </tr></thead>
+  <tbody>${(()=>{
+    let rows='';
+    lots.forEach(r=>{
+      const sv=r.svcs||{};
+      SVCS.filter(s=>sv[s.key]?.on).forEach((s,si)=>{
+        const v=sv[s.key];
+        const bg=si%2===0?C.white:'#F5F0FF';
+        const isWaived=v.invoice==='Waived';
+        rows+=`<tr>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};color:${C.blue};font-weight:600;font-size:11px">${r.bookingNo}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${v.customName||s.name}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};text-align:right;font-size:11px">${(v.price||0).toLocaleString()}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${v.cur||'USD'}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};text-align:center;font-size:11px">${v.qty||1}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${v.unit||'Cont'}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};text-align:right;font-weight:700;color:${isWaived?C.grayDark:C.blue};font-size:11px">${(v.amount||(v.price||0)*(v.qty||1)).toLocaleString()}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${v.vat||'0%'}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${isWaived?C.red:bg};font-size:11px;color:${isWaived?'#c00':'inherit'}">${v.invoice||'Yes'}</td>
+          <td style="padding:5px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${v.party||'—'}</td>
+        </tr>`;
+      });
     });
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ws2), 'Chi tiết dịch vụ');
-  XLSX.writeFile(wb, 'TradeFlow_'+tt+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
-  toast('Đã xuất Excel thành công');
+    return rows;
+  })()}</tbody>
+</table>
+</body></html>`;
+
+  const blob=new Blob([html],{type:'application/vnd.ms-excel;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='TradeFlow_'+tt+'_'+new Date().toISOString().slice(0,10)+'.xls';
+  a.click(); URL.revokeObjectURL(url);
+  toast('Đã xuất Excel (định dạng màu)');
 }
+
 
 /* ═══════════════════════════════════════════
    SOA - STATEMENT OF ACCOUNT
@@ -4057,13 +4176,11 @@ window.exportSOA=exportSOA;
 
 function exportExcelDebt(){
   if(!can('export')){toast('Không có quyền','error');return;}
-  var XLSX=window.XLSX;
-  if(!XLSX){setTimeout(function(){exportExcelDebt();},2000);return;}
   var filterShipper=g('cnReportShipper')?.value||'';
   var from=g('cnFrom')?.value||'';
   var to=g('cnTo')?.value||'';
   var allR=[...cache.xuat.map(r=>Object.assign({},r,{loai:'Xuất'})),...cache.nhap.map(r=>Object.assign({},r,{loai:'Nhập'}))];
-  var filtered=allR.filter(function(r){
+  var filtered=allR.filter(r=>{
     var sh=r.shipper||r.supplier||'';
     return (!filterShipper||sh===filterShipper)&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
   });
@@ -4071,65 +4188,118 @@ function exportExcelDebt(){
   var roe=26390;
   var dnSeq=1;
   function makeDN(){return 'DN'+new Date().getFullYear().toString().slice(-2)+String(new Date().getMonth()+1).padStart(2,'0')+String(dnSeq++).padStart(6,'0');}
-  var wb=XLSX.utils.book_new();
-  var shippers=[...new Set(filtered.map(function(r){return r.shipper||r.supplier||'';}))].filter(Boolean);
+  var shippers=[...new Set(filtered.map(r=>r.shipper||r.supplier||''))].filter(Boolean);
   if(!filterShipper) shippers=[shippers[0]];
-  shippers.forEach(function(sh){
-    var lots=filtered.filter(function(r){return (r.shipper||r.supplier||'')===sh;});
+  var today=new Date().toLocaleDateString('vi-VN');
+  var dateRange=(from||'01/01/2026').replace(/-/g,'/')+'  –  '+(to?to.replace(/-/g,'/'):today);
+
+  // Color palette
+  const C={green:'#0F6E56',greenL:'#E8F5F0',greenM:'#d0ece6',blue:'#1a4b8c',blueL:'#EEF4FB',purple:'#5B21B6',purpleL:'#F3E8FF',gray:'#F5F5F3',border:'#D0D0C8',white:'#FFFFFF',red:'#FFF0F0',amber:'#FFFBE6'};
+
+  var allHtml='';
+  shippers.forEach(sh=>{
     var sp=cache.partners[sh]||{};
-    var fromStr=from?from.replace(/-/g,'/'):'01/01/2026';
-    var toStr=to?to.replace(/-/g,'/'):new Date().toLocaleDateString('vi-VN');
+    var lots=filtered.filter(r=>(r.shipper||r.supplier||'')===sh);
     var dataRows=[];
-    lots.forEach(function(r){
+    lots.forEach(r=>{
       var svcs=r.svcs||{};
-      var contStr=(r.vol||'')+' x'+(r.typeCont||'')+(r.pod?' '+r.pod.split(',')[0].toUpperCase():'');
+      var contStr=(r.vol||'')+'×'+(r.typeCont||'')+(r.pod?' '+(r.pod.split(',')[0]).toUpperCase():'');
       var etdFmt=r.etd?r.etd.replace(/-/g,'/'):'';
       var totalYesVND=0,totalNoVND=0;
-      SVCS.forEach(function(s){
-        var sv=svcs[s.key];
-        if(!sv||!sv.on||sv.invoice==='Waived')return;
+      SVCS.forEach(s=>{
+        var sv=svcs[s.key]; if(!sv||!sv.on||sv.invoice==='Waived')return;
         var amt=sv.amount||(sv.price||0)*(sv.qty||1);
         var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
         if((sv.invoice||'Yes')==='Yes')totalYesVND+=amtVND;
         else if(sv.invoice==='No')totalNoVND+=amtVND;
       });
-      if(totalYesVND>0)dataRows.push([makeDN(),'RE'+r.bookingNo,r.mblNo||'',totalYesVND,'Công ty',sh,contStr,etdFmt]);
-      if(totalNoVND>0)dataRows.push([makeDN(),'RE'+r.bookingNo,r.mblNo||'',totalNoVND,'Cá nhân',sh,contStr,etdFmt]);
+      if(totalYesVND>0)dataRows.push({dn:makeDN(),job:'RE'+r.bookingNo,hbl:r.mblNo||'',amt:totalYesVND,tk:'Công ty',sender:sh,cont:contStr,date:etdFmt,type:'co'});
+      if(totalNoVND>0)dataRows.push({dn:makeDN(),job:'RE'+r.bookingNo,hbl:r.mblNo||'',amt:totalNoVND,tk:'Cá nhân',sender:sh,cont:contStr,date:etdFmt,type:'cn'});
     });
     if(!dataRows.length)return;
+    var totalCo=dataRows.filter(r=>r.type==='co').reduce((s,r)=>s+r.amt,0);
+    var totalCN=dataRows.filter(r=>r.type==='cn').reduce((s,r)=>s+r.amt,0);
+    var grandTotal=totalCo+totalCN;
 
-    // Sheet data with formatting
-    var wsData=[];
-    // Title rows
-    wsData.push(['','BẢNG KÊ CÔNG NỢ','','','','','','']);
-    wsData.push(['','Thời gian: từ '+fromStr+' đến '+toStr,'','','','','','']);
-    wsData.push(['','','','','','','','']);
-    wsData.push(['Full Name:',sp.fullname||sh,'','','','','','']);
-    wsData.push(['Address:',sp.addr||'','','','','','','']);
-    wsData.push(['Tax ID (MST):',sp.mst||'','','','','','','']);
-    wsData.push(['','','','','','','','']);
-    // Column headers
-    wsData.push(['Debit No','Job ID','HBL/MBL','VND Amount','TK thanh toán','Sender','Số Cont/VOL','Debit Date']);
-    // Data rows
-    var totalCty=0,totalCN=0;
-    dataRows.forEach(function(row){
-      wsData.push(row);
-      if(row[4]==='Công ty')totalCty+=row[3]||0;
-      else totalCN+=row[3]||0;
-    });
-    // Subtotals
-    wsData.push(['','','','','','','','']);
-    wsData.push(['','','Tổng Công ty:',totalCty,'','','','']);
-    wsData.push(['','','Tổng Cá nhân:',totalCN,'','','','']);
-    wsData.push(['','','GRAND TOTAL:',totalCty+totalCN,'','','','']);
+    var rowsHtml=dataRows.map((row,i)=>{
+      var bg=row.type==='co'?C.blueL:C.purpleL;
+      var clr=row.type==='co'?C.blue:C.purple;
+      return `<tr>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};color:${C.blue};font-weight:600;font-size:11px">${row.dn}</td>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};font-size:11px;font-weight:600">${row.job}</td>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${row.hbl}</td>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};text-align:right;font-size:12px;font-weight:700;color:${C.green}">${row.amt.toLocaleString()}</td>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};font-weight:700;font-size:11px;color:${clr}">${row.tk}</td>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${row.sender}</td>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};font-size:11px">${row.cont}</td>
+        <td style="padding:6px 9px;border:1px solid ${C.border};background:${bg};font-size:11px;text-align:center">${row.date}</td>
+      </tr>`;
+    }).join('');
 
-    var ws=XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols']=[{wch:13},{wch:16},{wch:22},{wch:16},{wch:13},{wch:32},{wch:24},{wch:13}];
-
-    // Style title rows (merge would need xlsx-style)
-    XLSX.utils.book_append_sheet(wb,ws,(sh||'Shipper').slice(0,28));
+    allHtml+=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head><meta charset="UTF-8"/><style>body{font-family:Calibri,Arial,sans-serif}table{border-collapse:collapse}</style></head>
+<body>
+<table style="width:100%;margin-bottom:14px;border-collapse:collapse">
+  <tr>
+    <td style="background:${C.green};color:#fff;padding:14px 22px;font-size:20px;font-weight:800;width:55%">COCOSEA CO., LTD</td>
+    <td style="background:${C.blue};color:#fff;padding:14px 22px;font-size:15px;font-weight:700;text-align:right">BẢNG KÊ CÔNG NỢ<br><span style="font-size:11px;opacity:.8">Thời gian: ${dateRange}</span></td>
+  </tr>
+</table>
+<table style="margin-bottom:6px;border-collapse:collapse">
+  <tr>
+    <td style="padding:7px 16px;font-weight:600;font-size:12px;color:${C.blue}">Full Name:</td>
+    <td style="padding:7px 16px;font-size:12px;font-weight:700">${sp.fullname||sh}</td>
+    <td style="width:30px"></td>
+    <td style="padding:7px 16px;font-weight:600;font-size:12px;color:${C.blue}">MST:</td>
+    <td style="padding:7px 16px;font-size:12px">${sp.mst||'—'}</td>
+  </tr>
+  <tr>
+    <td style="padding:3px 16px;font-weight:600;font-size:12px;color:${C.blue}">Address:</td>
+    <td colspan="4" style="padding:3px 16px;font-size:12px">${sp.addr||'—'}</td>
+  </tr>
+</table>
+<br/>
+<table style="width:100%">
+  <thead>
+    <tr style="background:${C.green}">
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:left;border:1px solid ${C.green}">Debit No</th>
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:left;border:1px solid ${C.green}">Job ID</th>
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:left;border:1px solid ${C.green}">HBL/MBL</th>
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:right;border:1px solid ${C.green}">VND Amount</th>
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:left;border:1px solid ${C.green}">TK thanh toán</th>
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:left;border:1px solid ${C.green}">Sender</th>
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:left;border:1px solid ${C.green}">Số Cont/VOL</th>
+      <th style="padding:8px 9px;color:#fff;font-size:11px;text-align:center;border:1px solid ${C.green}">Debit Date</th>
+    </tr>
+  </thead>
+  <tbody>${rowsHtml}</tbody>
+  <tfoot>
+    <tr><td colspan="8" style="padding:4px"></td></tr>
+    <tr>
+      <td colspan="3" style="padding:7px 9px;border:1px solid ${C.border};background:${C.blueL};font-weight:600;text-align:right;color:${C.blue}">Tổng Công ty (có HĐ):</td>
+      <td style="padding:7px 9px;border:1px solid ${C.border};background:${C.blueL};font-weight:700;text-align:right;color:${C.blue};font-size:13px">${totalCo.toLocaleString()}</td>
+      <td colspan="4" style="border:1px solid ${C.border};background:${C.blueL}"></td>
+    </tr>
+    <tr>
+      <td colspan="3" style="padding:7px 9px;border:1px solid ${C.border};background:${C.purpleL};font-weight:600;text-align:right;color:${C.purple}">Tổng Cá nhân (không HĐ):</td>
+      <td style="padding:7px 9px;border:1px solid ${C.border};background:${C.purpleL};font-weight:700;text-align:right;color:${C.purple};font-size:13px">${totalCN.toLocaleString()}</td>
+      <td colspan="4" style="border:1px solid ${C.border};background:${C.purpleL}"></td>
+    </tr>
+    <tr>
+      <td colspan="3" style="padding:8px 9px;border:2px solid ${C.green};background:${C.green};color:#fff;font-weight:800;text-align:right;font-size:13px">GRAND TOTAL:</td>
+      <td style="padding:8px 9px;border:2px solid ${C.green};background:${C.greenM};font-weight:800;text-align:right;color:${C.green};font-size:15px">${grandTotal.toLocaleString()}</td>
+      <td colspan="4" style="border:2px solid ${C.green};background:${C.green}"></td>
+    </tr>
+  </tfoot>
+</table>
+</body></html>`;
   });
-  XLSX.writeFile(wb,'BangKeCongNo_'+(filterShipper||'All')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+
+  var blob=new Blob([allHtml],{type:'application/vnd.ms-excel;charset=utf-8'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url; a.download='BangKeCongNo_'+(filterShipper||'All')+'_'+new Date().toISOString().slice(0,10)+'.xls';
+  a.click(); URL.revokeObjectURL(url);
   toast('Đã xuất Excel Bảng kê công nợ');
 }
 
