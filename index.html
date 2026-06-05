@@ -63,8 +63,14 @@ window._bankAccounts=[
 // Load bank accounts from Firestore
 function loadBankAccounts(){
   db.collection('_config').doc('banks').get().then(function(snap){
-    if(snap.exists&&snap.data().accounts){
-      window._bankAccounts=snap.data().accounts;
+    if(snap.exists){
+      const d=snap.data();
+      // Handle both old format (accounts:[]) and new format (company:[], personal:[])
+      if(d.company||d.personal){
+        window._bankAccounts={company:d.company||[],personal:d.personal||[]};
+      } else if(d.accounts){
+        window._bankAccounts={company:d.accounts,personal:[]};
+      }
     }
   }).catch(function(){});
 }
@@ -702,6 +708,7 @@ function renderDetailPanel(r,tt){
         +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="cno_'+i+'" value="'+(c.no||'')+'" placeholder="ABCU1234567" style="font-size:12px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"/></td>'
         +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="cseal_'+i+'" value="'+(c.seal||'')+'" placeholder="Seal number" style="font-size:12px"/></td>'
         +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="ctype_'+i+'" value="'+(c.type||r.typeCont||'')+'" placeholder="20DC/40HC..." style="font-size:12px;width:70px"/></td>'
+        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="number" id="cgw_'+i+'" value="'+(c.gw||'')+'" placeholder="0" min="0" style="font-size:12px;width:80px;text-align:right"/></td>'
         +'</tr>';
     }
     bodyHtml='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">'
@@ -714,9 +721,13 @@ function renderDetailPanel(r,tt){
         +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Container No</th>'
         +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Seal No</th>'
         +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Type</th>'
+        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:right;text-transform:uppercase;letter-spacing:.3px">G.W (KG)</th>'
       +'</tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
-      +'<div style="margin-top:1rem;display:flex;justify-content:flex-end">'
+      +'<div style="margin-top:.5rem;padding:6px 10px;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:12px;color:var(--text-secondary)">'
+        +'Total G.W: <strong id="totalGW">—</strong> KG'
+      +'</div>'
+    +'<div style="margin-top:.75rem;display:flex;justify-content:flex-end">'
         +'<button class="btn pri" onclick="saveContSeal()"><i class="ti ti-check"></i> Lưu</button>'
       +'</div>';
   }
@@ -726,7 +737,7 @@ function renderDetailPanel(r,tt){
     const svcs=r.svcs||{};
     Object.keys(svcs).forEach(k=>{if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name)SVCS.push({key:k,name:svcs[k]._name,custom:true});});
     bodyHtml=`<div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;font-weight:600;display:grid;grid-template-columns:24px 1fr 1fr 28px;gap:8px;padding:3px 10px;margin-bottom:4px"><div></div><div>Dịch vụ</div><div>Mô tả / Ghi chú</div><div></div></div>
-    <div style="display:grid;grid-template-columns:22px 150px 1fr 70px 70px 75px 60px 100px 90px 26px;gap:5px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div>Đơn giá</div><div>SL</div><div>Thành tiền</div><div>Curr</div><div>NCC</div><div>Trạng thái</div><div></div></div>
+    <div style="display:grid;grid-template-columns:22px 140px 1fr 65px 50px 70px 75px 55px 95px 90px 26px;gap:5px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div>Đơn giá</div><div>SL</div><div>Đơn vị</div><div>Thành tiền</div><div>Curr</div><div>NCC</div><div>Trạng thái</div><div></div></div>
     <div id="detailSvcGrid">${SVCS.map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')}</div>
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
@@ -1072,7 +1083,8 @@ async function saveContSeal(){
     const no=g('cno_'+i)?.value?.trim()||'';
     const seal=g('cseal_'+i)?.value?.trim()||'';
     const type=g('ctype_'+i)?.value?.trim()||'';
-    containers.push({no,seal,type});
+    const gw=parseFloat(g('cgw_'+i)?.value)||0;
+    containers.push({no,seal,type,gw});
   }
   setLoading(true,'Đang lưu...');
   try{
@@ -1095,11 +1107,12 @@ async function saveDetailSvc(){
     const desc=g('sd_'+s.key)?.value||'';
     const cost=parseFloat(g('scost_'+s.key)?.value)||0;
     const svcQty=parseFloat(g('sqty_'+s.key)?.value)||1;
+    const svcUnit=g('svcunit_'+s.key)?.value||'Cont';
     const svcCur=g('svcur_'+s.key)?.value||'USD';
     const svcSupplier=g('ssup_'+s.key)?.value||'';
     const svcStatus=g('sstatus_'+s.key)?.value||'';
     const prev=existing[s.key]||{};
-    svcs[s.key]={on,desc,cost,svcQty,svcCur,svcSupplier,svcStatus,
+    svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,svcStatus,
       price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',
       vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0};
     if(s.custom)svcs[s.key]._name=g('sname_'+s.key)?.value||s.name;
@@ -1356,8 +1369,10 @@ function openInvoice(id, tt, tempR){
 
   const svcs=r.svcs||{};
   Object.keys(svcs).forEach(k=>{ if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name) SVCS.push({key:k,name:svcs[k]._name,custom:true}); });
-  // Filter: only services with invoice=Yes (exclude Waived & No)
-  const activeSvcs=SVCS.filter(s=>svcs[s.key]?.on && svcs[s.key]?.invoice!=='Waived' && svcs[s.key]?.invoice!=='No');
+  // Split services: Yes (có HĐ) and No (không HĐ), exclude Waived
+  const svcsYes=SVCS.filter(s=>svcs[s.key]?.on && (svcs[s.key]?.invoice||'Yes')==='Yes');
+  const svcsNo=SVCS.filter(s=>svcs[s.key]?.on && svcs[s.key]?.invoice==='No');
+  const activeSvcs=[...svcsYes,...svcsNo]; // combined for ROE calc
   const allActiveSvcs=SVCS.filter(s=>svcs[s.key]?.on); // for summary
 
   const shipperName=r.shipper||r.supplier||'';
@@ -1468,24 +1483,34 @@ function rebuildInvoicePreview(){
   const tdL='padding:7px 10px;border-bottom:1px solid #e8e8e0;font-size:11.5px;vertical-align:top';
   const tdR='padding:7px 10px;border-bottom:1px solid #e8e8e0;font-size:11.5px;text-align:right;font-weight:600';
 
-  const chargeRows=activeSvcs.map((s,i)=>{
-    const sv=svcs[s.key];
-    const amt=sv.amount||(sv.price||0)*(sv.qty||1);
-    const amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
-    const desc=sv.desc||'';
-    const vat=sv.vat||'0%';
-    const displayName=svcs[s.key]?.customName||s.name;
-    return `<tr>
-      <td style="${tdL};color:#666;width:28px">${i+1}</td>
-      <td style="${tdL}"><strong>${displayName}</strong>${desc?'<br><span style="font-size:10.5px;color:#888">'+desc+'</span>':''}</td>
-      <td style="${tdR};font-weight:400">${(sv.price||0).toLocaleString()}</td>
-      <td style="${tdL}">${sv.cur||'USD'}</td>
-      <td style="${tdL};color:#888">${vat}</td>
-      <td style="${tdR}">${sv.qty||1}</td>
-      <td style="${tdL}">${sv.unit||'Unit'}</td>
-      <td style="${tdR};color:#1a4b8c">${amtVND.toLocaleString()}</td>
-    </tr>`;
-  }).join('');;
+  function buildSvcRows(svcList,startIdx){
+    return svcList.map((s,i)=>{
+      const sv=svcs[s.key];
+      const dn=sv.customName||s.name;
+      const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+      const amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
+      const desc=sv.desc||'';
+      const vat=sv.vat||'0%';
+      return `<tr>
+        <td style="${tdL};color:#666;width:28px">${startIdx+i+1}</td>
+        <td style="${tdL}"><strong>${dn}</strong>${desc?'<br><span style="font-size:10.5px;color:#888">'+desc+'</span>':''}</td>
+        <td style="${tdR};font-weight:400">${(sv.price||0).toLocaleString()}</td>
+        <td style="${tdL}">${sv.cur||'USD'}</td>
+        <td style="${tdL};color:#888">${vat}</td>
+        <td style="${tdR}">${sv.qty||1}</td>
+        <td style="${tdL}">${sv.unit||'Unit'}</td>
+        <td style="${tdR};color:#1a4b8c">${amtVND.toLocaleString()}</td>
+      </tr>`;
+    }).join('');
+  }
+  let sumYesVND=0,sumNoVND=0;
+  svcsYes.forEach(s=>{const sv=svcs[s.key];const a=sv.amount||(sv.price||0)*(sv.qty||1);sumYesVND+=(sv.cur||'USD')==='VND'?a:Math.round(a*roe);});
+  svcsNo.forEach(s=>{const sv=svcs[s.key];const a=sv.amount||(sv.price||0)*(sv.qty||1);sumNoVND+=(sv.cur||'USD')==='VND'?a:Math.round(a*roe);});
+  const secHdr=(label,bg)=>`<tr><td colspan="8" style="${tdL};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#fff;background:${bg};padding:6px 10px">${label}</td></tr>`;
+  const secSub=(label,val)=>`<tr style="background:#f0f5fc"><td colspan="7" style="${tdL};font-size:11.5px;font-weight:600;text-align:right;color:#444">${label}</td><td style="${tdR};color:#1a4b8c;font-weight:700">${val.toLocaleString()}</td></tr>`;
+  const chargeRows=(svcsYes.length?secHdr('A. Phí có hóa đơn (Invoice = Yes)','#2c6fad')+buildSvcRows(svcsYes,0)+secSub('Subtotal — Có hóa đơn (VND):',sumYesVND):'')
+    +(svcsNo.length?secHdr('B. Phí không hóa đơn (Invoice = No)','#5c7fa0')+buildSvcRows(svcsNo,svcsYes.length)+secSub('Subtotal — Không hóa đơn (VND):',sumNoVND):'');
+
 
   // Subtotals by VAT rate (already in VND)
   const sub0=vatGroups['0%']||0;
@@ -1505,11 +1530,12 @@ function rebuildInvoicePreview(){
     <td style="padding:8px 10px;color:#fff;font-weight:700;font-size:13px;text-align:right">${grandWithVAT.toLocaleString()}</td>
   </tr>`;
 
-  const bankRows=banks.map(b=>`<tr>
-    <td style="${tdL}">${b.beneficiary||''}</td>
-    <td style="${tdL};font-weight:600">${b.account||''}</td>
-    <td style="${tdL}">${b.bank||''}</td>
-  </tr>`).join('');
+  const banksData=window._bankAccounts||{company:[],personal:[]};
+  const coAccs=Array.isArray(banksData)?banksData:(banksData.company||[]);
+  const persAccs=Array.isArray(banksData)?[]:(banksData.personal||[]);
+  function buildBankTrs(list){return list.map(b=>`<tr><td style="${tdL}">${b.beneficiary||''}</td><td style="${tdL};font-weight:600">${b.account||''}</td><td style="${tdL}">${b.bank||''}</td></tr>`).join('');}
+  const bankRows=(coAccs.length?`<tr><td colspan="3" style="${tdL};font-size:10px;font-weight:700;text-transform:uppercase;color:#2c6fad;letter-spacing:.5px;background:#eef4fb">Tài khoản Công ty</td></tr>`+buildBankTrs(coAccs):'')
+    +(persAccs.length?`<tr><td colspan="3" style="${tdL};font-size:10px;font-weight:700;text-transform:uppercase;color:#555;letter-spacing:.5px;background:#f5f5f5">Tài khoản Cá nhân</td></tr>`+buildBankTrs(persAccs):'');
 
   const html=`<div id="dnPrintArea" style="font-family:Arial,sans-serif;font-size:12px;color:#1a1a18;background:#fff;padding:0">
     <!-- HEADER -->
@@ -1653,6 +1679,19 @@ function getSvcSupplierOpts(selected){
   return '<option value="">— NCC —</option>'+suppliers.map(function(s){return'<option'+(s===selected?' selected':'')+'>'+s+'</option>';}).join('');
 }
 
+function autoSvcQtyByUnit(key){
+  const unitEl=g('svcunit_'+key);
+  const qtyEl=g('sqty_'+key);
+  if(!unitEl||!qtyEl)return;
+  const unit=unitEl.value;
+  const r=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
+  const vol=parseInt(r.vol)||1;
+  if(unit==='Cont') qtyEl.value=vol;
+  else if(unit==='Shipment') qtyEl.value=1;
+  else if(unit==='Bill') qtyEl.value=1;
+  calcSvcAmt(key);
+}
+
 function autoFillQtyByUnit(selectEl, key){
   if(!selectEl) return;
   const unit=selectEl.value;
@@ -1686,7 +1725,7 @@ function svcRowHTML(s, sv){
   const curOpts=CURRENCIES.map(function(c){return'<option'+(c===cur?' selected':'')+'>'+c+'</option>';}).join('');
   const supplierOpts=getSvcSupplierOpts(supplier);
   const amt=cost&&qty?(parseFloat(cost)*parseFloat(qty)).toLocaleString():'—';
-  return`<div style="display:grid;grid-template-columns:22px 150px 1fr 70px 70px 75px 60px 100px 90px 26px;gap:5px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
+  return`<div style="display:grid;grid-template-columns:22px 140px 1fr 65px 50px 70px 75px 55px 95px 90px 26px;gap:5px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
     <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
     <div style="display:flex;align-items:center;gap:3px;min-width:0">
       ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:500;flex:1;min-width:0" oninput="renameSvc('${s.key}',this.value)"/>`:`<span style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.name}</span>`}
@@ -1694,6 +1733,7 @@ function svcRowHTML(s, sv){
     <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả..." ${sv.on?'':'disabled'} style="font-size:11px"/>
     <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Chi phí đơn giá đầu vào"/>
     <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
+    <select id="svcunit_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px" onchange="autoSvcQtyByUnit('${s.key}')">${unitOptsRow}</select>
     <span id="samt_${s.key}" style="font-size:11px;font-weight:600;color:var(--red);text-align:right">${amt}</span>
     <select id="svcur_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${curOpts}</select>
     <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
@@ -1728,7 +1768,7 @@ function renameSvc(key, newName){
 function toggleSvc(key){
   const tg=g('tg_'+key); const on=tg.classList.contains('on');
   tg.classList.toggle('on',!on); tg.classList.toggle('off',on);
-  ['sd_','scost_','sqty_','svcur_','ssup_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=on;});
+  ['sd_','scost_','sqty_','svcunit_','svcur_','ssup_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=on;});
   calcSvcAmt(key);
 }
 
@@ -2777,46 +2817,77 @@ function downloadEmlFile(id, tt){
 function renderSettings(){
   const pg=g('page-settings');
   if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Chỉ Admin mới truy cập được cài đặt</div></div>';return;}
-  const banks=window._bankAccounts||[{beneficiary:'',account:'',bank:''}];
-  let bankRows=banks.map(function(b,i){
-    return '<div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;margin-bottom:6px;align-items:center">'
-      +'<input type="text" id="bben_'+i+'" value="'+b.beneficiary+'" placeholder="Tên thụ hưởng" style="font-size:12px"/>'
-      +'<input type="text" id="bacc_'+i+'" value="'+b.account+'" placeholder="Số TK" style="font-size:12px"/>'
-      +'<input type="text" id="bbank_'+i+'" value="'+b.bank+'" placeholder="Ngân hàng" style="font-size:12px"/>'
-      +'<button class="rac red" onclick="removeBankRow('+i+')" title="Xóa"><i class="ti ti-trash"></i></button>'
-      +'</div>';
-  }).join('');
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const coBanks=Array.isArray(banks)?banks:(banks.company||[{beneficiary:'',account:'',bank:''}]);
+  const persBanks=Array.isArray(banks)?[]:(banks.personal||[]);
+
+  function bankRowsHtml(list,prefix){
+    return list.map(function(b,i){
+      return '<div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;margin-bottom:6px;align-items:center">'
+        +'<input type="text" id="'+prefix+'ben_'+i+'" value="'+b.beneficiary+'" placeholder="Tên thụ hưởng" style="font-size:12px"/>'
+        +'<input type="text" id="'+prefix+'acc_'+i+'" value="'+b.account+'" placeholder="Số TK" style="font-size:12px"/>'
+        +'<input type="text" id="'+prefix+'bank_'+i+'" value="'+b.bank+'" placeholder="Ngân hàng" style="font-size:12px"/>'
+        +'<button class="rac red" onclick="removeBankRow(this.dataset.prefix,this.dataset.idx)" data-prefix="'+prefix+'" data-idx="'+i+'" title="Xóa"><i class="ti ti-trash"></i></button>'
+        +'</div>';
+    }).join('');
+  }
 
   pg.innerHTML='<div style="font-weight:600;font-size:14px;margin-bottom:1.25rem">Cài đặt hệ thống</div>'
 
-    // Bank accounts section
     +'<div class="table-card" style="padding:1.25rem;margin-bottom:1.25rem">'
-      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-building-bank" style="font-size:14px"></i>Tài khoản ngân hàng</div>'
+      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-building" style="font-size:14px"></i>Tài khoản Công ty</div>'
       +'<div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;padding:3px 0;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px"><div>Tên thụ hưởng</div><div>Số tài khoản</div><div>Ngân hàng</div><div></div></div>'
-      +'<div id="bankRowsContainer">'+bankRows+'</div>'
-      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
-        +'<button class="btn" onclick="addBankRow()"><i class="ti ti-plus"></i> Thêm tài khoản</button>'
-        +'<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>'
+      +'<div id="bankRowsCo">'+bankRowsHtml(coBanks,'co')+'</div>'
+      +'<div style="display:flex;gap:8px;margin-top:.5rem">'
+        +'<button class="btn" onclick="addBankRow("co")"><i class="ti ti-plus"></i> Thêm TK Cty</button>'
       +'</div>'
-    +'</div>';
+    +'</div>'
+
+    +'<div class="table-card" style="padding:1.25rem;margin-bottom:1.25rem">'
+      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-user" style="font-size:14px"></i>Tài khoản Cá nhân</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 130px 1fr 32px;gap:8px;padding:3px 0;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px"><div>Tên thụ hưởng</div><div>Số tài khoản</div><div>Ngân hàng</div><div></div></div>'
+      +'<div id="bankRowsPers">'+bankRowsHtml(persBanks,'pers')+'</div>'
+      +'<div style="display:flex;gap:8px;margin-top:.5rem">'
+        +'<button class="btn" onclick="addBankRow("pers")"><i class="ti ti-plus"></i> Thêm TK Cá nhân</button>'
+      +'</div>'
+    +'</div>'
+
+    +'<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>';
 }
 
-function addBankRow(){
-  window._bankAccounts=(window._bankAccounts||[]).concat([{beneficiary:'',account:'',bank:''}]);
+function addBankRow(prefix){
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const co=Array.isArray(banks)?banks:(banks.company||[]);
+  const pers=Array.isArray(banks)?[]:(banks.personal||[]);
+  if(prefix==='co') co.push({beneficiary:'',account:'',bank:''});
+  else pers.push({beneficiary:'',account:'',bank:''});
+  window._bankAccounts={company:co,personal:pers};
   renderSettings();
 }
-function removeBankRow(idx){
-  window._bankAccounts=(window._bankAccounts||[]).filter(function(_,i){return i!==idx;});
+function removeBankRow(prefix,idx){
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const co=Array.isArray(banks)?banks:(banks.company||[]);
+  const pers=Array.isArray(banks)?[]:(banks.personal||[]);
+  if(prefix==='co') co.splice(idx,1);
+  else pers.splice(idx,1);
+  window._bankAccounts={company:co,personal:pers};
   renderSettings();
 }
 async function saveBankAccounts(){
-  const accounts=(window._bankAccounts||[]).map(function(_,i){
-    return {beneficiary:g('bben_'+i)?.value||'',account:g('bacc_'+i)?.value||'',bank:g('bbank_'+i)?.value||''};
-  });
-  window._bankAccounts=accounts;
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const coList=Array.isArray(banks)?banks:(banks.company||[]);
+  const persList=Array.isArray(banks)?[]:(banks.personal||[]);
+  function readRows(prefix,list){
+    return list.map(function(_,i){
+      return {beneficiary:g(prefix+'ben_'+i)?.value||'',account:g(prefix+'acc_'+i)?.value||'',bank:g(prefix+'bank_'+i)?.value||''};
+    });
+  }
+  const company=readRows('co',coList);
+  const personal=readRows('pers',persList);
+  window._bankAccounts={company,personal};
   setLoading(true,'Đang lưu...');
   try{
-    await fsSet('_config','banks',{accounts,updatedAt:Date.now()});
+    await fsSet('_config','banks',{company,personal,updatedAt:Date.now()});
     toast('Đã lưu tài khoản ngân hàng');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
@@ -2892,6 +2963,7 @@ function handleDnUpload(input, id, tt){
 
 window.handleDnUpload=handleDnUpload;
 
+window.autoSvcQtyByUnit=autoSvcQtyByUnit;
 window.autoFillQtyByUnit=autoFillQtyByUnit;
 window.calcSvcAmt=calcSvcAmt;
 window.saveContSeal=saveContSeal;
@@ -3008,41 +3080,43 @@ function renderCostingRows(items){
 function updateCostingTotal(){
   const r=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
   const svcs=r.svcs||{};
-  const byCur={};
-  // Auto from svcs - read editable inputs if rendered, else use saved values
+  let totalVND=0;
+  const roe=26390;
+
+  // Sum auto rows (from svcs) - only rendered inputs
   SVCS.forEach(function(s){
     const sv=svcs[s.key];
     if(!sv||!sv.on||!sv.cost)return;
     const priceEl=g('autoprice_'+s.key);
+    if(!priceEl)return;
     const qtyEl=g('autoqty_'+s.key);
     const curEl=g('autocur_'+s.key);
-    const price=priceEl?parseFloat(priceEl.value)||0:(sv.cost||0);
-    const qty=qtyEl?parseFloat(qtyEl.value)||1:(sv.svcQty||1);
-    const cur=curEl?curEl.value:(sv.svcCur||sv.cur||'USD');
-    const costAmt=price*qty;
-    const amtEl=g('autoamt_'+s.key);
-    if(amtEl) amtEl.textContent=costAmt?costAmt.toLocaleString():'—';
-    if(!byCur[cur])byCur[cur]=0;
-    byCur[cur]+=costAmt;
-  });
-  // Manual items: use price * qty
-  const items=_tempCosting||((r.costing||{}).items||[]);
-  items.forEach(function(_,i){
-    const price=parseFloat(g('cprice_'+i)?.value)||0;
-    const qty=parseFloat(g('cqty_'+i)?.value)||1;
-    const cur=g('ccur_'+i)?.value||'USD';
+    const price=parseFloat(priceEl.value)||0;
+    const qty=parseFloat(qtyEl?qtyEl.value:'1')||1;
+    const cur=curEl?curEl.value:'VND';
     const amt=price*qty;
-    // Update display cell
-    const dispEl=g('camt_display_'+i);
-    if(dispEl) dispEl.textContent=amt?amt.toLocaleString():'—';
-    if(!byCur[cur])byCur[cur]=0;
-    byCur[cur]+=amt;
+    const amtEl=g('autoamt_'+s.key);
+    if(amtEl)amtEl.textContent=amt?amt.toLocaleString():'—';
+    totalVND+=cur==='VND'?amt:Math.round(amt*roe);
   });
-  const tot=g('costingTotals');
-  if(tot){
-    const parts=Object.entries(byCur).map(function(e){return'<strong style="color:var(--red)">'+e[1].toLocaleString()+' '+e[0]+'</strong>';});
-    tot.innerHTML='Tổng chi phí: '+(parts.join(' + ')||'0');
+
+  // Sum manual rows - iterate by rendered inputs only
+  let i=0;
+  while(i<50){
+    const priceEl=g('cprice_'+i);
+    if(!priceEl)break;
+    const price=parseFloat(priceEl.value)||0;
+    const qty=parseFloat(g('cqty_'+i)?.value)||1;
+    const cur=g('ccur_'+i)?.value||'VND';
+    const amt=price*qty;
+    const dispEl=g('camt_display_'+i);
+    if(dispEl)dispEl.textContent=amt?amt.toLocaleString():'—';
+    totalVND+=cur==='VND'?amt:Math.round(amt*roe);
+    i++;
   }
+
+  const tot=g('costingTotals');
+  if(tot)tot.innerHTML='Tổng chi phí: <strong style="color:var(--red);font-size:13px">'+totalVND.toLocaleString()+' VND</strong>';
 }
 
 async function saveCosting(){
