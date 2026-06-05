@@ -799,15 +799,18 @@ function renderDetailPanel(r,tt){
       const svcs=r.svcs||{};
       const revenueRows=[];
       const revByCur={};
+      // Revenue: Yes + No (not Waived)
       SVCS.forEach(function(s){
         const sv=svcs[s.key];
-        if(!sv||!sv.on||sv.invoice==='Waived'||sv.invoice==='No')return;
-        const cur=sv.cur||'USD';
+        if(!sv||!sv.on||sv.invoice==='Waived')return;
+        const cur=sv.cur||'VND';
         const amt=sv.amount||(sv.price||0)*(sv.qty||1);
         revenueRows.push({name:sv.customName||s.name,price:sv.price||0,qty:sv.qty||1,unit:sv.unit||'Unit',cur,amt});
         if(!revByCur[cur])revByCur[cur]=0;
         revByCur[cur]+=amt;
       });
+      // ROE from _dnData or default
+      const costingROE=(window._dnData&&parseFloat(g('roeInput')?.value))||26390;
 
       // Chi phí từ svc.cost (đầu vào từ tab Dịch vụ) + manual costing
       const costByCur={};
@@ -826,8 +829,20 @@ function renderDetailPanel(r,tt){
         costByCur[cur]+=(it.amt||0);
       });
 
-      // Profit = Revenue - Cost (per currency)
-      const allCurs=[...new Set([...Object.keys(revByCur),...Object.keys(costByCur)])];
+      // Convert everything to VND for single summary
+      const roe=costingROE;
+      function toVND(amt,cur){
+        if(cur==='VND')return amt;
+        if(cur==='USD')return Math.round(amt*roe);
+        return Math.round(amt*roe); // approx
+      }
+      let totalRevVND=0,totalCostVND=0;
+      Object.entries(revByCur).forEach(function(e){totalRevVND+=toVND(e[1],e[0]);});
+      Object.entries(costByCur).forEach(function(e){totalCostVND+=toVND(e[1],e[0]);});
+      const totalProfitVND=totalRevVND-totalCostVND;
+      const marginPct=totalRevVND>0?Math.round(totalProfitVND/totalRevVND*100):0;
+      // Keep allCurs for per-section totals display
+      const allCurs=['VND'];
 
       const thS='padding:7px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap';
       const tdS='padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
@@ -854,7 +869,7 @@ function renderDetailPanel(r,tt){
           +'<td style="'+tdS+'"><input type="text" id="cname_'+i+'" value="'+(it.name||'')+'" placeholder="Tên chi phí" style="font-size:12px;width:100%"/></td>'
           +'<td style="'+tdS+';text-align:right"><input type="number" id="cprice_'+i+'" value="'+(it.price||it.amt||'')+'" placeholder="Đơn giá" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:85px;text-align:right"/></td>'
           +'<td style="'+tdS+';text-align:right"><input type="number" id="cqty_'+i+'" value="'+(it.qty||1)+'" placeholder="1" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:55px;text-align:right"/></td>'
-          +'<td style="'+tdS+'"><select id="cunit_'+i+'" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
+          +'<td style="'+tdS+'"><select id="cunit_'+i+'" onchange="autoFillQtyByUnit(this,\'manual_'+i+'\')" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
           +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="camt_display_'+i+'">'+calcAmt+'</td>'
           +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:65px">'+curOpts+'</select></td>'
           +'<td style="'+tdS+';text-align:center"><button class="rac red" onclick="removeCostingItem('+i+')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
@@ -872,7 +887,7 @@ function renderDetailPanel(r,tt){
           +'<td style="'+tdS+';font-size:11.5px"><span style="font-weight:500">'+s.name+'</span> <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
           +'<td style="'+tdS+'"><input type="number" id="autoprice_'+s.key+'" value="'+(sv.cost||0)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:85px;text-align:right"/></td>'
           +'<td style="'+tdS+'"><input type="number" id="autoqty_'+s.key+'" value="'+(sv.svcQty||1)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:55px;text-align:right"/></td>'
-          +'<td style="'+tdS+'"><select id="autounit_'+s.key+'" style="font-size:11px;width:80px">'+autoUnitOpts+'</select></td>'
+          +'<td style="'+tdS+'"><select id="autounit_'+s.key+'" onchange="autoFillQtyByUnit(this,\''+s.key+'\')" style="font-size:11px;width:80px">'+autoUnitOpts+'</select></td>'
           +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="autoamt_'+s.key+'">'+svcAmt.toLocaleString()+'</td>'
           +'<td style="'+tdS+'"><select id="autocur_'+s.key+'" onchange="updateCostingTotal()" style="font-size:11px;width:65px">'+autoCurOpts+'</select></td>'
           +'<td style="'+tdS+';font-size:10px;color:var(--text-tertiary)"><i class="ti ti-link" title="Từ dịch vụ"></i></td>'
@@ -881,19 +896,14 @@ function renderDetailPanel(r,tt){
 
 
       // Summary table
-      const summaryRows=allCurs.map(function(cur){
-        const rev=revByCur[cur]||0;
-        const cost=costByCur[cur]||0;
-        const profit=rev-cost;
-        const pct=rev>0?Math.round(profit/rev*100):0;
-        return '<tr>'
-          +'<td style="'+tdS+';font-weight:600">'+cur+'</td>'
-          +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700">'+rev.toLocaleString()+'</td>'
-          +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700">'+cost.toLocaleString()+'</td>'
-          +'<td style="'+tdS+';text-align:right;font-weight:700;font-size:13px;color:'+(profit>=0?'var(--green)':'var(--red)')+'">'+( profit>=0?'+':'')+profit.toLocaleString()+'</td>'
-          +'<td style="'+tdS+';text-align:center"><span style="padding:3px 8px;border-radius:12px;font-size:11px;font-weight:700;background:'+(profit>=0?'var(--green-bg)':'rgba(220,53,69,.1)')+';color:'+(profit>=0?'var(--green)':'var(--red)')+'">'+pct+'%</span></td>'
-        +'</tr>';
-      }).join('');
+      const clr2=totalProfitVND>=0?'var(--green)':'var(--red)';
+      const summaryRows='<tr style="background:var(--bg-secondary)">'
+        +'<td style="'+tdS+';font-weight:700;font-size:13px">VND</td>'
+        +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700;font-size:13px">'+totalRevVND.toLocaleString()+'</td>'
+        +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700;font-size:13px">'+totalCostVND.toLocaleString()+'</td>'
+        +'<td style="'+tdS+';text-align:right;font-weight:800;font-size:15px;color:'+clr2+'">'+(totalProfitVND>=0?'+':'')+totalProfitVND.toLocaleString()+'</td>'
+        +'<td style="'+tdS+';text-align:center"><span style="padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;background:'+(totalProfitVND>=0?'var(--green-bg)':'rgba(220,53,69,.1)')+';color:'+clr2+'">'+marginPct+'%</span></td>'
+      +'</tr>';
 
       bodyHtml=
         // Revenue section
@@ -902,7 +912,11 @@ function renderDetailPanel(r,tt){
           +'<table style="width:100%;border-collapse:collapse"><thead><tr>'
             +'<th style="'+thS+'">#</th><th style="'+thS+'">Dịch vụ</th><th style="'+thS+';text-align:right">Đơn giá</th><th style="'+thS+'">Curr</th><th style="'+thS+';text-align:right">Vol</th><th style="'+thS+'">Unit</th><th style="'+thS+';text-align:right">Amount</th>'
           +'</tr></thead>'
-          +'<tbody>'+(revRows||'<tr><td colspan="7" style="padding:1rem;text-align:center;color:var(--text-secondary);font-size:12px">Chưa có doanh thu. Fill giá và chọn Invoice=Yes trước.</td></tr>')+'</tbody>'
+          +'<tbody>'+(revRows||'<tr><td colspan="7" style="padding:1rem;text-align:center;color:var(--text-secondary);font-size:12px">Chưa có doanh thu. Fill giá và chọn Invoice!=Waived trước.</td></tr>')+'</tbody>'
+        +'<tfoot><tr style="background:var(--bg-secondary)">'
+          +'<td colspan="6" style="padding:6px 10px;font-size:11.5px;font-weight:600;text-align:right;border-top:2px solid var(--border-light)">Tổng doanh thu (VND):</td>'
+          +'<td style="padding:6px 10px;font-size:13px;font-weight:700;color:var(--green);text-align:right;border-top:2px solid var(--border-light)">'+totalRevVND.toLocaleString()+'</td>'
+        +'</tr></tfoot>'
         +'</table></div>'
 
         // Cost section
@@ -914,7 +928,11 @@ function renderDetailPanel(r,tt){
           +'<table style="width:100%;border-collapse:collapse"><thead><tr>'
             +'<th style="'+thS+'">Chi phí</th><th style="'+thS+';text-align:right">Đơn giá</th><th style="'+thS+';text-align:right">SL</th><th style="'+thS+'">Đơn vị</th><th style="'+thS+';text-align:right">Thành tiền</th><th style="'+thS+'">Curr</th><th style="'+thS+'"></th>'
           +'</tr></thead>'
-          +'<tbody id="costingBody">'+(autoCostRows||'')+(costInputRows||'<tr><td colspan="4" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>')+'</tbody>'
+          +'<tbody id="costingBody">'+(autoCostRows||'')+(costInputRows||'<tr><td colspan="7" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>')+'</tbody>'
+        +'<tfoot><tr style="background:var(--bg-secondary)">'
+          +'<td colspan="6" style="padding:6px 10px;font-size:11.5px;font-weight:600;text-align:right;border-top:2px solid var(--border-light)">Tổng chi phí (VND):</td>'
+          +'<td style="padding:6px 10px;font-size:13px;font-weight:700;color:var(--red);text-align:right;border-top:2px solid var(--border-light)">'+totalCostVND.toLocaleString()+'</td>'
+        +'</tr></tfoot>'
         +'</table></div>'
         +'<div id="costingTotals" style="padding:6px 10px;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary);margin-bottom:1rem"></div>'
 
@@ -1633,6 +1651,19 @@ const SVC_STATUSES=['','Đã lên DN','Xác nhận','Đã thanh toán'];
 function getSvcSupplierOpts(selected){
   const suppliers=Object.values(cache.partners||{}).map(function(p){return p.shortname;});
   return '<option value="">— NCC —</option>'+suppliers.map(function(s){return'<option'+(s===selected?' selected':'')+'>'+s+'</option>';}).join('');
+}
+
+function autoFillQtyByUnit(selectEl, key){
+  if(!selectEl) return;
+  const unit=selectEl.value;
+  // Find the corresponding qty input
+  const qtyEl=g('autoqty_'+key)||g('cqty_'+key.replace('manual_',''));
+  if(!qtyEl) return;
+  const r=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
+  const vol=parseInt(r.vol)||1;
+  if(unit==='Cont') qtyEl.value=vol;
+  else if(unit==='Shipment') qtyEl.value=1;
+  updateCostingTotal();
 }
 
 function calcSvcAmt(key){
@@ -2659,26 +2690,53 @@ function sendEmailDN(id, tt){
     +'Should you have any questions, please do not hesitate to contact us.\n\n'
     +'Best regards,\nCOCOSEA CO., LTD\nKeep Going . Keep Growing';
 
-  // Show email compose modal
+  // Build HTML email preview
+  const invTable=(window._dnData&&g('dnPrintArea'))?g('dnPrintArea').outerHTML:'';
+
   g('emailOv').innerHTML=`
-  <div class="modal" style="max-width:640px">
-    <div class="mhdr"><div class="mtitle"><i class="ti ti-mail" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>Soạn Email Debit Note</div><button class="rac" onclick="closeOv('emailOv')"><i class="ti ti-x"></i></button></div>
-    <div class="fg" style="gap:10px">
-      <div class="fi full"><label class="lbl">To</label><input type="email" id="emailTo" value="${toEmail}" placeholder="email@customer.com"/></div>
-      <div class="fi full"><label class="lbl">CC</label><input type="email" id="emailCc" value="${ccEmail}" placeholder="cc@company.com"/></div>
-      <div class="fi full"><label class="lbl">Subject</label><input type="text" id="emailSubject" value="${defSubject}"/></div>
-      <div class="fi full"><label class="lbl">Nội dung</label><textarea id="emailBody" rows="12" style="font-family:monospace;font-size:12px;resize:vertical">${defBody}</textarea></div>
-      <div class="fi full">
-        <div style="padding:.6rem .85rem;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary);display:flex;align-items:center;gap:8px">
-          <i class="ti ti-paperclip" style="font-size:14px;color:var(--text-secondary)"></i>
-          <span>File đính kèm: <strong>DebitNote_${r.bookingNo}.pdf</strong> (xuất PDF trước khi gửi)</span>
+  <div class="modal" style="max-width:720px">
+    <div class="mhdr">
+      <div><div class="mtitle" style="display:flex;align-items:center;gap:8px"><i class="ti ti-mail" style="font-size:16px;color:var(--blue)"></i>Soạn Email gửi Debit Note</div>
+      <div class="msub">${r.bookingNo} — ${r.shipper||r.supplier||''}</div></div>
+      <button class="rac" onclick="closeOv('emailOv')"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="display:grid;gap:8px;padding:0 0 .5rem">
+      <!-- To / CC -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div><label class="lbl">To (Người nhận)</label>
+          <input type="email" id="emailTo" value="${toEmail}" placeholder="email@customer.com" style="font-size:12.5px"/>
+        </div>
+        <div><label class="lbl">CC</label>
+          <input type="email" id="emailCc" value="${ccEmail}" placeholder="cc@company.com" style="font-size:12.5px"/>
         </div>
       </div>
+      <!-- Subject -->
+      <div><label class="lbl">Subject</label>
+        <input type="text" id="emailSubject" value="${defSubject}" style="font-size:12.5px"/>
+      </div>
+      <!-- Body -->
+      <div><label class="lbl" style="display:flex;justify-content:space-between">
+        <span>Nội dung email</span>
+        <span style="font-size:10px;color:var(--text-tertiary);font-weight:400">Plain text — tự điền tên, tàu, tuyến</span>
+      </label>
+      <textarea id="emailBody" rows="10" style="font-family:'Courier New',monospace;font-size:12px;resize:vertical;line-height:1.6">${defBody}</textarea></div>
+      <!-- Attachment notice -->
+      <div style="display:flex;align-items:center;gap:10px;padding:.6rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
+        <i class="ti ti-paperclip" style="font-size:16px;color:var(--text-secondary);flex-shrink:0"></i>
+        <div>
+          <div style="font-size:12px;font-weight:600">Đính kèm: DebitNote_${r.bookingNo}.pdf</div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">
+            Bấm <strong>"Mở Mail Client"</strong> → email mở ra → kéo file PDF đính kèm thủ công.
+            Hoặc tải <strong>.eml</strong> → mở bằng Outlook để đính kèm tự động.
+          </div>
+        </div>
+        <button class="btn sm" onclick="printDN()" style="flex-shrink:0;font-size:11px"><i class="ti ti-printer"></i> In PDF trước</button>
+      </div>
     </div>
-    <div class="mftr">
+    <div class="mftr" style="gap:8px">
       <button class="btn" onclick="closeOv('emailOv')">Hủy</button>
-      <button class="btn" onclick="downloadEmlFile('${id||svcIdx}','${tt||currentTab}')"><i class="ti ti-download"></i> Tải file .eml</button>
-      <button class="btn blu" onclick="openMailClient()"><i class="ti ti-send"></i> Mở Mail Client</button>
+      <button class="btn" onclick="downloadEmlFile('${id||svcIdx}','${tt||currentTab}')"><i class="ti ti-download"></i> Tải .eml</button>
+      <button class="btn pri" onclick="openMailClient()"><i class="ti ti-send"></i> Mở Mail Client</button>
     </div>
   </div>`;
   openOv('emailOv');
@@ -2834,6 +2892,7 @@ function handleDnUpload(input, id, tt){
 
 window.handleDnUpload=handleDnUpload;
 
+window.autoFillQtyByUnit=autoFillQtyByUnit;
 window.calcSvcAmt=calcSvcAmt;
 window.saveContSeal=saveContSeal;
 window.saveUserRole=saveUserRole;
@@ -2883,7 +2942,7 @@ setTimeout(function(){
 function addCostingItem(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const costing=r.costing||{items:[],note:''};
-  const items=[...(costing.items||[]),{name:'',amt:0,cur:'USD'}];
+  const items=[...(costing.items||[]),{name:'',price:0,qty:1,unit:'Cont',cur:'VND'}];
   // Update in memory and re-render costing tab only
   _tempCosting=items;
   renderCostingRows(items);
@@ -2922,7 +2981,7 @@ function renderCostingRows(items){
       +'<td style="'+tdS+';font-size:11.5px"><span style="font-weight:500">'+s.name+'</span> <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
       +'<td style="'+tdS+'"><input type="number" id="autoprice_'+s.key+'" value="'+(sv.cost||0)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:85px;text-align:right"/></td>'
       +'<td style="'+tdS+'"><input type="number" id="autoqty_'+s.key+'" value="'+(sv.svcQty||1)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:55px;text-align:right"/></td>'
-      +'<td style="'+tdS+'"><select id="autounit_'+s.key+'" style="font-size:11px;width:80px">'+autoUnitOpts+'</select></td>'
+      +'<td style="'+tdS+'"><select id="autounit_'+s.key+'" onchange="autoFillQtyByUnit(this,\''+s.key+'\')" style="font-size:11px;width:80px">'+autoUnitOpts+'</select></td>'
       +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="autoamt_'+s.key+'">'+svcAmt.toLocaleString()+'</td>'
       +'<td style="'+tdS+'"><select id="autocur_'+s.key+'" onchange="updateCostingTotal()" style="font-size:11px;width:65px">'+autoCurOpts+'</select></td>'
       +'<td style="'+tdS+';font-size:10px;color:var(--text-tertiary)"><i class="ti ti-link" title="Từ dịch vụ"></i></td>'
@@ -2936,7 +2995,7 @@ function renderCostingRows(items){
       +'<td style="'+tdS+'"><input type="text" id="cname_'+i+'" value="'+(it.name||'')+'" placeholder="Tên chi phí" style="font-size:12px;width:100%"/></td>'
       +'<td style="'+tdS+';text-align:right"><input type="number" id="cprice_'+i+'" value="'+(it.price||it.amt||'')+'" placeholder="Đơn giá" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:85px;text-align:right"/></td>'
       +'<td style="'+tdS+';text-align:right"><input type="number" id="cqty_'+i+'" value="'+(it.qty||1)+'" placeholder="1" min="0" oninput="updateCostingTotal()" style="font-size:12px;width:55px;text-align:right"/></td>'
-      +'<td style="'+tdS+'"><select id="cunit_'+i+'" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
+      +'<td style="'+tdS+'"><select id="cunit_'+i+'" onchange="autoFillQtyByUnit(this,\'manual_'+i+'\')" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
       +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="camt_display_'+i+'">'+calcAmt+'</td>'
       +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:65px">'+curOpts+'</select></td>'
       +'<td style="'+tdS+';text-align:center"><button class="rac red" onclick="removeCostingItem('+i+')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
@@ -3310,17 +3369,17 @@ function runCostingReport(){
       revByCur[cur]=(revByCur[cur]||0)+amt;
     });
 
-    // Cost: svc.cost + manual costing items
+    // Cost: svc.cost * qty + manual costing items (all → VND)
     const costByCur={};
     SVCS.forEach(s=>{
       const sv=svcs[s.key];
       if(!sv||!sv.on||!sv.cost)return;
-      const cur=sv.svcCur||sv.cur||'USD';
+      const cur=sv.svcCur||sv.cur||'VND';
       const costAmt=(sv.cost||0)*(sv.svcQty||1);
       costByCur[cur]=(costByCur[cur]||0)+costAmt;
     });
     costItems.forEach(it=>{
-      const cur=it.cur||'USD';
+      const cur=it.cur||'VND';
       const amt=it.price?it.price*(it.qty||1):(it.amt||0);
       costByCur[cur]=(costByCur[cur]||0)+amt;
     });
