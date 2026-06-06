@@ -98,7 +98,7 @@ const TASKS=[
   {key:'updn',label:'Up Debit Note'},{key:'price',label:'Fill giá dịch vụ'},
   {key:'send',label:'Gửi Debit Note cho khách hàng'},
 ];
-const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
+const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã Fill giá':'bdg-tl','Đã Costing':'bdg-b','Đã gửi DN':'bdg-purple','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
 const ROLES={
   admin:{label:'Admin',cls:'role-admin',perms:{addLot:true,editLot:true,deleteLot:true,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:true,managePartners:true,export:true}},
   operator:{label:'Operator',cls:'role-op',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:true,export:true}},
@@ -219,7 +219,7 @@ const XCOLS=[
   {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
-  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Done','Cancel','Xóa CB']}
+  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
 ];
 const NCOLS=[
   {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},
@@ -235,7 +235,7 @@ const NCOLS=[
   {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
-  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Done','Cancel','Xóa CB']}
+  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
 ];
 
 /* ─────────────────────────────────────────────
@@ -547,6 +547,7 @@ function renderLot(tt){
     <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);flex-shrink:0">
       <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,14)" style="font-size:11px;padding:3px 8px">-2wk</button>
       <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,30)" style="font-size:11px;padding:3px 8px">-1mo</button>
+      <button class="btn sm" data-tt="${tt}" onclick="resetAllFilters(this.dataset.tt)" style="font-size:11px;padding:3px 8px;color:var(--text-secondary)" title="Xóa tất cả bộ lọc"><i class="ti ti-refresh" style="font-size:11px"></i> Reset</button>
       <i class="ti ti-calendar" style="font-size:13px"></i>
       <input type="date" id="etdFrom_${tt}" value="${getDefaultEtdFrom()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
       <span>→</span>
@@ -581,6 +582,15 @@ function calcDefaultCutoff(etdStr, dayOffset, time){
     const dd=String(d.getDate()).padStart(2,'0');
     return yyyy+'-'+mm+'-'+dd+(time?' '+time:'');
   }catch(e){return '';}
+}
+
+function resetAllFilters(tt){
+  const srch=g('srch_'+tt); if(srch) srch.value='';
+  const sf=g('sf_'+tt); if(sf) sf.value='';
+  const ef=g('etdFrom_'+tt); if(ef) ef.value=getDefaultEtdFrom();
+  const et=g('etdTo_'+tt); if(et) et.value=getDefaultEtdTo();
+  renderLotTable(tt);
+  toast('Đã reset bộ lọc');
 }
 
 function setQuickFilter(tt, days){
@@ -1236,10 +1246,10 @@ async function saveDetailFillPrice(){
   });
   setLoading(true,'Đang lưu giá...');
   try{
-    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
-    toast('Đã lưu giá dịch vụ');
+    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email,status:'Đã Fill giá'});
+    toast('Đã lưu Fill giá → Trạng thái: Đã Fill giá');
     const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
-    renderDetailPanel(fresh,detailTt);
+    renderDetailPanel(Object.assign({},fresh,{status:'Đã Fill giá'}),detailTt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -1290,13 +1300,23 @@ function openLot(id, tt){
     if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
     if(c.compact) return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:130px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
     if(c.k==='tenHang'){
-      const cargoOpts=(window._cargoNames||[]).map(n=>`<option value="${n}">`).join('');
-      return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" list="cargoNamesList" autocomplete="off"/><datalist id="cargoNamesList">${cargoOpts}</datalist></div>`;
+      const names=window._cargoNames||[];
+      if(names.length){
+        const opts=names.map(n=>`<option${n===val?' selected':''}>${n}</option>`).join('');
+        return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}" onchange="toggleTenHangCustom(this)"><option value="">— Chọn tên hàng —</option>${opts}<option value="__custom__">✏️ Nhập tay...</option></select><input type="text" id="f_${c.k}_custom" placeholder="Nhập tên hàng..." style="display:${names.includes(val)?'none':'block'};margin-top:4px;font-size:12px" value="${names.includes(val)?'':val}"/></div>`;
+      }
+      return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"/></div>`;
     }
     return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"${c.k==='etd'?' oninput="updateEtdCutoffs()"':''}/></div>`;
   }).join('');
   openOv('lotOv');
 }
+
+function toggleTenHangCustom(sel){
+  const customEl=g('f_tenHang_custom');
+  if(customEl) customEl.style.display=sel.value==='__custom__'?'block':'none';
+}
+window.toggleTenHangCustom=toggleTenHangCustom;
 
 function updateEtdCutoffs(){
   const etdEl=g('f_etd');
@@ -1328,7 +1348,16 @@ async function saveLot(){
   const cols=currentTab==='xuat'?XCOLS:NCOLS;
   const existing=lotIdx?cache[currentTab].find(x=>x._id===lotIdx):null;
   const rec={svcs:existing?.svcs||{},tasks:existing?.tasks||{}};
-  cols.forEach(c=>{const el=g('f_'+c.k);if(el)rec[c.k]=el.value;});
+  cols.forEach(c=>{
+    const el=g('f_'+c.k);
+    if(!el)return;
+    if(c.k==='tenHang'&&el.tagName==='SELECT'){
+      const customEl=g('f_tenHang_custom');
+      rec[c.k]=el.value==='__custom__'?(customEl?.value||''):(el.value||'');
+    } else {
+      rec[c.k]=el.value;
+    }
+  });
   // Save country selections for port cascade
   ['pol','pod'].forEach(pk=>{const el=g('f_'+pk+'Country');if(el)rec[pk+'Country']=el.value;});
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
@@ -3087,6 +3116,7 @@ window.renderSettings=renderSettings;
 window.updatePortOptions=updatePortOptions;
 window.calcDefaultCutoff=calcDefaultCutoff;
 window.updateEtdCutoffs=updateEtdCutoffs;
+window.resetAllFilters=resetAllFilters;
 window.setQuickFilter=setQuickFilter;
 window.toggleSort=toggleSort;
 window.getDefaultEtdFrom=getDefaultEtdFrom;
@@ -3181,8 +3211,11 @@ async function saveDnInfo(){
   if(!dnNo){toast('Nhập số DN','error');return;}
   setLoading(true,'Đang lưu...');
   try{
-    await fsSet(colName(detailTt),detailId,{dnNo,dnStatus,updatedAt:Date.now()});
-    toast('Đã lưu: '+dnNo+(dnStatus?' — '+dnStatus:''));
+    const dnUpdateStatus=dnStatus==='Đã gửi DN'||dnStatus==='Đã xuất Hóa đơn'||dnStatus==='Đã thanh toán'?'Đã gửi DN':undefined;
+    const dnUpdate={dnNo,dnStatus,updatedAt:Date.now()};
+    if(dnUpdateStatus) dnUpdate.status=dnUpdateStatus;
+    await fsSet(colName(detailTt),detailId,dnUpdate);
+    toast('Đã lưu: '+dnNo+(dnStatus?' — '+dnStatus:'')+(dnUpdateStatus?' → Trạng thái: '+dnUpdateStatus:''));
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -3394,9 +3427,10 @@ async function saveCosting(){
   try{
     await fsSet(colName(detailTt),detailId,{costing,updatedAt:Date.now()});
     _tempCosting=null;
-    toast('Đã lưu costing');
+    await fsSet(colName(detailTt),detailId,{costingStatus:'Đã costing',status:'Đã Costing',updatedAt:Date.now()});
+    toast('Đã lưu Costing → Trạng thái: Đã Costing');
     const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
-    renderDetailPanel(fresh,detailTt);
+    renderDetailPanel(Object.assign({},fresh,{status:'Đã Costing',costingStatus:'Đã costing'}),detailTt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
