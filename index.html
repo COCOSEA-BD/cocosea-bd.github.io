@@ -109,7 +109,7 @@ const ROLES={
 };
 // Ports grouped by country for cascading selection
 const PORTS_BY_COUNTRY={
-  'Vietnam':['Cat Lai, HCMC','Cai Mep, BR-VT','Tan Cang Hiep Phuoc, HCMC','SP-ITC, HCMC','VICT, HCMC','Da Nang','Hai Phong','Quy Nhon','Nha Trang','Can Tho','Vung Tau'],
+  'Vietnam':['Cat Lai, HCMC','Cai Mep, BR-VT','TCHP, HCMC','SP-ITC, HCMC','VICT, HCMC','Da Nang','Hai Phong','Quy Nhon','Nha Trang','Can Tho','Vung Tau'],
   'China':['Shanghai, CN','Ningbo, CN','Guangzhou, CN','Shenzhen, CN','Tianjin, CN','Qingdao, CN','Xiamen, CN','Dalian, CN','Lianyungang, CN','Nanjing, CN','Wuhan, CN','Chongqing, CN','Yantian, CN','Nansha, CN','Shekou, CN','Zhenjiang, CN','Zhanjiang, CN'],
   'Singapore':['Singapore'],
   'Malaysia':['Port Klang, MY','Tanjung Pelepas, MY','Penang, MY','Johor Bahru, MY','Kuantan, MY'],
@@ -178,7 +178,6 @@ const XCOLS_LIST=[
   {k:'typeCont',l:'Type Cont'},
   {k:'etd',l:'ETD'},
   {k:'eta',l:'ETA'},
-  {k:'cutoff',l:'Cut Off',type:'cutoff'},
   {k:'carrier',l:'Carrier',partner:true},
   {k:'vessel',l:'Vessel'},
   {k:'voy',l:'Voy'},
@@ -196,7 +195,6 @@ const NCOLS_LIST=[
   {k:'typeCont',l:'Type Cont'},
   {k:'etd',l:'ETD'},
   {k:'eta',l:'ETA'},
-  {k:'cutoff',l:'Cut Off',type:'cutoff'},
   {k:'carrier',l:'Carrier',partner:true},
   {k:'vessel',l:'Vessel'},
   {k:'voy',l:'Voy'},
@@ -534,7 +532,12 @@ function renderLot(tt){
   const pg=g('page-'+tt);
   pg.innerHTML=`
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-label"><i class="ti ti-packages"></i> Tổng lô hàng</div><div class="stat-val">${rows.length}</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:.4rem 0">
+      <div class="search-wrap" style="flex:1;min-width:140px"><i class="ti ti-user"></i><input type="text" id="sfShipper_${tt}" placeholder="Shipper..." oninput="renderLotTable('${tt}')" style="font-size:12px"/></div>
+      <div class="search-wrap" style="flex:1;min-width:140px"><i class="ti ti-ship"></i><input type="text" id="sfCarrier_${tt}" placeholder="Carrier..." oninput="renderLotTable('${tt}')" style="font-size:12px"/></div>
+      <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;padding:5px 10px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light);white-space:nowrap"><input type="checkbox" id="sfFilled_${tt}" onchange="renderLotTable('${tt}')"/> Đã fill giá</label>
+      <span style="font-size:11.5px;color:var(--text-secondary)">Tổng: <strong id="stat-total-${tt}">0</strong> lô</span>
+    </div>
   </div>
   <div class="toolbar">
     <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier..." oninput="renderLotTable('${tt}')"/></div>
@@ -589,6 +592,9 @@ function resetAllFilters(tt){
   const sf=g('sf_'+tt); if(sf) sf.value='';
   const ef=g('etdFrom_'+tt); if(ef) ef.value=getDefaultEtdFrom();
   const et=g('etdTo_'+tt); if(et) et.value=getDefaultEtdTo();
+  const ss=g('sfShipper_'+tt); if(ss) ss.value='';
+  const sc=g('sfCarrier_'+tt); if(sc) sc.value='';
+  const sfill=g('sfFilled_'+tt); if(sfill) sfill.checked=false;
   renderLotTable(tt);
   toast('Đã reset bộ lọc');
 }
@@ -622,12 +628,19 @@ function renderLotTable(tt){
   const fs=g('fst_'+tt)?.value||'';
   const etdFrom=g('etdFrom_'+tt)?.value||'';
   const etdTo=g('etdTo_'+tt)?.value||'';
+  const sfShipper=(g('sfShipper_'+tt)?.value||'').toLowerCase().trim();
+  const sfCarrier=(g('sfCarrier_'+tt)?.value||'').toLowerCase().trim();
+  const sfFilled=g('sfFilled_'+tt)?.checked||false;
+
   const rows=cache[tt].filter(r=>{
-    const matchQ=Object.values(r).some(v=>(v+'').toLowerCase().includes(q));
+    const matchQ=!q||Object.values(r).some(v=>(v+'').toLowerCase().includes(q));
     const matchS=!fs||r.status===fs;
     const matchEtdFrom=!etdFrom||!r.etd||(r.etd>=etdFrom);
     const matchEtdTo=!etdTo||!r.etd||(r.etd<=etdTo);
-    return matchQ&&matchS&&matchEtdFrom&&matchEtdTo;
+    const matchShipper=!sfShipper||(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper);
+    const matchCarrier=!sfCarrier||(r.carrier||'').toLowerCase().includes(sfCarrier);
+    const matchFilled=!sfFilled||(Object.values(r.svcs||{}).some(sv=>sv.on&&sv.price));
+    return matchQ&&matchS&&matchEtdFrom&&matchEtdTo&&matchShipper&&matchCarrier&&matchFilled;
   }).sort(function(a,b){
     const dir=(sortState[tt]||{dir:1}).dir;
     const av=a.etd||''; const bv=b.etd||'';
@@ -650,7 +663,13 @@ function renderLotTable(tt){
       if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')">${sn}</button></td>`;}
       if(c.k==='tenHang') return`<td style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r[c.k]||''}">${r[c.k]||'—'}</td>`;
       if(c.k==='jobNo') return`<td><button class="plink" style="font-weight:700;color:var(--blue);font-size:11.5px;white-space:nowrap" data-id="${r._id}" data-tt="${tt}" onclick="openDetail(this.dataset.id,this.dataset.tt)">${r.jobNo||'—'}</button></td>`;
-      if(c.k==='etd') return`<td class="td-etd">${r.etd||'—'}</td>`;
+      if(c.k==='etd'){
+        const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
+        return`<td class="td-etd" style="vertical-align:top">
+          <div style="font-weight:600">${r.etd||'—'}</div>
+          ${cy?`<div style="font-size:10px;color:rgba(26,75,140,.65);margin-top:2px;white-space:nowrap"><i class="ti ti-clock" style="font-size:9px"></i> CY ${cy}</div>`:''}
+        </td>`;
+      }
       if(c.k==='eta') return`<td style="color:var(--text-secondary)">${r.eta||'—'}</td>`;
       if(c.type==='cutoff'){
         const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
@@ -2248,6 +2267,7 @@ function renderPartners(){
           <div style="padding:9px 12px;display:flex;flex-direction:column;justify-content:center;border-right:0.5px solid var(--border-light)">
             <div style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><i class="ti ti-user" style="font-size:11px"></i>${p.contact||'—'}</div>
             <div style="font-size:11px;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:4px"><i class="ti ti-map-pin" style="font-size:11px"></i><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">${p.addr||'—'}</span></div>
+            ${p.remark?`<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:2px;font-style:italic">${p.remark}</div>`:''}
           </div>
           <div style="display:flex;align-items:center;justify-content:center;padding:0 4px">
             <i class="ti ti-chevron-right" style="font-size:14px;color:var(--text-tertiary)" id="pchev_${p.shortname}"></i>
@@ -2303,12 +2323,14 @@ function openPartnerModal(name){
     <div class="fi full"><label class="lbl">Địa chỉ</label><input type="text" id="pf_addr" value="${p.addr||''}"/></div>
     <div class="fi"><label class="lbl">Email</label><input type="email" id="pf_email" value="${p.email||''}"/></div>
     <div class="fi"><label class="lbl">Người liên hệ</label><input type="text" id="pf_contact" value="${p.contact||''}"/></div>
-    <div class="fi"><label class="lbl">Điện thoại</label><input type="tel" id="pf_phone" value="${p.phone||''}"/></div>`;
+    <div class="fi"><label class="lbl">Điện thoại</label><input type="tel" id="pf_phone" value="${p.phone||''}"/></div>
+    <div class="fi full"><label class="lbl">Ghi chú / Remark</label><textarea id="pf_remark" rows="2" style="font-size:12px;resize:vertical">${p.remark||''}</textarea></div>`;
   openOv('partnerOv');
+    
 }
 async function savePartner(){
   const sn=g('pf_sn').value.trim(); if(!sn){toast('Nhập tên viết tắt','error');return;}
-  const rec={type:g('pf_type').value,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,contact:g('pf_contact').value,phone:g('pf_phone').value,updatedAt:Date.now()};
+  const remark=g('pf_remark')?.value||'';const rec={type:g('pf_type').value,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,contact:g('pf_contact').value,phone:g('pf_phone').value,updatedAt:Date.now()};
   setLoading(true,'Đang lưu...');
   try { await fsSet('partners',sn,rec); toast('Đã lưu đối tác'); closeOv('partnerOv'); }
   catch(e){ toast('Lỗi: '+e.message,'error'); }
@@ -4669,6 +4691,17 @@ function exportExcelDebt(){
 </body></html>`;
   });
 
+  // Append bank accounts to HTML
+  var banks2w=window._bankAccounts||{company:[],personal:[]};
+  var coList2=Array.isArray(banks2w)?banks2w:(banks2w.company||[]);
+  var persList2=Array.isArray(banks2w)?[]:(banks2w.personal||[]);
+  function mkBankSection(list,label){
+    if(!list.length)return '';
+    return '<table style="margin-top:12px;border-collapse:collapse;width:100%"><tr><td colspan="8" style="padding:7px 14px;background:#f5f5f3;font-size:10px;font-weight:700;text-transform:uppercase;color:#666;border:1px solid #ddd">'+label+'</td></tr>'
+      +list.map(function(b){return '<tr><td style="padding:5px 14px;border:1px solid #ddd;font-size:11.5px;font-weight:700">'+b.beneficiary+'</td><td style="padding:5px 14px;border:1px solid #ddd;font-size:11.5px">'+b.account+'</td><td style="padding:5px 14px;border:1px solid #ddd;font-size:11.5px">'+b.bank+'</td><td colspan="5" style="border:1px solid #ddd"></td></tr>';}).join('')
+      +'</table>';
+  }
+  allHtml+=mkBankSection(coList2,'Tài khoản Công ty')+mkBankSection(persList2,'Tài khoản Cá nhân');
   var blob=new Blob([allHtml],{type:'application/vnd.ms-excel;charset=utf-8'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
