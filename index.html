@@ -61,6 +61,13 @@ window._bankAccounts=[
 ];
 
 // Load bank accounts from Firestore
+function loadCargoNames(){
+  db.collection('_config').doc('cargoNames').get().then(function(snap){
+    if(snap.exists) window._cargoNames=snap.data().names||[];
+    else window._cargoNames=[];
+  }).catch(function(){window._cargoNames=[];});
+}
+
 function loadBankAccounts(){
   db.collection('_config').doc('banks').get().then(function(snap){
     if(snap.exists){
@@ -102,7 +109,7 @@ const ROLES={
 };
 // Ports grouped by country for cascading selection
 const PORTS_BY_COUNTRY={
-  'Vietnam':['Cat Lai, HCMC','Cai Mep, BR-VT','Tan Cang Hiep Phuoc, HCMC','Da Nang','Hai Phong','Quy Nhon','Nha Trang','Can Tho','Vung Tau'],
+  'Vietnam':['Cat Lai, HCMC','Cai Mep, BR-VT','Tan Cang Hiep Phuoc, HCMC','SP-ITC, HCMC','VICT, HCMC','Da Nang','Hai Phong','Quy Nhon','Nha Trang','Can Tho','Vung Tau'],
   'China':['Shanghai, CN','Ningbo, CN','Guangzhou, CN','Shenzhen, CN','Tianjin, CN','Qingdao, CN','Xiamen, CN','Dalian, CN','Lianyungang, CN','Nanjing, CN','Wuhan, CN','Chongqing, CN','Yantian, CN','Nansha, CN','Shekou, CN','Zhenjiang, CN','Zhanjiang, CN'],
   'Singapore':['Singapore'],
   'Malaysia':['Port Klang, MY','Tanjung Pelepas, MY','Penang, MY','Johor Bahru, MY','Kuantan, MY'],
@@ -204,10 +211,9 @@ const XCOLS=[
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
-  {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD (trong POL)',type:'icd'},
+  {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
   {k:'pod',l:'POD',type:'port'},
-  {k:'cargoType',l:'Loại hàng',type:'cargoType'},
-  {k:'vol',l:'Vol'},{k:'typeCont',l:'Type Cont',type:'typeCont'},
+  {k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'vol',l:'Vol',compact:true},{k:'typeCont',l:'Type Cont',type:'typeCont',compact:true},
   {k:'tenHang',l:'Tên hàng',full:true},
   {k:'cnee',l:'Cnee'},
   {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
@@ -221,10 +227,9 @@ const NCOLS=[
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
-  {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD (trong POL)',type:'icd'},
+  {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
   {k:'pod',l:'POD',type:'port'},
-  {k:'cargoType',l:'Loại hàng',type:'cargoType'},
-  {k:'vol',l:'Vol'},{k:'typeCont',l:'Type Cont',type:'typeCont'},
+  {k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'vol',l:'Vol',compact:true},{k:'typeCont',l:'Type Cont',type:'typeCont',compact:true},
   {k:'tenHang',l:'Tên hàng',full:true},
   {k:'consignee',l:'Consignee'},
   {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
@@ -345,6 +350,7 @@ async function doLogout(){
 ───────────────────────────────────────────── */
 function startListeners(){
   loadBankAccounts();
+  loadCargoNames();
   stopListeners();
 
   // Lô hàng xuất
@@ -624,7 +630,7 @@ function renderLotTable(tt){
     const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
     const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
     const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
-    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}">`+cols.map(c=>{
+    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`+cols.map(c=>{
       if(c.k==='bookingNo'){
         const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
         return`<td style="max-width:140px"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${r.bookingNo||'—'}</button>${urgDot}</td>`;
@@ -784,6 +790,7 @@ function renderDetailPanel(r,tt){
       +'<div style="display:flex;gap:8px">'
         +'<button class="btn" onclick="showKhaiEport()" title="Xuất nội dung khai eport"><i class="ti ti-file-export"></i> Khai Eport</button>'
         +'<button class="btn" onclick="showCheckEport()" title="Danh sách container để check eport"><i class="ti ti-clipboard-check"></i> Check Eport</button>'
+        +'<label class="btn" style="cursor:pointer" title="Nhập container từ Excel"><i class="ti ti-table-import"></i> Nhập từ Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importContFromExcel(this)"/></label>'
       +'</div>'
       +'<button class="btn pri" onclick="saveContSeal()"><i class="ti ti-check"></i> Lưu</button>'
     +'</div>';
@@ -832,7 +839,7 @@ function renderDetailPanel(r,tt){
         const partyName=r2.shipper||r2.supplier||r2.cnee||'';
         const rows2=allOn.map(function(s){
           const sv=svcs[s.key]||{};
-          const curOpts=CURRENCIES.map(function(c){return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
+          const curOpts=CURRENCIES.map(function(c){return '<option'+(c===(sv.cur||'VND')?' selected':'')+'>'+c+'</option>';}).join('');
           const unitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice','Lần'].map(function(u){return '<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
           const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===(sv.invoice||'Yes')?' selected':'')+'>'+v+'</option>';}).join('');
           const desc=sv.desc?'<div style="font-size:10px;color:var(--text-secondary);margin-top:2px">'+sv.desc+'</div>':'';
@@ -1281,6 +1288,11 @@ function openLot(id, tt){
     if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
     if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
     if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
+    if(c.compact) return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:130px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
+    if(c.k==='tenHang'){
+      const cargoOpts=(window._cargoNames||[]).map(n=>`<option value="${n}">`).join('');
+      return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" list="cargoNamesList" autocomplete="off"/><datalist id="cargoNamesList">${cargoOpts}</datalist></div>`;
+    }
     return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"${c.k==='etd'?' oninput="updateEtdCutoffs()"':''}/></div>`;
   }).join('');
   openOv('lotOv');
@@ -1834,9 +1846,11 @@ function svcRowHTML(s, sv){
   const isCustom=s.custom||false;
   const svcStatus=sv.svcStatus||'';
   const cost=sv.cost||'';
-  const qty=sv.svcQty||1;
+  const r0=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
+  const defaultVol=parseInt(r0.vol)||1;
+  const qty=sv.svcQty||defaultVol;
   const svcUnit=sv.svcUnit||'Cont';
-  const cur=sv.svcCur||'USD';
+  const cur=sv.svcCur||'VND';
   const supplier=sv.svcSupplier||'';
   const amt=cost&&qty?(parseFloat(cost)*parseFloat(qty)).toLocaleString():'—';
   const curOpts=CURRENCIES.map(function(c){return'<option'+(c===cur?' selected':'')+'>'+c+'</option>';}).join('');
@@ -1861,7 +1875,7 @@ function svcRowHTML(s, sv){
     <div style="display:flex;align-items:center;gap:3px;min-width:0">
       ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:500;flex:1;min-width:0" oninput="renameSvc('${s.key}',this.value)"/>`:`<span style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.name}</span>`}
     </div>
-    <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Chi phí đơn giá đầu vào"/>
+    <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right;width:100px" oninput="calcSvcAmt('${s.key}')" title="Chi phí đơn giá đầu vào"/>
     <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
     <select id="svcunit_${s.key}" data-key="${s.key}" ${sv.on?'':'disabled'} style="font-size:11px" onchange="autoSvcQtyByUnit(this.dataset.key)">${unitOptsRow}</select>
     <span id="samt_${s.key}" style="font-size:11px;font-weight:600;color:var(--red);text-align:right">${amt}</span>
@@ -2557,6 +2571,8 @@ tr:hover td{background:var(--bg-secondary)}
 .tr-urgent td{background:rgba(250,238,218,.25)!important}
 .tr-locked td{background:rgba(252,235,235,.18)!important}
 .tr-locked td:first-child{border-left:3px solid var(--red)}
+.tr-confirm td{background:rgba(220,53,69,.06)!important}
+.tr-confirm td:first-child{border-left:3px solid #dc3545}
 /* Striped rows */
 .lot-table tbody tr:nth-child(even) td{background:var(--bg-secondary)}
 .lot-table tbody tr:nth-child(odd) td{background:var(--bg-primary)}
@@ -2996,6 +3012,16 @@ function renderSettings(){
       +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-database" style="font-size:14px"></i>Tiện ích dữ liệu</div>'
       +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Tạo số Job ID cho tất cả lô hàng chưa có (chỉ cần chạy 1 lần)</div>'
       +'<button class="btn" onclick="migrateJobNos()"><i class="ti ti-wand"></i> Tạo Job ID cho lô hàng cũ</button>'
+    +'</div>'
+    +'<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border-light)"/>'
+    +'<div class="table-card" style="padding:1.25rem">'
+      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-package" style="font-size:14px"></i>Danh sách Tên hàng</div>'
+      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Nhập tên hàng để chọn nhanh khi tạo lô hàng mới</div>'
+      +'<textarea id="cargoNamesInput" rows="6" placeholder="Mỗi tên hàng một dòng\nVí dụ:\nXơ dừa\nHàng khô\nHạt tiêu" style="font-size:12px;resize:vertical">'+(window._cargoNames||[]).join('\n')+'</textarea>'
+      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
+        +'<button class="btn pri" onclick="saveCargoNames()"><i class="ti ti-check"></i> Lưu danh sách tên hàng</button>'
+      +'</div>'
+    +'</div'
     +'</div>';
 }
 
@@ -3044,6 +3070,19 @@ async function saveBankAccounts(){
   setLoading(false);
 }
 
+
+async function saveCargoNames(){
+  const raw=g('cargoNamesInput')?.value||'';
+  const names=raw.split('\n').map(s=>s.trim()).filter(Boolean);
+  window._cargoNames=names;
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet('_config','cargoNames',{names,updatedAt:Date.now()});
+    toast('Đã lưu '+names.length+' tên hàng');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveCargoNames=saveCargoNames;
 window.renderSettings=renderSettings;
 window.updatePortOptions=updatePortOptions;
 window.calcDefaultCutoff=calcDefaultCutoff;
@@ -3078,8 +3117,10 @@ async function toggleLotLock(id, tt){
   if(!confirm(action+' lô hàng '+r.bookingNo+'?'))return;
   setLoading(true,(newLocked?'Đang khóa...':'Đang mở khóa...'));
   try{
-    await fsSet(colName(tt),id,{locked:newLocked,lockedAt:Date.now(),lockedBy:currentUser.email});
-    toast((newLocked?'Đã khóa':'Đã mở khóa')+' lô hàng: '+r.bookingNo);
+    const lockData={locked:newLocked,lockedAt:Date.now(),lockedBy:currentUser.email};
+    if(newLocked) lockData.status='Done'; // auto set Done when locked
+    await fsSet(colName(tt),id,lockData);
+    toast((newLocked?'Đã khóa (→ Done)':'Đã mở khóa')+' lô hàng: '+r.bookingNo);
     const fresh=cache[tt].find(x=>x._id===id)||r;
     renderDetailPanel(Object.assign({},fresh,{locked:newLocked}),tt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -4093,6 +4134,43 @@ function showEportModal(title, text){
   openOv('eportOv');
 }
 
+
+function importContFromExcel(input){
+  const file=input.files[0]; if(!file)return;
+  const XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải XLSX...','error');return;}
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+      if(rows.length<2){toast('File không có dữ liệu','error');return;}
+      // Auto-detect columns: look for Container/Seal/GW headers
+      const header=rows[0].map(h=>(h+'').toLowerCase());
+      const contIdx=header.findIndex(h=>h.includes('cont'));
+      const sealIdx=header.findIndex(h=>h.includes('seal'));
+      const gwIdx=header.findIndex(h=>h.includes('gw')||h.includes('weight'));
+      const typeIdx=header.findIndex(h=>h.includes('type'));
+      if(contIdx<0){toast('Không tìm thấy cột Container No','error');return;}
+      let count=0;
+      rows.slice(1).forEach(function(row,i){
+        const no=(row[contIdx]||'').toString().trim().toUpperCase();
+        if(!no)return;
+        const contInput=g('cno_'+i);
+        if(!contInput)return;
+        contInput.value=no;
+        if(sealIdx>=0){const si=g('cseal_'+i);if(si)si.value=(row[sealIdx]||'').toString().trim();}
+        if(gwIdx>=0){const gi=g('cgw_'+i);if(gi)gi.value=parseFloat(row[gwIdx])||'';}
+        if(typeIdx>=0){const ti=g('ctype_'+i);if(ti)ti.value=(row[typeIdx]||'').toString().trim();}
+        count++;
+      });
+      toast('Đã nhập '+count+' container từ Excel');
+    }catch(err){toast('Lỗi đọc file: '+err.message,'error');}
+  };
+  reader.readAsArrayBuffer(file);
+}
+window.importContFromExcel=importContFromExcel;
 window.showKhaiEport=showKhaiEport;
 window.showCheckEport=showCheckEport;
 window.showEportModal=showEportModal;
