@@ -91,7 +91,7 @@ const TASKS=[
   {key:'updn',label:'Up Debit Note'},{key:'price',label:'Fill giá dịch vụ'},
   {key:'send',label:'Gửi Debit Note cho khách hàng'},
 ];
-const SB={'Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple','Chờ xác nhận':'bdg-gr','Xóa CB':'bdg-red'};
+const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
 const ROLES={
   admin:{label:'Admin',cls:'role-admin',perms:{addLot:true,editLot:true,deleteLot:true,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:true,managePartners:true,export:true}},
   operator:{label:'Operator',cls:'role-op',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:true,export:true}},
@@ -199,7 +199,8 @@ const XCOLS=[
   {k:'vol',l:'Vol'},
   {k:'tenHang',l:'Tên hàng'},
   {k:'soTkhai',l:'Số T.Khai'},{k:'maChiCuc',l:'Mã chi cục'},{k:'phanLuong',l:'Phân luồng'},{k:'cnee',l:'Cnee'},{k:'fwd',l:'FWD',partner:true},
-  {k:'status',l:'Trạng thái',type:'select',opts:['Đang xử lý','Đã nhập info','Đã lên debit','Đang vận chuyển','Đã giao','Xóa CB']}
+  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+    {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Done','Cancel','Xóa CB']}
 ];
 const NCOLS=[
   {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},{k:'carrier',l:'Carrier',partner:true},
@@ -212,7 +213,8 @@ const NCOLS=[
   {k:'vol',l:'Vol'},
   {k:'tenHang',l:'Tên hàng'},
   {k:'soTkhai',l:'Số T.Khai'},{k:'consignee',l:'Consignee'},{k:'fwd',l:'FWD',partner:true},
-  {k:'status',l:'Trạng thái',type:'select',opts:['Đang xử lý','Đã nhập info','Đã lên debit','Đang vận chuyển','Đã nhận','Xóa CB']}
+  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+    {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Done','Cancel','Xóa CB']}
 ];
 
 /* ─────────────────────────────────────────────
@@ -531,7 +533,6 @@ function renderLot(tt){
       <button class="btn sm" onclick="clearEtdFilter('${tt}')" title="Tất cả"><i class="ti ti-calendar-off"></i></button>
     </div>
     <button class="btn" onclick="exportExcel('${tt}')" ${can('export')?'':'disabled'}><i class="ti ti-file-spreadsheet"></i> Excel</button>
-    <button class="btn" onclick="openCombine('${tt}')" ${can('addLot')?'':'disabled'} title="Kết hợp nhiều lô hàng"><i class="ti ti-link"></i> Combine</button>
     <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}><i class="ti ti-plus"></i> Thêm lô hàng</button>
   </div>
   <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
@@ -621,7 +622,8 @@ function renderLotTable(tt){
       return`<td>${r[c.k]||'—'}</td>`;
     }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
       ${r.locked?'<span title="Lô hàng đã khóa" style="padding:4px;color:var(--red)"><i class="ti ti-lock" style="font-size:14px"></i></span>':''}
-      <button class="rac grn" onclick="openLot('${r._id}','${tt}')" title="Sửa" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i></button>
+       <button class="rac grn" data-id="${r._id}" data-tt="${tt}" onclick="openDetail(this.dataset.id,this.dataset.tt)" title="Xem chi tiết" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-eye"></i></button>
+       ${can('addLot')?`<button class="rac" data-id="${r._id}" data-tt="${tt}" onclick="openCombineFrom(this.dataset.id,this.dataset.tt)" title="Combine" style="color:var(--blue)"><i class="ti ti-link"></i></button>`:''}
       <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa" ${can('deleteLot')&&!r.locked?'':'disabled'}><i class="ti ti-trash"></i></button>
     </div></td></tr>`;
   }).join('');
@@ -673,7 +675,7 @@ function renderDetailPanel(r,tt){
 
   if(detailTab==='info'){
     const allCols=tt==='xuat'?XCOLS:NCOLS;
-    const skipList=['bookingNo','status','cutoffCY','cutoffSI','polCountry','podCountry'];
+    const skipList=['bookingNo','status','cutoffCY','cutoffSI','polCountry','podCountry','loaiHang'];
     bodyHtml=`<div class="detail-grid">
       ${allCols.filter(c=>!skipList.includes(c.k)).map(c=>{
         let val=r[c.k]||'—';
@@ -682,6 +684,11 @@ function renderDetailPanel(r,tt){
         else if(c.k==='status'){val=`<span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>`;}
         return`<div class="detail-field"><div class="detail-label">${c.l}</div><div class="detail-val">${val}</div></div>`;
       }).join('')}
+    </div>
+    <!-- Job No + Loai Hang -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${r.jobNo?`<div style="padding:5px 14px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><span style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Số quản lý</span><div style="font-size:14px;font-weight:800;color:var(--blue)">${r.jobNo}</div></div>`:''}
+      ${r.loaiHang?`<div style="padding:5px 14px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><span style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Loại lô hàng</span><div style="font-size:12px;font-weight:700;color:var(--text-primary)">${r.loaiHang}</div></div>`:''}
     </div>
     <!-- Cut Off section -->
     ${(r.cutoffCY||r.cutoffSI||r.etd)?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
@@ -694,7 +701,14 @@ function renderDetailPanel(r,tt){
         <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
       </div>
     </div>`:''}
-    <div style="margin-top:1rem;display:flex;gap:8px;flex-wrap:wrap">
+    <!-- Status quick buttons -->
+    ${can('editLot')&&!r.locked?`<div style="margin-top:.75rem">
+      <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Trạng thái lô hàng</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${['Confirm','Standby','Done','Cancel'].map(s=>`<button onclick="quickSetStatus('${r._id}','${tt}','${s}')" style="padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:2px solid ${r.status===s?'transparent':'#ddd'};background:${r.status===s?(s==='Confirm'?'#dc3545':s==='Standby'?'#ffc107':s==='Done'?'#198754':'#0d6efd'):(s==='Confirm'?'rgba(220,53,69,.1)':s==='Standby'?'rgba(255,193,7,.1)':s==='Done'?'rgba(25,135,84,.1)':'rgba(13,110,253,.1)')};color:${s==='Confirm'?'#dc3545':s==='Standby'?'#856404':s==='Done'?'#198754':'#0d6efd'}">${s}</button>`).join('')}
+      </div>
+    </div>`:''}
+    <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
       ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')">
         <i class="ti ${r.locked?'ti-lock-open':'ti-lock'}"></i> ${r.locked?'Mở khóa':'Khóa lô hàng'}
@@ -1021,7 +1035,7 @@ function renderDetailPanel(r,tt){
   g('detailPanel').innerHTML=`
   <div class="detail-hdr">
     <div>
-      <div style="font-size:15px;font-weight:600">${r.bookingNo||'—'} ${statusBadge}</div>
+      <div style="font-size:15px;font-weight:600">${r.bookingNo||'—'} ${statusBadge} ${r.jobNo?`<span style="font-size:10px;padding:2px 8px;border-radius:20px;background:var(--bg-secondary);color:var(--blue);font-weight:700;border:1px solid var(--border-light)">${r.jobNo}</span>`:''}</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${r.shipper||r.supplier||''} ${r.pol&&r.pod?'| '+r.pol+' → '+r.pod:''}</div>
     </div>
     <button class="rac" onclick="closeDetail()" style="font-size:18px;flex-shrink:0"><i class="ti ti-x"></i></button>
@@ -1257,7 +1271,7 @@ async function saveLot(){
   // Save country selections for port cascade
   ['pol','pod'].forEach(pk=>{const el=g('f_'+pk+'Country');if(el)rec[pk+'Country']=el.value;});
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
-  if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; }
+  if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; if(!rec.jobNo) rec.jobNo=getNextJobNo(rec.loaiHang||'XK - Xuất khẩu'); }
   const docId=lotIdx||genId();
   setLoading(true,'Đang lưu...');
   try {
@@ -3009,6 +3023,19 @@ async function toggleLotLock(id, tt){
   setLoading(false);
 }
 
+
+async function quickSetStatus(id, tt, status){
+  if(!can('editLot')){toast('Không có quyền','error');return;}
+  setLoading(true,'Đang cập nhật...');
+  try{
+    await fsSet(colName(tt),id,{status,updatedAt:Date.now()});
+    toast('Trạng thái: '+status);
+    const r=cache[tt].find(x=>x._id===id)||{};
+    renderDetailPanel(Object.assign({},r,{status}),tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.quickSetStatus=quickSetStatus;
 window.toggleLotLock=toggleLotLock;
 function handleDnUpload(input, id, tt){
   const file=input.files[0];
@@ -3649,12 +3676,72 @@ window.runCostingReport=runCostingReport;
 window.exportCostingExcel=exportCostingExcel;
 
 /* ═══════════════════════════════════════════
+   INTERNAL JOB NUMBER GENERATION
+═══════════════════════════════════════════ */
+function getNextJobNo(loaiHang){
+  const prefix = loaiHang==='LS - Local Service'?'LS':loaiHang==='IM - Nhập khẩu'?'IM':'XK';
+  // Collect all existing job numbers for this prefix
+  const all=[...cache.xuat,...cache.nhap];
+  const existing=all.map(r=>r.jobNo||'').filter(s=>s.startsWith(prefix));
+  // Extract sequence numbers: e.g. XKA0001 → {letter:'A', num:1}
+  const used=new Set();
+  existing.forEach(s=>{
+    const m=s.match(new RegExp('^'+prefix+'([A-Z])(\\d{4})$'));
+    if(m) used.add(m[1]+m[2]);
+  });
+  // Find next available
+  const letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for(let li=0;li<letters.length;li++){
+    for(let n=1;n<=9999;n++){
+      const key=letters[li]+String(n).padStart(4,'0');
+      if(!used.has(key)) return prefix+key;
+    }
+  }
+  return prefix+'A0001';
+}
+
+function getNextDnNo(){
+  // DN + letter + 4 digits
+  const all=[...cache.xuat,...cache.nhap];
+  const existing=[];
+  all.forEach(r=>{
+    Object.values(r.svcs||{}).forEach(sv=>{if(sv.dnNo)existing.push(sv.dnNo);});
+    if(r.dnNo) existing.push(r.dnNo);
+  });
+  const used=new Set(existing);
+  const letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for(let li=0;li<letters.length;li++){
+    for(let n=1;n<=9999;n++){
+      const key='DN'+letters[li]+String(n).padStart(4,'0');
+      if(!used.has(key)) return key;
+    }
+  }
+  return 'DNA0001';
+}
+
+window.getNextJobNo=getNextJobNo;
+window.getNextDnNo=getNextDnNo;
+
+/* ═══════════════════════════════════════════
    COMBINE BOOKING FEATURE
 ═══════════════════════════════════════════ */
 let combineSelectedIds=new Set();
 
+function openCombineFrom(id, tt){
+  combineSelectedIds=new Set([id]);
+  openCombine(tt);
+  // Pre-select and highlight the clicked lot
+  setTimeout(function(){
+    const chk=g('cbchk_'+id);
+    const row=g('cbrow_'+id);
+    if(chk)chk.checked=true;
+    if(row)row.style.background='var(--green-bg)';
+    updateCombinePreview(tt);
+  },100);
+}
+
 function openCombine(tt){
-  combineSelectedIds=new Set();
+  if(!combineSelectedIds) combineSelectedIds=new Set();
   const lots=cache[tt]||[];
   // Group by vessel+pod for display
   const tdS='padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
@@ -3745,11 +3832,13 @@ function updateCombinePreview(tt){
   }
 
   // Check vessel consistency
-  const vessels=new Set(selected.map(function(r){return r.vessel||'';}));
+  const vessels=new Set(selected.map(function(r){return (r.vessel||'')+(r.voy?'/'+r.voy:'');}));
   const pods=new Set(selected.map(function(r){return r.pod||'';}));
+  const fwds=new Set(selected.map(function(r){return r.fwd||'';}));
   const warnings=[];
-  if(vessels.size>1)warnings.push('⚠️ Khác tên tàu: '+Array.from(vessels).join(', '));
+  if(vessels.size>1)warnings.push('⚠️ Khác tàu/chuyến: '+Array.from(vessels).join(', '));
   if(pods.size>1)warnings.push('⚠️ Khác POD: '+Array.from(pods).join(', '));
+  if(fwds.size>1)warnings.push('⚠️ Khác FWD: '+Array.from(fwds).join(', '));
 
   if(warnings.length){
     warn.style.display='block';
@@ -3820,6 +3909,7 @@ async function executeCombine(tt){
   setLoading(false);
 }
 
+window.openCombineFrom=openCombineFrom;
 window.openCombine=openCombine;
 window.toggleCombineSelect=toggleCombineSelect;
 window.selectAllCombine=selectAllCombine;
