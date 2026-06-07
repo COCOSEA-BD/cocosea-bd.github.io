@@ -471,7 +471,7 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  ['xuat','nhap','deadline','cong-no','doi-tac','users','costing-report','ocean','settings'].forEach(id=>{
+  ['xuat','nhap','deadline','cong-no','doi-tac','users','docs','costing-report','ocean','settings'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
@@ -482,6 +482,7 @@ function goTab(t){
   if(t==='cong-no') renderDebt();
   if(t==='doi-tac') renderPartners();
   if(t==='users') renderUsers();
+  if(t==='docs') renderDocMaker();
   if(t==='costing-report') renderCostingReport();
   if(t==='ocean') renderOcean();
   if(t==='settings') renderSettings();
@@ -2808,6 +2809,7 @@ tr:hover td{background:var(--bg-secondary)}
     <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> Đối tác</button>
     <div class="sb-section" style="margin-top:.4rem">Hệ thống</div>
     <button class="sb-item" id="sb-users" onclick="goTab('users')"><i class="ti ti-users"></i> Người dùng</button>
+    <button class="sb-item" id="sb-docs" onclick="goTab('docs')"><i class="ti ti-file-certificate"></i> Document Maker</button>
     <button class="sb-item" id="sb-costing" onclick="goTab('costing-report')"><i class="ti ti-calculator"></i> Costing Report</button>
     <button class="sb-item" id="sb-ocean" onclick="goTab('ocean')"><i class="ti ti-anchor"></i> Ocean Freight</button>
     <button class="sb-item" id="sb-settings" onclick="goTab('settings')"><i class="ti ti-settings"></i> Cài đặt</button>
@@ -2839,6 +2841,7 @@ tr:hover td{background:var(--bg-secondary)}
       <div id="page-cong-no" style="display:none"></div>
       <div id="page-doi-tac" style="display:none"></div>
       <div id="page-users" style="display:none"></div>
+      <div id="page-docs" style="display:none"></div>
       <div id="page-costing-report" style="display:none"></div>
       <div id="page-ocean" style="display:none"></div>
       <div id="page-settings" style="display:none"></div>
@@ -4380,6 +4383,439 @@ window.importContFromExcel=importContFromExcel;
 window.showKhaiEport=showKhaiEport;
 window.showCheckEport=showCheckEport;
 window.showEportModal=showEportModal;
+
+/* ═══════════════════════════════════════════════════════════════
+   MODULE: DOCUMENT MAKER  v2
+   Xuất: INVOICE, PACKING LIST, CONTRACT, INV T.KHAI, SI
+═══════════════════════════════════════════════════════════════ */
+
+function renderDocMaker(){
+  const pg=g('page-docs'); if(!pg)return;
+  const allR=[...cache.xuat.map(r=>({...r,_tt:'xuat'})),...cache.nhap.map(r=>({...r,_tt:'nhap'}))];
+  allR.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const lotOpts=allR.map(r=>`<option value="${r._id}_${r._tt}">${r.jobNo||'—'} | ${r.bookingNo} — ${r.shipper||r.supplier||''} (${r.etd||''})</option>`).join('');
+  pg.innerHTML=`
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem">
+  <i class="ti ti-file-certificate" style="font-size:18px;color:var(--blue)"></i>
+  <span style="font-weight:700;font-size:15px">Document Maker</span>
+  <span style="font-size:11px;color:var(--text-secondary);margin-left:4px">— Xuất chứng từ xuất khẩu</span>
+</div>
+<div style="display:grid;grid-template-columns:380px 1fr;gap:1.25rem;align-items:start">
+<div>
+<div class="table-card" style="padding:1.1rem">
+  <label class="lbl">Chọn lô hàng</label>
+  <select id="dmLotSel" onchange="dmLoadLot()" style="font-size:12.5px;margin-bottom:1rem;font-weight:600">
+    <option value="">— Chọn lô hàng —</option>${lotOpts}
+  </select>
+  <div id="dmForm" style="display:none">
+    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📄 Số chứng từ</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <div><label class="lbl">Contract No.</label><input type="text" id="dm_cno" style="font-size:12px"/></div>
+      <div><label class="lbl">Invoice No.</label><input type="text" id="dm_ino" style="font-size:12px"/></div>
+      <div><label class="lbl">Date</label><input type="date" id="dm_date" style="font-size:12px"/></div>
+      <div><label class="lbl">POD (tiếng Anh)</label><input type="text" id="dm_pod" style="font-size:12px"/></div>
+    </div>
+    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🏢 Buyer / Cnee</div>
+    <div style="margin-bottom:10px">
+      <label class="lbl">Chọn Cnee</label>
+      <select id="dm_cnee" onchange="dmOnCneeChange()" style="font-size:12px;margin-bottom:5px"><option value="">— Chọn Cnee —</option></select>
+      <label class="lbl">Tên Cnee (EN)</label>
+      <input type="text" id="dm_cneeName" style="font-size:12px;margin-bottom:5px"/>
+      <label class="lbl">Địa chỉ Cnee (EN)</label>
+      <input type="text" id="dm_cneeAddr" style="font-size:12px"/>
+    </div>
+    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📦 Hàng hóa</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <div style="grid-column:1/-1"><label class="lbl">Tên hàng (EN)</label><input type="text" id="dm_goods" placeholder="COCONUT FIBER" style="font-size:12px"/></div>
+      <div style="grid-column:1/-1"><label class="lbl">Specifications</label><input type="text" id="dm_specs" placeholder="Grade C, Moisture: 35% min" style="font-size:12px"/></div>
+      <div><label class="lbl">Unit (Bales/Bags…)</label><input type="text" id="dm_unit" value="BALES" style="font-size:12px"/></div>
+      <div><label class="lbl">Đơn giá (USD/KGS)</label><input type="number" id="dm_price" step="0.0001" placeholder="0.195" style="font-size:12px" oninput="dmCalcAmount()"/></div>
+      <div><label class="lbl">Cước / cont (USD)</label><input type="number" id="dm_freight" placeholder="50" style="font-size:12px"/></div>
+      <div><label class="lbl">HS Code</label><input type="text" id="dm_hs" placeholder="53050022" style="font-size:12px"/></div>
+    </div>
+    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🚢 Container / Seal / Weight</div>
+    <div style="overflow-x:auto;margin-bottom:4px">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="background:var(--bg-secondary)">
+          <th style="padding:4px 4px;border:1px solid var(--border-light);text-align:center">#</th>
+          <th style="padding:4px 4px;border:1px solid var(--border-light)">Cont No</th>
+          <th style="padding:4px 4px;border:1px solid var(--border-light)">Seal</th>
+          <th style="padding:4px 4px;border:1px solid var(--border-light);text-align:center">Bales</th>
+          <th style="padding:4px 4px;border:1px solid var(--border-light);text-align:right">N.W(KG)</th>
+          <th style="padding:4px 4px;border:1px solid var(--border-light);text-align:right">G.W(KG)</th>
+          <th style="padding:4px 4px;border:1px solid var(--border-light);text-align:center">Type</th>
+          <th style="padding:4px 4px;border:1px solid var(--border-light)">Date</th>
+        </tr></thead>
+        <tbody id="dmContBody"></tbody>
+        <tfoot><tr style="background:var(--bg-secondary);font-weight:700">
+          <td colspan="3" style="padding:3px 4px;border:1px solid var(--border-light);text-align:right;font-size:11px">TOTAL</td>
+          <td id="dm_tBales" style="padding:3px 4px;border:1px solid var(--border-light);text-align:center"></td>
+          <td id="dm_tNW" style="padding:3px 4px;border:1px solid var(--border-light);text-align:right"></td>
+          <td id="dm_tGW" style="padding:3px 4px;border:1px solid var(--border-light);text-align:right"></td>
+          <td colspan="2" style="border:1px solid var(--border-light)"></td>
+        </tr></tfoot>
+      </table>
+    </div>
+    <div style="font-size:10.5px;color:var(--text-secondary);margin-bottom:.6rem">💡 G.W = N.W + 3,700 kg (tare) nếu để trống</div>
+    <div id="dm_amtBox" style="display:none;padding:8px 12px;background:rgba(15,110,86,.08);border-radius:8px;border:1px solid var(--green);margin-bottom:.75rem">
+      <div style="font-size:9.5px;color:var(--green);font-weight:700;text-transform:uppercase">Trị giá hàng hóa</div>
+      <div id="dm_amtVal" style="font-size:16px;font-weight:800;color:var(--green)"></div>
+    </div>
+    <button class="btn pri" onclick="dmPreview()" style="width:100%"><i class="ti ti-eye"></i> Xem trước & Kích hoạt xuất</button>
+  </div>
+</div>
+</div>
+<div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:.75rem">
+    <button class="btn" id="dmBtnInv" onclick="dmExport('INV')" disabled style="opacity:.4"><i class="ti ti-file-invoice"></i> INVOICE</button>
+    <button class="btn" id="dmBtnPkl" onclick="dmExport('PKL')" disabled style="opacity:.4"><i class="ti ti-package"></i> PACKING LIST</button>
+    <button class="btn" id="dmBtnCont" onclick="dmExport('CONTRACT')" disabled style="opacity:.4"><i class="ti ti-file-contract"></i> CONTRACT</button>
+    <button class="btn" id="dmBtnInvTk" onclick="dmExport('INV_TK')" disabled style="opacity:.4"><i class="ti ti-receipt-2"></i> INV T.KHAI</button>
+    <button class="btn" id="dmBtnSI" onclick="dmExport('SI')" disabled style="opacity:.4"><i class="ti ti-send"></i> SI</button>
+  </div>
+  <div id="dmPreviewBox" style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light);padding:1.5rem;min-height:280px">
+    <div style="text-align:center;padding:3rem;color:var(--text-tertiary)"><i class="ti ti-file-certificate" style="font-size:40px;opacity:.25"></i><div style="margin-top:.5rem;font-size:12px">Chọn lô hàng → Điền thông tin → Bấm Xem trước</div></div>
+  </div>
+</div>
+</div>`;
+}
+
+let _dmLot=null;
+function dmLoadLot(){
+  const val=g('dmLotSel')?.value||'';
+  if(!val){g('dmForm').style.display='none';_dmLot=null;return;}
+  const [id,tt]=val.split('_');
+  const r=(cache[tt]||[]).find(x=>x._id===id)||{};
+  _dmLot={...r,_tt:tt};
+  g('dm_date').value=r.etd||new Date().toISOString().slice(0,10);
+  g('dm_pod').value=(r.pod||'').split(',')[0].toUpperCase().trim();
+  g('dm_cno').value=r.jobNo||'';
+  g('dm_ino').value=r.dnNo||'';
+  g('dm_goods').value=r.tenHang||'';
+  const shipperKey=r.shipper||r.supplier||'';
+  const sp=cache.partners[shipperKey]||{};
+  const cnees=sp.cnees||[];
+  const cneeOpts=cnees.map(function(c,i){return `<option value="${i}" data-name="${c.name||''}" data-addr="${c.addr||''}">${c.name||'Cnee '+(i+1)}</option>`;}).join('');
+  g('dm_cnee').innerHTML=`<option value="">— Chọn Cnee —</option>${cneeOpts}`;
+  if(cnees.length===1){g('dm_cneeName').value=cnees[0].name||'';g('dm_cneeAddr').value=cnees[0].addr||'';g('dm_cnee').value='0';}
+  else{g('dm_cneeName').value='';g('dm_cneeAddr').value='';}
+  const conts=(r.containers||[]).filter(function(c){return c.no;});
+  const tbody=g('dmContBody');if(!tbody)return;
+  tbody.innerHTML=conts.map(function(c,i){
+    const gw=parseFloat(c.gw)||0;
+    return `<tr>
+      <td style="padding:2px 4px;border:1px solid var(--border-light);text-align:center;font-size:11px">${i+1}</td>
+      <td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_cont_${i}" value="${c.no}" style="font-size:11px;width:110px"/></td>
+      <td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_seal_${i}" value="${c.seal||''}" style="font-size:11px;width:96px"/></td>
+      <td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_bales_${i}" value="" placeholder="bales" style="font-size:11px;width:52px;text-align:center" oninput="dmUpdateTotals()"/></td>
+      <td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_nw_${i}" value="" placeholder="NW" style="font-size:11px;width:64px;text-align:right" oninput="dmNWChange(${i})"/></td>
+      <td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_gw_${i}" value="${gw||''}" placeholder="GW" style="font-size:11px;width:64px;text-align:right" oninput="dmUpdateTotals()"/></td>
+      <td style="padding:2px 4px;border:1px solid var(--border-light);text-align:center;font-size:11px">${c.type||r.typeCont||'40HC'}</td>
+      <td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="date" id="dmc_date_${i}" value="${r.etd||''}" style="font-size:11px;width:108px"/></td>
+    </tr>`;
+  }).join('');
+  dmUpdateTotals();
+  g('dmForm').style.display='block';
+  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI'].forEach(function(id){const b=g(id);if(b){b.disabled=true;b.style.opacity='.4';}});
+}
+
+function dmOnCneeChange(){
+  const sel=g('dm_cnee');const opt=sel?.options[sel.selectedIndex];
+  if(opt&&opt.dataset.name)g('dm_cneeName').value=opt.dataset.name;
+  if(opt&&opt.dataset.addr)g('dm_cneeAddr').value=opt.dataset.addr;
+}
+
+function dmNWChange(i){
+  const nw=parseFloat(g('dmc_nw_'+i)?.value)||0;
+  const gwEl=g('dmc_gw_'+i);
+  if(gwEl&&nw>0&&!gwEl.value)gwEl.value=nw+3700;
+  dmUpdateTotals();
+}
+
+function dmUpdateTotals(){
+  if(!_dmLot)return;
+  const conts=(_dmLot.containers||[]).filter(function(c){return c.no;});
+  let tb=0,tnw=0,tgw=0;
+  conts.forEach(function(_,i){
+    tb+=parseFloat(g('dmc_bales_'+i)?.value)||0;
+    tnw+=parseFloat(g('dmc_nw_'+i)?.value)||0;
+    tgw+=parseFloat(g('dmc_gw_'+i)?.value)||0;
+  });
+  const t=g('dm_tBales'),nw=g('dm_tNW'),gw_=g('dm_tGW');
+  if(t)t.textContent=tb||'';
+  if(nw)nw.textContent=tnw?tnw.toLocaleString():'';
+  if(gw_)gw_.textContent=tgw?tgw.toLocaleString():'';
+  dmCalcAmount();
+}
+
+function dmCalcAmount(){
+  const price=parseFloat(g('dm_price')?.value)||0;
+  if(!_dmLot)return;
+  const conts=(_dmLot.containers||[]).filter(function(c){return c.no;});
+  let tnw=0;conts.forEach(function(_,i){tnw+=parseFloat(g('dmc_nw_'+i)?.value)||0;});
+  const amt=Math.round(tnw*price*100)/100;
+  const amtEl=g('dm_amtBox');const amtVal=g('dm_amtVal');
+  if(amt>0&&amtEl&&amtVal){amtEl.style.display='block';amtVal.textContent='USD '+amt.toLocaleString('en-US',{minimumFractionDigits:2});}
+  else if(amtEl)amtEl.style.display='none';
+}
+
+function dmGetData(){
+  if(!_dmLot)return null;
+  const r=_dmLot;
+  const sp=cache.partners[r.shipper||r.supplier||'']||{};
+  const conts=(r.containers||[]).filter(function(c){return c.no;}).map(function(c,i){
+    const bales=parseFloat(g('dmc_bales_'+i)?.value)||0;
+    const nw=parseFloat(g('dmc_nw_'+i)?.value)||0;
+    const gwIn=parseFloat(g('dmc_gw_'+i)?.value)||0;
+    const gw=gwIn||(nw?nw+3700:0);
+    return {no:(g('dmc_cont_'+i)?.value||c.no).toUpperCase(),seal:g('dmc_seal_'+i)?.value||c.seal||'',bales,nw,gw,type:c.type||r.typeCont||'40HC',date:g('dmc_date_'+i)?.value||r.etd||''};
+  });
+  const totalBales=conts.reduce(function(s,c){return s+c.bales;},0);
+  const totalNW=conts.reduce(function(s,c){return s+c.nw;},0);
+  const totalGW=conts.reduce(function(s,c){return s+c.gw;},0);
+  const unitPrice=parseFloat(g('dm_price')?.value)||0;
+  const amount=Math.round(totalNW*unitPrice*100)/100;
+  const freight=parseFloat(g('dm_freight')?.value)||0;
+  const freightTotal=Math.round(freight*conts.length*100)/100;
+  return {r,sp,conts,totalBales,totalNW,totalGW,unitPrice,amount,freight,freightTotal,
+    contractNo:g('dm_cno')?.value||r.jobNo||'',invoiceNo:g('dm_ino')?.value||r.dnNo||'',
+    date:g('dm_date')?.value||r.etd||'',goods:g('dm_goods')?.value||r.tenHang||'',
+    specs:g('dm_specs')?.value||'',unit:g('dm_unit')?.value||'BALES',hsCode:g('dm_hs')?.value||'',
+    cnee:g('dm_cneeName')?.value||'',cneeAddr:g('dm_cneeAddr')?.value||'',
+    pod:g('dm_pod')?.value||r.pod||'',vessel:(r.vessel||'')+(r.voy?' V.'+r.voy:''),
+    mbl:r.mblNo||r.bookingNo||'',bkgNo:r.bookingNo||'',
+    sellerName:sp.enName||sp.fullname||'',sellerAddr:sp.enAddr||sp.addr||'',
+    sellerBankAcc:sp.bankAcc||'',sellerBankName:sp.bankName||'',pol:'HO CHI MINH, VIET NAM'};
+}
+
+function dmPreview(){
+  const d=dmGetData();
+  if(!d){toast('Chưa có dữ liệu','error');return;}
+  if(!d.sellerName){toast('Shipper chưa có tên tiếng Anh. Vào Đối tác → sửa Shipper để nhập','error');return;}
+  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
+  const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2});};
+  g('dmPreviewBox').innerHTML=`
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">
+    <div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)">
+      <div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary);letter-spacing:.5px">SELLER</div>
+      <div style="font-size:12px;font-weight:700;margin-top:3px">${d.sellerName}</div>
+      <div style="font-size:11px;color:var(--text-secondary)">${d.sellerAddr}</div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-top:3px">Acc: ${d.sellerBankAcc||'—'} / ${d.sellerBankName||'—'}</div>
+    </div>
+    <div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)">
+      <div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary);letter-spacing:.5px">BUYER / CNEE</div>
+      <div style="font-size:12px;font-weight:700;margin-top:3px">${d.cnee||'—'}</div>
+      <div style="font-size:11px;color:var(--text-secondary)">${d.cneeAddr}</div>
+    </div>
+    <div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)">
+      <div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary);letter-spacing:.5px">HÀNG HÓA</div>
+      <div style="font-size:12px;font-weight:700;margin-top:3px">${d.goods}</div>
+      <div style="font-size:11px">${d.specs}</div>
+      <div style="font-size:11px;margin-top:3px">NW: <strong>${d.totalNW.toLocaleString()}</strong> KGS &nbsp;|&nbsp; GW: <strong>${d.totalGW.toLocaleString()}</strong> KGS &nbsp;|&nbsp; ${d.totalBales.toLocaleString()} ${d.unit}</div>
+      <div style="font-size:15px;font-weight:800;color:var(--green);margin-top:5px">USD ${f2(d.amount)}</div>
+      ${d.freightTotal?`<div style="font-size:11px;color:var(--text-secondary)">Cước: USD ${f2(d.freightTotal)} (${d.conts.length} conts × $${d.freight})</div>`:''}
+    </div>
+    <div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)">
+      <div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary);letter-spacing:.5px">TUYẾN</div>
+      <div style="font-size:12px;font-weight:700;margin-top:3px">${d.vessel}</div>
+      <div style="font-size:11px">${d.pol} → ${d.pod}</div>
+      <div style="font-size:11px;margin-top:2px">MBL: ${d.mbl} &nbsp;|&nbsp; ${d.conts.length} conts</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <span class="bdg bdg-b">Contract: ${d.contractNo}</span>
+    <span class="bdg bdg-tl">Invoice: ${d.invoiceNo}</span>
+    <span class="bdg bdg-gr">Date: ${d.date}</span>
+    ${d.hsCode?`<span class="bdg" style="background:#f0f0ee">HS: ${d.hsCode}</span>`:''}
+  </div>`;
+}
+
+function _dmCSS(){
+  return `<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;font-size:11.5px;color:#000;padding:18px 24px}h1{font-size:15px;font-weight:800;text-align:center;margin-bottom:2px}h2{font-size:13px;font-weight:700;text-align:center;margin-bottom:10px}.sub{font-size:11px;text-align:center;color:#333;margin-bottom:8px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #555;padding:5px 7px;vertical-align:top}.nb td,.nb th{border:none;padding:2px 4px}.lbl{font-weight:700;white-space:nowrap;width:140px}.right{text-align:right}.center{text-align:center}tfoot td{font-weight:700}@media print{body{padding:10px 14px}@page{margin:8mm;size:A4}}</style>`;
+}
+
+function _dmHdr(d){return `<h1>${d.sellerName}</h1><p class="sub">${d.sellerAddr}</p>`;}
+
+function _dmInfoBlk(d,title){
+  return `<h2>${title}</h2><table class="nb" style="margin-bottom:8px"><tr valign="top">
+<td style="width:57%"><table class="nb">
+  <tr><td class="nb lbl">SELLER</td><td class="nb">: ${d.sellerName}</td></tr>
+  <tr><td class="nb lbl">ADDRESS</td><td class="nb">: ${d.sellerAddr}</td></tr>
+  <tr><td class="nb lbl">BUYER</td><td class="nb">: ${d.cnee}</td></tr>
+  <tr><td class="nb lbl">ADDRESS</td><td class="nb">: ${d.cneeAddr}</td></tr>
+  <tr><td class="nb lbl">BILL NO</td><td class="nb">: ${d.mbl}</td></tr>
+  <tr><td class="nb lbl">VESSEL / VOYAGE</td><td class="nb">: ${d.vessel}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT FROM</td><td class="nb">: ${d.pol}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT TO</td><td class="nb">: ${d.pod}</td></tr>
+</table></td>
+<td><table class="nb">
+  <tr><td class="nb lbl">CONTRACT No.</td><td class="nb">: ${d.contractNo}</td></tr>
+  <tr><td class="nb lbl">INVOICE No.</td><td class="nb">: ${d.invoiceNo}</td></tr>
+  <tr><td class="nb lbl">Date</td><td class="nb">: ${d.date}</td></tr>
+  <tr><td class="nb lbl" style="padding-top:8px">ACCOUNT NAME</td><td class="nb" style="padding-top:8px">: ${d.sellerName}</td></tr>
+  <tr><td class="nb lbl">ACCOUNT NO (USD)</td><td class="nb">: ${d.sellerBankAcc}</td></tr>
+  <tr><td class="nb lbl">BANK NAME</td><td class="nb">: ${d.sellerBankName}</td></tr>
+</table></td></tr></table>`;
+}
+
+function _dmInvoice(d){
+  const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2});};
+  const rows=d.conts.map(function(c,i){return `<tr><td class="center">${i+1}</td><td>${c.no}</td><td>${c.seal}</td><td class="center">${c.bales?c.bales.toLocaleString():''}</td><td class="right">${c.nw?c.nw.toLocaleString():''}</td><td class="right">${c.gw?c.gw.toLocaleString():''}</td></tr>`;}).join('');
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">${_dmCSS()}<title>INVOICE ${d.invoiceNo}</title></head><body>
+${_dmHdr(d)}${_dmInfoBlk(d,'COMMERCIAL INVOICE')}
+<table style="margin-top:8px"><thead><tr>
+<th class="center" style="width:28px">#</th><th>CONT NO</th><th>SEAL NO</th>
+<th class="center">${d.unit}</th><th class="right">NET WEIGHT (KGS)</th><th class="right">GROSS WEIGHT (KGS)</th>
+</tr></thead><tbody>${rows}</tbody>
+<tfoot><tr><td colspan="3" class="right">TOTAL</td><td class="center">${d.totalBales.toLocaleString()}</td><td class="right">${d.totalNW.toLocaleString()}</td><td class="right">${d.totalGW.toLocaleString()}</td></tr></tfoot></table>
+<table style="margin-top:10px"><thead><tr>
+<th>NAME OF GOODS</th><th>SPECIFICATIONS</th><th class="center">QUANTITY (KGS)</th><th class="center">UNIT PRICE (USD/KGS)</th><th class="center">AMOUNT (USD)</th>
+</tr></thead><tbody><tr>
+<td>${d.goods}</td><td>${d.specs}</td><td class="center">${d.totalNW.toLocaleString()}</td><td class="center">${d.unitPrice}</td><td class="center" style="font-weight:700">USD ${f2(d.amount)}</td>
+</tr></tbody><tfoot><tr><td colspan="4" class="right">TOTAL</td><td class="center" style="font-size:13px">USD ${f2(d.amount)}</td></tr></tfoot></table>
+<div style="margin-top:28px;text-align:right;font-weight:700">FOR AND ON BEHALF OF<br>${d.sellerName}<br><br><br>________________________</div>
+</body></html>`;
+}
+
+function _dmPKL(d){
+  const rows=d.conts.map(function(c,i){return `<tr><td>${c.no}</td><td>${c.seal}</td><td class="center">${c.bales?c.bales.toLocaleString():''}</td><td class="right">${c.nw?c.nw.toLocaleString():''}</td><td class="right">${c.gw?c.gw.toLocaleString():''}</td><td class="center">${i+1}</td><td>${c.date||''}</td></tr>`;}).join('');
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">${_dmCSS()}<title>PKL ${d.invoiceNo}</title></head><body>
+${_dmHdr(d)}<h2>PACKING LIST</h2>
+<table class="nb" style="margin-bottom:8px"><tr valign="top">
+<td style="width:57%"><table class="nb">
+  <tr><td class="nb lbl">SELLER</td><td class="nb">: ${d.sellerName}</td></tr>
+  <tr><td class="nb lbl">BUYER</td><td class="nb">: ${d.cnee}</td></tr>
+  <tr><td class="nb lbl">ADDRESS</td><td class="nb">: ${d.cneeAddr}</td></tr>
+  <tr><td class="nb lbl">BILL NO</td><td class="nb">: ${d.mbl}</td></tr>
+  <tr><td class="nb lbl">VESSEL / VOYAGE</td><td class="nb">: ${d.vessel}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT FROM</td><td class="nb">: ${d.pol}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT TO</td><td class="nb">: ${d.pod}</td></tr>
+</table></td>
+<td><table class="nb"><tr><td class="nb lbl">No.</td><td class="nb">: ${d.invoiceNo}</td></tr><tr><td class="nb lbl">Date</td><td class="nb">: ${d.date}</td></tr></table></td>
+</tr></table>
+<table><thead><tr>
+<th>CONT NO</th><th>SEAL NO</th><th class="center">NUMBER OF ${d.unit}</th><th class="right">NET WEIGHT (KGS)</th><th class="right">GROSS WEIGHT (KGS)</th><th class="center">NO</th><th>STUFF DATE</th>
+</tr></thead><tbody>${rows}</tbody>
+<tfoot><tr><td colspan="2" class="right">TOTAL</td><td class="center">${d.totalBales.toLocaleString()}</td><td class="right">${d.totalNW.toLocaleString()}</td><td class="right">${d.totalGW.toLocaleString()}</td><td colspan="2"></td></tr></tfoot></table>
+<div style="margin-top:28px;text-align:right;font-weight:700">FOR AND ON BEHALF OF<br>${d.sellerName}<br><br><br>________________________</div>
+</body></html>`;
+}
+
+function _dmContract(d){
+  const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2});};
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">${_dmCSS()}<title>CONTRACT ${d.contractNo}</title></head><body>
+${_dmHdr(d)}<h2>PURCHASE CONTRACT</h2>
+<table class="nb" style="margin-bottom:8px"><tr valign="top">
+<td style="width:57%"><table class="nb">
+  <tr><td class="nb lbl">SELLER</td><td class="nb">: ${d.sellerName}</td></tr>
+  <tr><td class="nb lbl">ADDRESS</td><td class="nb">: ${d.sellerAddr}</td></tr>
+  <tr><td class="nb lbl">BUYER</td><td class="nb">: ${d.cnee}</td></tr>
+  <tr><td class="nb lbl">ADDRESS</td><td class="nb">: ${d.cneeAddr}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT FROM</td><td class="nb">: ${d.pol}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT TO</td><td class="nb">: ${d.pod}</td></tr>
+  <tr><td class="nb lbl" style="padding-top:6px">ACCOUNT NAME</td><td class="nb" style="padding-top:6px">: ${d.sellerName}</td></tr>
+  <tr><td class="nb lbl">ACCOUNT NO (USD)</td><td class="nb">: ${d.sellerBankAcc}</td></tr>
+  <tr><td class="nb lbl">BANK NAME</td><td class="nb">: ${d.sellerBankName}</td></tr>
+</table></td>
+<td><table class="nb"><tr><td class="nb lbl">CONTRACT No.</td><td class="nb">: ${d.contractNo}</td></tr><tr><td class="nb lbl">Date</td><td class="nb">: ${d.date}</td></tr></table></td>
+</tr></table>
+<p style="margin:8px 0">This Purchase Contract is made between SELLER and BUYER, who agree to buy and sell the under-mentioned goods as follows:</p>
+<table><thead><tr><th>NAME OF GOODS</th><th>SPECIFICATIONS</th><th class="center">QUANTITY (KGS)</th><th class="center">UNIT PRICE (USD/KGS)</th><th class="center">AMOUNT (USD)</th></tr></thead>
+<tbody><tr><td>${d.goods}</td><td>${d.specs}</td><td class="center">${d.totalNW.toLocaleString()}</td><td class="center">${d.unitPrice}</td><td class="center" style="font-weight:700">USD ${f2(d.amount)}</td></tr></tbody>
+<tfoot><tr><td colspan="4" class="right">TOTAL</td><td class="center" style="font-size:13px">USD ${f2(d.amount)}</td></tr></tfoot></table>
+<div style="margin-top:10px;font-size:11px;line-height:1.6">
+<p><strong>1. Commodity:</strong> ${d.goods} — ${d.specs} — Origin: Vietnam — Port of Discharge: ${d.pod}</p>
+<p>Only Shipment. Transshipment: Allowed. Partial Shipment: Allowed.</p>
+<p><strong>2. Payment Terms:</strong> 1) TT 100% in advance &nbsp; 2) Scan documents sent after payment received &nbsp; 3) Actual weight at port of loading &nbsp; 4) Allow 1% short weight.</p>
+<p><strong>3. Documentation:</strong> Original BL × 3 &nbsp; Commercial Invoice &amp; PKL × 3 &nbsp; C/O (Form E) × 1 &nbsp; Phytosanitary Certificate × 1 &nbsp; Fumigation Certificate × 1</p>
+</div>
+<div style="display:flex;justify-content:space-between;margin-top:36px">
+<div style="text-align:center;width:46%"><strong>FOR THE BUYER</strong><br><br>${d.cnee}<br><br><br>________________________</div>
+<div style="text-align:center;width:46%"><strong>FOR THE SELLER</strong><br><br>${d.sellerName}<br><br><br>________________________</div>
+</div></body></html>`;
+}
+
+function _dmInvTK(d){
+  const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2});};
+  const net=Math.round((d.amount-d.freightTotal)*100)/100;
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">${_dmCSS()}<title>INV_TK ${d.invoiceNo}</title></head><body>
+${_dmHdr(d)}<h2>COMMERCIAL INVOICE (DÙNG KÈM TỜ KHAI XUẤT KHẨU)</h2>
+<table class="nb" style="margin-bottom:8px"><tr valign="top">
+<td style="width:57%"><table class="nb">
+  <tr><td class="nb lbl">BUYER</td><td class="nb">: ${d.cnee}</td></tr>
+  <tr><td class="nb lbl">ADDRESS</td><td class="nb">: ${d.cneeAddr}</td></tr>
+  <tr><td class="nb lbl">BILL NO</td><td class="nb">: ${d.mbl}</td></tr>
+  <tr><td class="nb lbl">VESSEL / VOYAGE</td><td class="nb">: ${d.vessel}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT FROM</td><td class="nb">: ${d.pol}</td></tr>
+  <tr><td class="nb lbl">SHIPMENT TO</td><td class="nb">: ${d.pod}</td></tr>
+  <tr><td class="nb lbl" style="padding-top:6px">ACCOUNT NAME</td><td class="nb" style="padding-top:6px">: ${d.sellerName}</td></tr>
+  <tr><td class="nb lbl">ACCOUNT NO</td><td class="nb">: ${d.sellerBankAcc}</td></tr>
+  <tr><td class="nb lbl">BANK NAME</td><td class="nb">: ${d.sellerBankName}</td></tr>
+</table></td>
+<td><table class="nb">
+  <tr><td class="nb lbl">CONTRACT No.</td><td class="nb">: ${d.contractNo}</td></tr>
+  <tr><td class="nb lbl">INVOICE No.</td><td class="nb">: ${d.invoiceNo}</td></tr>
+  <tr><td class="nb lbl">Date</td><td class="nb">: ${d.date}</td></tr>
+</table></td></tr></table>
+<table><thead><tr><th>NAME OF GOODS</th><th>SPECIFICATIONS</th><th class="center">QUANTITY (KGS)</th><th class="center">UNIT PRICE (USD/KGS)</th><th class="center">AMOUNT (USD)</th><th class="center">CƯỚC/CONT</th></tr></thead>
+<tbody><tr><td>${d.goods}</td><td>${d.specs}</td><td class="center">${d.totalNW.toLocaleString()}</td><td class="center">${d.unitPrice}</td><td class="center" style="font-weight:700">USD ${f2(d.amount)}</td><td class="center">$${d.freight}</td></tr></tbody>
+<tfoot>
+<tr><td colspan="4" class="right">TOTAL</td><td class="center">USD ${f2(d.amount)}</td><td class="center">${d.conts.length}</td></tr>
+<tr><td colspan="4" class="right">FREIGHT (${d.conts.length} CONT × $${d.freight})</td><td class="center">USD ${f2(d.freightTotal)}</td><td></td></tr>
+<tr><td colspan="4" class="right" style="font-size:12px">TOTAL (Trị giá khai báo)</td><td class="center" style="font-size:14px;color:green">USD ${f2(net)}</td><td></td></tr>
+</tfoot></table>
+<p style="margin-top:8px;font-size:10.5px;color:#555">Total N.W: ${d.totalNW.toLocaleString()} KGS | Total ${d.unit}: ${d.totalBales.toLocaleString()}</p>
+<div style="margin-top:28px;text-align:right;font-weight:700">FOR AND ON BEHALF OF<br>${d.sellerName}<br><br><br>________________________</div>
+</body></html>`;
+}
+
+function _dmSI(d){
+  const contRows=d.conts.map(function(c,i){
+    const vgm=c.gw?Math.round((c.gw+50)*10)/10:'';
+    return `<tr><td class="center">${i+1}</td><td>${c.no}</td><td>${c.seal||''}</td><td class="center">${c.type||'40HC'}</td><td class="center">${c.bales?c.bales.toLocaleString():''}</td><td>${d.unit}</td><td class="right">${c.gw?c.gw.toLocaleString():''}</td><td class="center">50</td><td class="right">${vgm}</td></tr>`;
+  }).join('');
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">${_dmCSS()}<title>SI ${d.mbl}</title></head><body>
+<h2>SHIPPING INSTRUCTION</h2>
+<table>
+<tr><td colspan="3" style="width:52%"><strong>1. Shipper/Exporter</strong><br><br>${d.sellerName}<br>${d.sellerAddr}</td><td colspan="2"><strong>4. BL No / Booking No:</strong><br><br>${d.mbl}</td></tr>
+<tr><td colspan="3"><strong>2. Consignee</strong><br><br>${d.cnee}<br>${d.cneeAddr}</td><td colspan="2"><strong>5. Type of BL:</strong><br><br>☐ Original &nbsp;&nbsp; ☒ Surrendered</td></tr>
+<tr><td colspan="3"><strong>3. Notify Party</strong><br><br>SAME AS CONSIGNEE</td><td colspan="2"><strong>6. BL Copy email:</strong><br></td></tr>
+<tr><td colspan="2"><strong>9. Vessel</strong><br>${d.r.vessel||''}</td><td><strong>10. Voy No</strong><br>${d.r.voy||''}</td><td colspan="2"><strong>Service Contract No.:</strong><br></td></tr>
+<tr><td colspan="2"><strong>12. Place of Receipt</strong><br>${d.pol}</td><td colspan="3"><strong>13. Port of Discharge</strong><br>${d.pod}</td></tr>
+<tr><td colspan="2"><strong>14. Port of Loading</strong><br>${d.pol}</td><td colspan="3"><strong>15. Place of Delivery</strong><br>${d.pod}</td></tr>
+</table>
+<p style="margin:8px 0 4px"><strong>16. PARTICULARS FURNISHED BY THE MERCHANT</strong></p>
+<table><thead><tr><th class="center">#</th><th>Container No.</th><th>Seal No.</th><th class="center">Type</th><th class="center">No. of Packages</th><th>Unit</th><th class="right">G.W (KGS)</th><th class="center">CBM</th><th class="right">VGM (KGS)</th></tr></thead>
+<tbody>${contRows}</tbody>
+<tfoot><tr><td colspan="4" class="right">TOTAL</td><td class="center">${d.totalBales.toLocaleString()}</td><td></td><td class="right">${d.totalGW.toLocaleString()}</td><td colspan="2"></td></tr></tfoot></table>
+<table style="margin-top:8px">
+<tr><td style="width:50%"><strong>25. Shipping Mark</strong><br><br>N/M</td><td><strong>26. Description of Goods</strong><br><br>${d.goods}<br>${d.specs}</td></tr>
+<tr><td><strong>27. Payment Term</strong><br>FREIGHT PREPAID</td><td><strong>Remark</strong><br>FREIGHT PREPAID</td></tr>
+</table>
+<div style="margin-top:28px;text-align:right;font-weight:700">FOR AND ON BEHALF OF ${d.sellerName}<br><br><br>________________________</div>
+</body></html>`;
+}
+
+function dmExport(type){
+  const d=dmGetData();
+  if(!d){toast('Chưa có dữ liệu','error');return;}
+  const map={'INV':[_dmInvoice(d),'Invoice_'+d.invoiceNo],'PKL':[_dmPKL(d),'PKL_'+d.invoiceNo],'CONTRACT':[_dmContract(d),'Contract_'+d.contractNo],'INV_TK':[_dmInvTK(d),'InvTKhai_'+d.invoiceNo],'SI':[_dmSI(d),'SI_'+d.mbl]};
+  const entry=map[type];if(!entry)return;
+  const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
+  w.document.write(entry[0]);w.document.close();w.focus();w.document.title=entry[1];
+  setTimeout(function(){w.print();},600);
+  toast('Đã mở: '+entry[1]+' — Bấm Ctrl+P → Save as PDF');
+}
+
+window.renderDocMaker=renderDocMaker;
+window.dmLoadLot=dmLoadLot;
+window.dmOnCneeChange=dmOnCneeChange;
+window.dmNWChange=dmNWChange;
+window.dmUpdateTotals=dmUpdateTotals;
+window.dmCalcAmount=dmCalcAmount;
+window.dmPreview=dmPreview;
+window.dmExport=dmExport;
+window.exportDoc=dmExport;
 
 // ═══════════════════════════════════════════
 // EXCEL EXPORT FUNCTIONS
