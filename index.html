@@ -63,9 +63,38 @@ window._bankAccounts=[
 // Load bank accounts from Firestore
 function loadCargoNames(){
   db.collection('_config').doc('cargoNames').get().then(function(snap){
-    if(snap.exists) window._cargoNames=snap.data().names||[];
-    else window._cargoNames=[];
+    let names=snap.exists?(snap.data().names||[]):[];
+    // Normalize: support old string[] and new object[]
+    window._cargoNames=names.map(function(n){
+      if(typeof n==='string')return {name:n,enName:'',specs:''};
+      return {name:n.name||'',enName:n.enName||'',specs:n.specs||''};
+    });
   }).catch(function(){window._cargoNames=[];});
+}
+
+function addCargoNameRow(){
+  const list=g('cargoNamesList'); if(!list)return;
+  const i=list.querySelectorAll('[data-cargo-row]').length;
+  const div=document.createElement('div');
+  div.innerHTML=cargoNameRowHtml({name:'',enName:'',specs:''},i);
+  list.appendChild(div.firstChild);
+}
+
+function cargoNameRowHtml(item,i){
+  return '<div data-cargo-row="'+i+'" style="border:1px solid var(--border-light);border-radius:8px;padding:10px;margin-bottom:8px;background:var(--bg-secondary)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:11px;font-weight:700;color:var(--blue)">Hàng #'+(i+1)+'</span><button class="rac red" onclick="this.closest(\'[data-cargo-row]\').remove()" style="font-size:12px"><i class="ti ti-trash"></i></button></div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
+      +'<div><label class="lbl">Tên hàng (VN)</label><input type="text" class="cargo-name" value="'+(item.name||'').replace(/"/g,"&quot;")+'" placeholder="Xơ dừa"/></div>'
+      +'<div><label class="lbl">Tên tiếng Anh</label><input type="text" class="cargo-en" value="'+(item.enName||'').replace(/"/g,"&quot;")+'" placeholder="COCONUT FIBER"/></div>'
+      +'<div style="grid-column:1/-1"><label class="lbl">Specifications (mỗi dòng 1 ý)</label><textarea class="cargo-specs" rows="3" placeholder="+ Product: Unwashed&#10;+ Moisture: 12-18% Max." style="font-size:11.5px;resize:vertical">'+(item.specs||'')+'</textarea></div>'
+    +'</div>'
+  +'</div>';
+}
+
+function renderCargoNamesList(){
+  const list=g('cargoNamesList'); if(!list)return;
+  const items=window._cargoNames||[];
+  list.innerHTML=(items.length?items:[{name:'',enName:'',specs:''}]).map(cargoNameRowHtml).join('');
 }
 
 function loadBankAccounts(){
@@ -697,22 +726,94 @@ function renderLotTable(tt){
 /* ─── DETAIL PANEL: click Booking No → slide-in panel with tabs ─── */
 let detailId=null, detailTt=null, detailTab='info';
 
+// ── Browser-style tab system for detail panels ──
+let _openTabs=[]; // {key, type:'lot'|'docmaker', id, tt, label, tab}
+let _activeTabKey=null;
+
 function openDetail(id, tt){
-  detailId=id; detailTt=tt;
-  detailTab='info';
   const r=cache[tt].find(x=>x._id===id)||{};
+  const key='lot_'+id;
+  let t=_openTabs.find(x=>x.key===key);
+  if(!t){
+    t={key,type:'lot',id,tt,label:(r.jobNo||r.bookingNo||'Lô hàng'),tab:'info'};
+    _openTabs.push(t);
+  }
+  _activeTabKey=key;
+  detailId=id; detailTt=tt; detailTab=t.tab;
+  renderDpanelTabs();
   renderDetailPanel(r,tt);
   g('detailPanel').classList.add('open');
   g('detailBackdrop').classList.add('open');
 }
 
+function openDocMakerTab(id, tt){
+  const key='docmaker';
+  let t=_openTabs.find(x=>x.key===key);
+  if(!t){t={key,type:'docmaker',label:'Document Maker'};_openTabs.push(t);}
+  _activeTabKey=key;
+  // Clear sidebar doc-maker to avoid duplicate IDs
+  g('detailPanel').innerHTML='<div class="dpanel-tabbar" id="dpanelTabbar"></div><div id="dmPanelHost" style="padding:1rem"></div>';
+  renderDpanelTabs();
+  // Build doc maker into the panel host by temporarily aliasing
+  _dmHost=g('dmPanelHost');
+  renderDocMaker();
+  if(id&&tt){setTimeout(function(){if(window.dmPickLot)dmPickLot(id,tt);},200);}
+  g('detailPanel').classList.add('open');
+  g('detailBackdrop').classList.add('open');
+}
+
+function switchToTab(key){
+  const t=_openTabs.find(x=>x.key===key);
+  if(!t)return;
+  _activeTabKey=key;
+  if(t.type==='lot'){
+    detailId=t.id; detailTt=t.tt; detailTab=t.tab||'info';
+    const r=cache[t.tt].find(x=>x._id===t.id)||{};
+    renderDetailPanel(r,t.tt);
+  } else if(t.type==='docmaker'){
+    openDocMakerTab();
+  }
+}
+
+function closeTab(key, ev){
+  if(ev)ev.stopPropagation();
+  const idx=_openTabs.findIndex(x=>x.key===key);
+  if(idx<0)return;
+  _openTabs.splice(idx,1);
+  if(_activeTabKey===key){
+    if(_openTabs.length){
+      switchToTab(_openTabs[Math.max(0,idx-1)].key);
+    } else {
+      closeDetail();
+    }
+  } else {
+    renderDpanelTabs();
+  }
+}
+
+function renderDpanelTabs(){
+  const bar=g('dpanelTabbar');
+  if(!bar)return;
+  bar.innerHTML=_openTabs.map(function(t){
+    const icon=t.type==='docmaker'?'ti-file-certificate':'ti-package';
+    return '<div class="dpanel-tab'+(t.key===_activeTabKey?' active':'')+'" onclick="switchToTab(\''+t.key+'\')"><i class="ti '+icon+'" style="font-size:13px"></i><span class="tabname">'+t.label+'</span><span class="tabclose" onclick="closeTab(\''+t.key+'\',event)"><i class="ti ti-x"></i></span></div>';
+  }).join('');
+}
+
 function closeDetail(){
+  _openTabs=[]; _activeTabKey=null;
   g('detailPanel').classList.remove('open');
   g('detailBackdrop').classList.remove('open');
 }
 
+window.openDocMakerTab=openDocMakerTab;
+window.switchToTab=switchToTab;
+window.closeTab=closeTab;
+
 function switchDetailTab(tab){
   detailTab=tab;
+  const at=_openTabs&&_openTabs.find(x=>x.key===_activeTabKey);
+  if(at)at.tab=tab;
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   renderDetailPanel(r,detailTt);
 }
@@ -796,25 +897,32 @@ function renderDetailPanel(r,tt){
     for(let i=0;i<Math.max(vol,contList.length||1);i++){
       const c=contList[i]||{};
       rows+='<tr>'
-        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light);color:var(--text-secondary);font-size:11px">'+(i+1)+'</td>'
-        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="cno_'+i+'" value="'+(c.no||'')+'" placeholder="ABCU1234567" style="font-size:12px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"/></td>'
-        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="cseal_'+i+'" value="'+(c.seal||'')+'" placeholder="Seal number" style="font-size:12px"/></td>'
-        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="text" id="ctype_'+i+'" value="'+(c.type||r.typeCont||'')+'" placeholder="20DC/40HC..." style="font-size:12px;width:70px"/></td>'
-        +'<td style="padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="number" id="cgw_'+i+'" value="'+(c.gw||'')+'" placeholder="0" min="0" style="font-size:12px;width:80px;text-align:right"/></td>'
+        +'<td style="padding:5px 6px;border-bottom:1px solid var(--border-light);color:var(--text-secondary);font-size:11px;text-align:center">'+(i+1)+'</td>'
+        +'<td style="padding:4px 5px;border-bottom:1px solid var(--border-light)"><input type="text" id="cno_'+i+'" value="'+(c.no||'')+'" placeholder="Cont No" style="font-size:11.5px;width:110px"/></td>'
+        +'<td style="padding:4px 5px;border-bottom:1px solid var(--border-light)"><input type="text" id="cseal_'+i+'" value="'+(c.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:96px"/></td>'
+        +'<td style="padding:4px 5px;border-bottom:1px solid var(--border-light)"><input type="text" id="ctype_'+i+'" value="'+(c.type||r.typeCont||'')+'" placeholder="40HC" style="font-size:11.5px;width:60px"/></td>'
+        +'<td style="padding:4px 5px;border-bottom:1px solid var(--border-light)"><input type="number" id="cpkg_'+i+'" value="'+(c.pkg||'')+'" placeholder="0" min="0" style="font-size:11.5px;width:60px;text-align:right"/></td>'
+        +'<td style="padding:4px 5px;border-bottom:1px solid var(--border-light)"><input type="number" id="cnw_'+i+'" value="'+(c.nw||'')+'" placeholder="0" min="0" style="font-size:11.5px;width:72px;text-align:right" oninput="autoGw('+i+')"/></td>'
+        +'<td style="padding:4px 5px;border-bottom:1px solid var(--border-light)"><input type="number" id="cgw_'+i+'" value="'+(c.gw||'')+'" placeholder="0" min="0" style="font-size:11.5px;width:72px;text-align:right"/></td>'
+        +'<td style="padding:4px 5px;border-bottom:1px solid var(--border-light)"><input type="date" id="cdate_'+i+'" value="'+(c.date||r.etd||'')+'" style="font-size:11px;width:108px"/></td>'
         +'</tr>';
     }
     bodyHtml='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">'
-      +'<div style="font-size:12px;color:var(--text-secondary)">Số lượng container: <strong>'+vol+'</strong> (chỉnh trong mục Sửa lô hàng → Vol)</div>'
+      +'<div style="font-size:12px;color:var(--text-secondary)">Số lượng container: <strong>'+vol+'</strong></div>'
+      +'<div style="display:flex;align-items:center;gap:6px"><label style="font-size:11px;color:var(--text-secondary)">Đơn vị Package:</label><select id="cPkgUnit" style="font-size:12px;width:100px">'+['Bales','Bags','Conts','Cartons','Pallets','Pcs','Rolls'].map(function(u){return '<option'+(u===(r.pkgUnit||'Bales')?' selected':'')+'>'+u+'</option>';}).join('')+'</select></div>'
       +'</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:.75rem"><div><label class="lbl">Số tờ khai</label><input type="text" id="csotk" value="'+(r.soTkhai||'')+'" placeholder="Số tờ khai XK" style="font-size:12px"/></div><div><label class="lbl">Mã chi cục</label><input type="text" id="cmacc" value="'+(r.maChiCuc||'')+'" placeholder="02CV..." style="font-size:12px"/></div><div><label class="lbl">Phân luồng</label><input type="text" id="cpl" value="'+(r.phanLuong||'')+'" placeholder="Xanh/Vàng/Đỏ" style="font-size:12px"/></div></div>'
       +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
       +'<table style="width:100%;border-collapse:collapse;font-size:12px">'
       +'<thead><tr>'
-        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">#</th>'
-        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Container No</th>'
-        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Seal No</th>'
-        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:left;text-transform:uppercase;letter-spacing:.3px">Type</th>'
-        +'<th style="padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-align:right;text-transform:uppercase;letter-spacing:.3px">G.W (KG)</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px;text-align:center;width:30px">#</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px">Cont No</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px">Seal</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px">Type</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px;text-align:right">No. Package</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px;text-align:right">N.W (KG)</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px;text-align:right">G.W (KG)</th>'
+        +'<th style="padding:6px 7px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px">Stuff Date</th>'
       +'</tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
       +'<div style="margin-top:.5rem;padding:6px 10px;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:12px;color:var(--text-secondary)">'
@@ -825,6 +933,7 @@ function renderDetailPanel(r,tt){
         +'<button class="btn" onclick="showKhaiEport()" title="Xuất nội dung khai eport"><i class="ti ti-file-export"></i> Khai Eport</button>'
         +'<button class="btn" onclick="showCheckEport()" title="Danh sách container để check eport"><i class="ti ti-clipboard-check"></i> Check Eport</button>'
         +'<label class="btn" style="cursor:pointer" title="Nhập container từ Excel"><i class="ti ti-table-import"></i> Nhập từ Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importContFromExcel(this)"/></label>'
+        +'<button class="btn" data-id="'+detailId+'" data-tt="'+detailTt+'" onclick="openDocMakerTab(this.dataset.id,this.dataset.tt)" title="Mở Document Maker" style="color:var(--blue);border-color:var(--blue)"><i class="ti ti-file-certificate"></i> Document Maker</button>'
       +'</div>'
       +'<button class="btn pri" onclick="saveContSeal()"><i class="ti ti-check"></i> Lưu</button>'
     +'</div>';
@@ -1116,12 +1225,13 @@ function renderDetailPanel(r,tt){
   }
 
   g('detailPanel').innerHTML=`
+  <div class="dpanel-tabbar" id="dpanelTabbar"></div>
   <div class="detail-hdr">
     <div>
       <div style="font-size:15px;font-weight:600">${r.bookingNo||'—'} ${statusBadge} ${r.jobNo?`<span style="font-size:10px;padding:2px 8px;border-radius:20px;background:var(--bg-secondary);color:var(--blue);font-weight:700;border:1px solid var(--border-light)">${r.jobNo}</span>`:''}</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${r.shipper||r.supplier||''} ${r.pol&&r.pod?'| '+r.pol+' → '+r.pod:''}</div>
     </div>
-    <button class="rac" onclick="closeDetail()" style="font-size:18px;flex-shrink:0"><i class="ti ti-x"></i></button>
+    <button class="rac" onclick="closeTab(_activeTabKey)" style="font-size:18px;flex-shrink:0" title="Đóng thẻ này"><i class="ti ti-x"></i></button>
   </div>
   <div class="dtabs">${tabsHtml}</div>
   <div class="detail-body">${bodyHtml}</div>`;
@@ -1129,6 +1239,8 @@ function renderDetailPanel(r,tt){
   // After render, update fp total if on price tab
   if(detailTab==='price') setTimeout(updDetailFpTotal, 50);
   if(detailTab==='costing') setTimeout(updateCostingTotal, 100);
+
+  renderDpanelTabs();
 }
 
 function addCustomSvcDetail(){
@@ -1179,20 +1291,33 @@ function openDebitNotePopup(){
   openInvoice(detailId, detailTt, tempR);
 }
 
+function autoGw(i){
+  const nw=parseFloat(g('cnw_'+i)?.value)||0;
+  const gwEl=g('cgw_'+i);
+  if(gwEl&&nw>0&&!gwEl.value)gwEl.value=nw+70;
+}
+window.autoGw=autoGw;
+
 async function saveContSeal(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const vol=parseInt(r.vol)||1;
+  const existing=r.containers||[];
   const containers=[];
-  for(let i=0;i<Math.max(vol,1);i++){
+  const maxRows=Math.max(vol,existing.length||1);
+  for(let i=0;i<maxRows;i++){
     const no=g('cno_'+i)?.value?.trim()||'';
     const seal=g('cseal_'+i)?.value?.trim()||'';
     const type=g('ctype_'+i)?.value?.trim()||'';
+    const pkg=parseFloat(g('cpkg_'+i)?.value)||0;
+    const nw=parseFloat(g('cnw_'+i)?.value)||0;
     const gw=parseFloat(g('cgw_'+i)?.value)||0;
-    containers.push({no,seal,type,gw});
+    const date=g('cdate_'+i)?.value||'';
+    containers.push({no,seal,type,pkg,nw,gw,date});
   }
+  const pkgUnit=g('cPkgUnit')?.value||'Bales';
   setLoading(true,'Đang lưu...');
   try{
-    await fsSet(colName(detailTt),detailId,{containers,soTkhai:g('csotk')?.value||'',maChiCuc:g('cmacc')?.value||'',phanLuong:g('cpl')?.value||'',updatedAt:Date.now(),updatedBy:currentUser.email});
+    await fsSet(colName(detailTt),detailId,{containers,pkgUnit,soTkhai:g('csotk')?.value||'',maChiCuc:g('cmacc')?.value||'',phanLuong:g('cpl')?.value||'',updatedAt:Date.now(),updatedBy:currentUser.email});
     toast('Đã lưu thông tin container/seal');
     const fresh=cache[detailTt].find(x=>x._id===detailId)||r;
     fresh.containers=containers;
@@ -1329,7 +1454,7 @@ function openLot(id, tt){
     if(c.k==='tenHang'){
       const names=window._cargoNames||[];
       if(names.length){
-        const opts=names.map(n=>`<option${n===val?' selected':''}>${n}</option>`).join('');
+        const opts=names.map(n=>{const nm=n.name||n;return `<option${nm===val?' selected':''}>${nm}</option>`;}).join('');
         return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"><option value="">— Chọn tên hàng —</option>${opts}</select></div>`;
       }
       return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"/></div>`;
@@ -2693,8 +2818,14 @@ tr:hover td{background:var(--bg-secondary)}
 .perm-toggle::after{content:'';position:absolute;top:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
 .perm-toggle.on::after{left:19px}.perm-toggle.off::after{left:3px}
 /* DETAIL PANEL */
-.detail-panel{position:fixed;top:0;right:min(-780px,-95vw);width:min(780px,95vw);height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:right .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
+.detail-panel{position:fixed;top:0;right:min(-1100px,-98vw);width:min(1100px,98vw);height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:right .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
 .detail-panel.open{right:0}
+.dpanel-tabbar{display:flex;align-items:center;gap:2px;background:var(--bg-secondary);border-bottom:1px solid var(--border-light);padding:6px 8px 0;position:sticky;top:0;z-index:10;overflow-x:auto;flex-wrap:nowrap}
+.dpanel-tab{display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-primary);border:1px solid var(--border-light);border-bottom:none;border-radius:8px 8px 0 0;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;color:var(--text-secondary);max-width:200px}
+.dpanel-tab.active{background:var(--bg-primary);color:var(--blue);border-top:2px solid var(--blue);margin-bottom:-1px}
+.dpanel-tab .tabname{overflow:hidden;text-overflow:ellipsis;max-width:140px}
+.dpanel-tab .tabclose{font-size:13px;opacity:.5;border-radius:50%;width:16px;height:16px;display:flex;align-items:center;justify-content:center}
+.dpanel-tab .tabclose:hover{opacity:1;background:var(--border-light)}
 .detail-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:149}
 .detail-backdrop.open{display:block}
 .detail-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:1.25rem 1.25rem .75rem;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:var(--bg-primary);z-index:1}
@@ -3087,13 +3218,15 @@ function renderSettings(){
     +'<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border-light)"/>'
     +'<div class="table-card" style="padding:1.25rem">'
       +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-package" style="font-size:14px"></i>Danh sách Tên hàng</div>'
-      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Nhập tên hàng để chọn nhanh khi tạo lô hàng mới</div>'
-      +'<textarea id="cargoNamesInput" rows="6" placeholder="Mỗi tên hàng một dòng\nVí dụ:\nXơ dừa\nHàng khô\nHạt tiêu" style="font-size:12px;resize:vertical">'+(window._cargoNames||[]).join('\n')+'</textarea>'
+      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Mỗi tên hàng gồm: Tên (VN), Tên tiếng Anh, và Specifications (dùng cho Document Maker)</div>'
+      +'<div id="cargoNamesList"></div>'
       +'<div style="display:flex;gap:8px;margin-top:.75rem">'
+        +'<button class="btn" onclick="addCargoNameRow()"><i class="ti ti-plus"></i> Thêm tên hàng</button>'
         +'<button class="btn pri" onclick="saveCargoNames()"><i class="ti ti-check"></i> Lưu danh sách tên hàng</button>'
       +'</div>'
-    +'</div'
+    +'</div>'
     +'</div>';
+  renderCargoNamesList();
 }
 
 function addBankRow(prefix){
@@ -3143,8 +3276,14 @@ async function saveBankAccounts(){
 
 
 async function saveCargoNames(){
-  const raw=g('cargoNamesInput')?.value||'';
-  const names=raw.split('\n').map(s=>s.trim()).filter(Boolean);
+  const rows=document.querySelectorAll('#cargoNamesList [data-cargo-row]');
+  const names=[];
+  rows.forEach(function(row){
+    const name=row.querySelector('.cargo-name')?.value.trim()||'';
+    const enName=row.querySelector('.cargo-en')?.value.trim()||'';
+    const specs=row.querySelector('.cargo-specs')?.value||'';
+    if(name||enName)names.push({name,enName,specs});
+  });
   window._cargoNames=names;
   setLoading(true,'Đang lưu...');
   try{
@@ -3154,6 +3293,8 @@ async function saveCargoNames(){
   setLoading(false);
 }
 window.saveCargoNames=saveCargoNames;
+window.addCargoNameRow=addCargoNameRow;
+window.renderCargoNamesList=renderCargoNamesList;
 
 /* ══ CNEE MANAGEMENT (full fields) ══ */
 async function openCneeEditor(shipperKey){
@@ -4363,7 +4504,7 @@ function showEportModal(title, text){
 function importContFromExcel(input){
   const file=input.files[0]; if(!file)return;
   const XLSX=window.XLSX;
-  if(!XLSX){toast('Đang tải XLSX...','error');return;}
+  if(!XLSX){toast('Đang tải thư viện XLSX, thử lại sau','error');return;}
   const reader=new FileReader();
   reader.onload=function(e){
     try{
@@ -4371,26 +4512,35 @@ function importContFromExcel(input){
       const ws=wb.Sheets[wb.SheetNames[0]];
       const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
       if(rows.length<2){toast('File không có dữ liệu','error');return;}
-      // Auto-detect columns: look for Container/Seal/GW headers
       const header=rows[0].map(h=>(h+'').toLowerCase());
-      const contIdx=header.findIndex(h=>h.includes('cont'));
-      const sealIdx=header.findIndex(h=>h.includes('seal'));
-      const gwIdx=header.findIndex(h=>h.includes('gw')||h.includes('weight'));
-      const typeIdx=header.findIndex(h=>h.includes('type'));
-      if(contIdx<0){toast('Không tìm thấy cột Container No','error');return;}
+      const find=function(keys){for(const k of keys){const idx=header.findIndex(h=>h.includes(k));if(idx>=0)return idx;}return -1;};
+      const contIdx=find(['cont']);
+      const sealIdx=find(['seal']);
+      const typeIdx=find(['type','size']);
+      const pkgIdx=find(['package','pkg','bale','bag','number of']);
+      const nwIdx=find(['net','n.w','nw']);
+      const gwIdx=find(['gross','g.w','gw','weight']);
+      const dateIdx=find(['date','stuff']);
+      if(contIdx<0){toast('Không tìm thấy cột Container No trong file','error');return;}
       let count=0;
       rows.slice(1).forEach(function(row,i){
         const no=(row[contIdx]||'').toString().trim().toUpperCase();
         if(!no)return;
-        const contInput=g('cno_'+i);
-        if(!contInput)return;
-        contInput.value=no;
-        if(sealIdx>=0){const si=g('cseal_'+i);if(si)si.value=(row[sealIdx]||'').toString().trim();}
-        if(gwIdx>=0){const gi=g('cgw_'+i);if(gi)gi.value=parseFloat(row[gwIdx])||'';}
-        if(typeIdx>=0){const ti=g('ctype_'+i);if(ti)ti.value=(row[typeIdx]||'').toString().trim();}
+        const set=function(id,val){const el=g(id);if(el&&val!=='')el.value=val;};
+        set('cno_'+i,no);
+        if(sealIdx>=0)set('cseal_'+i,(row[sealIdx]||'').toString().trim());
+        if(typeIdx>=0)set('ctype_'+i,(row[typeIdx]||'').toString().trim());
+        if(pkgIdx>=0)set('cpkg_'+i,parseFloat(row[pkgIdx])||'');
+        if(nwIdx>=0)set('cnw_'+i,parseFloat(row[nwIdx])||'');
+        if(gwIdx>=0)set('cgw_'+i,parseFloat(row[gwIdx])||'');
+        if(dateIdx>=0){
+          let dv=row[dateIdx];
+          if(typeof dv==='number'){const dt=XLSX.SSF?XLSX.SSF.parse_date_code(dv):null;if(dt)dv=dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
+          set('cdate_'+i,(dv||'').toString().slice(0,10));
+        }
         count++;
       });
-      toast('Đã nhập '+count+' container từ Excel');
+      toast('Đã nhập '+count+' container từ Excel (Cont/Seal/Pkg/NW/GW/Date)');
     }catch(err){toast('Lỗi đọc file: '+err.message,'error');}
   };
   reader.readAsArrayBuffer(file);
@@ -4406,8 +4556,11 @@ window.showEportModal=showEportModal;
 
 let _dmLot=null;
 
+let _dmHost=null;
 function renderDocMaker(){
-  const pg=g('page-docs'); if(!pg)return;
+  let pg=_dmHost||g('page-docs');
+  _dmHost=null;
+  if(!pg)return;
   pg.innerHTML=`
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem">
   <i class="ti ti-file-certificate" style="font-size:18px;color:var(--blue)"></i>
@@ -4441,6 +4594,7 @@ function renderDocMaker(){
 
     <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📦 Hàng hóa (nhập thủ công)</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <div style="grid-column:1/-1"><label class="lbl">Chọn tên hàng (từ Cài đặt)</label><select id="dm_goodsSel" onchange="dmPickGoods()" style="font-size:12px"><option value="">— Chọn / nhập tay —</option></select></div>
       <div style="grid-column:1/-1"><label class="lbl">Tên hàng (EN)</label><input type="text" id="dm_goods" placeholder="COCONUT PEAT" style="font-size:12px"/></div>
       <div style="grid-column:1/-1"><label class="lbl">Specifications (mỗi dòng 1 ý)</label><textarea id="dm_specs" rows="4" placeholder="+ Product: Unwashed&#10;+ Moisture: 12-18% Max." style="font-size:11.5px;resize:vertical"></textarea></div>
       <div><label class="lbl">Unit (BAGS/BALES…)</label><input type="text" id="dm_unit" value="BAGS" style="font-size:12px"/></div>
@@ -4520,6 +4674,7 @@ function dmPickLot(id,tt){
   g('dm_cno').value=r.jobNo||'';
   g('dm_ino').value=r.dnNo||'';
   g('dm_goods').value=(r.tenHang||'').toUpperCase();
+  if(r.pkgUnit)g('dm_unit').value=(r.pkgUnit||'BAGS').toUpperCase();
   g('dm_qty').value=r.vol?'':''; // user enters
 
   const shipperKey=r.shipper||r.supplier||'';
@@ -4539,16 +4694,32 @@ function dmPickLot(id,tt){
       +'<td style="padding:2px 4px;border:1px solid var(--border-light);text-align:center;font-size:11px">'+(i+1)+'</td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_cont_'+i+'" value="'+c.no+'" style="font-size:11px;width:108px"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_seal_'+i+'" value="'+(c.seal||'')+'" style="font-size:11px;width:92px"/></td>'
-      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_pkg_'+i+'" placeholder="pkg" style="font-size:11px;width:50px;text-align:center" oninput="dmUpdateTotals()"/></td>'
-      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_nw_'+i+'" placeholder="NW" style="font-size:11px;width:62px;text-align:right" oninput="dmNWChange('+i+')"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_pkg_'+i+'" value="'+(c.pkg||'')+'" placeholder="pkg" style="font-size:11px;width:50px;text-align:center" oninput="dmUpdateTotals()"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_nw_'+i+'" value="'+(c.nw||'')+'" placeholder="NW" style="font-size:11px;width:62px;text-align:right" oninput="dmNWChange('+i+')"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_gw_'+i+'" value="'+(gw||'')+'" placeholder="GW" style="font-size:11px;width:62px;text-align:right" oninput="dmUpdateTotals()"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="date" id="dmc_date_'+i+'" value="'+(r.etd||'')+'" style="font-size:11px;width:106px"/></td>'
     +'</tr>';
   }).join('');
   dmUpdateTotals();
   g('dmForm').style.display='block';
+  // Populate goods dropdown from cargo names
+  const gs=g('dm_goodsSel');
+  if(gs){
+    const items=window._cargoNames||[];
+    gs.innerHTML='<option value="">— Chọn / nhập tay —</option>'+items.map(function(it,i){return '<option value="'+i+'">'+(it.enName||it.name||'')+'</option>';}).join('');
+  }
   ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI'].forEach(function(id){const b=g(id);if(b){b.disabled=true;b.style.opacity='.4';}});
 }
+
+function dmPickGoods(){
+  const sel=g('dm_goodsSel'); const idx=sel?.value;
+  if(idx===''||idx==null)return;
+  const it=(window._cargoNames||[])[parseInt(idx)];
+  if(!it)return;
+  g('dm_goods').value=(it.enName||it.name||'').toUpperCase();
+  g('dm_specs').value=it.specs||'';
+}
+window.dmPickGoods=dmPickGoods;
 
 function dmOnCneeChange(){
   const sel=g('dm_cnee'); const idx=sel?.value;
