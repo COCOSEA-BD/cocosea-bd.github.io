@@ -500,11 +500,11 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  ['xuat','nhap','deadline','cong-no','doi-tac','users','docs','costing-report','ocean','settings'].forEach(id=>{
+  ['xuat','nhap','deadline','cong-no','doi-tac','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
-  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','users':'Người dùng'};
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','users':'Người dùng','quote':'Quotation'};
   g('pageTitle').textContent=titles[t]||t;
   if(t==='xuat'||t==='nhap') renderLot(t);
   if(t==='deadline') renderDeadline();
@@ -514,6 +514,7 @@ function goTab(t){
   if(t==='docs') renderDocMaker();
   if(t==='costing-report') renderCostingReport();
   if(t==='ocean') renderOcean();
+  if(t==='quote') renderQuote();
   if(t==='settings') renderSettings();
 }
 
@@ -3066,6 +3067,7 @@ tr:hover td{background:var(--bg-secondary)}
     <button class="sb-item" id="sb-docs" onclick="goTab('docs')"><i class="ti ti-file-certificate"></i> Document Maker</button>
     <button class="sb-item" id="sb-costing" onclick="goTab('costing-report')"><i class="ti ti-calculator"></i> Costing Report</button>
     <button class="sb-item" id="sb-ocean" onclick="goTab('ocean')"><i class="ti ti-anchor"></i> New Freight</button>
+    <button class="sb-item" id="sb-quote" onclick="goTab('quote')"><i class="ti ti-file-dollar"></i> Quotation</button>
     <button class="sb-item" id="sb-settings" onclick="goTab('settings')"><i class="ti ti-settings"></i> Cài đặt</button>
     <div class="sb-footer">
       <div class="user-row">
@@ -3098,6 +3100,7 @@ tr:hover td{background:var(--bg-secondary)}
       <div id="page-docs" style="display:none"></div>
       <div id="page-costing-report" style="display:none"></div>
       <div id="page-ocean" style="display:none"></div>
+      <div id="page-quote" style="display:none"></div>
       <div id="page-settings" style="display:none"></div>
     </div>
   </div>
@@ -4163,6 +4166,406 @@ function exportOceanExcel(){
 }
 
 window.renderOcean=renderOcean;
+
+/* ═══════════════════════════════════════════════════════════════
+   MODULE: QUOTATION (Báo giá logistics)
+═══════════════════════════════════════════════════════════════ */
+
+const QUOTE_LOCAL_CHARGES=['THC','Bill Fee','Seal Fee','AMS','Telex Release'];
+const QUOTE_SERVICES=['Customs Clearance','Phytosanitary Certificate','Fumigation Certificate','Certificate of Origin','Inland Trucking (incl. lift on/off)','International Courier Service'];
+const QUOTE_CONT_TYPES=['20DC','40HC','20RF','40RF'];
+let _quoteCargoTab='DC';
+
+function renderQuote(){
+  const pg=g('page-quote'); if(!pg)return;
+  // Initialize state if first time
+  if(!window._qTypes)window._qTypes={};
+  if(!window._qOcean)window._qOcean={};
+  if(!window._qLocal)window._qLocal={};
+  if(!window._qService)window._qService={};
+  const shippers=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname).sort();
+  const carriers=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname).sort();
+  const today=new Date().toISOString().slice(0,10);
+  const valid30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+
+  pg.innerHTML=`
+<style>
+  .qt-wrap{max-width:1100px;margin:0 auto;font-family:'Segoe UI',system-ui,sans-serif}
+  .qt-hero{background:linear-gradient(135deg,#0C2C52 0%,#185FA5 100%);border-radius:16px;padding:1.5rem 1.75rem;color:#fff;margin-bottom:1.25rem;position:relative;overflow:hidden}
+  .qt-hero::after{content:'';position:absolute;right:-30px;top:-30px;width:160px;height:160px;background:rgba(255,255,255,.06);border-radius:50%}
+  .qt-hero::before{content:'';position:absolute;right:40px;bottom:-50px;width:120px;height:120px;background:rgba(255,255,255,.04);border-radius:50%}
+  .qt-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:14px;padding:1.25rem 1.4rem;margin-bottom:1.1rem;box-shadow:0 1px 3px rgba(12,44,82,.04)}
+  .qt-card-hd{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700;color:#0C2C52;text-transform:uppercase;letter-spacing:.6px;margin-bottom:1rem;padding-bottom:.6rem;border-bottom:2px solid #E6F1FB}
+  .qt-card-hd .qt-ic{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#185FA5,#0C2C52);display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px}
+  .qt-grid{display:grid;gap:12px}
+  .qt-grid-3{grid-template-columns:repeat(3,1fr)}
+  .qt-grid-2{grid-template-columns:repeat(2,1fr)}
+  .qt-fld label{display:block;font-size:10.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+  .qt-fld input,.qt-fld select,.qt-fld textarea{width:100%;box-sizing:border-box;font-size:12.5px;padding:8px 11px;border:1px solid var(--border-light);border-radius:9px;background:var(--bg-secondary);transition:border .15s}
+  .qt-fld input:focus,.qt-fld select:focus,.qt-fld textarea:focus{outline:none;border-color:#185FA5;background:#fff}
+  .qt-tabs{display:flex;gap:8px;margin-bottom:1rem}
+  .qt-tab{flex:1;padding:12px;border:2px solid var(--border-light);border-radius:11px;background:var(--bg-secondary);cursor:pointer;display:flex;align-items:center;gap:10px;transition:all .15s}
+  .qt-tab.active{border-color:#185FA5;background:#E6F1FB}
+  .qt-tab .qt-tab-ic{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;color:#fff}
+  .qt-tab-dc .qt-tab-ic{background:linear-gradient(135deg,#185FA5,#0C2C52)}
+  .qt-tab-rf .qt-tab-ic{background:linear-gradient(135deg,#0F6E56,#085041)}
+  .qt-tab-ttl{font-size:13px;font-weight:700;color:var(--text-primary)}
+  .qt-tab-sub{font-size:10.5px;color:var(--text-secondary)}
+  .qt-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .qt-table th{background:#0C2C52;color:#fff;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;text-align:left}
+  .qt-table th:first-child{border-radius:8px 0 0 0}
+  .qt-table th:last-child{border-radius:0 8px 0 0}
+  .qt-table td{padding:6px 9px;border-bottom:1px solid var(--border-light)}
+  .qt-table input,.qt-table select{width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:var(--bg-secondary)}
+  .qt-table tr.qt-off{opacity:.4}
+  .qt-sum{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .qt-sum-box{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:12px;padding:14px 16px}
+  .qt-sum-box.grand{background:linear-gradient(135deg,#0C2C52,#185FA5);border:none;color:#fff}
+  .qt-sum-lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;opacity:.85;margin-bottom:5px}
+  .qt-sum-val{font-size:19px;font-weight:800}
+  .qt-chk{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border-light);border-radius:10px;background:var(--bg-secondary);margin-bottom:8px}
+  .qt-chk input[type=checkbox]{width:17px;height:17px;cursor:pointer;flex-shrink:0}
+  .qt-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-top:1.25rem}
+  .qt-btn{display:flex;align-items:center;gap:7px;padding:11px 18px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--border-light);background:var(--bg-primary);color:var(--text-primary);transition:all .15s}
+  .qt-btn:hover{transform:translateY(-1px);box-shadow:0 3px 8px rgba(12,44,82,.12)}
+  .qt-btn.primary{background:linear-gradient(135deg,#185FA5,#0C2C52);color:#fff;border:none}
+  .qt-btn.green{background:#0F6E56;color:#fff;border:none}
+  @media(max-width:880px){.qt-grid-3,.qt-grid-2{grid-template-columns:1fr}.qt-sum{grid-template-columns:1fr 1fr}.qt-tabs{flex-direction:column}}
+</style>
+
+<div class="qt-wrap">
+  <div class="qt-hero">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1">
+      <div>
+        <div style="font-size:11px;font-weight:600;letter-spacing:1.5px;opacity:.8;text-transform:uppercase">Logistics Quotation</div>
+        <div style="font-size:23px;font-weight:800;margin-top:3px">Báo Giá Vận Tải</div>
+        <div style="font-size:12px;opacity:.85;margin-top:4px">Tạo báo giá chuyên nghiệp cho khách hàng</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:34px;opacity:.9"><i class="ti ti-ship"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1. THÔNG TIN CHUNG -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-info-circle"></i></span>Thông tin chung</div>
+    <div class="qt-grid qt-grid-3">
+      <div class="qt-fld"><label>Quote No</label><input type="text" id="q_no" value="${quoteNextNo()}"/></div>
+      <div class="qt-fld"><label>Date</label><input type="date" id="q_date" value="${today}"/></div>
+      <div class="qt-fld"><label>Sales Person</label><input type="text" id="q_sales" value="${(currentProfile&&currentProfile.name)||''}" placeholder="Tên sales"/></div>
+      <div class="qt-fld"><label>Customer Name</label><select id="q_customer"><option value="">— Chọn khách hàng —</option>${shippers.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      <div class="qt-fld"><label>Carrier</label><select id="q_carrier"><option value="">— Chọn carrier —</option>${carriers.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      <div class="qt-fld"><label>Commodity</label><input type="text" id="q_commodity" placeholder="VD: Coconut fiber"/></div>
+      <div class="qt-fld"><label>POL (Port of Loading)</label><input type="text" id="q_pol" value="HO CHI MINH, VIETNAM"/></div>
+      <div class="qt-fld"><label>POD (Port of Discharge)</label><input type="text" id="q_pod" placeholder="VD: NANSHA, CHINA"/></div>
+      <div class="qt-fld"><label>Transit Time</label><input type="text" id="q_transit" placeholder="VD: 5-7 days"/></div>
+      <div class="qt-fld"><label>Valid Until</label><input type="date" id="q_valid" value="${valid30}"/></div>
+    </div>
+  </div>
+
+  <!-- 2. LOẠI HÀNG -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-box"></i></span>Loại hàng</div>
+    <div class="qt-tabs">
+      <div class="qt-tab qt-tab-dc active" id="qtab_DC" onclick="quoteSwitchCargo('DC')">
+        <div class="qt-tab-ic"><i class="ti ti-box"></i></div>
+        <div><div class="qt-tab-ttl">Dry Container (DC)</div><div class="qt-tab-sub">20DC / 40HC</div></div>
+      </div>
+      <div class="qt-tab qt-tab-rf" id="qtab_RF" onclick="quoteSwitchCargo('RF')">
+        <div class="qt-tab-ic"><i class="ti ti-snowflake"></i></div>
+        <div><div class="qt-tab-ttl">Reefer Container (RF)</div><div class="qt-tab-sub">20RF / 40RF</div></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap" id="qtypeChecks"></div>
+  </div>
+
+  <!-- 3. OCEAN FREIGHT -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-anchor"></i></span>Ocean Freight</div>
+    <table class="qt-table">
+      <thead><tr><th style="width:22%">Container Type</th><th style="width:16%">Currency</th><th style="width:22%">Unit Price</th><th>Remark</th></tr></thead>
+      <tbody id="qOceanBody"></tbody>
+    </table>
+  </div>
+
+  <!-- 4. LOCAL CHARGE -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-receipt"></i></span>Local Charge</div>
+    <table class="qt-table">
+      <thead><tr><th style="width:22%">Charge Name</th><th style="width:14%">Currency</th><th style="width:18%">Amount</th><th style="width:14%">Unit</th><th>Remark</th></tr></thead>
+      <tbody id="qLocalBody"></tbody>
+    </table>
+  </div>
+
+  <!-- 5. LOCAL SERVICE -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-list-check"></i></span>Local Service</div>
+    <div id="qServiceBody"></div>
+  </div>
+
+  <!-- 6. TOTAL SUMMARY -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-calculator"></i></span>Total Summary</div>
+    <div class="qt-sum">
+      <div class="qt-sum-box"><div class="qt-sum-lbl">Ocean Freight</div><div class="qt-sum-val" id="qSumOcean" style="color:#185FA5">0</div></div>
+      <div class="qt-sum-box"><div class="qt-sum-lbl">Local Charge</div><div class="qt-sum-val" id="qSumLocal" style="color:#185FA5">0</div></div>
+      <div class="qt-sum-box"><div class="qt-sum-lbl">Local Service</div><div class="qt-sum-val" id="qSumService" style="color:#185FA5">0</div></div>
+      <div class="qt-sum-box grand"><div class="qt-sum-lbl">Grand Total</div><div class="qt-sum-val" id="qSumGrand">0</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-top:10px"><i class="ti ti-info-circle"></i> Tổng theo từng loại tiền tệ. Quy đổi tham khảo nếu cần.</div>
+  </div>
+
+  <!-- 7. GHI CHÚ -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-note"></i></span>Ghi chú</div>
+    <div class="qt-grid qt-grid-2">
+      <div class="qt-fld"><label>Payment Term</label><input type="text" id="q_payment" placeholder="VD: TT in advance"/></div>
+      <div class="qt-fld"><label>Free Time</label><input type="text" id="q_freetime" placeholder="VD: 14 days at POD"/></div>
+      <div class="qt-fld" style="grid-column:1/-1"><label>Routing</label><input type="text" id="q_routing" placeholder="VD: HCMC → Nansha (direct)"/></div>
+      <div class="qt-fld" style="grid-column:1/-1"><label>Special Note</label><textarea id="q_note" rows="3" placeholder="Ghi chú đặc biệt..."></textarea></div>
+    </div>
+  </div>
+
+  <div class="qt-actions">
+    <button class="qt-btn" onclick="quoteSave()"><i class="ti ti-device-floppy"></i> Save Quote</button>
+    <button class="qt-btn primary" onclick="quoteExportPDF()"><i class="ti ti-file-type-pdf"></i> Export PDF</button>
+    <button class="qt-btn green" onclick="quoteSendEmail()"><i class="ti ti-mail"></i> Send Email</button>
+    <button class="qt-btn" onclick="quoteExportPDF()"><i class="ti ti-printer"></i> Print Quote</button>
+  </div>
+</div>`;
+
+  quoteRenderTypeChecks();
+  quoteRenderOcean();
+  quoteRenderLocal();
+  quoteRenderServices();
+  quoteRecalc();
+}
+
+function quoteSwitchCargo(t){
+  _quoteCargoTab=t;
+  g('qtab_DC').classList.toggle('active',t==='DC');
+  g('qtab_RF').classList.toggle('active',t==='RF');
+  quoteRenderTypeChecks();
+}
+
+function quoteRenderTypeChecks(){
+  const box=g('qtypeChecks'); if(!box)return;
+  const types=_quoteCargoTab==='DC'?['20DC','40HC']:['20RF','40RF'];
+  box.innerHTML=types.map(function(t){
+    const checked=window._qTypes&&window._qTypes[t]?'checked':'';
+    return '<label class="qt-chk" style="flex:0 0 auto"><input type="checkbox" data-qtype="'+t+'" '+checked+' onchange="quoteToggleType(this)"/> <span style="font-weight:600">'+t+'</span></label>';
+  }).join('');
+}
+
+function quoteToggleType(el){
+  window._qTypes=window._qTypes||{};
+  window._qTypes[el.dataset.qtype]=el.checked;
+  quoteRenderOcean();
+  quoteRecalc();
+}
+
+function quoteRenderOcean(){
+  const body=g('qOceanBody'); if(!body)return;
+  const types=Object.keys(window._qTypes||{}).filter(function(t){return window._qTypes[t];});
+  if(!types.length){body.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--text-tertiary);padding:14px">Chọn loại container ở phần trên</td></tr>';return;}
+  body.innerHTML=types.map(function(t){
+    const sv=(window._qOcean&&window._qOcean[t])||{};
+    return '<tr>'
+      +'<td style="font-weight:700;color:#0C2C52">'+t+'</td>'
+      +'<td><select data-qoc="'+t+'" data-f="cur" oninput="quoteOceanInput(this)">'+['USD','VND','CNY','EUR'].map(function(c){return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('')+'</select></td>'
+      +'<td><input type="number" data-qoc="'+t+'" data-f="price" value="'+(sv.price||'')+'" placeholder="0" oninput="quoteOceanInput(this)"/></td>'
+      +'<td><input type="text" data-qoc="'+t+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteOceanInput(this)"/></td>'
+    +'</tr>';
+  }).join('');
+}
+
+function quoteOceanInput(el){
+  window._qOcean=window._qOcean||{};
+  const t=el.dataset.qoc;
+  window._qOcean[t]=window._qOcean[t]||{};
+  window._qOcean[t][el.dataset.f]=el.value;
+  quoteRecalc();
+}
+
+function quoteRenderLocal(){
+  const body=g('qLocalBody'); if(!body)return;
+  body.innerHTML=QUOTE_LOCAL_CHARGES.map(function(name){
+    const sv=(window._qLocal&&window._qLocal[name])||{};
+    return '<tr>'
+      +'<td style="font-weight:600">'+name+'</td>'
+      +'<td><select data-qlc="'+name+'" data-f="cur" oninput="quoteLocalInput(this)">'+['USD','VND','CNY','EUR'].map(function(c){return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('')+'</select></td>'
+      +'<td><input type="number" data-qlc="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteLocalInput(this)"/></td>'
+      +'<td><input type="text" data-qlc="'+name+'" data-f="unit" value="'+(sv.unit||'/cont').replace(/"/g,'&quot;')+'" oninput="quoteLocalInput(this)"/></td>'
+      +'<td><input type="text" data-qlc="'+name+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteLocalInput(this)"/></td>'
+    +'</tr>';
+  }).join('');
+}
+
+function quoteLocalInput(el){
+  window._qLocal=window._qLocal||{};
+  const n=el.dataset.qlc;
+  window._qLocal[n]=window._qLocal[n]||{};
+  window._qLocal[n][el.dataset.f]=el.value;
+  quoteRecalc();
+}
+
+function quoteRenderServices(){
+  const body=g('qServiceBody'); if(!body)return;
+  body.innerHTML=QUOTE_SERVICES.map(function(name,i){
+    const sv=(window._qService&&window._qService[name])||{};
+    const on=sv.on?'checked':'';
+    return '<div class="qt-chk" style="display:grid;grid-template-columns:auto 1fr 120px 90px 1.4fr;gap:10px;align-items:center">'
+      +'<input type="checkbox" data-qsv="'+name+'" data-f="on" '+on+' onchange="quoteServiceInput(this)"/>'
+      +'<span style="font-weight:600;font-size:12.5px">'+name+'</span>'
+      +'<input type="number" data-qsv="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="Giá" oninput="quoteServiceInput(this)" style="font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:#fff"/>'
+      +'<select data-qsv="'+name+'" data-f="cur" oninput="quoteServiceInput(this)" style="font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:#fff">'+['USD','VND','CNY','EUR'].map(function(c){return '<option'+(c===(sv.cur||'VND')?' selected':'')+'>'+c+'</option>';}).join('')+'</select>'
+      +'<input type="text" data-qsv="'+name+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteServiceInput(this)" style="font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:#fff"/>'
+    +'</div>';
+  }).join('');
+}
+
+function quoteServiceInput(el){
+  window._qService=window._qService||{};
+  const n=el.dataset.qsv;
+  window._qService[n]=window._qService[n]||{};
+  window._qService[n][el.dataset.f]=el.dataset.f==='on'?el.checked:el.value;
+  quoteRecalc();
+}
+
+function quoteSumByCur(items, amtKey, onlyOn){
+  const sums={};
+  items.forEach(function(it){
+    if(onlyOn&&!it.on)return;
+    const a=parseFloat(it[amtKey])||0;
+    if(!a)return;
+    const cur=it.cur||'USD';
+    sums[cur]=(sums[cur]||0)+a;
+  });
+  return sums;
+}
+
+function quoteFmtSums(sums){
+  const keys=Object.keys(sums).filter(function(k){return sums[k];});
+  if(!keys.length)return '0';
+  return keys.map(function(k){return Math.round(sums[k]).toLocaleString('en-US')+' '+k;}).join(' + ');
+}
+
+function quoteRecalc(){
+  // Ocean
+  const oceanItems=Object.keys(window._qOcean||{}).filter(function(t){return window._qTypes&&window._qTypes[t];}).map(function(t){return {cur:(window._qOcean[t].cur||'USD'),price:window._qOcean[t].price};});
+  const oceanSums=quoteSumByCur(oceanItems,'price',false);
+  // Local
+  const localItems=Object.values(window._qLocal||{});
+  const localSums=quoteSumByCur(localItems,'amount',false);
+  // Service
+  const svcItems=Object.values(window._qService||{});
+  const svcSums=quoteSumByCur(svcItems,'amount',true);
+  // Grand: merge all
+  const grand={};
+  [oceanSums,localSums,svcSums].forEach(function(s){Object.keys(s).forEach(function(k){grand[k]=(grand[k]||0)+s[k];});});
+
+  if(g('qSumOcean'))g('qSumOcean').textContent=quoteFmtSums(oceanSums);
+  if(g('qSumLocal'))g('qSumLocal').textContent=quoteFmtSums(localSums);
+  if(g('qSumService'))g('qSumService').textContent=quoteFmtSums(svcSums);
+  if(g('qSumGrand'))g('qSumGrand').textContent=quoteFmtSums(grand);
+}
+
+function quoteNextNo(){
+  const d=new Date();
+  const ym=d.getFullYear()+String(d.getMonth()+1).padStart(2,'0');
+  const seq=Math.floor(Math.random()*900+100);
+  return 'QT'+ym+'-'+seq;
+}
+
+function quoteGather(){
+  return {
+    no:g('q_no')?.value||'',date:g('q_date')?.value||'',sales:g('q_sales')?.value||'',
+    customer:g('q_customer')?.value||'',carrier:g('q_carrier')?.value||'',commodity:g('q_commodity')?.value||'',
+    pol:g('q_pol')?.value||'',pod:g('q_pod')?.value||'',transit:g('q_transit')?.value||'',valid:g('q_valid')?.value||'',
+    types:window._qTypes||{},ocean:window._qOcean||{},local:window._qLocal||{},service:window._qService||{},
+    payment:g('q_payment')?.value||'',freetime:g('q_freetime')?.value||'',routing:g('q_routing')?.value||'',note:g('q_note')?.value||'',
+    savedAt:Date.now()
+  };
+}
+
+async function quoteSave(){
+  const q=quoteGather();
+  if(!q.customer){toast('Chọn khách hàng trước','error');return;}
+  setLoading(true,'Đang lưu báo giá...');
+  try{
+    await fsSet('quotes',q.no||('QT_'+Date.now()),q);
+    toast('Đã lưu báo giá '+q.no);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+function quoteBuildHTML(q){
+  const sp=cache.partners[q.customer]||{};
+  const types=Object.keys(q.types).filter(function(t){return q.types[t];});
+  const oceanRows=types.map(function(t){var o=q.ocean[t]||{};return '<tr><td>'+t+'</td><td>'+(o.cur||'USD')+'</td><td style="text-align:right">'+(o.price?parseFloat(o.price).toLocaleString():'-')+'</td><td>'+(o.remark||'')+'</td></tr>';}).join('');
+  const localRows=QUOTE_LOCAL_CHARGES.map(function(n){var l=q.local[n]||{};if(!l.amount)return '';return '<tr><td>'+n+'</td><td>'+(l.cur||'USD')+'</td><td style="text-align:right">'+parseFloat(l.amount).toLocaleString()+'</td><td>'+(l.unit||'')+'</td><td>'+(l.remark||'')+'</td></tr>';}).filter(Boolean).join('');
+  const svcRows=QUOTE_SERVICES.map(function(n){var s=q.service[n]||{};if(!s.on)return '';return '<tr><td>'+n+'</td><td>'+(s.cur||'VND')+'</td><td style="text-align:right">'+(s.amount?parseFloat(s.amount).toLocaleString():'-')+'</td><td>'+(s.remark||'')+'</td></tr>';}).filter(Boolean).join('');
+  const css='<style>body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a18;padding:24px 30px;margin:0}.hd{background:linear-gradient(135deg,#0C2C52,#185FA5);color:#fff;padding:18px 22px;border-radius:10px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}.hd h1{font-size:20px;margin:0}.hd .sub{font-size:11px;opacity:.85}.sec{margin-bottom:14px}.sec-t{font-size:12px;font-weight:700;color:#0C2C52;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #E6F1FB;padding-bottom:4px;margin-bottom:8px}table{width:100%;border-collapse:collapse;font-size:11.5px}th{background:#0C2C52;color:#fff;padding:7px 9px;text-align:left;font-size:10px;text-transform:uppercase}td{padding:6px 9px;border-bottom:1px solid #e0e0d8}.info{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}.info div{padding:3px 0;border-bottom:1px solid #f0efe9}.info b{display:inline-block;width:130px;color:#6b6b65;font-weight:600}.foot{margin-top:24px;padding-top:14px;border-top:2px solid #0C2C52;font-size:11px;color:#444}@media print{body{padding:14px}@page{margin:10mm;size:A4}}</style>';
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+css+'<title>Quotation '+q.no+'</title></head><body>'
+    +'<div class="hd"><div><h1>QUOTATION</h1><div class="sub">'+q.no+' • '+q.date+'</div></div><div style="text-align:right;font-size:13px;font-weight:700">'+(window._companyInfo&&window._companyInfo.name||'COCOSEA CO., LTD')+'</div></div>'
+    +'<div class="sec"><div class="info">'
+      +'<div><b>Customer</b>'+(sp.fullname||q.customer)+'</div>'
+      +'<div><b>Sales Person</b>'+q.sales+'</div>'
+      +'<div><b>POL</b>'+q.pol+'</div>'
+      +'<div><b>POD</b>'+q.pod+'</div>'
+      +'<div><b>Commodity</b>'+q.commodity+'</div>'
+      +'<div><b>Carrier</b>'+q.carrier+'</div>'
+      +'<div><b>Transit Time</b>'+q.transit+'</div>'
+      +'<div><b>Valid Until</b>'+q.valid+'</div>'
+    +'</div></div>'
+    +(oceanRows?'<div class="sec"><div class="sec-t">Ocean Freight</div><table><thead><tr><th>Container Type</th><th>Currency</th><th style="text-align:right">Unit Price</th><th>Remark</th></tr></thead><tbody>'+oceanRows+'</tbody></table></div>':'')
+    +(localRows?'<div class="sec"><div class="sec-t">Local Charge</div><table><thead><tr><th>Charge</th><th>Currency</th><th style="text-align:right">Amount</th><th>Unit</th><th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div>':'')
+    +(svcRows?'<div class="sec"><div class="sec-t">Local Service</div><table><thead><tr><th>Service</th><th>Currency</th><th style="text-align:right">Amount</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div>':'')
+    +'<div class="sec"><div class="sec-t">Notes</div>'
+      +'<div class="info">'
+      +'<div><b>Payment Term</b>'+q.payment+'</div>'
+      +'<div><b>Free Time</b>'+q.freetime+'</div>'
+      +'<div style="grid-column:1/-1"><b>Routing</b>'+q.routing+'</div>'
+      +(q.note?'<div style="grid-column:1/-1"><b>Special Note</b>'+q.note+'</div>':'')
+      +'</div></div>'
+    +'<div class="foot"><strong>'+(window._companyInfo&&window._companyInfo.name||'COCOSEA CO., LTD')+'</strong><br>'
+      +(window._companyInfo&&window._companyInfo.address||'')+'<br>'
+      +'Hotline: '+(window._companyInfo&&window._companyInfo.hotline||'')+' • Email: '+(window._companyInfo&&window._companyInfo.email||'')+' • '+(window._companyInfo&&window._companyInfo.website||'')+'</div>'
+    +'</body></html>';
+}
+
+function quoteExportPDF(){
+  const q=quoteGather();
+  if(!q.customer){toast('Chọn khách hàng trước','error');return;}
+  const html=quoteBuildHTML(q);
+  const w=window.open('','_blank','width=960,height=740,scrollbars=yes');
+  w.document.write(html);w.document.close();w.focus();w.document.title='Quotation_'+q.no;
+  setTimeout(function(){w.print();},600);
+  toast('Đã mở báo giá — Ctrl+P để lưu PDF');
+}
+
+function quoteSendEmail(){
+  const q=quoteGather();
+  const sp=cache.partners[q.customer]||{};
+  const to=sp.email||'';
+  const subject='Quotation '+q.no+' - '+(q.pol||'')+' to '+(q.pod||'');
+  const body='Dear '+(sp.contact||'Sir/Madam')+',%0D%0A%0D%0APlease find our quotation '+q.no+' for your shipment from '+q.pol+' to '+q.pod+'.%0D%0A%0D%0ACommodity: '+q.commodity+'%0D%0ACarrier: '+q.carrier+'%0D%0ATransit Time: '+q.transit+'%0D%0AValid Until: '+q.valid+'%0D%0A%0D%0ABest regards,%0D%0A'+(q.sales||'');
+  window.location.href='mailto:'+to+'?subject='+encodeURIComponent(subject)+'&body='+body;
+  toast('Đang mở ứng dụng email...');
+}
+
+window.renderQuote=renderQuote;
+window.quoteSwitchCargo=quoteSwitchCargo;
+window.quoteToggleType=quoteToggleType;
+window.quoteOceanInput=quoteOceanInput;
+window.quoteLocalInput=quoteLocalInput;
+window.quoteServiceInput=quoteServiceInput;
+window.quoteRecalc=quoteRecalc;
+window.quoteSave=quoteSave;
+window.quoteExportPDF=quoteExportPDF;
+window.quoteSendEmail=quoteSendEmail;
+
 window.openOceanEdit=openOceanEdit;
 window.updateOceanPorts=updateOceanPorts;
 window.saveOceanRate=saveOceanRate;
