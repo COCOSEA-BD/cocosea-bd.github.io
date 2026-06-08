@@ -4180,9 +4180,9 @@ function renderQuote(){
   const pg=g('page-quote'); if(!pg)return;
   // Initialize state if first time
   if(!window._qTypes)window._qTypes={};
-  if(!window._qOcean)window._qOcean={};
   if(!window._qLocal)window._qLocal={};
   if(!window._qService)window._qService={};
+  if(!window._qPods)window._qPods=[];
   const shippers=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname).sort();
   const carriers=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname).sort();
   const today=new Date().toISOString().slice(0,10);
@@ -4255,12 +4255,8 @@ function renderQuote(){
       <div class="qt-fld"><label>Date</label><input type="date" id="q_date" value="${today}"/></div>
       <div class="qt-fld"><label>Sales Person</label><input type="text" id="q_sales" value="${(currentProfile&&currentProfile.name)||''}" placeholder="Tên sales"/></div>
       <div class="qt-fld"><label>Customer Name</label><select id="q_customer"><option value="">— Chọn khách hàng —</option>${shippers.map(s=>`<option>${s}</option>`).join('')}</select></div>
-      <div class="qt-fld"><label>Carrier</label><select id="q_carrier"><option value="">— Chọn carrier —</option>${carriers.map(s=>`<option>${s}</option>`).join('')}</select></div>
       <div class="qt-fld"><label>Commodity</label><input type="text" id="q_commodity" placeholder="VD: Coconut fiber"/></div>
       <div class="qt-fld"><label>POL (Port of Loading)</label><input type="text" id="q_pol" value="HO CHI MINH, VIETNAM"/></div>
-      <div class="qt-fld"><label>POD (Port of Discharge)</label><input type="text" id="q_pod" placeholder="VD: NANSHA, CHINA"/></div>
-      <div class="qt-fld"><label>Transit Time</label><input type="text" id="q_transit" placeholder="VD: 5-7 days"/></div>
-      <div class="qt-fld"><label>Valid Until</label><input type="date" id="q_valid" value="${valid30}"/></div>
     </div>
   </div>
 
@@ -4282,11 +4278,14 @@ function renderQuote(){
 
   <!-- 3. OCEAN FREIGHT -->
   <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-anchor"></i></span>Ocean Freight</div>
-    <table class="qt-table">
-      <thead><tr><th style="width:22%">Container Type</th><th style="width:16%">Currency</th><th style="width:22%">Unit Price</th><th>Remark</th></tr></thead>
-      <tbody id="qOceanBody"></tbody>
-    </table>
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-anchor"></i></span>Ocean Freight
+      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Mỗi POD có thể có nhiều carrier với giá khác nhau</span>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
+      <div class="qt-fld" style="flex:1;min-width:160px"><label>Default Currency</label><select id="q_curOcean">${['USD','VND','CNY','EUR'].map(cu=>`<option${cu==='USD'?' selected':''}>${cu}</option>`).join('')}</select></div>
+    </div>
+    <div id="qOceanGroups"></div>
+    <button class="qt-btn" onclick="quoteAddPodGroup()" style="margin-top:6px"><i class="ti ti-plus"></i> Thêm POD</button>
   </div>
 
   <!-- 4. LOCAL CHARGE -->
@@ -4362,31 +4361,99 @@ function quoteToggleType(el){
   window._qTypes=window._qTypes||{};
   window._qTypes[el.dataset.qtype]=el.checked;
   quoteRenderOcean();
+  quoteRenderServices();
   quoteRecalc();
+}
+
+function quoteActiveTypes(){
+  return QUOTE_CONT_TYPES.filter(function(t){return window._qTypes&&window._qTypes[t];});
 }
 
 function quoteRenderOcean(){
-  const body=g('qOceanBody'); if(!body)return;
-  const types=Object.keys(window._qTypes||{}).filter(function(t){return window._qTypes[t];});
-  if(!types.length){body.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--text-tertiary);padding:14px">Chọn loại container ở phần trên</td></tr>';return;}
-  body.innerHTML=types.map(function(t){
-    const sv=(window._qOcean&&window._qOcean[t])||{};
-    return '<tr>'
-      +'<td style="font-weight:700;color:#0C2C52">'+t+'</td>'
-      +'<td><select data-qoc="'+t+'" data-f="cur" oninput="quoteOceanInput(this)">'+['USD','VND','CNY','EUR'].map(function(c){return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('')+'</select></td>'
-      +'<td><input type="number" data-qoc="'+t+'" data-f="price" value="'+(sv.price||'')+'" placeholder="0" oninput="quoteOceanInput(this)"/></td>'
-      +'<td><input type="text" data-qoc="'+t+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteOceanInput(this)"/></td>'
-    +'</tr>';
+  const box=g('qOceanGroups'); if(!box)return;
+  const types=quoteActiveTypes();
+  window._qPods=window._qPods||[];
+  if(!window._qPods.length)window._qPods.push({pod:'',transit:'',rows:[{carrier:'',valid:'',prices:{},remark:''}]});
+
+  if(!types.length){
+    box.innerHTML='<div style="padding:14px;text-align:center;color:var(--text-tertiary);font-size:12px;border:1px dashed var(--border-light);border-radius:10px">⚠️ Chọn loại container ở phần "Loại hàng" trước để nhập giá cước</div>';
+    return;
+  }
+
+  const carriers=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname).sort();
+  const valid30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+
+  box.innerHTML=window._qPods.map(function(grp,gi){
+    const rowsHtml=grp.rows.map(function(row,ri){
+      const priceCells=types.map(function(t){
+        const v=(row.prices&&row.prices[t])||'';
+        return '<td><input type="number" data-pod="'+gi+'" data-row="'+ri+'" data-pt="'+t+'" value="'+v+'" placeholder="0" oninput="quotePodPrice(this)" style="text-align:right"/></td>';
+      }).join('');
+      return '<tr>'
+        +priceCells
+        +'<td><select data-pod="'+gi+'" data-row="'+ri+'" data-f="carrier" onchange="quotePodRow(this)"><option value="">— Carrier —</option>'+carriers.map(function(cr){return '<option'+(cr===row.carrier?' selected':'')+'>'+cr+'</option>';}).join('')+'</select></td>'
+        +'<td><input type="date" data-pod="'+gi+'" data-row="'+ri+'" data-f="valid" value="'+(row.valid||valid30)+'" onchange="quotePodRow(this)"/></td>'
+        +'<td><input type="text" data-pod="'+gi+'" data-row="'+ri+'" data-f="remark" value="'+(row.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quotePodRow(this)"/></td>'
+        +'<td style="text-align:center;width:30px"><button class="rac red" onclick="quoteDelPodRow('+gi+','+ri+')" title="Xóa dòng" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
+      +'</tr>';
+    }).join('');
+
+    const typeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
+    return '<div style="border:1px solid var(--border-light);border-radius:12px;padding:12px 14px;margin-bottom:12px;background:var(--bg-secondary)">'
+      +'<div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">'
+        +'<div class="qt-fld" style="flex:2;min-width:200px"><label>POD (Port of Discharge)</label><input type="text" data-pod="'+gi+'" data-f="pod" value="'+(grp.pod||'').replace(/"/g,'&quot;')+'" placeholder="VD: NANSHA, CHINA" oninput="quotePodMeta(this)" style="background:#fff"/></div>'
+        +'<div class="qt-fld" style="flex:1;min-width:120px"><label>Transit Time</label><input type="text" data-pod="'+gi+'" data-f="transit" value="'+(grp.transit||'').replace(/"/g,'&quot;')+'" placeholder="5-7 days" oninput="quotePodMeta(this)" style="background:#fff"/></div>'
+        +(window._qPods.length>1?'<button class="rac red" onclick="quoteDelPod('+gi+')" title="Xóa POD này" style="font-size:14px;margin-bottom:6px"><i class="ti ti-trash"></i></button>':'')
+      +'</div>'
+      +'<table class="qt-table"><thead><tr>'+typeHeads+'<th style="width:130px">Carrier</th><th style="width:130px">Valid</th><th>Remark</th><th></th></tr></thead>'
+      +'<tbody>'+rowsHtml+'</tbody></table>'
+      +'<button class="qt-btn" onclick="quoteAddPodRow('+gi+')" style="margin-top:8px;padding:7px 12px;font-size:12px"><i class="ti ti-plus"></i> Thêm carrier / giá</button>'
+    +'</div>';
   }).join('');
 }
 
-function quoteOceanInput(el){
-  window._qOcean=window._qOcean||{};
-  const t=el.dataset.qoc;
-  window._qOcean[t]=window._qOcean[t]||{};
-  window._qOcean[t][el.dataset.f]=el.value;
+function quotePodMeta(el){
+  const gi=+el.dataset.pod;
+  window._qPods[gi][el.dataset.f]=el.value;
+}
+function quotePodRow(el){
+  const gi=+el.dataset.pod, ri=+el.dataset.row;
+  window._qPods[gi].rows[ri][el.dataset.f]=el.value;
+}
+function quotePodPrice(el){
+  const gi=+el.dataset.pod, ri=+el.dataset.row;
+  const row=window._qPods[gi].rows[ri];
+  row.prices=row.prices||{};
+  row.prices[el.dataset.pt]=el.value;
   quoteRecalc();
 }
+function quoteAddPodGroup(){
+  window._qPods=window._qPods||[];
+  window._qPods.push({pod:'',transit:'',rows:[{carrier:'',valid:'',prices:{},remark:''}]});
+  quoteRenderOcean();
+}
+function quoteDelPod(gi){
+  window._qPods.splice(gi,1);
+  if(!window._qPods.length)window._qPods.push({pod:'',transit:'',rows:[{carrier:'',valid:'',prices:{},remark:''}]});
+  quoteRenderOcean(); quoteRecalc();
+}
+function quoteAddPodRow(gi){
+  window._qPods[gi].rows.push({carrier:'',valid:'',prices:{},remark:''});
+  quoteRenderOcean();
+}
+function quoteDelPodRow(gi,ri){
+  window._qPods[gi].rows.splice(ri,1);
+  if(!window._qPods[gi].rows.length)window._qPods[gi].rows.push({carrier:'',valid:'',prices:{},remark:''});
+  quoteRenderOcean(); quoteRecalc();
+}
+window.quotePodMeta=quotePodMeta;
+window.quotePodRow=quotePodRow;
+window.quotePodPrice=quotePodPrice;
+window.quoteAddPodGroup=quoteAddPodGroup;
+window.quoteDelPod=quoteDelPod;
+window.quoteAddPodRow=quoteAddPodRow;
+window.quoteDelPodRow=quoteDelPodRow;
+window.quoteActiveTypes=quoteActiveTypes;
 
 function quoteRenderLocal(){
   const body=g('qLocalBody'); if(!body)return;
@@ -4412,17 +4479,33 @@ function quoteLocalInput(el){
 
 function quoteRenderServices(){
   const body=g('qServiceBody'); if(!body)return;
-  body.innerHTML=QUOTE_SERVICES.map(function(name,i){
+  const types=quoteActiveTypes();
+  const curOpts=function(sel){return ['USD','VND','CNY','EUR'].map(function(cc){return '<option'+(cc===(sel||'VND')?' selected':'')+'>'+cc+'</option>';}).join('');};
+  // Header: checkbox + service name + [price per cont type...] + currency + remark
+  const typeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
+  const head='<table class="qt-table"><thead><tr><th style="width:34px"></th><th>Service</th>'+(types.length?typeHeads:'<th style="text-align:right">Giá</th>')+'<th style="width:90px">Currency</th><th>Remark</th></tr></thead><tbody>';
+  const rows=QUOTE_SERVICES.map(function(name){
     const sv=(window._qService&&window._qService[name])||{};
     const on=sv.on?'checked':'';
-    return '<div class="qt-chk" style="display:grid;grid-template-columns:auto 1fr 120px 90px 1.4fr;gap:10px;align-items:center">'
-      +'<input type="checkbox" data-qsv="'+name+'" data-f="on" '+on+' onchange="quoteServiceInput(this)"/>'
-      +'<span style="font-weight:600;font-size:12.5px">'+name+'</span>'
-      +'<input type="number" data-qsv="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="Giá" oninput="quoteServiceInput(this)" style="font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:#fff"/>'
-      +'<select data-qsv="'+name+'" data-f="cur" oninput="quoteServiceInput(this)" style="font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:#fff">'+['USD','VND','CNY','EUR'].map(function(c){return '<option'+(c===(sv.cur||'VND')?' selected':'')+'>'+c+'</option>';}).join('')+'</select>'
-      +'<input type="text" data-qsv="'+name+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteServiceInput(this)" style="font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:#fff"/>'
-    +'</div>';
+    let priceCells;
+    if(types.length){
+      priceCells=types.map(function(t){
+        const v=(sv.prices&&sv.prices[t])||'';
+        return '<td><input type="number" data-qsv="'+name+'" data-pt="'+t+'" value="'+v+'" placeholder="0" oninput="quoteServicePrice(this)" style="text-align:right"/></td>';
+      }).join('');
+    } else {
+      priceCells='<td><input type="number" data-qsv="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteServiceInput(this)" style="text-align:right"/></td>';
+    }
+    return '<tr class="'+(sv.on?'':'qt-off')+'">'
+      +'<td style="text-align:center"><input type="checkbox" data-qsv="'+name+'" data-f="on" '+on+' onchange="quoteServiceInput(this)" style="width:16px;height:16px;cursor:pointer"/></td>'
+      +'<td style="font-weight:600;font-size:12px">'+name+'</td>'
+      +priceCells
+      +'<td><select data-qsv="'+name+'" data-f="cur" onchange="quoteServiceInput(this)">'+curOpts(sv.cur)+'</select></td>'
+      +'<td><input type="text" data-qsv="'+name+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteServiceInput(this)"/></td>'
+    +'</tr>';
   }).join('');
+  body.innerHTML=head+rows+'</tbody></table>'
+    +(types.length?'':'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">💡 Chọn loại container ở phần "Loại hàng" để nhập giá theo từng loại cont</div>');
 }
 
 function quoteServiceInput(el){
@@ -4430,8 +4513,18 @@ function quoteServiceInput(el){
   const n=el.dataset.qsv;
   window._qService[n]=window._qService[n]||{};
   window._qService[n][el.dataset.f]=el.dataset.f==='on'?el.checked:el.value;
+  if(el.dataset.f==='on')quoteRenderServices();
   quoteRecalc();
 }
+function quoteServicePrice(el){
+  window._qService=window._qService||{};
+  const n=el.dataset.qsv;
+  window._qService[n]=window._qService[n]||{};
+  window._qService[n].prices=window._qService[n].prices||{};
+  window._qService[n].prices[el.dataset.pt]=el.value;
+  quoteRecalc();
+}
+window.quoteServicePrice=quoteServicePrice;
 
 function quoteSumByCur(items, amtKey, onlyOn){
   const sums={};
@@ -4452,15 +4545,32 @@ function quoteFmtSums(sums){
 }
 
 function quoteRecalc(){
-  // Ocean
-  const oceanItems=Object.keys(window._qOcean||{}).filter(function(t){return window._qTypes&&window._qTypes[t];}).map(function(t){return {cur:(window._qOcean[t].cur||'USD'),price:window._qOcean[t].price};});
+  // Ocean: sum all prices across POD groups / rows / cont types
+  const cur=g('q_curOcean')?.value||'USD';
+  const types=quoteActiveTypes();
+  const oceanItems=[];
+  (window._qPods||[]).forEach(function(grp){
+    (grp.rows||[]).forEach(function(row){
+      types.forEach(function(t){
+        const p=parseFloat((row.prices&&row.prices[t])||0);
+        if(p)oceanItems.push({cur:cur,price:p});
+      });
+    });
+  });
   const oceanSums=quoteSumByCur(oceanItems,'price',false);
   // Local
   const localItems=Object.values(window._qLocal||{});
   const localSums=quoteSumByCur(localItems,'amount',false);
-  // Service
-  const svcItems=Object.values(window._qService||{});
-  const svcSums=quoteSumByCur(svcItems,'amount',true);
+  // Service: sum per-cont-type prices (or flat amount if no types)
+  const svcSums={};
+  Object.values(window._qService||{}).forEach(function(s){
+    if(!s.on)return;
+    const sc=s.cur||'VND';
+    let total=0;
+    if(types.length&&s.prices){types.forEach(function(t){total+=parseFloat(s.prices[t])||0;});}
+    else total=parseFloat(s.amount)||0;
+    if(total)svcSums[sc]=(svcSums[sc]||0)+total;
+  });
   // Grand: merge all
   const grand={};
   [oceanSums,localSums,svcSums].forEach(function(s){Object.keys(s).forEach(function(k){grand[k]=(grand[k]||0)+s[k];});});
@@ -4481,9 +4591,9 @@ function quoteNextNo(){
 function quoteGather(){
   return {
     no:g('q_no')?.value||'',date:g('q_date')?.value||'',sales:g('q_sales')?.value||'',
-    customer:g('q_customer')?.value||'',carrier:g('q_carrier')?.value||'',commodity:g('q_commodity')?.value||'',
-    pol:g('q_pol')?.value||'',pod:g('q_pod')?.value||'',transit:g('q_transit')?.value||'',valid:g('q_valid')?.value||'',
-    types:window._qTypes||{},ocean:window._qOcean||{},local:window._qLocal||{},service:window._qService||{},
+    customer:g('q_customer')?.value||'',commodity:g('q_commodity')?.value||'',
+    pol:g('q_pol')?.value||'',curOcean:g('q_curOcean')?.value||'USD',
+    types:window._qTypes||{},pods:window._qPods||[],local:window._qLocal||{},service:window._qService||{},
     payment:g('q_payment')?.value||'',freetime:g('q_freetime')?.value||'',routing:g('q_routing')?.value||'',note:g('q_note')?.value||'',
     savedAt:Date.now()
   };
@@ -4502,26 +4612,52 @@ async function quoteSave(){
 
 function quoteBuildHTML(q){
   const sp=cache.partners[q.customer]||{};
-  const types=Object.keys(q.types).filter(function(t){return q.types[t];});
-  const oceanRows=types.map(function(t){var o=q.ocean[t]||{};return '<tr><td>'+t+'</td><td>'+(o.cur||'USD')+'</td><td style="text-align:right">'+(o.price?parseFloat(o.price).toLocaleString():'-')+'</td><td>'+(o.remark||'')+'</td></tr>';}).join('');
+  const types=QUOTE_CONT_TYPES.filter(function(t){return q.types[t];});
+  const cur=q.curOcean||'USD';
+
+  // Ocean: grouped by POD
+  let oceanHTML='';
+  (q.pods||[]).forEach(function(grp){
+    const validRows=(grp.rows||[]).filter(function(row){
+      return types.some(function(t){return parseFloat((row.prices&&row.prices[t])||0)>0;})||row.carrier;
+    });
+    if(!grp.pod&&!validRows.length)return;
+    const typeHeads=types.map(function(t){return '<th style="text-align:right">'+t+' ('+cur+')</th>';}).join('');
+    const rowsHtml=validRows.map(function(row){
+      const priceCells=types.map(function(t){var p=(row.prices&&row.prices[t]);return '<td style="text-align:right">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');
+      return '<tr>'+priceCells+'<td>'+(row.carrier||'-')+'</td><td>'+(row.valid||'')+'</td><td>'+(row.remark||'')+'</td></tr>';
+    }).join('');
+    oceanHTML+='<div style="margin-bottom:12px">'
+      +'<div style="font-size:11.5px;font-weight:700;color:#185FA5;margin-bottom:4px">'+(q.pol||'')+' → '+(grp.pod||'(POD?)')+(grp.transit?' &nbsp;•&nbsp; Transit: '+grp.transit:'')+'</div>'
+      +'<table><thead><tr>'+typeHeads+'<th>Carrier</th><th>Valid</th><th>Remark</th></tr></thead><tbody>'+(rowsHtml||'<tr><td colspan="'+(types.length+3)+'" style="text-align:center;color:#999">Chưa có giá</td></tr>')+'</tbody></table>'
+    +'</div>';
+  });
+
   const localRows=QUOTE_LOCAL_CHARGES.map(function(n){var l=q.local[n]||{};if(!l.amount)return '';return '<tr><td>'+n+'</td><td>'+(l.cur||'USD')+'</td><td style="text-align:right">'+parseFloat(l.amount).toLocaleString()+'</td><td>'+(l.unit||'')+'</td><td>'+(l.remark||'')+'</td></tr>';}).filter(Boolean).join('');
-  const svcRows=QUOTE_SERVICES.map(function(n){var s=q.service[n]||{};if(!s.on)return '';return '<tr><td>'+n+'</td><td>'+(s.cur||'VND')+'</td><td style="text-align:right">'+(s.amount?parseFloat(s.amount).toLocaleString():'-')+'</td><td>'+(s.remark||'')+'</td></tr>';}).filter(Boolean).join('');
-  const css='<style>body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a18;padding:24px 30px;margin:0}.hd{background:linear-gradient(135deg,#0C2C52,#185FA5);color:#fff;padding:18px 22px;border-radius:10px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}.hd h1{font-size:20px;margin:0}.hd .sub{font-size:11px;opacity:.85}.sec{margin-bottom:14px}.sec-t{font-size:12px;font-weight:700;color:#0C2C52;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #E6F1FB;padding-bottom:4px;margin-bottom:8px}table{width:100%;border-collapse:collapse;font-size:11.5px}th{background:#0C2C52;color:#fff;padding:7px 9px;text-align:left;font-size:10px;text-transform:uppercase}td{padding:6px 9px;border-bottom:1px solid #e0e0d8}.info{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}.info div{padding:3px 0;border-bottom:1px solid #f0efe9}.info b{display:inline-block;width:130px;color:#6b6b65;font-weight:600}.foot{margin-top:24px;padding-top:14px;border-top:2px solid #0C2C52;font-size:11px;color:#444}@media print{body{padding:14px}@page{margin:10mm;size:A4}}</style>';
+
+  // Service: per-cont-type columns
+  const svcTypeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
+  const svcRows=QUOTE_SERVICES.map(function(n){
+    var s=q.service[n]||{};if(!s.on)return '';
+    let cells;
+    if(types.length){cells=types.map(function(t){var p=(s.prices&&s.prices[t]);return '<td style="text-align:right">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');}
+    else cells='<td style="text-align:right">'+(s.amount?parseFloat(s.amount).toLocaleString():'-')+'</td>';
+    return '<tr><td>'+n+'</td>'+cells+'<td>'+(s.cur||'VND')+'</td><td>'+(s.remark||'')+'</td></tr>';
+  }).filter(Boolean).join('');
+  const svcHead=types.length?svcTypeHeads:'<th style="text-align:right">Amount</th>';
+
+  const css='<style>body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a18;padding:24px 30px;margin:0}.hd{background:linear-gradient(135deg,#0C2C52,#185FA5);color:#fff;padding:18px 22px;border-radius:10px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}.hd h1{font-size:20px;margin:0}.hd .sub{font-size:11px;opacity:.85}.sec{margin-bottom:14px}.sec-t{font-size:12px;font-weight:700;color:#0C2C52;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #E6F1FB;padding-bottom:4px;margin-bottom:8px}table{width:100%;border-collapse:collapse;font-size:11.5px;margin-bottom:4px}th{background:#0C2C52;color:#fff;padding:6px 9px;text-align:left;font-size:9.5px;text-transform:uppercase}td{padding:5px 9px;border-bottom:1px solid #e0e0d8}.info{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}.info div{padding:3px 0;border-bottom:1px solid #f0efe9}.info b{display:inline-block;width:130px;color:#6b6b65;font-weight:600}.foot{margin-top:24px;padding-top:14px;border-top:2px solid #0C2C52;font-size:11px;color:#444}@media print{body{padding:14px}@page{margin:10mm;size:A4}}</style>';
   return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+css+'<title>Quotation '+q.no+'</title></head><body>'
     +'<div class="hd"><div><h1>QUOTATION</h1><div class="sub">'+q.no+' • '+q.date+'</div></div><div style="text-align:right;font-size:13px;font-weight:700">'+(window._companyInfo&&window._companyInfo.name||'COCOSEA CO., LTD')+'</div></div>'
     +'<div class="sec"><div class="info">'
       +'<div><b>Customer</b>'+(sp.fullname||q.customer)+'</div>'
       +'<div><b>Sales Person</b>'+q.sales+'</div>'
       +'<div><b>POL</b>'+q.pol+'</div>'
-      +'<div><b>POD</b>'+q.pod+'</div>'
       +'<div><b>Commodity</b>'+q.commodity+'</div>'
-      +'<div><b>Carrier</b>'+q.carrier+'</div>'
-      +'<div><b>Transit Time</b>'+q.transit+'</div>'
-      +'<div><b>Valid Until</b>'+q.valid+'</div>'
     +'</div></div>'
-    +(oceanRows?'<div class="sec"><div class="sec-t">Ocean Freight</div><table><thead><tr><th>Container Type</th><th>Currency</th><th style="text-align:right">Unit Price</th><th>Remark</th></tr></thead><tbody>'+oceanRows+'</tbody></table></div>':'')
+    +(oceanHTML?'<div class="sec"><div class="sec-t">Ocean Freight</div>'+oceanHTML+'</div>':'')
     +(localRows?'<div class="sec"><div class="sec-t">Local Charge</div><table><thead><tr><th>Charge</th><th>Currency</th><th style="text-align:right">Amount</th><th>Unit</th><th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div>':'')
-    +(svcRows?'<div class="sec"><div class="sec-t">Local Service</div><table><thead><tr><th>Service</th><th>Currency</th><th style="text-align:right">Amount</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div>':'')
+    +(svcRows?'<div class="sec"><div class="sec-t">Local Service</div><table><thead><tr><th>Service</th>'+svcHead+'<th>Currency</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div>':'')
     +'<div class="sec"><div class="sec-t">Notes</div>'
       +'<div class="info">'
       +'<div><b>Payment Term</b>'+q.payment+'</div>'
@@ -4549,8 +4685,9 @@ function quoteSendEmail(){
   const q=quoteGather();
   const sp=cache.partners[q.customer]||{};
   const to=sp.email||'';
-  const subject='Quotation '+q.no+' - '+(q.pol||'')+' to '+(q.pod||'');
-  const body='Dear '+(sp.contact||'Sir/Madam')+',%0D%0A%0D%0APlease find our quotation '+q.no+' for your shipment from '+q.pol+' to '+q.pod+'.%0D%0A%0D%0ACommodity: '+q.commodity+'%0D%0ACarrier: '+q.carrier+'%0D%0ATransit Time: '+q.transit+'%0D%0AValid Until: '+q.valid+'%0D%0A%0D%0ABest regards,%0D%0A'+(q.sales||'');
+  const pods=(q.pods||[]).map(function(p){return p.pod;}).filter(Boolean).join(', ');
+  const subject='Quotation '+q.no+' - '+(q.pol||'')+' to '+(pods||'destination');
+  const body='Dear '+(sp.contact||'Sir/Madam')+',%0D%0A%0D%0APlease find our quotation '+q.no+' for your shipment from '+q.pol+' to '+pods+'.%0D%0A%0D%0ACommodity: '+q.commodity+'%0D%0A%0D%0ABest regards,%0D%0A'+(q.sales||'');
   window.location.href='mailto:'+to+'?subject='+encodeURIComponent(subject)+'&body='+body;
   toast('Đang mở ứng dụng email...');
 }
@@ -4558,7 +4695,6 @@ function quoteSendEmail(){
 window.renderQuote=renderQuote;
 window.quoteSwitchCargo=quoteSwitchCargo;
 window.quoteToggleType=quoteToggleType;
-window.quoteOceanInput=quoteOceanInput;
 window.quoteLocalInput=quoteLocalInput;
 window.quoteServiceInput=quoteServiceInput;
 window.quoteRecalc=quoteRecalc;
