@@ -4752,42 +4752,86 @@ function importContFromExcel(input){
   const reader=new FileReader();
   reader.onload=function(e){
     try{
-      const wb=XLSX.read(e.target.result,{type:'array'});
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
       const ws=wb.Sheets[wb.SheetNames[0]];
-      const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-      if(grid.length<1){toast('File không có dữ liệu','error');return;}
-      window._xlsxGrid=grid;
-      // Ask user for the cell of the FIRST container number
-      const colLetter=prompt('Cột chứa SỐ CONT đầu tiên?\nNhập chữ cái cột (A, B, C...) hoặc số (1, 2...):','A');
-      if(colLetter==null)return;
-      const rowNum=prompt('Hàng chứa SỐ CONT đầu tiên?\nNhập số hàng (theo Excel, vd 2):','2');
-      if(rowNum==null)return;
-      // Convert column letter to index
-      let col0;
-      const cl=(colLetter+'').trim().toUpperCase();
-      if(/^[A-Z]+$/.test(cl)){col0=0;for(let k=0;k<cl.length;k++)col0=col0*26+(cl.charCodeAt(k)-64);col0-=1;}
-      else col0=(parseInt(cl)||1)-1;
-      const row0=(parseInt(rowNum)||2)-1;
-      // From the first container cell, map subsequent columns automatically:
-      // col0=Cont, col0+1=Seal, col0+2=Type, col0+3=Pkg, col0+4=NW, col0+5=GW, col0+6=Date
+      const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
+      if(grid.length<2){toast('File không có dữ liệu','error');return;}
+
+      // 1) Find the HEADER row: the row that contains the most known keywords
+      function norm(v){return (v==null?'':(v+'')).toLowerCase().replace(/[._\-\s]+/g,' ').trim();}
+      const KW={
+        cont:['cont no','container no','container','cont','cont number','container number','so cont','số cont'],
+        seal:['seal no','seal number','seal','so seal','số seal','niem phong','niêm phong'],
+        pkg:['number of package','no of package','no. of package','package','pkg','quantity','q ty','qty','bales','bags','number of','so luong','số lượng','package(s)','no of bales','no of bags'],
+        nw:['net weight','n w','nw','net wt','net','khoi luong tinh','khối lượng tịnh','trong luong tinh','trọng lượng tịnh','tl tinh','tịnh'],
+        gw:['gross weight','g w','gw','gross wt','gross','khoi luong','khối lượng','trong luong','trọng lượng','tong trong luong','tổng trọng lượng','tong tl','ca bi','cả bì'],
+        date:['stuff date','stuffing date','date','ngay dong','ngày đóng','ngay','ngày','stuffing'],
+        type:['size type','size/type','type','cont type','loai cont','loại cont','size']
+      };
+      function matchKey(headerText){
+        const h=norm(headerText); if(!h)return null;
+        // Pick the field whose keyword best matches the header.
+        // Rule: header must CONTAIN the keyword (or equal it). Longer keyword = stronger match.
+        // This avoids short headers like "NO" grabbing "no of package".
+        let best=null,bestLen=0;
+        for(const f in KW){
+          for(const kw of KW[f]){
+            if(h===kw){return f;} // exact wins immediately
+            if(h.indexOf(kw)>=0 && kw.length>bestLen){best=f;bestLen=kw.length;}
+          }
+        }
+        return best;
+      }
+      // scan first 8 rows to find the header row
+      let headerRow=-1,bestScore=0,colMap={};
+      for(let rIdx=0;rIdx<Math.min(8,grid.length);rIdx++){
+        const row=grid[rIdx]||[];
+        const map={};let score=0;
+        row.forEach(function(cell,ci){
+          const f=matchKey(cell);
+          if(f&&map[f]==null){map[f]=ci;score++;}
+        });
+        if(score>bestScore){bestScore=score;headerRow=rIdx;colMap=map;}
+      }
+      if(headerRow<0||colMap.cont==null){
+        toast('Không tìm thấy cột Container No. Kiểm tra tiêu đề file Excel.','error');
+        return;
+      }
+
+      // 2) Read data rows after the header row
       let count=0;
-      for(let i=0;row0+i<grid.length;i++){
-        const grow=grid[row0+i]||[];
-        const no=(grow[col0]||'').toString().trim().toUpperCase();
-        if(!no)break; // stop at first empty container
-        const set=function(id,val){const el=g(id);if(el&&val!==''&&val!=null)el.value=val;};
-        set('cno_'+i,no);
-        set('cseal_'+i,(grow[col0+1]||'').toString().trim());
-        set('ctype_'+i,(grow[col0+2]||'').toString().trim());
-        const pkg=parseFloat(grow[col0+3]);if(!isNaN(pkg))set('cpkg_'+i,pkg);
-        const nw=parseFloat(grow[col0+4]);if(!isNaN(nw))set('cnw_'+i,nw);
-        const gw=parseFloat(grow[col0+5]);if(!isNaN(gw))set('cgw_'+i,gw);
-        let dv=grow[col0+6];
-        if(typeof dv==='number'){const dt=XLSX.SSF?XLSX.SSF.parse_date_code(dv):null;if(dt)dv=dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
-        if(dv)set('cdate_'+i,(dv||'').toString().slice(0,10));
+      const setV=function(id,val){const el=g(id);if(el&&val!==''&&val!=null)el.value=val;};
+      const toNum=function(v){if(v==null||v==='')return null;const n=parseFloat((v+'').replace(/[, ]/g,''));return isNaN(n)?null:n;};
+      const toDate=function(v){
+        if(v==null||v==='')return '';
+        if(v instanceof Date && !isNaN(v))return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+        if(typeof v==='number'){var dt=XLSX.SSF&&XLSX.SSF.parse_date_code(v);if(dt)return dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
+        var s=(v+'').trim();
+        // dd/mm/yyyy or dd-mm-yyyy
+        var m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+        if(m){var y=m[3].length===2?'20'+m[3]:m[3];return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');}
+        // yyyy-mm-dd already
+        if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+        return '';
+      };
+
+      for(let rIdx=headerRow+1;rIdx<grid.length;rIdx++){
+        const row=grid[rIdx]||[];
+        const no=(colMap.cont!=null?row[colMap.cont]:'').toString().trim().toUpperCase();
+        if(!no)continue; // skip blank rows (don't break — there may be total rows / gaps)
+        // skip obvious total/summary rows
+        if(/^(total|tong|tổng|grand)/i.test(no))continue;
+        setV('cno_'+count,no);
+        if(colMap.seal!=null)setV('cseal_'+count,(row[colMap.seal]||'').toString().trim());
+        if(colMap.type!=null)setV('ctype_'+count,(row[colMap.type]||'').toString().trim());
+        if(colMap.pkg!=null){const p=toNum(row[colMap.pkg]);if(p!=null)setV('cpkg_'+count,p);}
+        if(colMap.nw!=null){const nw=toNum(row[colMap.nw]);if(nw!=null)setV('cnw_'+count,nw);}
+        if(colMap.gw!=null){const gw=toNum(row[colMap.gw]);if(gw!=null)setV('cgw_'+count,gw);}
+        if(colMap.date!=null){const d=toDate(row[colMap.date]);if(d)setV('cdate_'+count,d);}
         count++;
       }
-      toast('Đã nhập '+count+' container từ Excel (Cont→Seal→Type→Pkg→NW→GW→Date)');
+      const foundCols=Object.keys(colMap).map(function(k){return k.toUpperCase();}).join(', ');
+      toast('Đã nhập '+count+' container. Cột nhận diện: '+foundCols);
     }catch(err){toast('Lỗi đọc file: '+err.message,'error');}
   };
   reader.readAsArrayBuffer(file);
@@ -4895,6 +4939,7 @@ function renderDocMaker(){
   </div>
   <div style="margin-top:1rem">
     <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem"><i class="ti ti-files" style="font-size:13px"></i> Chứng từ đã lưu</div>
+    <input type="text" id="dmSavedSearch" placeholder="Tìm theo Job ID / Booking / MBL..." oninput="renderDmSavedList()" style="font-size:11.5px;width:100%;margin-bottom:6px;box-sizing:border-box"/>
     <div id="dmSavedList"></div>
   </div>
 </div>
@@ -4904,9 +4949,16 @@ function renderDocMaker(){
 
 function renderDmSavedList(){
   const box=g('dmSavedList'); if(!box)return;
+  const q=(g('dmSavedSearch')?.value||'').toLowerCase().trim();
   const allR=[...cache.xuat.map(r=>({...r,_tt:'xuat'})),...cache.nhap.map(r=>({...r,_tt:'nhap'}))];
-  const saved=allR.filter(function(r){return r.docData&&r.docData.savedAt;}).sort(function(a,b){return (b.docData.savedAt||0)-(a.docData.savedAt||0);});
-  if(!saved.length){box.innerHTML='<div style="font-size:11.5px;color:var(--text-tertiary);padding:8px">Chưa có lô hàng nào được làm chứng từ</div>';return;}
+  let saved=allR.filter(function(r){return r.docData&&r.docData.savedAt;}).sort(function(a,b){return (b.docData.savedAt||0)-(a.docData.savedAt||0);});
+  if(q){
+    saved=saved.filter(function(r){
+      const dd=r.docData||{};
+      return (r.jobNo||'').toLowerCase().includes(q)||(r.bookingNo||'').toLowerCase().includes(q)||(r.mblNo||'').toLowerCase().includes(q)||(dd.invoiceNo||'').toLowerCase().includes(q);
+    });
+  }
+  if(!saved.length){box.innerHTML='<div style="font-size:11.5px;color:var(--text-tertiary);padding:8px">'+(q?'Không tìm thấy chứng từ phù hợp':'Chưa có lô hàng nào được làm chứng từ')+'</div>';return;}
   box.innerHTML='<div style="display:flex;flex-direction:column;gap:5px">'+saved.map(function(r){
     const dd=r.docData||{};
     const dt=dd.savedAt?new Date(dd.savedAt).toLocaleDateString('vi-VN'):'';
