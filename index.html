@@ -1307,7 +1307,7 @@ function buildTkhaiRows(r){
 }
 function tkhaiRowHtml(t,i){
   return '<div data-tkhai="'+i+'" style="display:grid;grid-template-columns:1fr 1fr 1fr 30px;gap:8px;margin-bottom:6px;align-items:end">'
-    +'<div><label class="lbl">Số tờ khai'+(i>0?' #'+(i+1):'')+'</label><input type="text" class="tk_sotk" value="'+(t.sotk||'').replace(/"/g,"&quot;")+'" placeholder="Số tờ khai XK" style="font-size:12px"/></div>'
+    +'<div><label class="lbl">Số tờ khai'+(t.booking?' ('+t.booking+')':(i>0?' #'+(i+1):''))+'</label><input type="text" class="tk_sotk" value="'+(t.sotk||'').replace(/"/g,"&quot;")+'" placeholder="Số tờ khai XK" style="font-size:12px"/></div>'
     +'<div><label class="lbl">Mã chi cục</label><input type="text" class="tk_macc" value="'+(t.macc||'').replace(/"/g,"&quot;")+'" placeholder="02CV..." style="font-size:12px"/></div>'
     +'<div><label class="lbl">Phân luồng</label><input type="text" class="tk_pl" value="'+(t.pl||'').replace(/"/g,"&quot;")+'" placeholder="Xanh/Vàng/Đỏ" style="font-size:12px"/></div>'
     +'<button class="rac red" onclick="this.closest(\'[data-tkhai]\').remove()" title="Xóa" style="font-size:13px;margin-bottom:4px">'+(i>0?'<i class="ti ti-trash"></i>':'')+'</button>'
@@ -1774,10 +1774,13 @@ function switchPartyTab(idx){
 function rebuildInvoicePreview(){
   try{
   const d=window._dnData; if(!d)return;
-  const {r,svcs,allActiveSvcs,sp,cp,cnNm,shipperName,dateStr,dnNo,containers,allParties}=d;
+  const {r,svcs,allActiveSvcs,sp,cp,cnNm,shipperName,dateStr,containers,allParties}=d;
   // Filter svcs by current party
   const partyList=allParties||[''];
   const currentParty=partyList[d.currentPartyIdx||0]||'';
+  // DN number: prefer the saved per-party number; fall back to lot dnNo, then the generated one
+  const dnMap=r.dnByParty||{};
+  const dnNo=(dnMap[currentParty]&&dnMap[currentParty].trim())||(dnMap[currentParty||'(Không party)']&&dnMap[currentParty||'(Không party)'].trim())||(r.dnNo&&r.dnNo.trim())||d.dnNo;
   // If party is set, filter; if no party on svc treat as wildcard only when single party
   function svcMatchParty(s){
     const svParty=(svcs[s.key]?.party||'').trim();
@@ -3679,6 +3682,9 @@ async function exportDebitForParty(party){
     const p=el.dataset.party; if(p)dnByParty[p]=el.value;
   });
   try{ await fsSet(colName(detailTt),detailId,{dnByParty}); }catch(e){}
+  // Update cache immediately so popup reads the fresh DN numbers
+  const ci=cache[detailTt].findIndex(x=>x._id===detailId);
+  if(ci>=0)cache[detailTt][ci].dnByParty=dnByParty;
   // Open the debit note popup filtered to this party
   window._dnFilterParty=party==='(Không party)'?'':party;
   openDebitNotePopup();
@@ -4179,7 +4185,105 @@ const QUOTE_SERVICES=['Customs Clearance','Phytosanitary Certificate','Fumigatio
 const QUOTE_CONT_TYPES=['20DC','40HC','20RF','40RF'];
 let _quoteCargoTab='DC';
 
+let _quotesCache=[];
 function renderQuote(){
+  const pg=g('page-quote'); if(!pg)return;
+  // LIST VIEW: quotations grouped by shipper
+  pg.innerHTML=`
+  <div style="max-width:1000px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
+      <div><div style="font-weight:700;font-size:16px;color:#0C2C52"><i class="ti ti-file-dollar" style="margin-right:6px"></i>Quotation</div>
+      <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">Danh sách báo giá theo khách hàng</div></div>
+      <button class="btn pri" onclick="newQuotation()"><i class="ti ti-plus"></i> New Quotation</button>
+    </div>
+    <input type="text" id="qListSearch" placeholder="Tìm theo shipper / quote no..." oninput="renderQuoteList()" style="width:100%;box-sizing:border-box;font-size:12.5px;padding:9px 12px;border:1px solid var(--border-light);border-radius:9px;background:var(--bg-secondary);margin-bottom:1rem"/>
+    <div id="qListBox"><div style="text-align:center;padding:2rem;color:var(--text-tertiary)">Đang tải...</div></div>
+  </div>`;
+  loadQuotes();
+}
+
+async function loadQuotes(){
+  try{
+    const snap=await db.collection('quotes').get();
+    _quotesCache=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+  }catch(e){_quotesCache=[];}
+  renderQuoteList();
+}
+
+function renderQuoteList(){
+  const box=g('qListBox'); if(!box)return;
+  const q=(g('qListSearch')?.value||'').toLowerCase().trim();
+  let list=_quotesCache.slice().sort(function(a,b){return (b.savedAt||0)-(a.savedAt||0);});
+  if(q)list=list.filter(function(x){return (x.customer||'').toLowerCase().includes(q)||(x.no||'').toLowerCase().includes(q);});
+  if(!list.length){box.innerHTML='<div style="text-align:center;padding:2rem;color:var(--text-tertiary);font-size:13px">Chưa có báo giá nào. Bấm "New Quotation" để tạo mới.</div>';return;}
+  // Group by shipper
+  const groups={};
+  list.forEach(function(x){const k=x.customer||'(Không tên)';(groups[k]=groups[k]||[]).push(x);});
+  box.innerHTML=Object.keys(groups).sort().map(function(sh){
+    const items=groups[sh];
+    return '<div style="margin-bottom:1.25rem">'
+      +'<div style="font-size:12px;font-weight:700;color:#185FA5;text-transform:uppercase;letter-spacing:.4px;margin-bottom:.5rem;padding-bottom:4px;border-bottom:2px solid #E6F1FB"><i class="ti ti-building" style="font-size:13px"></i> '+sh+' <span style="color:var(--text-tertiary);font-weight:500">('+items.length+')</span></div>'
+      +'<div style="display:flex;flex-direction:column;gap:6px">'+items.map(function(x){
+        const pods=(x.pods||[]).map(function(p){return p.pod;}).filter(Boolean).join(', ');
+        const dt=x.savedAt?new Date(x.savedAt).toLocaleDateString('vi-VN'):'';
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border:1px solid var(--border-light);border-radius:10px;background:var(--bg-primary)">'
+          +'<div onclick="openQuotation(\''+x._id+'\')" style="cursor:pointer;flex:1;min-width:0">'
+            +'<div style="font-weight:700;font-size:13px;color:#0C2C52">'+(x.no||'—')+' <span style="font-weight:500;color:var(--text-secondary);font-size:11.5px">'+(x.date||'')+'</span></div>'
+            +'<div style="font-size:11.5px;color:var(--text-secondary)">'+(x.pol||'')+(pods?' → '+pods:'')+(x.commodity?' • '+x.commodity:'')+'</div>'
+          +'</div>'
+          +'<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">'
+            +'<span style="font-size:10px;color:var(--text-tertiary)">'+dt+'</span>'
+            +'<button class="rac" onclick="openQuotation(\''+x._id+'\')" title="Mở"><i class="ti ti-edit"></i></button>'
+            +'<button class="rac red" onclick="deleteQuotation(\''+x._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>'
+          +'</div>'
+        +'</div>';
+      }).join('')+'</div></div>';
+  }).join('');
+}
+
+function newQuotation(){
+  // Ask which shipper, then open the form
+  const shippers=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname).sort();
+  if(!shippers.length){toast('Chưa có shipper nào trong Đối tác','error');return;}
+  const opts=shippers.map(function(s){return '<option>'+s+'</option>';}).join('');
+  g('combineOv').innerHTML='<div class="modal" style="max-width:420px"><div class="mhdr"><div class="mtitle">Chọn khách hàng</div><button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="fg"><div class="fi full"><label class="lbl">Khách hàng (Shipper)</label><select id="newQuoteShipper">'+opts+'</select></div></div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button><button class="btn pri" onclick="startNewQuote()"><i class="ti ti-arrow-right"></i> Tạo báo giá</button></div></div>';
+  openOv('combineOv');
+}
+
+function startNewQuote(){
+  const sh=g('newQuoteShipper')?.value||'';
+  closeOv('combineOv');
+  window._qEditId=null;
+  window._qTypes={};window._qLocal={};window._qService={};window._qPods=[];
+  window._qPresetCustomer=sh;
+  renderQuoteForm();
+}
+
+function openQuotation(id){
+  const q=_quotesCache.find(function(x){return x._id===id;});
+  if(!q){toast('Không tìm thấy báo giá','error');return;}
+  window._qEditId=id;
+  window._qTypes=q.types||{};window._qLocal=q.local||{};window._qService=q.service||{};window._qPods=q.pods||[];
+  window._qPresetCustomer=q.customer||'';
+  window._qLoaded=q;
+  renderQuoteForm();
+}
+
+async function deleteQuotation(id){
+  if(!confirm('Xóa báo giá này?'))return;
+  try{await fsDel('quotes',id);_quotesCache=_quotesCache.filter(function(x){return x._id!==id;});toast('Đã xóa');renderQuoteList();}
+  catch(e){toast('Lỗi: '+e.message,'error');}
+}
+window.newQuotation=newQuotation;
+window.startNewQuote=startNewQuote;
+window.openQuotation=openQuotation;
+window.deleteQuotation=deleteQuotation;
+window.renderQuoteList=renderQuoteList;
+window.loadQuotes=loadQuotes;
+
+function renderQuoteForm(){
   const pg=g('page-quote'); if(!pg)return;
   // Initialize state if first time
   if(!window._qTypes)window._qTypes={};
@@ -4245,7 +4349,7 @@ function renderQuote(){
         <div style="font-size:12px;opacity:.85;margin-top:4px">Tạo báo giá chuyên nghiệp cho khách hàng</div>
       </div>
       <div style="text-align:right">
-        <div style="font-size:34px;opacity:.9"><i class="ti ti-ship"></i></div>
+        <button onclick="renderQuote()" style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;padding:8px 14px;border-radius:9px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px"><i class="ti ti-arrow-left"></i> Danh sách</button>
       </div>
     </div>
   </div>
@@ -4257,7 +4361,7 @@ function renderQuote(){
       <div class="qt-fld"><label>Quote No</label><input type="text" id="q_no" value="${quoteNextNo()}"/></div>
       <div class="qt-fld"><label>Date</label><input type="date" id="q_date" value="${today}"/></div>
       <div class="qt-fld"><label>Sales Person</label><input type="text" id="q_sales" value="${(currentProfile&&currentProfile.name)||''}" placeholder="Tên sales"/></div>
-      <div class="qt-fld"><label>Customer Name</label><select id="q_customer"><option value="">— Chọn khách hàng —</option>${shippers.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      <div class="qt-fld"><label>Customer Name</label><select id="q_customer"><option value="">— Chọn khách hàng —</option>${shippers.map(s=>`<option${s===window._qPresetCustomer?' selected':''}>${s}</option>`).join('')}</select></div>
       <div class="qt-fld"><label>Commodity</label><input type="text" id="q_commodity" placeholder="VD: Coconut fiber"/></div>
       <div class="qt-fld"><label>POL (Port of Loading)</label><input type="text" id="q_pol" value="HO CHI MINH, VIETNAM"/></div>
     </div>
@@ -4293,11 +4397,10 @@ function renderQuote(){
 
   <!-- 4. LOCAL CHARGE -->
   <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-receipt"></i></span>Local Charge</div>
-    <table class="qt-table">
-      <thead><tr><th style="width:22%">Charge Name</th><th style="width:14%">Currency</th><th style="width:18%">Amount</th><th style="width:14%">Unit</th><th>Remark</th></tr></thead>
-      <tbody id="qLocalBody"></tbody>
-    </table>
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-receipt"></i></span>Local Charge
+      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Giá theo từng loại cont</span>
+    </div>
+    <div id="qLocalWrap"></div>
   </div>
 
   <!-- 5. LOCAL SERVICE -->
@@ -4330,19 +4433,29 @@ function renderQuote(){
   </div>
 
   <div class="qt-actions">
-    <button class="qt-btn" onclick="quoteSave()"><i class="ti ti-device-floppy"></i> Save Quote</button>
+    <button class="qt-btn" onclick="quoteSave(true)"><i class="ti ti-device-floppy"></i> Save Quote</button>
     <button class="qt-btn primary" onclick="quoteExportPDF()"><i class="ti ti-file-type-pdf"></i> Export PDF</button>
     <button class="qt-btn green" onclick="quoteSendEmail()"><i class="ti ti-mail"></i> Send Email</button>
     <button class="qt-btn" onclick="quoteExportPDF()"><i class="ti ti-printer"></i> Print Quote</button>
   </div>
 </div>`;
 
+  // Load saved scalar fields when editing
+  if(window._qLoaded){
+    const q=window._qLoaded;
+    const setv=function(id,v){const el=g(id);if(el&&v!=null)el.value=v;};
+    setv('q_no',q.no);setv('q_date',q.date);setv('q_sales',q.sales);setv('q_commodity',q.commodity);
+    setv('q_pol',q.pol);setv('q_curOcean',q.curOcean);
+    setv('q_payment',q.payment);setv('q_freetime',q.freetime);setv('q_routing',q.routing);setv('q_note',q.note);
+    window._qLoaded=null;
+  }
   quoteRenderTypeChecks();
   quoteRenderOcean();
   quoteRenderLocal();
   quoteRenderServices();
   quoteRecalc();
 }
+window.renderQuoteForm=renderQuoteForm;
 
 function quoteSwitchCargo(t){
   _quoteCargoTab=t;
@@ -4364,6 +4477,7 @@ function quoteToggleType(el){
   window._qTypes=window._qTypes||{};
   window._qTypes[el.dataset.qtype]=el.checked;
   quoteRenderOcean();
+  quoteRenderLocal();
   quoteRenderServices();
   quoteRecalc();
 }
@@ -4459,17 +4573,30 @@ window.quoteDelPodRow=quoteDelPodRow;
 window.quoteActiveTypes=quoteActiveTypes;
 
 function quoteRenderLocal(){
-  const body=g('qLocalBody'); if(!body)return;
-  body.innerHTML=QUOTE_LOCAL_CHARGES.map(function(name){
+  const wrap=g('qLocalWrap'); if(!wrap)return;
+  const types=quoteActiveTypes();
+  const curOpts=function(sel){return ['USD','VND','CNY','EUR'].map(function(cc){return '<option'+(cc===(sel||'USD')?' selected':'')+'>'+cc+'</option>';}).join('');};
+  const typeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
+  const head='<table class="qt-table"><thead><tr><th style="width:20%">Charge Name</th><th style="width:12%">Currency</th>'+(types.length?typeHeads:'<th style="text-align:right">Amount</th>')+'<th>Remark</th></tr></thead><tbody>';
+  const rows=QUOTE_LOCAL_CHARGES.map(function(name){
     const sv=(window._qLocal&&window._qLocal[name])||{};
+    let priceCells;
+    if(types.length){
+      priceCells=types.map(function(t){
+        const v=(sv.prices&&sv.prices[t])||'';
+        return '<td><input type="number" data-qlc="'+name+'" data-pt="'+t+'" value="'+v+'" placeholder="0" oninput="quoteLocalPrice(this)" style="text-align:right"/></td>';
+      }).join('');
+    } else {
+      priceCells='<td><input type="number" data-qlc="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteLocalInput(this)" style="text-align:right"/></td>';
+    }
     return '<tr>'
       +'<td style="font-weight:600">'+name+'</td>'
-      +'<td><select data-qlc="'+name+'" data-f="cur" oninput="quoteLocalInput(this)">'+['USD','VND','CNY','EUR'].map(function(c){return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('')+'</select></td>'
-      +'<td><input type="number" data-qlc="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteLocalInput(this)"/></td>'
-      +'<td><input type="text" data-qlc="'+name+'" data-f="unit" value="'+(sv.unit||'/cont').replace(/"/g,'&quot;')+'" oninput="quoteLocalInput(this)"/></td>'
+      +'<td><select data-qlc="'+name+'" data-f="cur" onchange="quoteLocalInput(this)">'+curOpts(sv.cur)+'</select></td>'
+      +priceCells
       +'<td><input type="text" data-qlc="'+name+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteLocalInput(this)"/></td>'
     +'</tr>';
   }).join('');
+  wrap.innerHTML=head+rows+'</tbody></table>'+(types.length?'':'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">💡 Chọn loại container để nhập giá theo từng loại cont</div>');
 }
 
 function quoteLocalInput(el){
@@ -4479,6 +4606,15 @@ function quoteLocalInput(el){
   window._qLocal[n][el.dataset.f]=el.value;
   quoteRecalc();
 }
+function quoteLocalPrice(el){
+  window._qLocal=window._qLocal||{};
+  const n=el.dataset.qlc;
+  window._qLocal[n]=window._qLocal[n]||{};
+  window._qLocal[n].prices=window._qLocal[n].prices||{};
+  window._qLocal[n].prices[el.dataset.pt]=el.value;
+  quoteRecalc();
+}
+window.quoteLocalPrice=quoteLocalPrice;
 
 function quoteRenderServices(){
   const body=g('qServiceBody'); if(!body)return;
@@ -4561,9 +4697,15 @@ function quoteRecalc(){
     });
   });
   const oceanSums=quoteSumByCur(oceanItems,'price',false);
-  // Local
-  const localItems=Object.values(window._qLocal||{});
-  const localSums=quoteSumByCur(localItems,'amount',false);
+  // Local: sum per-cont-type prices (or flat amount if no types)
+  const localSums={};
+  Object.values(window._qLocal||{}).forEach(function(l){
+    const lc=l.cur||'USD';
+    let tot=0;
+    if(types.length&&l.prices){types.forEach(function(t){tot+=parseFloat(l.prices[t])||0;});}
+    else tot=parseFloat(l.amount)||0;
+    if(tot)localSums[lc]=(localSums[lc]||0)+tot;
+  });
   // Service: sum per-cont-type prices (or flat amount if no types)
   const svcSums={};
   Object.values(window._qService||{}).forEach(function(s){
@@ -4602,15 +4744,25 @@ function quoteGather(){
   };
 }
 
-async function quoteSave(){
+async function quoteSave(returnToList){
   const q=quoteGather();
-  if(!q.customer){toast('Chọn khách hàng trước','error');return;}
+  if(!q.customer){toast('Chọn khách hàng trước','error');return false;}
+  const id=window._qEditId||q.no||('QT_'+Date.now());
+  q._id=id;
   setLoading(true,'Đang lưu báo giá...');
+  let ok=false;
   try{
-    await fsSet('quotes',q.no||('QT_'+Date.now()),q);
+    await fsSet('quotes',id,q);
+    window._qEditId=id;
+    // update local cache
+    const ci=_quotesCache.findIndex(function(x){return x._id===id;});
+    if(ci>=0)_quotesCache[ci]=q; else _quotesCache.push(q);
     toast('Đã lưu báo giá '+q.no);
+    ok=true;
+    if(returnToList)renderQuote();
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
+  return ok;
 }
 
 function quoteBuildHTML(q){
@@ -4636,7 +4788,17 @@ function quoteBuildHTML(q){
     +'</div>';
   });
 
-  const localRows=QUOTE_LOCAL_CHARGES.map(function(n){var l=q.local[n]||{};if(!l.amount)return '';return '<tr><td>'+n+'</td><td>'+(l.cur||'USD')+'</td><td style="text-align:right">'+parseFloat(l.amount).toLocaleString()+'</td><td>'+(l.unit||'')+'</td><td>'+(l.remark||'')+'</td></tr>';}).filter(Boolean).join('');
+  const localTypeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
+  const localHead=types.length?localTypeHeads:'<th style="text-align:right">Amount</th>';
+  const localRows=QUOTE_LOCAL_CHARGES.map(function(n){
+    var l=q.local[n]||{};
+    var has=types.length?(l.prices&&types.some(function(t){return parseFloat(l.prices[t])>0;})):parseFloat(l.amount)>0;
+    if(!has)return '';
+    var cells;
+    if(types.length){cells=types.map(function(t){var p=(l.prices&&l.prices[t]);return '<td style="text-align:right">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');}
+    else cells='<td style="text-align:right">'+(l.amount?parseFloat(l.amount).toLocaleString():'-')+'</td>';
+    return '<tr><td>'+n+'</td><td>'+(l.cur||'USD')+'</td>'+cells+'<td>'+(l.remark||'')+'</td></tr>';
+  }).filter(Boolean).join('');
 
   // Service: per-cont-type columns
   const svcTypeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
@@ -4659,7 +4821,7 @@ function quoteBuildHTML(q){
       +'<div><b>Commodity</b>'+q.commodity+'</div>'
     +'</div></div>'
     +(oceanHTML?'<div class="sec"><div class="sec-t">Ocean Freight</div>'+oceanHTML+'</div>':'')
-    +(localRows?'<div class="sec"><div class="sec-t">Local Charge</div><table><thead><tr><th>Charge</th><th>Currency</th><th style="text-align:right">Amount</th><th>Unit</th><th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div>':'')
+    +(localRows?'<div class="sec"><div class="sec-t">Local Charge</div><table><thead><tr><th>Charge</th><th>Currency</th>'+localHead+'<th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div>':'')
     +(svcRows?'<div class="sec"><div class="sec-t">Local Service</div><table><thead><tr><th>Service</th>'+svcHead+'<th>Currency</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div>':'')
     +'<div class="sec"><div class="sec-t">Notes</div>'
       +'<div class="info">'
@@ -5051,6 +5213,13 @@ window.getNextDnNo=getNextDnNo;
 ═══════════════════════════════════════════ */
 let combineSelectedIds=new Set();
 
+function dmOpenCombine(){
+  if(!_dmLot){toast('Chưa chọn lô hàng','error');return;}
+  // Open combine with the current DM lot as the first/base selection
+  openCombineFrom(_dmLot._id,_dmLot._tt);
+}
+window.dmOpenCombine=dmOpenCombine;
+
 function openCombineFrom(id, tt){
   combineSelectedIds=new Set([id]);
   openCombine(tt);
@@ -5066,15 +5235,34 @@ function openCombineFrom(id, tt){
 
 function openCombine(tt){
   if(!combineSelectedIds) combineSelectedIds=new Set();
-  const lots=cache[tt]||[];
+  let lots=(cache[tt]||[]).filter(function(r){return r.status!=='Xóa CB';});
+  // Determine base lot (first selected) to compute suggestions
+  const baseId=Array.from(combineSelectedIds)[0];
+  const base=lots.find(function(r){return r._id===baseId;});
+  function matchScore(r){
+    if(!base||r._id===base._id)return -1;
+    let s=0;
+    if((r.pod||'')&&(r.pod===base.pod))s+=3;
+    if((r.vessel||'')&&r.vessel===base.vessel&&(r.voy||'')===(base.voy||''))s+=2;
+    if((r.shipper||r.supplier||'')&&(r.shipper||r.supplier)===(base.shipper||base.supplier))s+=1;
+    return s;
+  }
+  if(base){
+    lots=lots.slice().sort(function(a,b){
+      if(a._id===base._id)return -1; if(b._id===base._id)return 1;
+      return matchScore(b)-matchScore(a);
+    });
+  }
   // Group by vessel+pod for display
   const tdS='padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
   const thS='padding:7px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;text-align:left';
 
-  const rows=lots.filter(function(r){return r.status!=='Xóa CB';}).map(function(r){
-    return '<tr id="cbrow_'+r._id+'" style="cursor:pointer" data-id="'+r._id+'" data-tt="'+tt+'" onclick="toggleCombineSelect(this.dataset.id,this.dataset.tt)">'
+  const rows=lots.map(function(r){
+    const sug=base&&r._id!==base._id&&matchScore(r)>0;
+    const sugBadge=sug?' <span style="font-size:9px;background:var(--green-bg);color:var(--green);padding:1px 5px;border-radius:4px;font-weight:600">gợi ý</span>':'';
+    return '<tr id="cbrow_'+r._id+'" style="cursor:pointer'+(sug?';background:rgba(15,110,86,.05)':'')+'" data-id="'+r._id+'" data-tt="'+tt+'" onclick="toggleCombineSelect(this.dataset.id,this.dataset.tt)">'
       +'<td style="'+tdS+';text-align:center;width:36px"><input type="checkbox" id="cbchk_'+r._id+'" data-id="'+r._id+'" data-tt="'+tt+'" onchange="toggleCombineSelect(this.dataset.id,this.dataset.tt)" onclick="event.stopPropagation()"/></td>'
-      +'<td style="'+tdS+';font-weight:600;color:var(--blue)">'+r.bookingNo+'</td>'
+      +'<td style="'+tdS+';font-weight:600;color:var(--blue)">'+r.bookingNo+sugBadge+'</td>'
       +'<td style="'+tdS+'">'+( r.shipper||r.supplier||'—')+'</td>'
       +'<td style="'+tdS+'">'+( r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'</td>'
       +'<td style="'+tdS+'">'+( r.pod||'—')+'</td>'
@@ -5203,11 +5391,22 @@ async function executeCombine(tt){
     const firstR=selected[0];
     const combinedBook=selected.map(function(r){return r.bookingNo;}).join(' + ');
     const totalVol=selected.reduce(function(s,r){return s+(parseInt(r.vol)||0);},0);
-    // Merge svcs
+    // Merge svcs — dedupe: if same service key already added, keep first only
     const mergedSvcs={};
     selected.forEach(function(r){
       Object.entries(r.svcs||{}).forEach(function(e){
         if(e[1].on&&!mergedSvcs[e[0]])mergedSvcs[e[0]]=JSON.parse(JSON.stringify(e[1]));
+      });
+    });
+    // Merge containers from all lots
+    const mergedConts=[];
+    selected.forEach(function(r){(r.containers||[]).forEach(function(c){if(c.no)mergedConts.push(JSON.parse(JSON.stringify(c)));});});
+    // Collect tờ khai per lot (list each lot's declarations with its booking)
+    const mergedTkhai=[];
+    selected.forEach(function(r){
+      const list=(r.tkhaiList&&r.tkhaiList.length)?r.tkhaiList:[{sotk:r.soTkhai||'',macc:r.maChiCuc||'',pl:r.phanLuong||''}];
+      list.forEach(function(t){
+        if(t.sotk||t.macc||t.pl)mergedTkhai.push({sotk:t.sotk||'',macc:t.macc||'',pl:t.pl||'',booking:r.bookingNo||'',jobNo:r.jobNo||''});
       });
     });
     // Create combined lot
@@ -5215,7 +5414,11 @@ async function executeCombine(tt){
       bookingNo:combinedBook,
       vol:String(totalVol),
       svcs:mergedSvcs,
+      containers:mergedConts,
+      tkhaiList:mergedTkhai,
+      soTkhai:(mergedTkhai[0]||{}).sotk||'',
       combinedFrom:selected.map(function(r){return r._id;}),
+      combinedBookings:selected.map(function(r){return {booking:r.bookingNo,jobNo:r.jobNo,vol:r.vol};}),
       createdAt:Date.now(),
       updatedAt:Date.now(),
       status:'Đang xử lý'
@@ -5413,13 +5616,23 @@ function renderDocMaker(){
 
   <div id="dmForm" style="display:none">
     <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📄 Số chứng từ</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-      <div><label class="lbl">Contract No.</label><input type="text" id="dm_cno" style="font-size:12px"/></div>
-      <div><label class="lbl">Invoice No.</label><input type="text" id="dm_ino" style="font-size:12px"/></div>
-      <div><label class="lbl">Packing List No.</label><input type="text" id="dm_pkl" style="font-size:12px"/></div>
-      <div><label class="lbl">Date</label><input type="date" id="dm_date" style="font-size:12px"/></div>
-      <div style="grid-column:1/-1"><label class="lbl">POD (EN)</label><input type="text" id="dm_pod" style="font-size:12px"/></div>
+    <div style="display:grid;grid-template-columns:90px 1fr 130px;gap:8px;margin-bottom:6px;align-items:center">
+      <div style="font-size:11px;font-weight:600;color:var(--text-secondary)">Contract</div>
+      <input type="text" id="dm_cno" placeholder="Contract No." style="font-size:12px"/>
+      <input type="date" id="dm_cdate" title="Contract Date" style="font-size:12px"/>
     </div>
+    <div style="display:grid;grid-template-columns:90px 1fr 130px;gap:8px;margin-bottom:6px;align-items:center">
+      <div style="font-size:11px;font-weight:600;color:var(--text-secondary)">Invoice</div>
+      <input type="text" id="dm_ino" placeholder="Invoice No." style="font-size:12px"/>
+      <input type="date" id="dm_idate" title="Invoice Date" style="font-size:12px"/>
+    </div>
+    <div style="display:grid;grid-template-columns:90px 1fr 130px;gap:8px;margin-bottom:10px;align-items:center">
+      <div style="font-size:11px;font-weight:600;color:var(--text-secondary)">Packing List</div>
+      <input type="text" id="dm_pkl" placeholder="Packing List No." style="font-size:12px"/>
+      <input type="date" id="dm_pdate" title="PKL Date" style="font-size:12px"/>
+    </div>
+    <input type="hidden" id="dm_date"/>
+    <div style="margin-bottom:10px"><label class="lbl">POD (EN)</label><input type="text" id="dm_pod" style="font-size:12px"/></div>
 
     <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🏢 Buyer / Cnee</div>
     <div style="margin-bottom:10px">
@@ -5432,8 +5645,9 @@ function renderDocMaker(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
       <div style="grid-column:1/-1"><label class="lbl">Chọn tên hàng (từ Cài đặt)</label><select id="dm_goodsSel" onchange="dmPickGoods()" style="font-size:12px"><option value="">— Chọn / nhập tay —</option></select></div>
       <div style="grid-column:1/-1"><label class="lbl">Tên hàng (EN)</label><input type="text" id="dm_goods" placeholder="COCONUT PEAT" style="font-size:12px"/></div>
+      <div style="grid-column:1/-1"><label class="lbl">HS Code</label><input type="text" id="dm_hscode" placeholder="VD: 530500 (coconut fiber) / 140490 (mụn dừa)" style="font-size:12px"/></div>
       <div style="grid-column:1/-1"><label class="lbl">Specifications (mỗi dòng 1 ý)</label><textarea id="dm_specs" rows="4" placeholder="+ Product: Unwashed&#10;+ Moisture: 12-18% Max." style="font-size:11.5px;resize:vertical"></textarea></div>
-      <div><label class="lbl">Unit (BAGS/BALES…)</label><input type="text" id="dm_unit" value="BAGS" style="font-size:12px"/></div>
+      <div><label class="lbl">Unit (cho Invoice — độc lập)</label><input type="text" id="dm_unit" value="BAGS" style="font-size:12px"/></div>
       <div><label class="lbl">Quantity</label><input type="number" id="dm_qty" placeholder="6000" style="font-size:12px" oninput="dmCalcAmount()"/></div>
       <div><label class="lbl">Unit Price (USD)</label><input type="number" id="dm_price" step="0.001" placeholder="1.21" style="font-size:12px" oninput="dmCalcAmount()"/></div>
       <div><label class="lbl">Amount (USD)</label><input type="number" id="dm_amount" step="0.01" placeholder="tự tính" style="font-size:12px;font-weight:700"/></div>
@@ -5465,9 +5679,13 @@ function renderDocMaker(){
         </tr></tfoot>
       </table>
     </div>
+    <label style="display:flex;align-items:center;gap:8px;margin:.5rem 0;font-size:12px;cursor:pointer;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
+      <input type="checkbox" id="dm_addStamp" checked style="width:16px;height:16px;cursor:pointer"/> Thêm con mộc công ty (shipper) vào chứng từ
+    </label>
     <div style="display:flex;gap:8px;margin-top:.5rem">
       <button class="btn pri" onclick="dmPreview()" style="flex:1"><i class="ti ti-eye"></i> Xem trước</button>
       <button class="btn" onclick="dmSaveData()" title="Lưu thông tin chứng từ vào lô hàng"><i class="ti ti-device-floppy"></i> Lưu</button>
+      <button class="btn" onclick="dmOpenCombine()" title="Gộp nhiều lô hàng" style="color:var(--green);border-color:var(--green)"><i class="ti ti-arrows-join"></i> Gộp file</button>
     </div>
   </div>
 </div>
@@ -5545,7 +5763,7 @@ function dmPickLot(id,tt){
   g('dm_cno').value=r.jobNo||'';
   g('dm_ino').value=r.dnNo||'';
   g('dm_goods').value=(r.tenHang||'').toUpperCase();
-  if(r.pkgUnit)g('dm_unit').value=(r.pkgUnit||'BAGS').toUpperCase();
+  if(r.pkgUnit&&!g('dm_unit').value)g('dm_unit').value=(r.pkgUnit||'BAGS').toUpperCase();
   g('dm_qty').value=r.vol?'':''; // user enters
 
   const shipperKey=r.shipper||r.supplier||'';
@@ -5673,7 +5891,7 @@ function dmGetData(){
     mbl:r.mblNo||'',bkgNo:r.bookingNo||'',
     sName:sp.enName||sp.fullname||'',sShort:sp.enShort||sp.enName||sp.fullname||'',sAddr:sp.enAddr||sp.addr||'',
     sTel:sp.phone||'',sEmail:sp.email||'',
-    sAcctName:sp.acctName||sp.enName||sp.fullname||'',sBankAcc:sp.bankAcc||'',sBankName:sp.bankName||'',sBankSwift:sp.swift||'',sBankAddr:sp.bankAddr||'',sStamp:sp.stamp||'',
+    sAcctName:sp.acctName||sp.enName||sp.fullname||'',sBankAcc:sp.bankAcc||'',sBankName:sp.bankName||'',sBankSwift:sp.swift||'',sBankAddr:sp.bankAddr||'',sStamp:(g('dm_addStamp')?.checked!==false)?(sp.stamp||''):'',
     pklNo:g('dm_pkl')?.value||'',
     pol:'HO CHI MINH, VIET NAM'};
 }
@@ -5702,12 +5920,14 @@ function _dmTop(d){
   return '<h1>'+d.sName+'</h1><div class="addr">ADDRESS: '+d.sAddr.toUpperCase()+'</div>';
 }
 function _dmDocNos(d,showInv){
+  // Invoice context uses invoice date (d.date); Contract context uses contractDate
+  const theDate=showInv?(d.invoiceDate||d.date):(d.contractDate||d.date);
   return '<table class="nb" style="width:100%;margin-bottom:10px"><tr>'
     +'<td style="width:55%"></td>'
     +'<td><table class="nb">'
     +'<tr><td class="lbl">CONTRACT No.</td><td>: '+d.contractNo+'</td></tr>'
     +(showInv?'<tr><td class="lbl">INVOICE  No.</td><td>: '+d.invoiceNo+'</td></tr>':'')
-    +'<tr><td class="lbl">Date</td><td>: '+d.date+'</td></tr>'
+    +'<tr><td class="lbl">Date</td><td>: '+theDate+'</td></tr>'
     +'</table></td></tr></table>';
 }
 function _dmParties(d){
@@ -5780,7 +6000,7 @@ function _dmPKL2(d){
   return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+_dmCSS()+'<title>PKL '+(d.pklNo||d.invoiceNo)+'</title></head><body>'
     +_dmTop(d)
     +'<div class="title">PACKING LIST</div>'
-    +'<table class="nb" style="width:100%;margin-bottom:6px"><tr><td style="width:60%"></td><td><table class="nb"><tr><td class="lbl">No.</td><td>: '+(d.pklNo||d.invoiceNo)+'</td></tr><tr><td class="lbl">Date</td><td>: '+d.date+'</td></tr></table></td></tr></table>'
+    +'<table class="nb" style="width:100%;margin-bottom:6px"><tr><td style="width:60%"></td><td><table class="nb"><tr><td class="lbl">No.</td><td>: '+(d.pklNo||d.invoiceNo)+'</td></tr><tr><td class="lbl">Date</td><td>: '+(d.pklDate||d.date)+'</td></tr></table></td></tr></table>'
     +'<table class="nb" style="width:100%;margin-bottom:4px">'
     +'<tr><td class="lbl" style="width:130px">SELLER</td><td style="width:14px">:</td><td class="b">'+d.sName+'</td></tr>'
     +'<tr><td class="lbl">ADDRESS</td><td>:</td><td>'+d.sAddr+'</td></tr>'
@@ -5857,7 +6077,7 @@ function _dmSI(d){
     const tare=c.tare||0;
     const gw=c.gw||0;
     const vgm=gw?Math.round((gw+tare)*10)/10:'';
-    return '<tr><td class="c">'+(i+1)+'</td><td class="c">'+c.no+'</td><td class="c">'+c.seal+'</td><td class="c">'+(c.type||'40HC')+'</td><td class="c">'+(c.pkg?c.pkg.toLocaleString():'')+'</td><td class="c">'+d.unit+'</td><td class="r">'+(gw?gw.toLocaleString():'')+'</td><td class="r">'+(tare?tare.toLocaleString():'')+'</td><td class="r">'+(vgm?vgm.toLocaleString():'')+'</td><td class="c"></td></tr>';
+    return '<tr><td class="c">'+(i+1)+'</td><td class="c">'+c.no+'</td><td class="c">'+c.seal+'</td><td class="c">'+(c.type||'40HC')+'</td><td class="c">'+(c.pkg?c.pkg.toLocaleString():'')+'</td><td class="c">'+d.unit+'</td><td class="r">'+(gw?gw.toLocaleString():'')+'</td><td class="r">'+(tare?tare.toLocaleString():'')+'</td><td class="r">'+(vgm?vgm.toLocaleString():'')+'</td><td class="c">40</td></tr>';
   }).join('');
   const totalTare=d.conts.reduce(function(s,c){return s+(c.tare||0);},0);
   const totalVGM=d.conts.reduce(function(s,c){return s+((c.gw||0)+(c.tare||0));},0);
@@ -5866,8 +6086,8 @@ function _dmSI(d){
     +'<div class="title">SHIPPING INSTRUCTION</div>'
     +'<table class="gt" style="width:100%;font-size:10px">'
     +'<tr><td colspan="3" style="width:52%"><span class="b">1. Shipper/Exporter</span><br>'+d.sName+'<br>'+d.sAddr+'</td><td colspan="2"><span class="b">4. BL No/ Booking No:</span><br>'+d.mbl+'</td></tr>'
-    +'<tr><td colspan="3"><span class="b">2. Consignee</span><br>'+d.cnee+'<br>'+d.cneeAddr+'</td><td colspan="2"><span class="b">5. Type of Bill of lading</span><br>Original [ ]&nbsp;&nbsp; Surrendered [X]</td></tr>'
-    +'<tr><td colspan="3"><span class="b">3. Notify Party</span><br>SAME AS CONSIGNEE</td><td colspan="2"><span class="b">6. Contact email:</span><br>'+(d.cneeEmail||'')+'</td></tr>'
+    +'<tr><td colspan="3"><span class="b">2. Consignee</span><br>'+d.cnee+'<br>'+d.cneeAddr+(d.cneeUsci?'<br>USCI: '+d.cneeUsci:'')+(d.cneePic?'<br>PIC: '+d.cneePic:'')+(d.cneeTel?'&nbsp;&nbsp;Tel: '+d.cneeTel:'')+(d.cneeEmail?'<br>Email: '+d.cneeEmail:'')+'</td><td colspan="2"><span class="b">5. Type of Bill of lading</span><br>Original [ ]&nbsp;&nbsp; Surrendered [X]</td></tr>'
+    +'<tr><td colspan="3"><span class="b">3. Notify Party</span><br>SAME AS CONSIGNEE</td><td colspan="2"><span class="b">6. HS Code:</span><br>'+(d.hscode||'')+'</td></tr>'
     +'<tr><td colspan="2"><span class="b">9. Vessel</span><br>'+(d.r.vessel||'')+'</td><td><span class="b">10. Voy No</span><br>'+(d.r.voy||'')+'</td><td colspan="2"><span class="b">11. Service Contract No.</span></td></tr>'
     +'<tr><td colspan="2"><span class="b">12. Place of receipt</span><br>'+d.pol+'</td><td colspan="3"><span class="b">13. Port of Discharge</span><br>'+d.pod+'</td></tr>'
     +'<tr><td colspan="2"><span class="b">14. Port of Loading</span><br>'+d.pol+'</td><td colspan="3"><span class="b">15. Place of delivery</span><br>'+d.pod+'</td></tr>'
@@ -5876,7 +6096,7 @@ function _dmSI(d){
     +'<table class="gt" style="width:100%;font-size:9.5px"><thead><tr><th class="c">#</th><th class="c">Container Number</th><th class="c">Seal Number</th><th class="c">Size/Type</th><th class="c">No. of Package</th><th class="c">Unit</th><th class="c">Gross Weight<br>KGS</th><th class="c">Tare<br>KGS</th><th class="c">VGM<br>(kgs)</th><th class="c">Measurement<br>CBM</th></tr></thead>'
     +'<tbody>'+rows+'</tbody>'
     +'<tfoot><tr><td colspan="4" class="c b">TOTAL</td><td class="c b">'+d.totalPkg.toLocaleString()+'</td><td></td><td class="r b">'+d.totalGW.toLocaleString()+'</td><td class="r b">'+(totalTare?totalTare.toLocaleString():'')+'</td><td class="r b">'+(totalVGM?totalVGM.toLocaleString():'')+'</td><td></td></tr></tfoot></table>'
-    +'<table class="gt" style="width:100%;margin-top:6px;font-size:10px"><tr><td style="width:50%"><span class="b">25. Shipping Mark</span><br>N/M</td><td><span class="b">26. Description of Goods</span><br>'+d.goods+'</td></tr>'
+    +'<table class="gt" style="width:100%;margin-top:6px;font-size:10px"><tr><td style="width:50%"><span class="b">25. Shipping Mark</span><br>N/M</td><td><span class="b">26. Description of Goods</span><br>'+d.goods+(d.hscode?'<br>HS Code: '+d.hscode:'')+'</td></tr>'
     +'<tr><td><span class="b">27. Payment Term</span><br>FREIGHT PREPAID</td><td><span class="b">REMARK</span><br>FREIGHT PREPAID</td></tr></table>'
     +'<div style="margin-top:18px;text-align:right" class="b">FOR AND ON BEHALF OF '+(d.sShort||d.sName)+'</div>'
     +'</body></html>';
@@ -5909,8 +6129,12 @@ async function dmSaveData(){
   });
   const docData={
     contractNo:g('dm_cno')?.value||'',invoiceNo:g('dm_ino')?.value||'',pklNo:g('dm_pkl')?.value||'',
-    date:g('dm_date')?.value||'',pod:g('dm_pod')?.value||'',cneeIdx:g('dm_cnee')?.value||'',
-    goods:g('dm_goods')?.value||'',specs:g('dm_specs')?.value||'',unit:g('dm_unit')?.value||'',
+    date:g('dm_idate')?.value||g('dm_date')?.value||'',
+    contractDate:g('dm_cdate')?.value||g('dm_idate')?.value||'',
+    invoiceDate:g('dm_idate')?.value||'',
+    pklDate:g('dm_pdate')?.value||g('dm_idate')?.value||'',
+    pod:g('dm_pod')?.value||'',cneeIdx:g('dm_cnee')?.value||'',
+    goods:g('dm_goods')?.value||'',hscode:g('dm_hscode')?.value||'',specs:g('dm_specs')?.value||'',unit:g('dm_unit')?.value||'',
     qty:g('dm_qty')?.value||'',price:g('dm_price')?.value||'',amount:g('dm_amount')?.value||'',
     priceLabel:g('dm_priceLabel')?.value||'',freight:g('dm_freight')?.value||'',
     docConts:conts,savedAt:Date.now()
@@ -5932,6 +6156,8 @@ function dmLoadSaved(d){
   const set=function(id,v){const el=g(id);if(el&&v!=null&&v!=='')el.value=v;};
   set('dm_cno',d.contractNo);set('dm_ino',d.invoiceNo);set('dm_pkl',d.pklNo);
   set('dm_date',d.date);set('dm_pod',d.pod);
+  set('dm_cdate',d.contractDate||d.date);set('dm_idate',d.invoiceDate||d.date);set('dm_pdate',d.pklDate||d.date);
+  set('dm_hscode',d.hscode);
   set('dm_goods',d.goods);set('dm_specs',d.specs);set('dm_unit',d.unit);
   set('dm_qty',d.qty);set('dm_price',d.price);set('dm_amount',d.amount);
   set('dm_priceLabel',d.priceLabel);set('dm_freight',d.freight);
