@@ -1156,14 +1156,15 @@ function renderDetailPanel(r,tt){
         +'</div>'
         +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-bottom:.5rem">'
           +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
-            +'<colgroup><col/><col style="width:14%"/><col style="width:10%"/><col style="width:13%"/><col style="width:16%"/><col style="width:10%"/><col style="width:34px"/></colgroup>'
+            +'<colgroup><col/><col style="width:16%"/><col style="width:9%"/><col style="width:14%"/><col style="width:17%"/><col style="width:9%"/><col style="width:30px"/></colgroup>'
             +'<thead><tr>'
             +'<th style="'+thS+'">Chi phí</th><th style="'+thS+';text-align:right">Đơn giá</th><th style="'+thS+';text-align:right">SL</th><th style="'+thS+'">Đơn vị</th><th style="'+thS+';text-align:right">Thành tiền</th><th style="'+thS+'">Curr</th><th style="'+thS+'"></th>'
           +'</tr></thead>'
           +'<tbody id="costingBody">'+(autoCostRows||'')+(costInputRows||'<tr><td colspan="7" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>')+'</tbody>'
         +'<tfoot><tr style="background:var(--bg-secondary)" id="costingTotalRow">'
-          +'<td colspan="6" style="padding:6px 10px;font-size:11.5px;font-weight:600;text-align:right;border-top:2px solid var(--border-light)">Tổng chi phí (VND):</td>'
-          +'<td style="padding:6px 10px;font-size:13px;font-weight:700;color:var(--red);text-align:right;border-top:2px solid var(--border-light)" id="costingTotalCell">—</td>'
+          +'<td colspan="4" style="padding:8px 10px;font-size:11.5px;font-weight:600;text-align:right;border-top:2px solid var(--border-light)">Tổng chi phí (VND):</td>'
+          +'<td colspan="2" style="padding:8px 10px;font-size:13px;font-weight:700;color:var(--red);text-align:right;border-top:2px solid var(--border-light)" id="costingTotalCell">—</td>'
+          +'<td style="border-top:2px solid var(--border-light)"></td>'
         +'</tr></tfoot>'
         +'</table></div>'
         +'<div id="costingTotals" style="padding:6px 10px;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary);margin-bottom:1rem"></div>'
@@ -1181,7 +1182,7 @@ function renderDetailPanel(r,tt){
         +'<div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">'
           +'<div><label class="lbl">Ghi chú costing</label><textarea id="costingNote" rows="2" style="font-size:12px;resize:none">'+(costing.note||'')+'</textarea></div>'
           +'<div style="display:flex;gap:8px"><button class="btn pri" onclick="saveCosting()"><i class="ti ti-check"></i> Lưu Costing</button>'
-          +(currentProfile?.role==='admin'?'<button class="btn '+(r.locked?'pri':'')+'" onclick="toggleLotLock(\''+r._id+'\',\''+tt+'\')" title="'+(r.locked?'Mở khóa':'Khóa lô hàng')+'"><i class="ti ti-'+(r.locked?'lock-open':'lock')+'"></i> '+(r.locked?'Mở khóa':'Khóa lô')+'</button>':'')+'</div>'
+          +(currentProfile?.role==='admin'?'<button class="btn '+(r.locked?'pri':'')+'" data-lock-action="1" onclick="toggleCurrentLotLock()" title="'+(r.locked?'Mở khóa':'Khóa lô hàng')+'"><i class="ti ti-'+(r.locked?'lock-open':'lock')+'"></i> '+(r.locked?'Mở khóa':'Khóa lô')+'</button>':'')+'</div>'
         +'</div>';
     }
   }
@@ -1268,7 +1269,7 @@ function renderDetailPanel(r,tt){
       // Disable action buttons except the lock/unlock toggle and tab switches
       panel.querySelectorAll('button').forEach(function(b){
         const oc=(b.getAttribute('onclick')||'');
-        const keep=oc.includes('toggleLotLock')||oc.includes('switchDetailTab')||oc.includes('switchToTab')||oc.includes('closeTab')||oc.includes('closeDetail')||oc.includes('openDocMakerTab')||oc.includes('Eport')||oc.includes('Export')||oc.includes('exportDebit')||oc.includes('openDebitNotePopup');
+        const keep=oc.includes('toggleLotLock')||oc.includes('switchDetailTab')||oc.includes('switchToTab')||oc.includes('closeTab')||oc.includes('closeDetail')||oc.includes('openDocMakerTab')||oc.includes('Eport')||oc.includes('Export')||oc.includes('exportDebit')||oc.includes('openDebitNotePopup')||b.dataset.lockAction;
         if(!keep){b.disabled=true;b.style.opacity='.5';b.style.cursor='not-allowed';}
       });
       // Banner
@@ -3629,8 +3630,11 @@ async function toggleLotLock(id, tt){
     if(newLocked) lockData.status='Done'; // auto set Done when locked
     await fsSet(colName(tt),id,lockData);
     toast((newLocked?'Đã khóa (→ Done)':'Đã mở khóa')+' lô hàng: '+r.bookingNo);
-    const fresh=cache[tt].find(x=>x._id===id)||r;
-    renderDetailPanel(Object.assign({},fresh,{locked:newLocked}),tt);
+    // Update cache immediately so renderDetailPanel gets the right locked state
+    const ci=cache[tt].findIndex(x=>x._id===id);
+    if(ci>=0) Object.assign(cache[tt][ci],lockData);
+    const fresh=cache[tt][ci>=0?ci:0]||r;
+    renderDetailPanel(Object.assign({},fresh),tt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -3648,6 +3652,8 @@ async function quickSetStatus(id, tt, status){
   setLoading(false);
 }
 window.quickSetStatus=quickSetStatus;
+function toggleCurrentLotLock(){toggleLotLock(detailId,detailTt);}
+window.toggleCurrentLotLock=toggleCurrentLotLock;
 window.toggleLotLock=toggleLotLock;
 function handleDnUpload(input, id, tt){
   const file=input.files[0];
