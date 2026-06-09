@@ -66,8 +66,8 @@ function loadCargoNames(){
     let names=snap.exists?(snap.data().names||[]):[];
     // Normalize: support old string[] and new object[]
     window._cargoNames=names.map(function(n){
-      if(typeof n==='string')return {name:n,enName:'',specs:''};
-      return {name:n.name||'',enName:n.enName||'',specs:n.specs||''};
+      if(typeof n==='string')return {name:n,enName:'',specs:'',hscode:''};
+      return {name:n.name||'',enName:n.enName||'',specs:n.specs||'',hscode:n.hscode||''};
     });
   }).catch(function(){window._cargoNames=[];});
 }
@@ -76,7 +76,7 @@ function addCargoNameRow(){
   const list=g('cargoNamesList'); if(!list)return;
   const i=list.querySelectorAll('[data-cargo-row]').length;
   const div=document.createElement('div');
-  div.innerHTML=cargoNameRowHtml({name:'',enName:'',specs:''},i);
+  div.innerHTML=cargoNameRowHtml({name:'',enName:'',specs:'',hscode:''},i);
   list.appendChild(div.firstChild);
 }
 
@@ -86,6 +86,7 @@ function cargoNameRowHtml(item,i){
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
       +'<div><label class="lbl">Tên hàng (VN)</label><input type="text" class="cargo-name" value="'+(item.name||'').replace(/"/g,"&quot;")+'" placeholder="Xơ dừa"/></div>'
       +'<div><label class="lbl">Tên tiếng Anh</label><input type="text" class="cargo-en" value="'+(item.enName||'').replace(/"/g,"&quot;")+'" placeholder="COCONUT FIBER"/></div>'
+      +'<div><label class="lbl">HS Code</label><input type="text" class="cargo-hscode" value="'+(item.hscode||'').replace(/"/g,"&quot;")+'" placeholder="VD: 530500 / 140490"/></div>'
       +'<div style="grid-column:1/-1"><label class="lbl">Specifications (mỗi dòng 1 ý)</label><textarea class="cargo-specs" rows="3" placeholder="+ Product: Unwashed&#10;+ Moisture: 12-18% Max." style="font-size:11.5px;resize:vertical">'+(item.specs||'')+'</textarea></div>'
     +'</div>'
   +'</div>';
@@ -94,7 +95,7 @@ function cargoNameRowHtml(item,i){
 function renderCargoNamesList(){
   const list=g('cargoNamesList'); if(!list)return;
   const items=window._cargoNames||[];
-  list.innerHTML=(items.length?items:[{name:'',enName:'',specs:''}]).map(cargoNameRowHtml).join('');
+  list.innerHTML=(items.length?items:[{name:'',enName:'',specs:'',hscode:''}]).map(cargoNameRowHtml).join('');
 }
 
 function loadBankAccounts(){
@@ -3414,7 +3415,8 @@ async function saveCargoNames(){
     const name=row.querySelector('.cargo-name')?.value.trim()||'';
     const enName=row.querySelector('.cargo-en')?.value.trim()||'';
     const specs=row.querySelector('.cargo-specs')?.value||'';
-    if(name||enName)names.push({name,enName,specs});
+    const hscode=row.querySelector('.cargo-hscode')?.value.trim()||'';
+    if(name||enName)names.push({name,enName,specs,hscode});
   });
   window._cargoNames=names;
   setLoading(true,'Đang lưu...');
@@ -5679,13 +5681,11 @@ function renderDocMaker(){
         </tr></tfoot>
       </table>
     </div>
-    <label style="display:flex;align-items:center;gap:8px;margin:.5rem 0;font-size:12px;cursor:pointer;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
-      <input type="checkbox" id="dm_addStamp" checked style="width:16px;height:16px;cursor:pointer"/> Thêm con mộc công ty (shipper) vào chứng từ
-    </label>
+    <input type="checkbox" id="dm_addStamp" checked style="display:none"/>
     <div style="display:flex;gap:8px;margin-top:.5rem">
       <button class="btn pri" onclick="dmPreview()" style="flex:1"><i class="ti ti-eye"></i> Xem trước</button>
       <button class="btn" onclick="dmSaveData()" title="Lưu thông tin chứng từ vào lô hàng"><i class="ti ti-device-floppy"></i> Lưu</button>
-      <button class="btn" onclick="dmOpenCombine()" title="Gộp nhiều lô hàng" style="color:var(--green);border-color:var(--green)"><i class="ti ti-arrows-join"></i> Gộp file</button>
+      <button class="btn" onclick="dmOpenCombine()" title="Gộp nhiều lô hàng thành 1 lô" style="color:var(--green);border-color:var(--green)"><i class="ti ti-arrows-join"></i> Gộp lô</button>
     </div>
   </div>
 </div>
@@ -5697,7 +5697,11 @@ function renderDocMaker(){
     <button class="btn" id="dmBtnCont" onclick="dmExport('CONTRACT')" disabled style="opacity:.4"><i class="ti ti-file-contract"></i> CONTRACT</button>
     <button class="btn" id="dmBtnInvTk" onclick="dmExport('INV_TK')" disabled style="opacity:.4"><i class="ti ti-receipt-2"></i> INV T.KHAI</button>
     <button class="btn" id="dmBtnSI" onclick="dmExport('SI')" disabled style="opacity:.4"><i class="ti ti-send"></i> SI</button>
+    <button class="btn" id="dmBtnMerge" onclick="dmMergePdf()" disabled style="opacity:.4;color:var(--blue);border-color:var(--blue)"><i class="ti ti-files"></i> Gộp PDF</button>
   </div>
+  <label style="display:flex;align-items:center;gap:8px;margin-bottom:.75rem;font-size:12px;cursor:pointer;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
+    <input type="checkbox" id="dm_addStampMain" checked onchange="if(g('dm_addStamp'))g('dm_addStamp').checked=this.checked" style="width:16px;height:16px;cursor:pointer"/> Thêm con mộc công ty vào chứng từ
+  </label>
   <div id="dmPreviewBox" style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light);padding:1.5rem;min-height:280px">
     <div style="text-align:center;padding:3rem;color:var(--text-tertiary)"><i class="ti ti-file-certificate" style="font-size:40px;opacity:.25"></i><div style="margin-top:.5rem;font-size:12px">Tìm lô hàng → Điền thông tin → Xem trước</div></div>
   </div>
@@ -5803,7 +5807,7 @@ function dmPickLot(id,tt){
     const items=window._cargoNames||[];
     gs.innerHTML='<option value="">— Chọn / nhập tay —</option>'+items.map(function(it,i){return '<option value="'+i+'">'+(it.name||it.enName||'')+'</option>';}).join('');
   }
-  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI'].forEach(function(id){const b=g(id);if(b){b.disabled=true;b.style.opacity='.4';}});
+  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=true;b.style.opacity='.4';}});
   // Load previously saved doc data
   if(r.docData)setTimeout(function(){dmLoadSaved(r.docData);},100);
 }
@@ -5815,6 +5819,7 @@ function dmPickGoods(){
   if(!it)return;
   g('dm_goods').value=(it.enName||it.name||'').toUpperCase();
   g('dm_specs').value=it.specs||'';
+  if(it.hscode&&g('dm_hscode'))g('dm_hscode').value=it.hscode;
 }
 window.dmPickGoods=dmPickGoods;
 
@@ -5885,6 +5890,7 @@ function dmGetData(){
     date:fmtDate(g('dm_date')?.value),dateRaw:g('dm_date')?.value||'',
     goods:(g('dm_goods')?.value||'').toUpperCase(),
     specs:g('dm_specs')?.value||'',unit:g('dm_unit')?.value||'BAGS',
+    pkgUnit:(r.pkgUnit||'Bales').toUpperCase(),
     priceLabel:g('dm_priceLabel')?.value||'CNF',
     cnee:cnee.name||'',cneeAddr:cnee.addr||'',cneePic:cnee.pic||'',cneeTel:cnee.tel||'',cneeEmail:cnee.email||'',cneeUsci:cnee.usci||'',
     pod:g('dm_pod')?.value||r.pod||'',vessel:(r.vessel||'')+(r.voy?' V.'+r.voy:''),
@@ -5900,7 +5906,7 @@ function dmPreview(){
   const d=dmGetData();
   if(!d){toast('Chưa chọn lô hàng','error');return;}
   if(!d.sName){toast('Shipper chưa có tên tiếng Anh — vào Đối tác để nhập','error');return;}
-  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
+  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
   g('dmPreviewBox').innerHTML=
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">'
@@ -6014,7 +6020,7 @@ function _dmPKL2(d){
     +'</table>'
     +'<table class="gt" style="width:100%;margin-top:6px"><thead>'
     +'<tr><th rowspan="2" class="c">DESCRIPTION</th><th rowspan="2" class="c">CONT</th><th rowspan="2" class="c">SEAL</th><th class="c">NUMBER OF<br>PACKAGE</th><th class="c">NET<br>WEIGHT</th><th class="c">GROSS<br>WEIGHT</th><th rowspan="2" class="c">NO</th><th rowspan="2" class="c">STUFF DATE</th></tr>'
-    +'<tr><th class="c">'+d.unit+'</th><th class="c">(KGS)</th><th class="c">(KGS)</th></tr>'
+    +'<tr><th class="c">'+(d.pkgUnit||d.unit)+'</th><th class="c">(KGS)</th><th class="c">(KGS)</th></tr>'
     +'</thead><tbody>'+rows+'</tbody>'
     +'<tfoot><tr><td colspan="3" class="c b">TOTAL</td><td class="c b">'+d.totalPkg.toLocaleString()+'</td><td class="r b">'+f2(d.totalNW)+'</td><td class="r b">'+f2(d.totalGW)+'</td><td colspan="2"></td></tr></tfoot>'
     +'</table>'+_dmSign(d)+'</body></html>';
@@ -6077,7 +6083,7 @@ function _dmSI(d){
     const tare=c.tare||0;
     const gw=c.gw||0;
     const vgm=gw?Math.round((gw+tare)*10)/10:'';
-    return '<tr><td class="c">'+(i+1)+'</td><td class="c">'+c.no+'</td><td class="c">'+c.seal+'</td><td class="c">'+(c.type||'40HC')+'</td><td class="c">'+(c.pkg?c.pkg.toLocaleString():'')+'</td><td class="c">'+d.unit+'</td><td class="r">'+(gw?gw.toLocaleString():'')+'</td><td class="r">'+(tare?tare.toLocaleString():'')+'</td><td class="r">'+(vgm?vgm.toLocaleString():'')+'</td><td class="c">40</td></tr>';
+    return '<tr><td class="c">'+(i+1)+'</td><td class="c">'+c.no+'</td><td class="c">'+c.seal+'</td><td class="c">'+(c.type||'40HC')+'</td><td class="c">'+(c.pkg?c.pkg.toLocaleString():'')+'</td><td class="c">'+(d.pkgUnit||d.unit)+'</td><td class="r">'+(gw?gw.toLocaleString():'')+'</td><td class="r">'+(tare?tare.toLocaleString():'')+'</td><td class="r">'+(vgm?vgm.toLocaleString():'')+'</td><td class="c">40</td></tr>';
   }).join('');
   const totalTare=d.conts.reduce(function(s,c){return s+(c.tare||0);},0);
   const totalVGM=d.conts.reduce(function(s,c){return s+((c.gw||0)+(c.tare||0));},0);
@@ -6113,6 +6119,53 @@ function dmExport(type){
   setTimeout(function(){w.print();},600);
   toast('Đã mở: '+entry[1]+' — Ctrl+P → Save as PDF');
 }
+
+function dmMergePdf(){
+  const d=dmGetData();
+  if(!d){toast('Chưa có dữ liệu','error');return;}
+  // Popup to choose which documents to merge
+  g('combineOv').innerHTML='<div class="modal" style="max-width:420px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-files" style="margin-right:6px"></i>Gộp chứng từ thành 1 PDF</div><button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="fg"><div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Chọn các chứng từ cần gộp (theo thứ tự):</div>'
+    +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="INV" checked style="width:16px;height:16px"/> <i class="ti ti-file-invoice"></i> Invoice</label>'
+    +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="PKL" checked style="width:16px;height:16px"/> <i class="ti ti-package"></i> Packing List</label>'
+    +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="CONTRACT" style="width:16px;height:16px"/> <i class="ti ti-file-contract"></i> Contract</label>'
+    +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="INV_TK" style="width:16px;height:16px"/> <i class="ti ti-receipt-2"></i> INV Tờ khai</label>'
+    +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer"><input type="checkbox" class="mergeChk" value="SI" style="width:16px;height:16px"/> <i class="ti ti-send"></i> SI</label>'
+    +'</div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button><button class="btn pri" onclick="dmDoMerge()"><i class="ti ti-files"></i> Gộp & In PDF</button></div></div>';
+  openOv('combineOv');
+}
+
+function dmDoMerge(){
+  const d=dmGetData();
+  const chosen=Array.from(document.querySelectorAll('.mergeChk:checked')).map(function(x){return x.value;});
+  if(!chosen.length){toast('Chọn ít nhất 1 chứng từ','error');return;}
+  closeOv('combineOv');
+  const builders={'INV':_dmInvoice,'PKL':_dmPKL2,'CONTRACT':_dmContract,'INV_TK':_dmInvTK,'SI':_dmSI};
+  // Extract <body> inner from each doc + collect their <style>, put each on its own page
+  function extractParts(html){
+    const styleMatch=html.match(/<style[\s\S]*?<\/style>/gi)||[];
+    const bodyMatch=html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    return {styles:styleMatch.join('\n'),body:bodyMatch?bodyMatch[1]:html};
+  }
+  const styleSet=[];
+  const pages=chosen.map(function(type,i){
+    const html=builders[type](d);
+    const p=extractParts(html);
+    if(p.styles&&styleSet.indexOf(p.styles)<0)styleSet.push(p.styles);
+    const brk=i<chosen.length-1?'page-break-after:always;':'';
+    return '<div style="'+brk+'">'+p.body+'</div>';
+  }).join('');
+  const allStyles=styleSet.join('\n');
+  const merged='<!DOCTYPE html><html><head><meta charset="UTF-8">'+allStyles+'<title>Combined_'+(d.invoiceNo||d.mbl||'docs')+'</title></head><body>'+pages+'</body></html>';
+  const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
+  w.document.write(merged);w.document.close();w.focus();w.document.title='Combined_'+(d.invoiceNo||d.mbl||'docs');
+  setTimeout(function(){w.print();},700);
+  toast('Đã gộp '+chosen.length+' chứng từ — Ctrl+P → Save as PDF');
+}
+window.dmMergePdf=dmMergePdf;
+window.dmDoMerge=dmDoMerge;
 
 async function dmSaveData(){
   if(!_dmLot){toast('Chưa chọn lô hàng','error');return;}
