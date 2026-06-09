@@ -1261,23 +1261,18 @@ function renderDetailPanel(r,tt){
   if(detailTab==='price') setTimeout(updDetailFpTotal, 50);
   if(detailTab==='costing') setTimeout(updateCostingTotal, 100);
 
-  // LOCK GUARD: when lot is locked, disable all editing in the detail panel
+  // LOCK BANNER: show a read-only notice when lot is locked (no disabling of elements)
   if(r.locked){
     setTimeout(function(){
-      const panel=g('detailPanel'); if(!panel)return;
-      panel.querySelectorAll('input,select,textarea').forEach(function(el){el.disabled=true;});
-      // Disable action buttons except the lock/unlock toggle and tab switches
-      panel.querySelectorAll('button').forEach(function(b){
-        const oc=(b.getAttribute('onclick')||'');
-        const keep=oc.includes('toggleLotLock')||oc.includes('switchDetailTab')||oc.includes('switchToTab')||oc.includes('closeTab')||oc.includes('closeDetail')||oc.includes('openDocMakerTab')||oc.includes('Eport')||oc.includes('Export')||oc.includes('exportDebit')||oc.includes('openDebitNotePopup')||b.dataset.lockAction;
-        if(!keep){b.disabled=true;b.style.opacity='.5';b.style.cursor='not-allowed';}
-      });
-      // Banner
-      if(!panel.querySelector('.lock-banner')){
-        const bd=panel.querySelector('.detail-body');
-        if(bd){const bn=document.createElement('div');bn.className='lock-banner';bn.style.cssText='background:var(--green-bg);color:var(--green);padding:8px 12px;border-radius:8px;font-size:12px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:6px';bn.innerHTML='<i class="ti ti-lock"></i> Lô hàng đã khóa — chỉ xem, không thể chỉnh sửa. Mở khóa (tab Chi tiết hoặc Costing) để sửa.';bd.insertBefore(bn,bd.firstChild);}
+      const bd=g('detailPanel')&&g('detailPanel').querySelector('.detail-body');
+      if(bd&&!bd.querySelector('.lock-banner')){
+        const bn=document.createElement('div');
+        bn.className='lock-banner';
+        bn.style.cssText='background:var(--green-bg);color:var(--green);padding:8px 12px;border-radius:8px;font-size:12px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:6px';
+        bn.innerHTML='<i class="ti ti-lock"></i> Lô hàng đã khóa — chỉ xem. Bấm <strong style="margin:0 4px">Mở khóa</strong> ở tab Chi tiết hoặc Costing để chỉnh sửa.';
+        bd.insertBefore(bn,bd.firstChild);
       }
-    },120);
+    },80);
   }
 
   renderDpanelTabs();
@@ -3610,32 +3605,47 @@ window.switchPartyTab=switchPartyTab;
 window.rebuildInvoicePreview=rebuildInvoicePreview;
 
 async function toggleLotLock(id, tt){
-  if(currentProfile?.role!=='admin'){toast('Chỉ Admin mới có quyền khóa/mở lô hàng','error');return;}
-  const r=cache[tt].find(x=>x._id===id);
-  if(!r)return;
+  // --- Debug ---
+  console.log('[Lock] id='+id+' tt='+tt+' role='+(currentProfile&&currentProfile.role));
+  // Role check
+  const role=currentProfile&&currentProfile.role;
+  if(role!=='admin'){toast('Chỉ Admin mới có quyền khóa/mở lô hàng (role hiện tại: '+(role||'chưa đăng nhập')+')','error');return;}
+  // Find lot
+  if(!tt||!id){toast('Thiếu thông tin lô hàng','error');return;}
+  const arr=cache[tt];
+  if(!arr){toast('Không tìm thấy danh sách lô (tt='+tt+')','error');return;}
+  const r=arr.find(function(x){return x._id===id;});
+  if(!r){toast('Không tìm thấy lô hàng (id='+id+')','error');return;}
   const newLocked=!r.locked;
   const action=newLocked?'Khóa':'Mở khóa';
-  // Gate: all active services must be finished before locking
+  // Gate for lock: all services must be finished
   if(newLocked){
     const svcs=r.svcs||{};
-    const activeSvcs=Object.keys(svcs).filter(function(k){return svcs[k]&&svcs[k].on;});
-    const unfinished=activeSvcs.filter(function(k){return !svcs[k].finish;});
-    if(activeSvcs.length===0){toast('Lô hàng chưa có dịch vụ nào được bật','error');return;}
-    if(unfinished.length>0){toast('Còn '+unfinished.length+' dịch vụ chưa tick Finish — không thể khóa','error');return;}
+    const activeKeys=Object.keys(svcs).filter(function(k){return svcs[k]&&svcs[k].on;});
+    if(activeKeys.length===0){toast('Lô hàng chưa có dịch vụ nào được bật','error');return;}
+    const unfinished=activeKeys.filter(function(k){return !svcs[k].finish;});
+    if(unfinished.length>0){toast('Còn '+unfinished.length+' dịch vụ chưa tick Finish','error');return;}
   }
   if(!confirm(action+' lô hàng '+r.bookingNo+'?'))return;
-  setLoading(true,(newLocked?'Đang khóa...':'Đang mở khóa...'));
+  setLoading(true,newLocked?'Đang khóa...':'Đang mở khóa...');
   try{
     const lockData={locked:newLocked,lockedAt:Date.now(),lockedBy:currentUser.email};
-    if(newLocked) lockData.status='Done'; // auto set Done when locked
+    if(newLocked)lockData.status='Done';
+    console.log('[Lock] writing to Firestore...',colName(tt),id,lockData);
     await fsSet(colName(tt),id,lockData);
-    toast((newLocked?'Đã khóa (→ Done)':'Đã mở khóa')+' lô hàng: '+r.bookingNo);
-    // Update cache immediately so renderDetailPanel gets the right locked state
-    const ci=cache[tt].findIndex(x=>x._id===id);
-    if(ci>=0) Object.assign(cache[tt][ci],lockData);
-    const fresh=cache[tt][ci>=0?ci:0]||r;
-    renderDetailPanel(Object.assign({},fresh),tt);
-  }catch(e){toast('Lỗi: '+e.message,'error');}
+    console.log('[Lock] Firestore write OK');
+    // Update local cache immediately
+    const ci=arr.findIndex(function(x){return x._id===id;});
+    if(ci>=0){Object.assign(arr[ci],lockData);}
+    toast((newLocked?'✅ Đã khóa (status→Done)':'🔓 Đã mở khóa')+': '+r.bookingNo);
+    // Re-render the detail panel with updated state
+    const updated=ci>=0?arr[ci]:Object.assign({},r,lockData);
+    detailId=id; detailTt=tt;
+    renderDetailPanel(Object.assign({},updated),tt);
+  }catch(e){
+    console.error('[Lock] error',e);
+    toast('Lỗi khi '+(newLocked?'khóa':'mở khóa')+': '+e.message,'error');
+  }
   setLoading(false);
 }
 
