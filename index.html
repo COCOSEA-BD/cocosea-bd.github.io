@@ -2423,7 +2423,17 @@ function runDebtReport(){
 
     const rows=data.rows.map(function(r){
       const svcs=r.svcs||{};
-      const invSvcs=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice!=='Waived'&&e[1].invoice!=='No';});
+      const sh2=r.shipper||r.supplier||'';
+      const sp3=cache.partners[sh2]||{};
+      const invSvcs=Object.entries(svcs).filter(function(e){
+        if(!e[1].on||e[1].invoice==='Waived'||e[1].invoice==='No')return false;
+        // Filter by party if filterShipper is active
+        if(filterShipper){
+          const svParty=(e[1].party||'').trim();
+          if(svParty&&svParty!==sh2&&svParty!==(sp3.fullname||'')&&svParty!==(sp3.enName||'')&&svParty!==(sp3.enShort||''))return false;
+        }
+        return true;
+      });
       const rowTotal={};
       invSvcs.forEach(function(e){const sv=e[1];const cur=sv.cur||'USD';const amt=sv.amount||(sv.price||0)*(sv.qty||1);if(!rowTotal[cur])rowTotal[cur]=0;rowTotal[cur]+=amt;});
       const rowTotalStr=Object.entries(rowTotal).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'—';
@@ -2435,6 +2445,7 @@ function runDebtReport(){
         +'<td style="'+tdS+'">'+(r.pol||'—')+' → '+(r.pod||'—')+'</td>'
         +'<td style="'+tdS+'"><span class="bdg '+(SB[r.status]||'bdg-gr')+'">'+r.status+'</span></td>'
         +'<td style="'+tdS+';color:var(--green);font-weight:600">'+rowTotalStr+'</td>'
+        +(function(){var pm=r.dnPayStatus||{};var vals=Object.values(pm);var paid=vals.length&&vals.every(function(v){return v==='paid';});return '<td style="'+tdS+';font-weight:600;color:'+(paid?'var(--green)':'var(--red)')+'">'+(paid?'Đã TT':'Chưa TT')+'</td>';})()
         +'</tr>';
     }).join('');
 
@@ -2444,7 +2455,7 @@ function runDebtReport(){
         +'<div style="font-size:12px"><span style="color:var(--text-secondary)">'+data.rows.length+' lô</span> &nbsp;|&nbsp; Tổng: <strong style="color:var(--green)">'+totalStr+'</strong></div>'
       +'</div>'
       +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
-        +'<thead><tr><th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Doanh thu (Invoice)</th></tr></thead>'
+        +'<thead><tr><th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Doanh thu (Invoice)</th><th style="'+thS+'">Trạng thái TT</th></tr></thead>'
         +'<tbody>'+rows+'</tbody>'
       +'</table></div>'
     +'</div>';
@@ -6529,9 +6540,16 @@ function exportSOA(){
     var psMap=r.dnPayStatus||{};var psVals=Object.values(psMap);
     var payStatus=(psVals.length&&psVals.every(function(v){return v==='paid';}))?'Đã TT':'Chưa TT';
     var svcLines=[];
+    var sh3=r.shipper||r.supplier||'';
+    var sp4=cache.partners[sh3]||{};
     SVCS.forEach(function(s){
       var sv=svcs[s.key];
       if(!sv||!sv.on||sv.invoice==='Waived')return;
+      // Filter by party matching filterShipper
+      if(filterShipper){
+        var svParty=(sv.party||'').trim();
+        if(svParty&&svParty!==sh3&&svParty!==(sp4.fullname||'')&&svParty!==(sp4.enName||'')&&svParty!==(sp4.enShort||''))return;
+      }
       var amt=sv.amount||(sv.price||0)*(sv.qty||1);
       var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
       var vatPct=parseFloat((sv.vat||'0%').replace('%',''))||0;
@@ -6678,6 +6696,13 @@ function exportExcelDebt(){
       var preYes=0,vatYes=0,preNo=0,vatNo=0;
       SVCS.forEach(s=>{
         var sv=svcs[s.key]; if(!sv||!sv.on||sv.invoice==='Waived')return;
+        // If filterShipper is set, only count services assigned to this shipper's party
+        // Party is stored in sv.party; match against shipper shortname, fullname, or enName
+        if(filterShipper){
+          var svParty=(sv.party||'').trim();
+          var partyMatch=!svParty||(svParty===sh)||(svParty===(sp&&sp.fullname))||(svParty===(sp&&sp.enName))||(svParty===(sp&&sp.enShort));
+          if(!partyMatch)return;
+        }
         var amt=sv.amount||(sv.price||0)*(sv.qty||1);
         var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
         var vatPct=parseFloat((sv.vat||'0%').replace('%',''))||0;
@@ -6686,7 +6711,14 @@ function exportExcelDebt(){
         else if(sv.invoice==='No'){preNo+=amtVND;vatNo+=vatAmt;}
       });
       var totalYesVND=preYes+vatYes, totalNoVND=preNo+vatNo;
-      const dnNo=r.dnNo||'—';
+      // Pick DN number: prefer party-specific DN that matches the current filter shipper
+      // Look for a party in dnByParty that matches the shipper shortname or fullname
+      var dnMap2=r.dnByParty||{};
+      var dnKeys=Object.keys(dnMap2);
+      var matchedDnKey=dnKeys.find(function(k){return k===sh||k===(sp&&sp.fullname)||k===(sp&&sp.enName)||k===(sp&&sp.enShort);});
+      // Also try: the party key that is NOT the filter shipper (so we pick the right one)
+      // If filterShipper is set, use the party that matches; else use first non-empty
+      var dnNo=(matchedDnKey&&dnMap2[matchedDnKey])||dnKeys.reduce(function(best,k){return dnMap2[k]?dnMap2[k]:best;},'')|| r.dnNo||'—';
       // Payment status: if every party paid → 'Đã thanh toán', else 'Chưa thanh toán'
       const psMap=r.dnPayStatus||{};
       const psVals=Object.values(psMap);
@@ -6738,7 +6770,7 @@ function exportExcelDebt(){
     <td style="padding:7px 16px;font-size:12px;font-weight:700">${sp.fullname||sh}</td>
     <td style="width:30px"></td>
     <td style="padding:7px 16px;font-weight:600;font-size:12px;color:${C.blue}">MST:</td>
-    <td style="padding:7px 16px;font-size:12px">${sp.mst||'—'}</td>
+    <td style="padding:7px 16px;font-size:12px;mso-number-format:'@'">${sp.mst||'—'}</td>
   </tr>
   <tr>
     <td style="padding:3px 16px;font-weight:600;font-size:12px;color:${C.blue}">Address:</td>
