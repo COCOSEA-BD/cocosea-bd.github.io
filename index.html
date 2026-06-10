@@ -1899,7 +1899,113 @@ function renderDetailPanel(r,tt){
     </div>`;
   }
 
-  else if(detailTab==='svc'){
+  else if(else if(detailTab==='cont'){
+    // Multi-booking: each booking gets its own cont/seal section
+    const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:parseInt(r.vol)||1,typeCont:r.typeCont||'40HC'}];
+    const bookingConts=r.bookingConts||{};
+    const thBase='padding:6px 6px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px';
+
+    function bContRows(conts,vol,bkNo){
+      let rows='';
+      // If conts have been saved, use saved count. If brand new (empty), use vol.
+      const n=conts.length>0?conts.length:Math.max(vol,1);
+      for(let i=0;i<n;i++){
+        const c2=conts[i]||{};
+        const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+        rows+='<tr>'
+          +'<td style="padding:4px;border-bottom:1px solid var(--border-light);text-align:center;font-size:11px">'+(i+1)+'</td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="text" class="cno_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.no||'')+'" placeholder="Cont No" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="text" class="cseal_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="cpkg_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="cnw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="cgw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.gw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="ctare_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.tare||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="date" class="cdate_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.date||r.etd||'')+'" style="font-size:11px;width:100%;box-sizing:border-box"/></td>'
+          +'<td style="padding:2px 4px;border-bottom:1px solid var(--border-light);text-align:center;width:28px"><button type="button" onclick="delBkContRow(this)" data-bk="'+bkNo+'" data-bkkey="'+bkKey+'" class="rac red" style="font-size:11px;padding:2px 4px" title="Xóa dòng này"><i class="ti ti-trash"></i></button></td>'
+          +'</tr>';
+      }
+      return rows;
+    }
+
+    // Build per-booking sections
+    let sectionsHtml='';
+    let totalPkg=0,totalNW=0,totalGW=0,totalVol=0;
+    bookings.forEach(function(bk){
+      const bkNo=bk.bookingNo||'(no booking)';
+      const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+      const bkData=bookingConts[bkKey]||{};
+      const conts=bkData.containers||[];
+      const bkVol=parseInt(bk.vol)||1;
+      const pkgUnit=bkData.pkgUnit||'Bales';
+      totalVol+=bkVol;
+      conts.forEach(function(c2){totalPkg+=(c2.pkg||0);totalNW+=(c2.nw||0);totalGW+=(c2.gw||0);});
+
+      // Tờ khai for this booking
+      const tkHtml=buildTkhaiRows(bkData.tkhaiList?{tkhaiList:bkData.tkhaiList}:(bk===bookings[0]?r:{}));
+
+      const pkgUnitSel='<select class="cPkgUnit" data-bk="'+bkNo+'" style="font-size:10px;width:100%;margin-top:2px;font-weight:400">'+['Bales','Bags','Conts','Cartons','Pallets','Pcs','Rolls'].map(function(u){return '<option'+(u===pkgUnit?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
+
+      sectionsHtml+='<div style="border:1px solid var(--border-light);border-radius:10px;overflow:hidden;margin-bottom:12px">';
+      // Booking header
+      sectionsHtml+='<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--blue-bg);border-bottom:1px solid var(--border-light)">';
+      sectionsHtml+='<div><span style="font-weight:700;color:var(--blue);font-size:13px">'+bkNo+'</span><span style="font-size:11px;color:var(--text-secondary);margin-left:8px">×'+bkVol+' '+bk.typeCont+'</span></div>';
+      sectionsHtml+='<div style="display:flex;gap:6px">';
+      sectionsHtml+='<button class="btn" onclick="showKhaiEport()"><i class="ti ti-file-export"></i> Khai Eport</button>';
+      sectionsHtml+='<button class="btn" onclick="showCheckEport()"><i class="ti ti-clipboard-check"></i> Check</button>';
+      sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
+      sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
+      sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
+      sectionsHtml+='</div></div>';
+      // Tkhai rows
+      sectionsHtml+='<div style="padding:8px 12px;border-bottom:1px solid var(--border-light)">';
+      sectionsHtml+='<div id="tkhaiBox_'+bkKey+'">'+tkHtml+'</div>';
+      sectionsHtml+='<button class="btn sm" onclick="addTkhaiRowForBk(\''+bkKey+'\')"><i class="ti ti-plus"></i> Thêm tờ khai</button>';
+      sectionsHtml+='</div>';
+      // Cont table
+      sectionsHtml+='<table style="width:100%;border-collapse:collapse;table-layout:fixed">';
+      sectionsHtml+='<colgroup><col style="width:32px"/><col style="width:17%"/><col style="width:14%"/><col style="width:11%"/><col style="width:11%"/><col style="width:11%"/><col style="width:9%"/><col style="width:14%"/><col style="width:28px"/></colgroup>';
+      sectionsHtml+='<thead><tr>';
+      sectionsHtml+='<th style="'+thBase+';text-align:center">#</th>';
+      sectionsHtml+='<th style="'+thBase+'">Cont No</th>';
+      sectionsHtml+='<th style="'+thBase+'">Seal</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">No. Package'+pkgUnitSel+'</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">N.W (KG)</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">G.W (KG)</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">Tare</th>';
+      sectionsHtml+='<th style="'+thBase+'">Stuff Date</th>';
+      sectionsHtml+='<th style="'+thBase+'"></th>';
+      sectionsHtml+='</tr></thead>';
+      sectionsHtml+='<tbody>'+bContRows(conts,bkVol,bkNo)+'</tbody></table>';
+      sectionsHtml+='</div>';
+    });
+
+    // Total summary section - matching the image format
+    const bkNosStr=bookings.map(function(b){return b.bookingNo||'?';}).join(', ');
+    const firstPkgUnit=(bookingConts[bookings[0]&&bookings[0].bookingNo.replace(/[^a-zA-Z0-9]/g,'_')]||{}).pkgUnit||'Bales';
+    const pkgUnitTotalSel='<select id="cPkgUnitTotal" style="font-size:11px;padding:2px 4px;border:1px solid var(--border-light);border-radius:6px">'+
+      ['Bales','Bags','Conts','Cartons','Pallets','Pcs','Rolls'].map(function(u){return '<option'+(u===firstPkgUnit?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
+    sectionsHtml+='<div style="background:var(--bg-secondary);border:2px solid var(--blue);border-radius:10px;padding:10px 14px;margin-top:4px">';
+    sectionsHtml+='<div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:8px"><i class="ti ti-sum"></i> Booking no: '+bkNosStr+',&nbsp;&nbsp;vol <strong>'+totalVol+'</strong>&nbsp;'+
+      (bookings[0]&&bookings[0].typeCont||'')+'&nbsp;&nbsp;Total PACKAGE '+pkgUnitTotalSel+'&nbsp;&nbsp;total N.W&nbsp;&nbsp;total G.W</div>';
+    sectionsHtml+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total Vol</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+totalVol+'</div></div>';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total Package</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(totalPkg?totalPkg.toLocaleString():'—')+'</div></div>';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total N.W (KG)</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(totalNW?totalNW.toLocaleString():'—')+'</div></div>';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total G.W (KG)</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(totalGW?totalGW.toLocaleString():'—')+'</div></div>';
+    sectionsHtml+='</div>';
+    sectionsHtml+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    sectionsHtml+='<button class="btn" onclick="showKhaiEport()"><i class="ti ti-file-export"></i> Khai Eport</button>';
+    sectionsHtml+='<button class="btn" onclick="showCheckEport()"><i class="ti ti-clipboard-check"></i> Check Eport</button>';
+    sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Nhập từ Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importContFromExcel(this)"/></label>';
+    sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" onclick="openDocMakerTab(detailId,detailTt)"><i class="ti ti-file-certificate"></i> Document Maker (tổng)</button>';
+    sectionsHtml+='<button class="btn pri" onclick="saveContSealAll()"><i class="ti ti-check"></i> Lưu</button>';
+    sectionsHtml+='</div>';
+    sectionsHtml+='</div>';
+
+    bodyHtml=sectionsHtml;
+  }
+
+detailTab==='svc'){
     // Restore custom svcs
     const svcs=r.svcs||{};
     Object.keys(svcs).forEach(k=>{if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name)SVCS.push({key:k,name:svcs[k]._name,custom:true});});
