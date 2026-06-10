@@ -903,7 +903,8 @@ function renderDetailPanel(r,tt){
 
     function bContRows(conts,vol,bkNo){
       let rows='';
-      const n=Math.max(vol,conts.length||1);
+      // If conts have been saved, use saved count. If brand new (empty), use vol.
+      const n=conts.length>0?conts.length:Math.max(vol,1);
       for(let i=0;i<n;i++){
         const c2=conts[i]||{};
         const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
@@ -1901,7 +1902,8 @@ function renderDetailPanel(r,tt){
   else if(detailTab==='cont'){
     const vol=parseInt(r.vol)||1;
     const contList=r.containers||[];
-    const nRows=Math.max(vol,contList.length||1);
+    // Use saved container count if available, else use vol (for new empty lots)
+    const nRows=contList.length>0?contList.length:Math.max(vol,1);
     let rows='';
     for(let i=0;i<nRows;i++){
       const c=contList[i]||{};
@@ -2399,8 +2401,18 @@ async function saveContSealAll(){
   const firstTkhai=(bookingConts[firstKey]&&bookingConts[firstKey].tkhaiList)||[];
   setLoading(true,'Đang lưu...');
   try{
+    // Update bookings[].vol to match actual saved cont count per booking
+    const updatedBookings=bookings.map(function(bk){
+      const bkKey2=(bk.bookingNo||'(no booking)').replace(/[^a-zA-Z0-9]/g,'_');
+      const savedConts=(bookingConts[bkKey2]&&bookingConts[bkKey2].containers)||[];
+      const actualVol=savedConts.length||parseInt(bk.vol)||1;
+      return Object.assign({},bk,{vol:actualVol});
+    });
+    const totalSavedVol=updatedBookings.reduce(function(s,b){return s+(parseInt(b.vol)||0);},0);
     await fsSet(colName(detailTt),detailId,{
       bookingConts,
+      bookings:updatedBookings,
+      vol:String(totalSavedVol),
       containers:allConts,
       pkgUnit:(bookingConts[firstKey]&&bookingConts[firstKey].pkgUnit)||'Bales',
       tkhaiList:firstTkhai,
@@ -2479,8 +2491,16 @@ function delContRow(btn){
   const tbody=tr.closest('tbody');
   if(tbody&&tbody.querySelectorAll('tr').length<=1){toast('Cần ít nhất 1 dòng cont','error');return;}
   tr.remove();
-  // Re-number
-  if(tbody){tbody.querySelectorAll('tr').forEach(function(r,i){const first=r.querySelector('td');if(first)first.textContent=i+1;});}
+  // Re-number AND re-index all input IDs so saveContSeal loop works
+  if(tbody){
+    tbody.querySelectorAll('tr').forEach(function(row,newIdx){
+      const first=row.querySelector('td');if(first)first.textContent=newIdx+1;
+      ['cno','cseal','ctype','cpkg','cnw','cgw','ctare','cdate'].forEach(function(pfx){
+        const el=row.querySelector('[id^="'+pfx+'_"]');
+        if(el)el.id=pfx+'_'+newIdx;
+      });
+    });
+  }
 }
 window.delContRow=delContRow;
 
@@ -2509,20 +2529,23 @@ async function isLotLocked(tt,id){const r=cache[tt]&&cache[tt].find(x=>x._id===i
 async function saveContSeal(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
-  const vol=parseInt(r.vol)||1;
-  const existing=r.containers||[];
+  // Read only rows that actually exist in DOM (handles deleted rows)
   const containers=[];
-  const maxRows=Math.max(vol,existing.length||1);
-  for(let i=0;i<maxRows;i++){
-    const no=g('cno_'+i)?.value?.trim()||'';
-    const seal=g('cseal_'+i)?.value?.trim()||'';
-    const type=g('ctype_'+i)?.value?.trim()||'';
-    const pkg=parseFloat(g('cpkg_'+i)?.value)||0;
-    const nw=parseFloat(g('cnw_'+i)?.value)||0;
-    const gw=parseFloat(g('cgw_'+i)?.value)||0;
-    const tare=parseFloat(g('ctare_'+i)?.value)||0;
-    const date=g('cdate_'+i)?.value||'';
-    containers.push({no,seal,type,pkg,nw,gw,tare,date});
+  const panel=g('detailPanel');
+  if(panel){
+    let i=0;
+    while(g('cno_'+i)!==null){
+      const no=g('cno_'+i)?.value?.trim()||'';
+      const seal=g('cseal_'+i)?.value?.trim()||'';
+      const type=g('ctype_'+i)?.value?.trim()||'';
+      const pkg=parseFloat(g('cpkg_'+i)?.value)||0;
+      const nw=parseFloat(g('cnw_'+i)?.value)||0;
+      const gw=parseFloat(g('cgw_'+i)?.value)||0;
+      const tare=parseFloat(g('ctare_'+i)?.value)||0;
+      const date=g('cdate_'+i)?.value||'';
+      containers.push({no,seal,type,pkg,nw,gw,tare,date});
+      i++;
+    }
   }
   const pkgUnit=g('cPkgUnit')?.value||'Bales';
   // Collect tờ khai list
@@ -2536,7 +2559,8 @@ async function saveContSeal(){
   const first=tkhaiList[0]||{};
   setLoading(true,'Đang lưu...');
   try{
-    await fsSet(colName(detailTt),detailId,{containers,pkgUnit,tkhaiList,soTkhai:first.sotk||'',maChiCuc:first.macc||'',phanLuong:first.pl||'',updatedAt:Date.now(),updatedBy:currentUser.email});
+    const validConts=containers.filter(function(x){return x.no;});
+    await fsSet(colName(detailTt),detailId,{containers:validConts,vol:String(validConts.length||1),pkgUnit,tkhaiList,soTkhai:first.sotk||'',maChiCuc:first.macc||'',phanLuong:first.pl||'',updatedAt:Date.now(),updatedBy:currentUser.email});
     toast('Đã lưu thông tin container/seal');
     const fresh=cache[detailTt].find(x=>x._id===detailId)||r;
     fresh.containers=containers;
