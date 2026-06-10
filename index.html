@@ -234,33 +234,1032 @@ const NCOLS_LIST=[
 ];
 // All columns used in the edit form
 const XCOLS=[
-  {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},
+  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'cnee',l:'Cnee',type:'cnee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
+  {k:'_bookingBlock',l:'',type:'bookingBlock'},
   {k:'shipper',l:'Shipper',partner:true},{k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
   {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
   {k:'pod',l:'POD',type:'port'},
-  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'vol',l:'Vol',compact:true},{k:'typeCont',l:'Type Cont',type:'typeCont',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
-  {k:'tenHang',l:'Tên hàng',full:true},
-  {k:'cnee',l:'Cnee',type:'cnee'},
-  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
   {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
 ];
 const NCOLS=[
-  {k:'bookingNo',l:'Booking No'},{k:'mblNo',l:'MBL No'},
+  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'consignee',l:'Consignee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
+  {k:'_bookingBlock',l:'',type:'bookingBlock'},
   {k:'supplier',l:'Nhà cung cấp',partner:true},{k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
   {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
   {k:'pod',l:'POD',type:'port'},
-  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'vol',l:'Vol',compact:true},{k:'typeCont',l:'Type Cont',type:'typeCont',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
-  {k:'tenHang',l:'Tên hàng',full:true},
-  {k:'consignee',l:'Consignee'},
+  {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
+  {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
+  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
+];
+
+/* ─────────────────────────────────────────────
+   STATE
+───────────────────────────────────────────── */
+let currentUser = null;   // Firebase Auth user
+let currentProfile = null; // Firestore user profile {role, name, ...}
+let currentTab = 'xuat';
+let lotIdx = null; let svcIdx = null; let taskIdx = null;
+let partnerIdx = null; let partnerIsNew = false; let userEditIdx = null;
+let deadlineDays = 5;
+
+// Local cache (kept in sync via onSnapshot)
+let cache = { xuat: [], nhap: [], partners: {}, users: [] };
+
+// Firestore listeners (unsubscribe functions)
+let listeners = [];
+
+function can(perm){ return ROLES[currentProfile?.role||'viewer'].perms[perm]||false; }
+function isLotLocked(id, tt){
+  if(!id||!tt) return false;
+  const r=(cache[tt]||[]).find(x=>x._id===id);
+  return r&&r.locked===true;
+}
+
+/* ─────────────────────────────────────────────
+   TOAST NOTIFICATION
+───────────────────────────────────────────── */
+function toast(msg, type='success'){
+  const t=document.createElement('div');
+  t.className='toast toast-'+type;
+  t.innerHTML=`<i class="ti ti-${type==='success'?'circle-check':'alert-circle'}"></i> ${msg}`;
+  document.getElementById('toastArea').appendChild(t);
+  setTimeout(()=>t.classList.add('show'),10);
+  setTimeout(()=>{t.classList.remove('show');setTimeout(()=>t.remove(),300);},3000);
+}
+
+/* ─────────────────────────────────────────────
+   LOADING OVERLAY
+───────────────────────────────────────────── */
+function setLoading(on, msg='Đang tải...'){
+  const el=document.getElementById('loadingOverlay');
+  el.style.display=on?'flex':'none';
+  document.getElementById('loadingMsg').textContent=msg;
+}
+
+/* ─────────────────────────────────────────────
+   AUTH
+───────────────────────────────────────────── */
+auth.onAuthStateChanged(async (user) => {
+  if (user) {
+    currentUser = user;
+    setLoading(true,'Đang tải dữ liệu...');
+    try {
+      // Try all possible doc ID formats for the user profile
+      const emailKey = user.email.replace(/\./g,'_').replace(/@/g,'@');
+      const emailKeyDot = user.email.replace(/\./g,'_');
+      const snap = await db.collection('users').get();
+      const profiles = snap.docs.map(d=>({_docId:d.id,...d.data()}));
+      cache.users = profiles;
+      // Find profile: by email field, or by UID doc ID, or by email-based doc ID
+      currentProfile = profiles.find(p=>p.email===user.email)
+        || profiles.find(p=>p.uid===user.uid)
+        || profiles.find(p=>p._docId===user.uid)
+        || profiles.find(p=>p._docId===emailKeyDot)
+        || profiles.find(p=>p._docId===emailKey)
+        || null;
+      if(!currentProfile){
+        // No profile found - log details for debugging
+        console.warn('TradeFlow: No profile found for', user.email, '(UID:', user.uid+')');
+        console.warn('Available docs:', profiles.map(p=>p._docId+'/'+p.email).join(', '));
+        // Default to viewer - admin should create profile in Firestore
+        currentProfile = {role:'viewer',name:user.displayName||user.email,avatar:(user.email||'??').slice(0,2).toUpperCase(),email:user.email};
+      } else {
+        console.log('TradeFlow: Profile found, role=', currentProfile.role, 'docId=', currentProfile._docId);
+      }
+    } catch(e) {
+      console.error('Profile load error:', e);
+      currentProfile = {role:'admin',name:user.email,avatar:user.email.slice(0,2).toUpperCase(),email:user.email};
+    }
+    startListeners();
+    showApp();
+    setLoading(false);
+  } else {
+    currentUser = null; currentProfile = null;
+    stopListeners();
+    showLogin();
+  }
+});
+
+async function doLogin(){
+  const email = g('loginEmail').value.trim();
+  const pass  = g('loginPass').value;
+  if(!email||!pass){ toast('Vui lòng nhập email và mật khẩu','error'); return; }
+  setLoading(true,'Đang đăng nhập...');
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+  } catch(e) {
+    setLoading(false);
+    toast('Email hoặc mật khẩu không đúng','error');
+  }
+}
+
+async function doLogout(){
+  stopListeners();
+  await auth.signOut();
+  toast('Đã đăng xuất');
+}
+
+/* ─────────────────────────────────────────────
+   FIRESTORE REALTIME LISTENERS
+───────────────────────────────────────────── */
+function startListeners(){
+  loadBankAccounts();
+  loadCargoNames();
+  stopListeners();
+
+  // Lô hàng xuất
+  const u1 = db.collection('lots_xuat').onSnapshot(snap => {
+    cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
+    cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+    if(currentTab==='xuat') renderLotTable('xuat');
+    if(detailId&&detailTt==='xuat'&&g('detailPanel').classList.contains('open')){
+      const fresh=cache.xuat.find(x=>x._id===detailId);
+      if(fresh) renderDetailPanel(fresh,'xuat');
+    }
+    updateSidebar();
+  });
+
+  const u2 = db.collection('lots_nhap').onSnapshot(snap => {
+    cache.nhap = snap.docs.map(d=>({_id:d.id,...d.data()}));
+    cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+    if(currentTab==='nhap') renderLotTable('nhap');
+    if(detailId&&detailTt==='nhap'&&g('detailPanel').classList.contains('open')){
+      const fresh=cache.nhap.find(x=>x._id===detailId);
+      if(fresh) renderDetailPanel(fresh,'nhap');
+    }
+    updateSidebar();
+  });
+
+  const u3 = db.collection('partners').onSnapshot(snap => {
+    cache.partners = {};
+    snap.docs.forEach(d=>{ cache.partners[d.id]={shortname:d.id,...d.data()}; });
+    if(currentTab==='doi-tac') renderPartners();
+  });
+
+  // Users
+  // Live-sync permissions from Firestore (persists across F5)
+  const uPerm=db.collection('_config').doc('permissions').onSnapshot(function(snap){
+    if(snap.exists){
+      const saved=snap.data().roles||{};
+      ['operator','accountant','doc','cus','viewer'].forEach(function(role){
+        if(saved[role]) Object.assign(ROLES[role].perms, saved[role]);
+      });
+      if(currentTab==='users') renderUsers();
+      updateSidebar();
+    }
+  },function(){});
+
+  // Ocean freight rates (realtime)
+  db.collection('ocean_rates').onSnapshot(function(snap){
+    cache.ocean=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+    if(currentTab==='ocean') renderOcean();
+  },function(){cache.ocean=[];});
+
+  const u4 = db.collection('users').onSnapshot(snap => {
+    const profiles = snap.docs.map(d=>({_docId:d.id,...d.data()}));
+    cache.users = profiles;
+    // Refresh currentProfile if it updated
+    if(currentUser){
+      const emailKeyDot = currentUser.email.replace(/\./g,'_');
+      const fresh = profiles.find(p=>p.email===currentUser.email)
+        || profiles.find(p=>p.uid===currentUser.uid)
+        || profiles.find(p=>p._docId===currentUser.uid)
+        || profiles.find(p=>p._docId===emailKeyDot);
+      if(fresh) currentProfile = fresh;
+    }
+    if(currentTab==='users') renderUsers();
+    updateSidebar();
+  });
+
+  listeners = [u1,u2,u3,u4];
+}
+function stopListeners(){ listeners.forEach(u=>u&&u()); listeners=[]; }
+
+/* ─────────────────────────────────────────────
+   FIRESTORE HELPERS
+───────────────────────────────────────────── */
+const colName = tt => tt==='xuat'?'lots_xuat':'lots_nhap';
+
+async function fsSet(colPath, docId, data){
+  await db.collection(colPath).doc(docId).set(data, {merge:true});
+}
+async function fsDel(colPath, docId){
+  await db.collection(colPath).doc(docId).delete();
+}
+
+function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+
+/* ─────────────────────────────────────────────
+   UI HELPERS
+───────────────────────────────────────────── */
+function g(id){ return document.getElementById(id); }
+function openOv(id){ g(id).classList.add('open'); }
+function closeOv(id){ g(id).classList.remove('open'); }
+
+function showLogin(){
+  setLoading(false);
+  g('loginWrap').style.display='flex';
+  g('appShell').style.display='none';
+}
+function showApp(){
+  setLoading(false);
+  g('loginWrap').style.display='none';
+  g('appShell').style.display='flex';
+  updateSidebar();
+  goTab('xuat');
+}
+
+function updateSidebar(){
+  const u=currentProfile; if(!u)return;
+  const r=ROLES[u.role||'viewer'];
+  console.log('TradeFlow: user='+u.email+' role='+u.role+' docId='+u._docId);
+  g('sbAvatar').textContent=u.avatar||'??';
+  g('sbName').textContent=u.name||u.email||'';
+  g('sbEmail').textContent=currentUser?.email||'';
+  g('sbRole').innerHTML=`<span class="${r.cls}">${r.label}</span>`;
+  const alerts=getDeadlineAlerts();
+  const dot=g('deadlineBadge');
+  if(alerts.length){dot.style.display='';dot.textContent=alerts.length;}else dot.style.display='none';
+}
+
+/* ─────────────────────────────────────────────
+   NAVIGATION
+───────────────────────────────────────────── */
+function goTab(t){
+  currentTab=t;
+  ['xuat','nhap','deadline','cong-no','doi-tac','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
+    g('page-'+id).style.display=id===t?'':'none';
+    g('sb-'+id)?.classList.toggle('active',id===t);
+  });
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','users':'Người dùng','quote':'Quotation'};
+  g('pageTitle').textContent=titles[t]||t;
+  if(t==='xuat'||t==='nhap') renderLot(t);
+  if(t==='deadline') renderDeadline();
+  if(t==='cong-no') renderDebt();
+  if(t==='doi-tac') renderPartners();
+  if(t==='users') renderUsers();
+  if(t==='docs') renderDocMaker();
+  if(t==='costing-report') renderCostingReport();
+  if(t==='ocean') renderOcean();
+  if(t==='quote') renderQuote();
+  if(t==='settings') renderSettings();
+}
+
+/* ─────────────────────────────────────────────
+   THEME
+───────────────────────────────────────────── */
+function toggleTheme(){
+  const dark=document.documentElement.getAttribute('data-theme')==='dark';
+  document.documentElement.setAttribute('data-theme',dark?'light':'dark');
+  g('themeIcon').className=dark?'ti ti-sun-moon':'ti ti-moon';
+  localStorage.setItem('tf_theme',dark?'light':'dark');
+}
+(()=>{
+  const t=localStorage.getItem('tf_theme')||'light';
+  document.documentElement.setAttribute('data-theme',t);
+})();
+
+/* ─────────────────────────────────────────────
+   DEADLINE
+───────────────────────────────────────────── */
+function getDeadlineAlerts(){
+  const today=new Date();today.setHours(0,0,0,0);
+  const alerts=[];
+  [...cache.xuat,...cache.nhap].forEach(r=>{
+    ['etd','eta'].forEach(f=>{
+      if(!r[f])return;
+      const d=new Date(r[f]);d.setHours(0,0,0,0);
+      const diff=Math.ceil((d-today)/86400000);
+      if(diff>=0&&diff<=deadlineDays) alerts.push({type:f,days:diff,r});
+    });
+    const incomplete=TASKS.filter(t=>!r.tasks?.[t.key]);
+    if(incomplete.length&&r.status!=='Đã giao'&&r.status!=='Đã nhận')
+      alerts.push({type:'task',incompleteTasks:incomplete,r});
+  });
+  return alerts;
+}
+
+/* ─────────────────────────────────────────────
+   LOT LIST
+───────────────────────────────────────────── */
+function renderLot(tt){
+  const rows=cache[tt];
+  const done=rows.filter(r=>r.status==='Đã giao'||r.status==='Đã nhận').length;
+  const transit=rows.filter(r=>r.status==='Đang vận chuyển').length;
+  const tasksDone=rows.filter(r=>r.tasks&&TASKS.every(t=>r.tasks[t.key])).length;
+  const pg=g('page-'+tt);
+  pg.innerHTML=`
+  <div class="stats-grid">
+    <div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;padding:.4rem 0;width:100%">
+      <div class="search-wrap" style="flex:2 1 0;min-width:160px"><i class="ti ti-user"></i><input type="text" id="sfShipper_${tt}" placeholder="Shipper..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
+      <div class="search-wrap" style="flex:2 1 0;min-width:160px"><i class="ti ti-ship"></i><input type="text" id="sfCarrier_${tt}" placeholder="Carrier..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
+      <div class="search-wrap" style="flex:2 1 0;min-width:150px"><i class="ti ti-map-pin"></i><input type="text" id="sfPod_${tt}" placeholder="POD..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
+      <select id="sfLock_${tt}" onchange="renderLotTable('${tt}')" style="font-size:12px;flex:0 0 140px;width:140px"><option value="">Tất cả khóa</option><option value="locked">Đã khóa</option><option value="unlocked">Chưa khóa</option></select>
+      <span style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap;flex:0 0 auto">Tổng: <strong id="stat-total-${tt}">0</strong> lô</span>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier..." oninput="renderLotTable('${tt}')"/></div>
+    <button class="btn sm" id="sortBtn_${tt}" onclick="toggleSort('${tt}')" title="Sắp xếp theo ETD" style="font-size:12px;white-space:nowrap"><i class="ti ti-arrows-sort"></i> ETD <span id="sortDir_${tt}">↑</span></button>
+    <select id="fst_${tt}" style="width:140px" onchange="renderLotTable('${tt}')">
+      <option value="">Tất cả trạng thái</option>
+      <option>Đang xử lý</option><option>Đã nhập info</option>
+      <option>Đã lên debit</option><option>Đang vận chuyển</option><option>${tt==='xuat'?'Đã giao':'Đã nhận'}</option>
+    </select>
+    <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);flex-shrink:0">
+      <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,14)" style="font-size:11px;padding:3px 8px">-2wk</button>
+      <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,30)" style="font-size:11px;padding:3px 8px">-1mo</button>
+      <button class="btn sm" data-tt="${tt}" onclick="resetAllFilters(this.dataset.tt)" style="font-size:11px;padding:3px 8px;color:var(--text-secondary)" title="Xóa tất cả bộ lọc"><i class="ti ti-refresh" style="font-size:11px"></i> Reset</button>
+      <i class="ti ti-calendar" style="font-size:13px"></i>
+      <input type="date" id="etdFrom_${tt}" value="${getDefaultEtdFrom()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
+      <span>→</span>
+      <input type="date" id="etdTo_${tt}" value="${getDefaultEtdTo()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
+      <button class="btn sm" onclick="clearEtdFilter('${tt}')" title="Tất cả"><i class="ti ti-calendar-off"></i></button>
+    </div>
+    <button class="btn" onclick="exportExcel('${tt}')" ${can('export')?'':'disabled'}><i class="ti ti-file-spreadsheet"></i> Excel</button>
+    <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}><i class="ti ti-plus"></i> Thêm lô hàng</button>
+  </div>
+  <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
+  <div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>`;
+  renderLotTable(tt);
+}
+
+// Sort state per tab
+var sortState={xuat:{key:'etd',dir:1},nhap:{key:'etd',dir:1}};
+
+function toggleSort(tt){
+  sortState[tt].dir*=-1;
+  const el=g('sortDir_'+tt);
+  if(el)el.textContent=sortState[tt].dir===1?'↑':'↓';
+  renderLotTable(tt);
+}
+
+function calcDefaultCutoff(etdStr, dayOffset, time){
+  if(!etdStr) return '';
+  try{
+    const d=new Date(etdStr);
+    d.setDate(d.getDate()+(dayOffset||0));
+    const yyyy=d.getFullYear();
+    const mm=String(d.getMonth()+1).padStart(2,'0');
+    const dd=String(d.getDate()).padStart(2,'0');
+    return yyyy+'-'+mm+'-'+dd+(time?' '+time:'');
+  }catch(e){return '';}
+}
+
+function resetAllFilters(tt){
+  const srch=g('srch_'+tt); if(srch) srch.value='';
+  const sf=g('sf_'+tt); if(sf) sf.value='';
+  const ef=g('etdFrom_'+tt); if(ef) ef.value=getDefaultEtdFrom();
+  const et=g('etdTo_'+tt); if(et) et.value=getDefaultEtdTo();
+  const ss=g('sfShipper_'+tt); if(ss) ss.value='';
+  const sc=g('sfCarrier_'+tt); if(sc) sc.value='';
+  const sfl=g('sfLock_'+tt); if(sfl) sfl.value='';
+  const spod=g('sfPod_'+tt); if(spod) spod.value='';
+  renderLotTable(tt);
+  toast('Đã reset bộ lọc');
+}
+
+function setQuickFilter(tt, days){
+  const from=new Date(Date.now()-days*86400000).toISOString().slice(0,10);
+  const to=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+  const el1=g('etdFrom_'+tt); const el2=g('etdTo_'+tt);
+  if(el1) el1.value=from;
+  if(el2) el2.value=to;
+  renderLotTable(tt);
+}
+
+function getDefaultEtdFrom(){
+  const d=new Date(); d.setDate(d.getDate()-1);
+  return d.toISOString().slice(0,10);
+}
+function getDefaultEtdTo(){
+  const d=new Date(); d.setDate(d.getDate()+20);
+  return d.toISOString().slice(0,10);
+}
+function clearEtdFilter(tt){
+  const f=g('etdFrom_'+tt); const t=g('etdTo_'+tt);
+  if(f)f.value=''; if(t)t.value='';
+  renderLotTable(tt);
+}
+
+function renderLotTable(tt){
+  const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
+  const q=(g('srch_'+tt)?.value||'').toLowerCase();
+  const fs=g('fst_'+tt)?.value||'';
+  const etdFrom=g('etdFrom_'+tt)?.value||'';
+  const etdTo=g('etdTo_'+tt)?.value||'';
+  const sfShipper=(g('sfShipper_'+tt)?.value||'').toLowerCase().trim();
+  const sfCarrier=(g('sfCarrier_'+tt)?.value||'').toLowerCase().trim();
+  const sfLock=g('sfLock_'+tt)?.value||'';
+
+  const rows=cache[tt].filter(r=>{
+    const matchQ=!q||Object.values(r).some(v=>(v+'').toLowerCase().includes(q));
+    const matchS=!fs||r.status===fs;
+    const matchEtdFrom=!etdFrom||!r.etd||(r.etd>=etdFrom);
+    const matchEtdTo=!etdTo||!r.etd||(r.etd<=etdTo);
+    const matchShipper=!sfShipper||(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper);
+    const sfPod=(g('sfPod_'+tt)?.value||'').toLowerCase().trim();
+    const matchCarrier=!sfCarrier||(r.carrier||'').toLowerCase().includes(sfCarrier);
+    const matchPod=!sfPod||(r.pod||'').toLowerCase().includes(sfPod);
+    const matchLock=!sfLock||(sfLock==='locked'&&r.locked)||(sfLock==='unlocked'&&!r.locked);
+    return matchQ&&matchS&&matchEtdFrom&&matchEtdTo&&matchShipper&&matchCarrier&&matchPod&&matchLock;
+  }).sort(function(a,b){
+    const dir=(sortState[tt]||{dir:1}).dir;
+    const av=a.etd||''; const bv=b.etd||'';
+    return dir*(av<bv?-1:av>bv?1:0);
+  });
+  const today=new Date();today.setHours(0,0,0,0);
+  g('th_'+tt).innerHTML='<tr>'+cols.map(c=>`<th>${c.l}</th>`).join('')+'<th style="text-align:center">Thao tác</th></tr>';
+  if(!rows.length){g('tb_'+tt).innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;return;}
+  g('tb_'+tt).innerHTML=rows.map(r=>{
+    const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
+    const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
+    const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
+    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`+cols.map(c=>{
+      if(c.k==='bookingNo'){
+        const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
+        return`<td style="max-width:140px"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${r.bookingNo||'—'}</button>${urgDot}</td>`;
+      }
+      if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
+      if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${tc}</span>`:'—'}</td>`;}
+      if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')">${sn}</button></td>`;}
+      if(c.k==='tenHang') return`<td style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r[c.k]||''}">${r[c.k]||'—'}</td>`;
+      if(c.k==='jobNo'){const jc=r.locked?'var(--green)':'var(--red)';return`<td><button class="plink" style="font-weight:700;color:${jc};font-size:11.5px;white-space:nowrap" data-id="${r._id}" data-tt="${tt}" onclick="openDetail(this.dataset.id,this.dataset.tt)" title="${r.locked?'Đã khóa':'Chưa khóa'}">${r.jobNo||'—'}</button></td>`;}
+      if(c.k==='etd'){
+        const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
+        return`<td class="td-etd" style="vertical-align:top">
+          <div style="font-weight:600">${r.etd||'—'}</div>
+          ${cy?`<div style="font-size:10px;color:rgba(26,75,140,.65);margin-top:2px;white-space:nowrap"><i class="ti ti-clock" style="font-size:9px"></i> CY ${cy}</div>`:''}
+        </td>`;
+      }
+      if(c.k==='eta') return`<td style="color:var(--text-secondary)">${r.eta||'—'}</td>`;
+      if(c.type==='cutoff'){
+        const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
+        const si=r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00');
+        return`<td style="font-size:11px;white-space:nowrap;line-height:1.7">
+          <div><span style="color:var(--text-tertiary);font-size:9.5px">CY</span> <span style="font-weight:500">${cy||'—'}</span></div>
+          <div><span style="color:var(--text-tertiary);font-size:9.5px">SI</span> <span style="font-weight:500">${si||'—'}</span></div>
+        </td>`;
+      }
+      return`<td>${r[c.k]||'—'}</td>`;
+    }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
+      ${r.locked?'<span title="Lô hàng đã khóa" style="padding:4px;color:var(--red)"><i class="ti ti-lock" style="font-size:14px"></i></span>':''}
+       <button class="rac grn" data-id="${r._id}" data-tt="${tt}" onclick="openDetail(this.dataset.id,this.dataset.tt)" title="Xem chi tiết" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-eye"></i></button>
+       ${can('addLot')?`<button class="rac" data-id="${r._id}" data-tt="${tt}" onclick="openCombineFrom(this.dataset.id,this.dataset.tt)" title="Combine" style="color:var(--blue)"><i class="ti ti-link"></i></button>`:''}
+      <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa" ${can('deleteLot')&&!r.locked?'':'disabled'}><i class="ti ti-trash"></i></button>
+    </div></td></tr>`;
+  }).join('');
+}
+
+/* ─── DETAIL PANEL: click Booking No → slide-in panel with tabs ─── */
+let detailId=null, detailTt=null, detailTab='info';
+
+// ── Browser-style tab system for detail panels ──
+let _openTabs=[]; // {key, type:'lot'|'docmaker', id, tt, label, tab}
+let _activeTabKey=null;
+
+function openDetail(id, tt){
+  const r=cache[tt].find(x=>x._id===id)||{};
+  const key='lot_'+id;
+  let t=_openTabs.find(x=>x.key===key);
+  if(!t){
+    t={key,type:'lot',id,tt,label:(r.jobNo||r.bookingNo||'Lô hàng'),tab:'info'};
+    _openTabs.push(t);
+  }
+  _activeTabKey=key;
+  detailId=id; detailTt=tt; detailTab=t.tab;
+  renderDpanelTabs();
+  renderDetailPanel(r,tt);
+  g('detailPanel').classList.add('open');
+  g('detailBackdrop').classList.add('open');
+}
+
+function openDocMakerTab(id, tt){
+  const key='docmaker';
+  let t=_openTabs.find(x=>x.key===key);
+  if(!t){t={key,type:'docmaker',label:'Document Maker',id:id||null,tt:tt||null};_openTabs.push(t);}
+  else if(id&&tt){t.id=id;t.tt=tt;} // remember last lot
+  _activeTabKey=key;
+  g('detailPanel').innerHTML='<div class="dpanel-tabbar" id="dpanelTabbar"></div><div id="dmPanelHost" style="padding:1rem"></div>';
+  renderDpanelTabs();
+  _dmHost=g('dmPanelHost');
+  renderDocMaker();
+  g('detailPanel').classList.add('open');
+  g('detailBackdrop').classList.add('open');
+  // Auto-pick the lot once the form DOM exists
+  const pickId=id||t.id, pickTt=tt||t.tt;
+  if(pickId&&pickTt){
+    const tryPick=function(tries){
+      if(window.dmPickLot&&g('dmSearch')){dmPickLot(pickId,pickTt);}
+      else if(tries>0){setTimeout(function(){tryPick(tries-1);},80);}
+    };
+    tryPick(15);
+  }
+}
+
+function switchToTab(key){
+  const t=_openTabs.find(x=>x.key===key);
+  if(!t)return;
+  _activeTabKey=key;
+  if(t.type==='lot'){
+    detailId=t.id; detailTt=t.tt; detailTab=t.tab||'info';
+    const r=cache[t.tt].find(x=>x._id===t.id)||{};
+    renderDetailPanel(r,t.tt);
+  } else if(t.type==='docmaker'){
+    openDocMakerTab();
+  }
+}
+
+function closeTab(key, ev){
+  if(ev)ev.stopPropagation();
+  const idx=_openTabs.findIndex(x=>x.key===key);
+  if(idx<0)return;
+  _openTabs.splice(idx,1);
+  if(_activeTabKey===key){
+    if(_openTabs.length){
+      switchToTab(_openTabs[Math.max(0,idx-1)].key);
+    } else {
+      closeDetail();
+    }
+  } else {
+    renderDpanelTabs();
+  }
+}
+
+function renderDpanelTabs(){
+  const bar=g('dpanelTabbar');
+  if(!bar)return;
+  bar.innerHTML=_openTabs.map(function(t){
+    const icon=t.type==='docmaker'?'ti-file-certificate':'ti-package';
+    return '<div class="dpanel-tab'+(t.key===_activeTabKey?' active':'')+'" onclick="switchToTab(\''+t.key+'\')"><i class="ti '+icon+'" style="font-size:13px"></i><span class="tabname">'+t.label+'</span><span class="tabclose" onclick="closeTab(\''+t.key+'\',event)"><i class="ti ti-x"></i></span></div>';
+  }).join('');
+}
+
+function closeDetail(){
+  _openTabs=[]; _activeTabKey=null;
+  g('detailPanel').classList.remove('open');
+  g('detailBackdrop').classList.remove('open');
+}
+
+window.openDocMakerTab=openDocMakerTab;
+window.switchToTab=switchToTab;
+window.closeTab=closeTab;
+
+function switchDetailTab(tab){
+  detailTab=tab;
+  const at=_openTabs&&_openTabs.find(x=>x.key===_activeTabKey);
+  if(at)at.tab=tab;
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  renderDetailPanel(r,detailTt);
+}
+
+function renderDetailPanel(r,tt){
+  // Tab buttons
+  const canSeePricing=can('fillPrice')||can('viewCost')||can('viewInvoice');
+  // Redirect if doc/cus somehow lands on pricing tab
+  if(!canSeePricing && ['price','costing','invoice'].includes(detailTab)) detailTab='svc';
+  const tabs=[
+    {k:'info',label:'Chi tiết',icon:'ti-info-circle'},
+    {k:'cont',label:'Cont/Seal',icon:'ti-container'},
+    {k:'svc',label:'Dịch vụ',icon:'ti-clipboard-list'},
+    ...(canSeePricing?[
+      {k:'price',label:'Fill giá',icon:'ti-currency-dollar'},
+      {k:'costing',label:'Costing',icon:'ti-calculator'},
+      {k:'invoice',label:'Invoice',icon:'ti-file-invoice'},
+    ]:[]),
+  ];
+  const tabsHtml=tabs.map(t=>`<button class="dtab${detailTab===t.k?' active':''}" onclick="switchDetailTab('${t.k}')"><i class="ti ${t.icon}" style="font-size:13px"></i> ${t.label}</button>`).join('');
+
+  // Header
+  const statusBadge=`<span class="bdg ${SB[r.status]||'bdg-gr'}">${r.status||'—'}</span>`;
+  let bodyHtml='';
+
+  if(detailTab==='info'){
+    const allCols=tt==='xuat'?XCOLS:NCOLS;
+    const skipList=['bookingNo','status','cutoffCY','cutoffSI','polCountry','podCountry','loaiHang','remark'];
+    bodyHtml=`<div class="detail-grid">
+      ${allCols.filter(c=>!skipList.includes(c.k)).map(c=>{
+        let val=r[c.k]||'—';
+        if(c.k==='typeCont'&&r[c.k]){const isRf=r[c.k].includes('R');val=`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${r[c.k]}</span>`;}
+        else if(c.k==='cargoType'&&r[c.k]){val=`<span class="bdg ${r[c.k]==='Hàng lạnh'?'bdg-b':'bdg-a'}">${r[c.k]}</span>`;}
+        else if(c.k==='status'){val=`<span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>`;}
+        return`<div class="detail-field"><div class="detail-label">${c.l}</div><div class="detail-val">${val}</div></div>`;
+      }).join('')}
+    </div>
+    <!-- ICD / CY / WH / Remark -->
+    ${(r.icd||r.cyLocation||r.wh)?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px">
+      ${r.icd?`<div style="padding:5px 12px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><div style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">ICD</div><div style="font-size:12px;font-weight:600">${r.icd}</div></div>`:''}
+      ${r.cyLocation?`<div style="padding:5px 12px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><div style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">CY</div><div style="font-size:12px">${r.cyLocation}</div></div>`:''}
+      ${r.wh?`<div style="padding:5px 12px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><div style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">WH</div><div style="font-size:12px">${r.wh}</div></div>`:''}
+    </div>`:''}
+    ${r.remark?`<div style="margin-top:8px;padding:8px 12px;border-radius:8px;background:#FFFBE6;border:1px solid #F0D060"><div style="font-size:9.5px;color:#856A00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Ghi chú</div><div style="font-size:12px;color:#1a1a18">${r.remark}</div></div>`:''}
+    <!-- Job No + Loai Hang -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${r.jobNo?`<div style="padding:5px 14px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><span style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Số quản lý</span><div style="font-size:14px;font-weight:800;color:var(--blue)">${r.jobNo}</div></div>`:''}
+      ${r.loaiHang?`<div style="padding:5px 14px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><span style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Loại lô hàng</span><div style="font-size:12px;font-weight:700;color:var(--text-primary)">${r.loaiHang}</div></div>`:''}
+    </div>
+    <!-- Cut Off section -->
+    ${(r.cutoffCY||r.cutoffSI||r.etd)?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:8px;padding:.6rem .85rem">
+        <div style="font-size:9.5px;color:#856a00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Cut Off CY</div>
+        <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
+      </div>
+      <div style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:8px;padding:.6rem .85rem">
+        <div style="font-size:9.5px;color:#856a00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Cut Off SI</div>
+        <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
+      </div>
+    </div>`:''}
+    <!-- Status quick buttons -->
+    ${can('editLot')&&!r.locked?`<div style="margin-top:.75rem">
+      <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Trạng thái lô hàng</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${['Confirm','Standby','Done','Cancel'].map(s=>`<button onclick="quickSetStatus('${r._id}','${tt}','${s}')" style="padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:2px solid ${r.status===s?'transparent':'#ddd'};background:${r.status===s?(s==='Confirm'?'#dc3545':s==='Standby'?'#ffc107':s==='Done'?'#198754':'#0d6efd'):(s==='Confirm'?'rgba(220,53,69,.1)':s==='Standby'?'rgba(255,193,7,.1)':s==='Done'?'rgba(25,135,84,.1)':'rgba(13,110,253,.1)')};color:${s==='Confirm'?'#dc3545':s==='Standby'?'#856404':s==='Done'?'#198754':'#0d6efd'}">${s}</button>`).join('')}
+      </div>
+    </div>`:''}
+    <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
+      ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')">
+        <i class="ti ${r.locked?'ti-lock-open':'ti-lock'}"></i> ${r.locked?'Mở khóa':'Khóa lô hàng'}
+      </button>`:''}
+      ${r.locked?'<span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:500"><i class="ti ti-lock" style="font-size:14px"></i>Lô hàng đã được khóa — chỉ Admin mới mở được</span>':''}
+    </div>`;
+  }
+
+  else if(detailTab==='cont'){
+    // Multi-booking: each booking gets its own cont/seal section
+    const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:parseInt(r.vol)||1,typeCont:r.typeCont||'40HC'}];
+    const bookingConts=r.bookingConts||{};
+    const thBase='padding:6px 6px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px';
+
+    function bContRows(conts,vol,bkNo){
+      let rows='';
+      const n=Math.max(vol,conts.length||1);
+      for(let i=0;i<n;i++){
+        const c2=conts[i]||{};
+        const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+        rows+='<tr>'
+          +'<td style="padding:4px;border-bottom:1px solid var(--border-light);text-align:center;font-size:11px">'+(i+1)+'</td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="text" class="cno_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.no||'')+'" placeholder="Cont No" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="text" class="cseal_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="cpkg_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="cnw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="cgw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.gw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" class="ctare_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.tare||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+          +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="date" class="cdate_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.date||r.etd||'')+'" style="font-size:11px;width:100%;box-sizing:border-box"/></td>'
+          +'<td style="padding:2px 4px;border-bottom:1px solid var(--border-light);text-align:center;width:28px"><button type="button" onclick="delBkContRow(this)" data-bk="'+bkNo+'" data-bkkey="'+bkKey+'" class="rac red" style="font-size:11px;padding:2px 4px" title="Xóa dòng này"><i class="ti ti-trash"></i></button></td>'
+          +'</tr>';
+      }
+      return rows;
+    }
+
+    // Build per-booking sections
+    let sectionsHtml='';
+    let totalPkg=0,totalNW=0,totalGW=0,totalVol=0;
+    bookings.forEach(function(bk){
+      const bkNo=bk.bookingNo||'(no booking)';
+      const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+      const bkData=bookingConts[bkKey]||{};
+      const conts=bkData.containers||[];
+      const bkVol=parseInt(bk.vol)||1;
+      const pkgUnit=bkData.pkgUnit||'Bales';
+      totalVol+=bkVol;
+      conts.forEach(function(c2){totalPkg+=(c2.pkg||0);totalNW+=(c2.nw||0);totalGW+=(c2.gw||0);});
+
+      // Tờ khai for this booking
+      const tkHtml=buildTkhaiRows(bkData.tkhaiList?{tkhaiList:bkData.tkhaiList}:(bk===bookings[0]?r:{}));
+
+      const pkgUnitSel='<select class="cPkgUnit" data-bk="'+bkNo+'" style="font-size:10px;width:100%;margin-top:2px;font-weight:400">'+['Bales','Bags','Conts','Cartons','Pallets','Pcs','Rolls'].map(function(u){return '<option'+(u===pkgUnit?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
+
+      sectionsHtml+='<div style="border:1px solid var(--border-light);border-radius:10px;overflow:hidden;margin-bottom:12px">';
+      // Booking header
+      sectionsHtml+='<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--blue-bg);border-bottom:1px solid var(--border-light)">';
+      sectionsHtml+='<div><span style="font-weight:700;color:var(--blue);font-size:13px">'+bkNo+'</span><span style="font-size:11px;color:var(--text-secondary);margin-left:8px">×'+bkVol+' '+bk.typeCont+'</span></div>';
+      sectionsHtml+='<div style="display:flex;gap:6px">';
+      sectionsHtml+='<button class="btn" onclick="showKhaiEport()"><i class="ti ti-file-export"></i> Khai Eport</button>';
+      sectionsHtml+='<button class="btn" onclick="showCheckEport()"><i class="ti ti-clipboard-check"></i> Check</button>';
+      sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
+      sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
+      sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
+      sectionsHtml+='</div></div>';
+      // Tkhai rows
+      sectionsHtml+='<div style="padding:8px 12px;border-bottom:1px solid var(--border-light)">';
+      sectionsHtml+='<div id="tkhaiBox_'+bkKey+'">'+tkHtml+'</div>';
+      sectionsHtml+='<button class="btn sm" onclick="addTkhaiRowForBk(\''+bkKey+'\')"><i class="ti ti-plus"></i> Thêm tờ khai</button>';
+      sectionsHtml+='</div>';
+      // Cont table
+      sectionsHtml+='<table style="width:100%;border-collapse:collapse;table-layout:fixed">';
+      sectionsHtml+='<colgroup><col style="width:32px"/><col style="width:17%"/><col style="width:14%"/><col style="width:11%"/><col style="width:11%"/><col style="width:11%"/><col style="width:9%"/><col style="width:14%"/><col style="width:28px"/></colgroup>';
+      sectionsHtml+='<thead><tr>';
+      sectionsHtml+='<th style="'+thBase+';text-align:center">#</th>';
+      sectionsHtml+='<th style="'+thBase+'">Cont No</th>';
+      sectionsHtml+='<th style="'+thBase+'">Seal</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">No. Package'+pkgUnitSel+'</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">N.W (KG)</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">G.W (KG)</th>';
+      sectionsHtml+='<th style="'+thBase+';text-align:right">Tare</th>';
+      sectionsHtml+='<th style="'+thBase+'">Stuff Date</th>';
+      sectionsHtml+='<th style="'+thBase+'"></th>';
+      sectionsHtml+='</tr></thead>';
+      sectionsHtml+='<tbody>'+bContRows(conts,bkVol,bkNo)+'</tbody></table>';
+      sectionsHtml+='</div>';
+    });
+
+    // Total summary section - matching the image format
+    const bkNosStr=bookings.map(function(b){return b.bookingNo||'?';}).join(', ');
+    const firstPkgUnit=(bookingConts[bookings[0]&&bookings[0].bookingNo.replace(/[^a-zA-Z0-9]/g,'_')]||{}).pkgUnit||'Bales';
+    const pkgUnitTotalSel='<select id="cPkgUnitTotal" style="font-size:11px;padding:2px 4px;border:1px solid var(--border-light);border-radius:6px">'+
+      ['Bales','Bags','Conts','Cartons','Pallets','Pcs','Rolls'].map(function(u){return '<option'+(u===firstPkgUnit?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
+    sectionsHtml+='<div style="background:var(--bg-secondary);border:2px solid var(--blue);border-radius:10px;padding:10px 14px;margin-top:4px">';
+    sectionsHtml+='<div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:8px"><i class="ti ti-sum"></i> Booking no: '+bkNosStr+',&nbsp;&nbsp;vol <strong>'+totalVol+'</strong>&nbsp;'+
+      (bookings[0]&&bookings[0].typeCont||'')+'&nbsp;&nbsp;Total PACKAGE '+pkgUnitTotalSel+'&nbsp;&nbsp;total N.W&nbsp;&nbsp;total G.W</div>';
+    sectionsHtml+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total Vol</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+totalVol+'</div></div>';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total Package</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(totalPkg?totalPkg.toLocaleString():'—')+'</div></div>';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total N.W (KG)</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(totalNW?totalNW.toLocaleString():'—')+'</div></div>';
+    sectionsHtml+='<div style="background:#fff;border-radius:8px;padding:8px 10px;border:1px solid var(--border-light)"><div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase">Total G.W (KG)</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(totalGW?totalGW.toLocaleString():'—')+'</div></div>';
+    sectionsHtml+='</div>';
+    sectionsHtml+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    sectionsHtml+='<button class="btn" onclick="showKhaiEport()"><i class="ti ti-file-export"></i> Khai Eport</button>';
+    sectionsHtml+='<button class="btn" onclick="showCheckEport()"><i class="ti ti-clipboard-check"></i> Check Eport</button>';
+    sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Nhập từ Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importContFromExcel(this)"/></label>';
+    sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" onclick="openDocMakerTab(detailId,detailTt)"><i class="ti ti-file-certificate"></i> Document Maker (tổng)</button>';
+    sectionsHtml+='<button class="btn pri" onclick="saveContSealAll()"><i class="ti ti-check"></i> Lưu</button>';
+    sectionsHtml+='</div>';
+    sectionsHtml+='</div>';
+
+    bodyHtml=sectionsHtml;
+  }
+
+    
+html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TradeFlow — Xuất Nhập Khẩu</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.x/dist/tabler-icons.min.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
+
+<!-- ✅ BƯỚC DUY NHẤT BẠN CẦN THAY: dán Firebase config của bạn vào đây -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+// Load XLSX with multiple CDN fallbacks
+(function(){
+  var cdns=[
+    'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js',
+    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'
+  ];
+  var idx=0;
+  function tryLoad(){
+    if(window.XLSX||idx>=cdns.length)return;
+    var s=document.createElement('script');
+    s.src=cdns[idx++];
+    s.onload=function(){console.log('XLSX loaded from',s.src);};
+    s.onerror=function(){console.warn('XLSX CDN failed, trying next...');tryLoad();};
+    document.head.appendChild(s);
+  }
+  tryLoad();
+})();
+</script>
+<script>
+
+// 🔴 THAY THẾ ĐOẠN NÀY bằng config từ Firebase Console của bạn
+// Firebase Console → Project Settings → Your apps → Web app → SDK setup
+const firebaseConfig = {
+  apiKey:            "AIzaSyC4FhWQLmGGEtNTLk_ZYeJNnypEUoopxXU",
+  authDomain:        "cocosea-6b51d.firebaseapp.com",
+  projectId:         "cocosea-6b51d",
+  storageBucket:     "cocosea-6b51d.firebasestorage.app",
+  messagingSenderId: "584531594212",
+  appId:             "1:584531594212:web:e903aebef7396ebf2115f1"
+};
+
+// Ensure XLSX is loaded
+if(!window.XLSX){
+  var s=document.createElement('script');
+  s.src='https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';
+  s.onload=function(){console.log('XLSX loaded via fallback');};
+  document.head.appendChild(s);
+}
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db   = firebase.firestore();
+
+// Default bank accounts (admin can edit in Firestore _config/banks)
+window._bankAccounts=[
+  {beneficiary:'',account:'',bank:''},
+];
+
+// Load bank accounts from Firestore
+function loadCargoNames(){
+  db.collection('_config').doc('cargoNames').get().then(function(snap){
+    let names=snap.exists?(snap.data().names||[]):[];
+    // Normalize: support old string[] and new object[]
+    window._cargoNames=names.map(function(n){
+      if(typeof n==='string')return {name:n,enName:'',specs:'',hscode:''};
+      return {name:n.name||'',enName:n.enName||'',specs:n.specs||'',hscode:n.hscode||''};
+    });
+  }).catch(function(){window._cargoNames=[];});
+}
+
+function addCargoNameRow(){
+  const list=g('cargoNamesList'); if(!list)return;
+  const i=list.querySelectorAll('[data-cargo-row]').length;
+  const div=document.createElement('div');
+  div.innerHTML=cargoNameRowHtml({name:'',enName:'',specs:'',hscode:''},i);
+  list.appendChild(div.firstChild);
+}
+
+function cargoNameRowHtml(item,i){
+  return '<div data-cargo-row="'+i+'" style="border:1px solid var(--border-light);border-radius:8px;padding:10px;margin-bottom:8px;background:var(--bg-secondary)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:11px;font-weight:700;color:var(--blue)">Hàng #'+(i+1)+'</span><button class="rac red" onclick="this.closest(\'[data-cargo-row]\').remove()" style="font-size:12px"><i class="ti ti-trash"></i></button></div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
+      +'<div><label class="lbl">Tên hàng (VN)</label><input type="text" class="cargo-name" value="'+(item.name||'').replace(/"/g,"&quot;")+'" placeholder="Xơ dừa"/></div>'
+      +'<div><label class="lbl">Tên tiếng Anh</label><input type="text" class="cargo-en" value="'+(item.enName||'').replace(/"/g,"&quot;")+'" placeholder="COCONUT FIBER"/></div>'
+      +'<div><label class="lbl">HS Code</label><input type="text" class="cargo-hscode" value="'+(item.hscode||'').replace(/"/g,"&quot;")+'" placeholder="VD: 530500 / 140490"/></div>'
+      +'<div style="grid-column:1/-1"><label class="lbl">Specifications (mỗi dòng 1 ý)</label><textarea class="cargo-specs" rows="3" placeholder="+ Product: Unwashed&#10;+ Moisture: 12-18% Max." style="font-size:11.5px;resize:vertical">'+(item.specs||'')+'</textarea></div>'
+    +'</div>'
+  +'</div>';
+}
+
+function renderCargoNamesList(){
+  const list=g('cargoNamesList'); if(!list)return;
+  const items=window._cargoNames||[];
+  list.innerHTML=(items.length?items:[{name:'',enName:'',specs:'',hscode:''}]).map(cargoNameRowHtml).join('');
+}
+
+function loadBankAccounts(){
+  db.collection('_config').doc('banks').get().then(function(snap){
+    if(snap.exists){
+      const d=snap.data();
+      // Handle both old format (accounts:[]) and new format (company:[], personal:[])
+      if(d.company||d.personal){
+        window._bankAccounts={company:d.company||[],personal:d.personal||[]};
+      } else if(d.accounts){
+        window._bankAccounts={company:d.accounts,personal:[]};
+      }
+    }
+  }).catch(function(){});
+}
+
+/* ─────────────────────────────────────────────
+   CONSTANTS
+───────────────────────────────────────────── */
+let SVCS=[
+  {key:'freight',name:'Cước vận tải QT'},{key:'customs',name:'Thông quan'},
+  {key:'quarantine',name:'Kiểm dịch'},{key:'co',name:'C/O'},
+  {key:'fumi',name:'Fumi'},{key:'stuffing',name:'Đóng hàng tại bãi'},
+  {key:'trucking',name:'Trucking'},{key:'ddl',name:'DDL'},
+  {key:'docfee',name:'Phí chứng từ xuất khẩu'},
+];
+const CURRENCIES=['USD','VND','EUR','JPY','CNY','KRW'];
+const TASKS=[
+  {key:'mbl',label:'Nhập MBL No'},{key:'cnee',label:'Nhập thông tin Cnee'},
+  {key:'updn',label:'Up Debit Note'},{key:'price',label:'Fill giá dịch vụ'},
+  {key:'send',label:'Gửi Debit Note cho khách hàng'},
+];
+const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã Fill giá':'bdg-tl','Đã Costing':'bdg-b','Đã gửi DN':'bdg-purple','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
+const ROLES={
+  admin:{label:'Admin',cls:'role-admin',perms:{addLot:true,editLot:true,deleteLot:true,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:true,managePartners:true,export:true}},
+  operator:{label:'Operator',cls:'role-op',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:true,export:true}},
+  accountant:{label:'Accountant',cls:'role-acc',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,editSvcDesc:false,editCont:false,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:false,export:true}},
+  doc:{label:'Doc',cls:'role-doc',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
+  cus:{label:'Cus',cls:'role-cus',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
+  viewer:{label:'Viewer',cls:'role-view',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
+};
+// Ports grouped by country for cascading selection
+const PORTS_BY_COUNTRY={
+  'Vietnam':['Cat Lai, HCMC','Cai Mep, BR-VT','TCHP, HCMC','SP-ITC, HCMC','VICT, HCMC','Da Nang','Hai Phong','Quy Nhon','Nha Trang','Can Tho','Vung Tau'],
+  'China':['Shanghai, CN','Ningbo, CN','Guangzhou, CN','Shenzhen, CN','Tianjin, CN','Qingdao, CN','Xiamen, CN','Dalian, CN','Lianyungang, CN','Nanjing, CN','Wuhan, CN','Chongqing, CN','Yantian, CN','Nansha, CN','Shekou, CN','Zhenjiang, CN','Zhanjiang, CN'],
+  'Singapore':['Singapore'],
+  'Malaysia':['Port Klang, MY','Tanjung Pelepas, MY','Penang, MY','Johor Bahru, MY','Kuantan, MY'],
+  'Thailand':['Laem Chabang, TH','Bangkok, TH','Map Ta Phut, TH'],
+  'Indonesia':['Jakarta, ID','Surabaya, ID','Belawan, ID','Semarang, ID','Makassar, ID'],
+  'Philippines':['Manila, PH','Cebu, PH','Davao, PH','Batangas, PH'],
+  'Cambodia':['Phnom Penh, KH','Sihanoukville, KH'],
+  'Myanmar':['Yangon, MM','Thilawa, MM'],
+  'South Korea':['Busan, KR','Incheon, KR','Gwangyang, KR','Ulsan, KR'],
+  'Japan':['Tokyo, JP','Osaka, JP','Nagoya, JP','Yokohama, JP','Kobe, JP','Hakata, JP','Shimizu, JP'],
+  'Taiwan':['Kaohsiung, TW','Taichung, TW','Keelung, TW'],
+  'Hong Kong':['Hong Kong'],
+  'India':['Mumbai, IN','Chennai, IN','Nhava Sheva, IN','Kolkata, IN','Mundra, IN','Visakhapatnam, IN','Cochin, IN'],
+  'Sri Lanka':['Colombo, LK'],
+  'Bangladesh':['Chittagong, BD'],
+  'Pakistan':['Karachi, PK'],
+  'UAE':['Dubai, AE','Abu Dhabi, AE','Sharjah, AE','Jebel Ali, AE'],
+  'Saudi Arabia':['Jeddah, SA','Dammam, SA','Riyadh, SA'],
+  'Qatar':['Doha, QA'],
+  'Netherlands':['Rotterdam, NL','Amsterdam, NL'],
+  'Germany':['Hamburg, DE','Bremen, DE','Bremerhaven, DE'],
+  'Belgium':['Antwerp, BE','Ghent, BE','Zeebrugge, BE'],
+  'UK':['Felixstowe, UK','Southampton, UK','London Gateway, UK','Liverpool, UK','Glasgow, UK'],
+  'France':['Le Havre, FR','Marseille, FR','Dunkirk, FR'],
+  'Spain':['Barcelona, ES','Valencia, ES','Bilbao, ES','Algeciras, ES'],
+  'Italy':['Genoa, IT','Naples, IT','Livorno, IT','Trieste, IT'],
+  'Greece':['Piraeus, GR','Thessaloniki, GR'],
+  'Turkey':['Istanbul, TR','Mersin, TR','Izmir, TR'],
+  'Poland':['Gdansk, PL','Gdynia, PL'],
+  'Russia':['Vladivostok, RU','St. Petersburg, RU','Novorossiysk, RU'],
+  'USA':['Los Angeles, US','Long Beach, US','New York, US','Seattle, US','Houston, US','Savannah, US','Charleston, US','Oakland, US','Miami, US','Baltimore, US','Norfolk, US'],
+  'Canada':['Vancouver, CA','Montreal, CA','Halifax, CA','Toronto, CA'],
+  'Mexico':['Manzanillo, MX','Lazaro Cardenas, MX','Veracruz, MX'],
+  'Brazil':['Santos, BR','Rio de Janeiro, BR','Paranagua, BR'],
+  'Chile':['Valparaiso, CL','San Antonio, CL'],
+  'Australia':['Sydney, AU','Melbourne, AU','Brisbane, AU','Fremantle, AU','Adelaide, AU'],
+  'New Zealand':['Auckland, NZ','Tauranga, NZ'],
+  'South Africa':['Durban, ZA','Cape Town, ZA'],
+  'Kenya':['Mombasa, KE'],
+  'Egypt':['Alexandria, EG','Port Said, EG','Damietta, EG'],
+  'Morocco':['Casablanca, MA','Tangier, MA'],
+};
+const PORTS=Object.values(PORTS_BY_COUNTRY).flat();
+const ICD_LIST=[
+  'ICD Tan Cang Song Than','ICD Tan Cang Nhon Trach','ICD Tan Cang Long Binh',
+  'ICD Phuoc Long','ICD Transimex','ICD Sotrans',
+  'ICD Viet Hung','ICD TANAMEXCO','ICD My Dinh, Ha Noi',
+  'ICD Tien Son, Bac Ninh','ICD Lao Cai','ICD Yen Vien',
+  'Tan Cang Hiep Phuoc','Cai Mep Terminal','CMIT','TCTT',
+  'SP-PSA','SP-ITC','VICT','Ben Nghe Port',
+];
+const PORT_COUNTRIES=Object.keys(PORTS_BY_COUNTRY);
+const CONT_TYPES={
+  'Hàng khô':['20DC','40HC'],
+  'Hàng lạnh':['20RF','40RH'],
+  'LCL':['CBM'],
+};
+// Columns shown in the main list table (compact)
+const XCOLS_LIST=[
+  {k:'jobNo',l:'Job ID'},
+  {k:'bookingNo',l:'Booking No'},
+  {k:'mblNo',l:'MBL No'},
+  {k:'shipper',l:'Shipper',partner:true},
+  {k:'tenHang',l:'Tên hàng'},
+  {k:'vol',l:'Vol'},
+  {k:'typeCont',l:'Type Cont'},
+  {k:'etd',l:'ETD'},
+  {k:'eta',l:'ETA'},
+  {k:'carrier',l:'Carrier',partner:true},
+  {k:'vessel',l:'Vessel'},
+  {k:'voy',l:'Voy'},
+  {k:'pol',l:'POL'},
+  {k:'pod',l:'POD'},
+  {k:'status',l:'Trạng thái'},
+];
+const NCOLS_LIST=[
+  {k:'jobNo',l:'Job ID'},
+  {k:'bookingNo',l:'Booking No'},
+  {k:'mblNo',l:'MBL No'},
+  {k:'supplier',l:'Nhà cung cấp',partner:true},
+  {k:'tenHang',l:'Tên hàng'},
+  {k:'vol',l:'Vol'},
+  {k:'typeCont',l:'Type Cont'},
+  {k:'etd',l:'ETD'},
+  {k:'eta',l:'ETA'},
+  {k:'carrier',l:'Carrier',partner:true},
+  {k:'vessel',l:'Vessel'},
+  {k:'voy',l:'Voy'},
+  {k:'pol',l:'POL'},
+  {k:'pod',l:'POD'},
+  {k:'status',l:'Trạng thái'},
+];
+// All columns used in the edit form
+const XCOLS=[
   {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'cnee',l:'Cnee',type:'cnee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
+  {k:'_bookingBlock',l:'',type:'bookingBlock'},
+  {k:'shipper',l:'Shipper',partner:true},{k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
+  {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
+  {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
+  {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
+  {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
+  {k:'pod',l:'POD',type:'port'},
+  {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
+  {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
+  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
+];
+const NCOLS=[
+  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'consignee',l:'Consignee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
+  {k:'_bookingBlock',l:'',type:'bookingBlock'},
+  {k:'supplier',l:'Nhà cung cấp',partner:true},{k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
+  {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
+  {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
+  {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
+  {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
+  {k:'pod',l:'POD',type:'port'},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
   {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
@@ -915,7 +1914,8 @@ function renderDetailPanel(r,tt){
         +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" id="cgw_'+i+'" value="'+(c.gw||'')+'" placeholder="0" min="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
         +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="number" id="ctare_'+i+'" value="'+(c.tare||'')+'" placeholder="0" min="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
         +'<td style="padding:3px 5px;border-bottom:1px solid var(--border-light)"><input type="date" id="cdate_'+i+'" value="'+(c.date||r.etd||'')+'" style="font-size:11px;width:100%;box-sizing:border-box"/></td>'
-        +'</tr>';
+         +'<td style="padding:2px 4px;border-bottom:1px solid var(--border-light);text-align:center;width:28px"><button type="button" onclick="delContRow(this)" class="rac red" style="font-size:11px" title="Xóa dòng"><i class="ti ti-trash"></i></button></td>'
+         +'</tr>';
     }
     const thBase='padding:6px 6px;background:var(--bg-secondary);font-size:9.5px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px';
     const pkgUnitSel='<select id="cPkgUnit" style="font-size:10px;width:100%;margin-top:2px;text-transform:none;font-weight:400">'+['Bales','Bags','Conts','Cartons','Pallets','Pcs','Rolls'].map(function(u){return '<option'+(u===(r.pkgUnit||'Bales')?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
@@ -928,7 +1928,7 @@ function renderDetailPanel(r,tt){
       +'<div style="margin-bottom:.75rem"><button class="btn sm" onclick="addTkhaiRow()"><i class="ti ti-plus"></i> Thêm tờ khai</button></div>'
       +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
       +'<table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed">'
-      +'<colgroup><col style="width:36px"/><col style="width:18%"/><col style="width:15%"/><col style="width:14%"/><col style="width:13%"/><col style="width:13%"/><col style="width:12%"/><col style="width:15%"/></colgroup>'
+      +'<colgroup><col style="width:32px"/><col style="width:16%"/><col style="width:14%"/><col style="width:12%"/><col style="width:12%"/><col style="width:12%"/><col style="width:10%"/><col style="width:14%"/><col style="width:28px"/></colgroup>'
       +'<thead><tr>'
         +'<th style="'+thBase+';text-align:center">#</th>'
         +'<th style="'+thBase+';text-align:left">Cont No</th>'
@@ -938,6 +1938,7 @@ function renderDetailPanel(r,tt){
         +'<th style="'+thBase+';text-align:right">G.W (KG)</th>'
         +'<th style="'+thBase+';text-align:right">Tare (KG)</th>'
         +'<th style="'+thBase+';text-align:left">Stuff Date</th>'
+      +'<th style="'+thBase+'"></th>'
       +'</tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
       +'<div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center">'
@@ -1353,6 +2354,150 @@ window.buildTkhaiRows=buildTkhaiRows;
 window.tkhaiRowHtml=tkhaiRowHtml;
 window.addTkhaiRow=addTkhaiRow;
 
+
+async function saveContSealAll(){
+  if(isLotLocked(detailTt,detailId)){toast('Lô hàng đã khóa','error');return;}
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:parseInt(r.vol)||1,typeCont:r.typeCont||'40HC'}];
+  const bookingConts={};
+  // Collect tờ khai for each booking
+  bookings.forEach(function(bk){
+    const bkNo=bk.bookingNo||'(no booking)';
+    const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+    // Containers
+    const conts=[];
+    const panel=g('detailPanel');
+    if(panel){
+      const nos=panel.querySelectorAll('.cno_'+bkKey);
+      nos.forEach(function(el,i){
+        const row=el.closest('tr')||{};
+        const get=function(cls){return (panel.querySelectorAll('.'+cls+'_'+bkKey)[i]||{}).value||'';};
+        const no=el.value.trim().toUpperCase();
+        if(no)conts.push({no,seal:get('cseal'),pkg:parseFloat(get('cpkg'))||0,nw:parseFloat(get('cnw'))||0,gw:parseFloat(get('cgw'))||0,tare:parseFloat(get('ctare'))||0,date:get('cdate')});
+      });
+    }
+    // PkgUnit
+    const puEl=panel&&panel.querySelector('.cPkgUnit[data-bk="'+bkNo+'"]');
+    const pkgUnit=puEl?puEl.value:'Bales';
+    // Tờ khai
+    const tkhaiBox=g('tkhaiBox_'+bkKey);
+    const tkhaiList=[];
+    if(tkhaiBox){
+      tkhaiBox.querySelectorAll('[data-tkhai]').forEach(function(row2){
+        const sotk=row2.querySelector('.tk_sotk')?.value.trim()||'';
+        const macc=row2.querySelector('.tk_macc')?.value.trim()||'';
+        const pl=row2.querySelector('.tk_pl')?.value.trim()||'';
+        if(sotk||macc||pl)tkhaiList.push({sotk,macc,pl});
+      });
+    }
+    bookingConts[bkKey]={containers:conts,pkgUnit,tkhaiList,bookingNo:bkNo};
+  });
+  // Also compute legacy fields from all containers
+  const allConts=Object.values(bookingConts).flatMap(b=>b.containers||[]);
+  const first=bookings[0]||{};
+  const firstKey=(first.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+  const firstTkhai=(bookingConts[firstKey]&&bookingConts[firstKey].tkhaiList)||[];
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(detailTt),detailId,{
+      bookingConts,
+      containers:allConts,
+      pkgUnit:(bookingConts[firstKey]&&bookingConts[firstKey].pkgUnit)||'Bales',
+      tkhaiList:firstTkhai,
+      soTkhai:(firstTkhai[0]||{}).sotk||'',
+      maChiCuc:(firstTkhai[0]||{}).macc||'',
+      phanLuong:(firstTkhai[0]||{}).pl||'',
+      updatedAt:Date.now(),updatedBy:currentUser.email
+    });
+    toast('Đã lưu tất cả Cont/Seal');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+function addTkhaiRowForBk(bkKey){
+  const box=g('tkhaiBox_'+bkKey); if(!box)return;
+  const i=box.querySelectorAll('[data-tkhai]').length;
+  const div=document.createElement('div');
+  div.innerHTML=tkhaiRowHtml({},i);
+  box.appendChild(div.firstChild);
+}
+
+function importContFromExcelBk(input){
+  const bkNo=input.dataset.bk;
+  if(!bkNo){importContFromExcel(input);return;}
+  // Use existing importContFromExcel but target the per-booking inputs
+  const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+  const file=input.files[0]; if(!file)return;
+  const XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải thư viện XLSX','error');return;}
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
+      const colLetter=prompt('Cột chứa SỐ CONT đầu tiên? (A, B, C...)','A');
+      if(colLetter==null)return;
+      const rowNum=prompt('Hàng chứa SỐ CONT đầu tiên? (số hàng Excel)','2');
+      if(rowNum==null)return;
+      let col0;const cl=(colLetter+'').trim().toUpperCase();
+      if(/^[A-Z]+$/.test(cl)){col0=0;for(let k=0;k<cl.length;k++)col0=col0*26+(cl.charCodeAt(k)-64);col0-=1;}
+      else col0=(parseInt(cl)||1)-1;
+      const row0=(parseInt(rowNum)||2)-1;
+      const panel=g('detailPanel');
+      let count=0;
+      for(let i=0;row0+i<grid.length;i++){
+        const grow=grid[row0+i]||[];
+        const no=(grow[col0]||'').toString().trim().toUpperCase();
+        if(!no)break;
+        if(/^(total|tong|tổng)/i.test(no))continue;
+        const setV=function(cls,val){const els=panel.querySelectorAll('.'+cls+'_'+bkKey);if(els[i]&&val!==''&&val!=null)els[i].value=val;};
+        setV('cno',no);setV('cseal',(grow[col0+1]||'').toString().trim());
+        const pkg=parseFloat(grow[col0+2]);if(!isNaN(pkg))setV('cpkg',pkg);
+        const nw=parseFloat(grow[col0+3]);if(!isNaN(nw))setV('cnw',nw);
+        const gw=parseFloat(grow[col0+4]);if(!isNaN(gw))setV('cgw',gw);
+        let dv=grow[col0+5];
+        if(typeof dv==='number'){const dt=XLSX.SSF&&XLSX.SSF.parse_date_code(dv);if(dt)dv=dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
+        if(dv)setV('cdate',(dv||'').toString().slice(0,10));
+        count++;
+      }
+      toast('Đã nhập '+count+' container cho booking '+bkNo);
+    }catch(err){toast('Lỗi: '+err.message,'error');}
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function openDocMakerForBooking(bkNo){
+  // Store the target booking key so dmPickLot can use it
+  window._dmTargetBooking=bkNo;
+  openDocMakerTab(detailId,detailTt);
+}
+window.openDocMakerForBooking=openDocMakerForBooking;
+
+function delContRow(btn){
+  const tr=btn.closest('tr'); if(!tr)return;
+  const tbody=tr.closest('tbody');
+  if(tbody&&tbody.querySelectorAll('tr').length<=1){toast('Cần ít nhất 1 dòng cont','error');return;}
+  tr.remove();
+  // Re-number
+  if(tbody){tbody.querySelectorAll('tr').forEach(function(r,i){const first=r.querySelector('td');if(first)first.textContent=i+1;});}
+}
+window.delContRow=delContRow;
+
+function delBkContRow(btn){
+  const tr=btn.closest('tr'); if(!tr)return;
+  const tbody=tr.closest('tbody');
+  if(tbody&&tbody.querySelectorAll('tr').length<=1){toast('Cần ít nhất 1 dòng cont','error');return;}
+  tr.remove();
+  // Re-number rows
+  if(tbody){tbody.querySelectorAll('tr').forEach(function(r,i){const first=r.querySelector('td');if(first)first.textContent=i+1;});}
+}
+window.delBkContRow=delBkContRow;
+
+window.saveContSealAll=saveContSealAll;
+window.addTkhaiRowForBk=addTkhaiRowForBk;
+window.importContFromExcelBk=importContFromExcelBk;
+window.openDocMakerForBooking=openDocMakerForBooking;
 function autoGw(i){
   const nw=parseFloat(g('cnw_'+i)?.value)||0;
   const gwEl=g('cgw_'+i);
@@ -1521,6 +2666,11 @@ function openLot(id, tt){
     }
     if(c.type==='rowStart') return'<div style="display:flex;gap:8px;align-items:flex-end;grid-column:1/-1">';
     if(c.type==='rowEnd') return'</div>';
+    if(c.type==='bookingBlock'){
+      // Multi-booking UI - rendered via buildBookingBlock
+      const bklist=r.bookings&&r.bookings.length?r.bookings:[{bookingNo:r.bookingNo||'',vol:r.vol||'',typeCont:r.typeCont||''}];
+      return buildBookingBlockHtml(bklist,r.mblNo||'');
+    }
     if(c.type==='textarea'){
       return`<div class="fi${full}" style="grid-column:1/-1"><label class="lbl">${c.l}</label><textarea id="f_${c.k}" rows="2" style="resize:vertical;font-size:12px">${val||''}</textarea></div>`;
     }
@@ -1536,20 +2686,29 @@ function openLot(id, tt){
     if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
     if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
     if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;const onch=(c.k==='shipper'||c.k==='supplier')?' onchange="refreshCneeOptions()"':'';return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"${onch}><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
-    if(c.compact) return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:130px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
+    // Compact wrapper: only apply to plain text inputs, not special types
+    const SPECIAL_COMPACT=['cnee','cargoType','typeCont','port','icd','cutoffField','date','select','bookingBlock'];
+    if(c.compact && !SPECIAL_COMPACT.includes(c.type) && c.k!=='tenHang' && c.k!=='consignee'){
+      return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:150px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
+    }
     if(c.type==='cnee'){
       // Cnee dropdown from selected shipper's cnees
       const shKey=r.shipper||r.supplier||'';
       const sp2=cache.partners[shKey]||{};
       const cnees=sp2.cnees||[];
       const opts=cnees.map(function(cn){return `<option${cn.name===val?' selected':''}>${cn.name}</option>`;}).join('');
-      return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${cnees.length?'<option value="">— Chọn Cnee —</option>'+opts:'<option value="">(Chọn Shipper trước)</option>'}</select></div>`;
+      const wrapStyle=c.compact?'display:inline-flex;flex-direction:column;gap:2px;flex:2;min-width:200px;max-width:320px':'';
+      const divClass=c.compact?'':'fi'+full;
+      return`<div ${wrapStyle?`style="${wrapStyle}"`:`class="${divClass}"`}><label class="lbl" ${c.compact?'style="font-size:9.5px"':''}>${c.l}</label><select id="f_${c.k}">${cnees.length?'<option value="">— Chọn Cnee —</option>'+opts:'<option value="">(Chọn Shipper trước)</option>'}</select></div>`;
     }
     if(c.k==='tenHang'){
       const names=window._cargoNames||[];
+      const thWrap=c.compact?'display:inline-flex;flex-direction:column;gap:2px;flex:2;min-width:150px;max-width:220px':'';
+      const thDiv=c.compact?`style="${thWrap}"`:`class="fi${full}"`;
+      const thLbl=c.compact?'style="font-size:9.5px"':'';
       if(names.length){
         const opts=names.map(n=>{const nm=n.name||n;return `<option${nm===val?' selected':''}>${nm}</option>`;}).join('');
-        return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"><option value="">— Chọn tên hàng —</option>${opts}</select></div>`;
+        return`<div ${thDiv}><label class="lbl" ${thLbl}>${c.l}</label><select id="f_${c.k}"><option value="">— Chọn tên hàng —</option>${opts}</select></div>`;
       }
       return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"/></div>`;
     }
@@ -1590,6 +2749,75 @@ function updatePortOptions(portKey, countryKey){
   portEl.innerHTML='<option value="">— Chọn cảng —</option>'+ports.map(p=>`<option>${p}</option>`).join('');
 }
 
+
+/* ═══ MULTI-BOOKING SUPPORT ═══ */
+function bookingRowHtml(b, i, contTypes){
+  const opts=contTypes||['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
+  const typeOpts=opts.map(t=>`<option${t===(b.typeCont||'40HC')?' selected':''}>${t}</option>`).join('');
+  return `<div class="bk-row" data-bki="${i}" style="display:grid;grid-template-columns:1fr 70px 130px 30px;gap:6px;align-items:end;margin-bottom:5px">
+    <div><label class="lbl" style="font-size:9.5px">Booking No</label><input type="text" class="bk-no" value="${(b.bookingNo||'').replace(/"/g,'&quot;')}" placeholder="Booking No" style="font-size:12px"/></div>
+    <div><label class="lbl" style="font-size:9.5px">Vol</label><input type="number" class="bk-vol" value="${b.vol||''}" min="1" placeholder="1" oninput="updateTotalVol()" style="font-size:12px;text-align:right"/></div>
+    <div><label class="lbl" style="font-size:9.5px">Type Cont</label><select class="bk-type" style="font-size:12px">${typeOpts}</select></div>
+    <button type="button" onclick="removeBookingRow(${i})" class="rac red" style="font-size:12px;margin-bottom:3px" title="Xóa booking này"><i class="ti ti-trash"></i></button>
+  </div>`;
+}
+
+function buildBookingBlockHtml(bklist, mblNo){
+  const contTypes=['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
+  const rows=bklist.map((b,i)=>bookingRowHtml(b,i,contTypes)).join('');
+  const totalVol=bklist.reduce((s,b)=>s+(parseInt(b.vol)||0),0);
+  return `<div class="fi full" style="grid-column:1/-1;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;padding:10px 12px;margin-bottom:4px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <div style="font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.4px"><i class="ti ti-bookmark" style="font-size:13px"></i> Booking Numbers</div>
+    <button type="button" onclick="addBookingRow()" class="btn sm" style="font-size:11px"><i class="ti ti-plus"></i> Thêm Booking</button>
+  </div>
+  <div id="bookingRows">${rows}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;padding-top:6px;border-top:1px dashed var(--border-light)">
+    <div><label class="lbl" style="font-size:9.5px">MBL No</label><input type="text" id="f_mblNo" value="${(mblNo||'').replace(/"/g,'&quot;')}" placeholder="MBL No" style="font-size:12px"/></div>
+    <div><label class="lbl" style="font-size:9.5px">Total Vol <span style="color:var(--text-tertiary)">(tự tính)</span></label><input type="text" id="f_totalVol" value="${totalVol||''}" readonly style="font-size:12px;background:var(--bg-tertiary);color:var(--text-secondary)"/></div>
+  </div>
+</div>`;
+}
+
+function addBookingRow(){
+  const box=g('bookingRows'); if(!box)return;
+  const i=box.querySelectorAll('.bk-row').length;
+  const div=document.createElement('div');
+  const contTypes=['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
+  div.innerHTML=bookingRowHtml({},i,contTypes);
+  box.appendChild(div.firstChild);
+  updateTotalVol();
+}
+function removeBookingRow(i){
+  const box=g('bookingRows'); if(!box)return;
+  const rows=box.querySelectorAll('.bk-row');
+  if(rows.length<=1){toast('Cần ít nhất 1 booking','error');return;}
+  rows[i]&&rows[i].remove();
+  // Re-index
+  box.querySelectorAll('.bk-row').forEach((r,j)=>r.dataset.bki=j);
+  updateTotalVol();
+}
+function updateTotalVol(){
+  const box=g('bookingRows'); if(!box)return;
+  const total=Array.from(box.querySelectorAll('.bk-vol')).reduce((s,el)=>s+(parseInt(el.value)||0),0);
+  const tv=g('f_totalVol');if(tv)tv.value=total||'';
+}
+function readBookingsFromForm(){
+  const box=g('bookingRows'); if(!box)return[];
+  return Array.from(box.querySelectorAll('.bk-row')).map(function(row){
+    return {
+      bookingNo:row.querySelector('.bk-no')?.value.trim()||'',
+      vol:row.querySelector('.bk-vol')?.value||'',
+      typeCont:row.querySelector('.bk-type')?.value||'40HC'
+    };
+  }).filter(b=>b.bookingNo||b.vol);
+}
+window.addBookingRow=addBookingRow;
+window.removeBookingRow=removeBookingRow;
+window.updateTotalVol=updateTotalVol;
+window.buildBookingBlockHtml=buildBookingBlockHtml;
+window.readBookingsFromForm=readBookingsFromForm;
+/* ═══ END MULTI-BOOKING ═══ */
 async function saveLot(){
   const cols=currentTab==='xuat'?XCOLS:NCOLS;
   const existing=lotIdx?cache[currentTab].find(x=>x._id===lotIdx):null;
@@ -1605,6 +2833,15 @@ async function saveLot(){
   });
   // Save country selections for port cascade
   ['pol','pod'].forEach(pk=>{const el=g('f_'+pk+'Country');if(el)rec[pk+'Country']=el.value;});
+  // Save multi-booking data
+  const bookings=readBookingsFromForm();
+  if(bookings.length){
+    rec.bookings=bookings;
+    // Backward compat: first booking populates legacy fields
+    rec.bookingNo=bookings[0].bookingNo||rec.bookingNo||'';
+    rec.vol=String(bookings.reduce((s,b)=>s+(parseInt(b.vol)||0),0)); // total vol
+    rec.typeCont=bookings[0].typeCont||rec.typeCont||'40HC';
+  }
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
   if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; if(!rec.jobNo) rec.jobNo=getNextJobNo(rec.loaiHang||'XK - Xuất khẩu'); }
   const docId=lotIdx||genId();
@@ -5887,8 +7124,19 @@ function dmPickLot(id,tt){
   else if(cnees.length===1){g('dm_cnee').value='0';dmOnCneeChange();}
   else g('dm_cneeInfo').innerHTML='';
 
-  // Container rows
-  const conts=(r.containers||[]).filter(function(c){return c.no;});
+  // Container rows - use specific booking if _dmTargetBooking set, else combine all
+  let allBkConts=[];
+  if(r.bookingConts&&Object.keys(r.bookingConts).length){
+    const targetBk=window._dmTargetBooking;
+    if(targetBk){
+      const bkKey=targetBk.replace(/[^a-zA-Z0-9]/g,'_');
+      allBkConts=(r.bookingConts[bkKey]&&r.bookingConts[bkKey].containers)||[];
+    } else {
+      Object.values(r.bookingConts).forEach(function(bk){(bk.containers||[]).forEach(function(c2){if(c2.no)allBkConts.push(c2);});});
+    }
+  }
+  window._dmTargetBooking=null; // reset after use
+  const conts=(allBkConts.length?allBkConts:(r.containers||[])).filter(function(c){return c.no;});
   const tbody=g('dmContBody');
   tbody.innerHTML=conts.map(function(c,i){
     const gw=parseFloat(c.gw)||0;
