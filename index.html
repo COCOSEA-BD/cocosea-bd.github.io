@@ -95,6 +95,74 @@ function loadCargoNames(){
   }).catch(function(){window._cargoNames=[];});
 }
 
+
+/* ═══ THÔNG TIN TÀI KHOẢN (Settings) ═══ */
+function loadAcctInfo(){
+  db.collection('_config').doc('acctInfo').get().then(function(snap){
+    window._acctInfo=snap.exists?(snap.data().rows||[]):[];
+    if(currentTab==='cai-dat'||g('acctInfoList'))renderAcctInfoList();
+  }).catch(function(){window._acctInfo=[];});
+}
+window.loadAcctInfo=loadAcctInfo;
+
+function acctInfoRowHtml(row,i){
+  row=row||{};
+  return '<div data-acct-row style="display:grid;grid-template-columns:1fr 1.3fr 1.3fr 1.3fr 32px;gap:8px;margin-bottom:6px;align-items:start">'
+    +'<input type="text" class="acct-shipper" value="'+(row.shipper||'').replace(/"/g,'&quot;')+'" placeholder="Tên Shipper" style="font-size:12px"/>'
+    +'<textarea class="acct-ecosys" placeholder="Thông tin Ecosys" style="font-size:12px;min-height:34px;resize:vertical;padding:6px 8px">'+(row.ecosys||'')+'</textarea>'
+    +'<textarea class="acct-pqs" placeholder="Thông tin PQS" style="font-size:12px;min-height:34px;resize:vertical;padding:6px 8px">'+(row.pqs||'')+'</textarea>'
+    +'<textarea class="acct-other" placeholder="Other" style="font-size:12px;min-height:34px;resize:vertical;padding:6px 8px">'+(row.other||'')+'</textarea>'
+    +'<button class="rac red" onclick="removeAcctInfoRow(this)" title="Xóa"><i class="ti ti-trash"></i></button>'
+    +'</div>';
+}
+
+function renderAcctInfoList(){
+  const box=g('acctInfoList'); if(!box)return;
+  const rows=window._acctInfo||[];
+  let html='<div style="display:grid;grid-template-columns:1fr 1.3fr 1.3fr 1.3fr 32px;gap:8px;margin-bottom:6px;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px">'
+    +'<div>Tên Shipper</div><div>Thông tin Ecosys</div><div>Thông tin PQS</div><div>Other</div><div></div></div>';
+  if(rows.length===0){
+    html+=acctInfoRowHtml({},0);
+  } else {
+    html+=rows.map(function(r,i){return acctInfoRowHtml(r,i);}).join('');
+  }
+  box.innerHTML=html;
+}
+window.renderAcctInfoList=renderAcctInfoList;
+
+function addAcctInfoRow(){
+  const box=g('acctInfoList'); if(!box)return;
+  const div=document.createElement('div');
+  div.innerHTML=acctInfoRowHtml({},box.querySelectorAll('[data-acct-row]').length);
+  box.appendChild(div.firstChild);
+}
+window.addAcctInfoRow=addAcctInfoRow;
+
+function removeAcctInfoRow(btn){
+  const row=btn.closest('[data-acct-row]'); if(row)row.remove();
+}
+window.removeAcctInfoRow=removeAcctInfoRow;
+
+async function saveAcctInfo(){
+  const rows=[];
+  document.querySelectorAll('#acctInfoList [data-acct-row]').forEach(function(row){
+    const shipper=row.querySelector('.acct-shipper')?.value.trim()||'';
+    const ecosys=row.querySelector('.acct-ecosys')?.value.trim()||'';
+    const pqs=row.querySelector('.acct-pqs')?.value.trim()||'';
+    const other=row.querySelector('.acct-other')?.value.trim()||'';
+    if(shipper||ecosys||pqs||other)rows.push({shipper,ecosys,pqs,other});
+  });
+  setLoading(true,'Đang lưu...');
+  try{
+    await db.collection('_config').doc('acctInfo').set({rows,updatedAt:Date.now(),updatedBy:currentUser.email});
+    window._acctInfo=rows;
+    toast('Đã lưu thông tin tài khoản');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveAcctInfo=saveAcctInfo;
+/* ═══ END THÔNG TIN TÀI KHOẢN ═══ */
+
 function addCargoNameRow(){
   const list=g('cargoNamesList'); if(!list)return;
   const i=list.querySelectorAll('[data-cargo-row]').length;
@@ -398,6 +466,7 @@ async function doLogout(){
 function startListeners(){
   loadBankAccounts();
   loadCargoNames();
+  loadAcctInfo();
   stopListeners();
 
   // Lô hàng xuất
@@ -2610,44 +2679,140 @@ function _svcNccEmail(svcKey){
   return {r:r, ncc:ncc, nccName:nccName, email:ncc.email||'', contact:ncc.contact||''};
 }
 
-function _buildContTable(r){
-  // Build a simple cont list from bookingConts or containers
+function _emailContList(r){
   let conts=[];
   if(r.bookingConts&&Object.keys(r.bookingConts).length){
     Object.values(r.bookingConts).forEach(function(bk){(bk.containers||[]).forEach(function(c2){if(c2.no)conts.push(c2);});});
   }
   if(conts.length===0)conts=(r.containers||[]).filter(function(c){return c.no;});
-  if(conts.length===0)return '';
-  let t='\nDanh sách container:\n';
-  conts.forEach(function(c,i){t+='  '+(i+1)+'. '+c.no+(c.seal?' / Seal: '+c.seal:'')+'\n';});
-  return t;
+  return conts;
 }
+
+// Company info constants (from settings or defaults)
+function _coInfo(){
+  return {
+    name:'CÔNG TY TNHH COCO SEA',
+    addr:'991B Tân Kỳ Tân Quý, Phường Bình Hưng Hòa, Thành phố Hồ Chí Minh, Việt Nam',
+    mst:'0319570124',
+    invEmail:'Cocosea.acc@gmail.com, Cocosea.bd@gmail.com'
+  };
+}
+
+function _openEmailModal(opts){
+  // opts: {title, to, cc, subject, rowsHtml, bodyIntro, kind}
+  const co=_coInfo();
+  g('emailOv').innerHTML=`
+  <div class="modal" style="max-width:780px;max-height:90vh;overflow-y:auto">
+    <div class="mhdr">
+      <div><div class="mtitle" style="display:flex;align-items:center;gap:8px"><i class="ti ti-mail" style="font-size:16px;color:var(--blue)"></i>${opts.title}</div>
+      <div class="msub">Xem lại nội dung, sau đó bấm "Tạo file .eml" để mở trong Outlook/Mail rồi gửi</div></div>
+      <button class="x" onclick="closeOv('emailOv')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="mbody" style="padding:16px 20px">
+      <div style="display:grid;grid-template-columns:60px 1fr;gap:8px 10px;align-items:center;margin-bottom:12px;font-size:12.5px">
+        <label style="font-weight:600;color:var(--text-secondary)">To:</label>
+        <input type="text" id="em_to" value="${(opts.to||'').replace(/"/g,'&quot;')}" style="font-size:12.5px;padding:6px 8px"/>
+        <label style="font-weight:600;color:var(--text-secondary)">Cc:</label>
+        <input type="text" id="em_cc" value="${(opts.cc||'').replace(/"/g,'&quot;')}" style="font-size:12.5px;padding:6px 8px"/>
+        <label style="font-weight:600;color:var(--text-secondary)">Subject:</label>
+        <input type="text" id="em_subject" value="${(opts.subject||'').replace(/"/g,'&quot;')}" style="font-size:12.5px;padding:6px 8px;font-weight:600"/>
+      </div>
+      <div style="border:1px solid var(--border-light);border-radius:8px;padding:14px 16px;background:#fff" id="em_preview">
+        ${opts.bodyHtml}
+      </div>
+    </div>
+    <div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">
+      <button class="btn" onclick="closeOv('emailOv')">Hủy</button>
+      <button class="btn" onclick="_emailOpenMailto()"><i class="ti ti-external-link"></i> Mở Email App</button>
+      <button class="btn pri" onclick="_emailDownloadEml()"><i class="ti ti-download"></i> Tạo file .eml (gửi)</button>
+    </div>
+  </div>`;
+  openOv('emailOv');
+}
+
+function _emailGetPlainBody(){
+  // Convert the preview HTML to plain text for mailto
+  const prev=g('em_preview');
+  if(!prev)return '';
+  let txt=prev.innerText||prev.textContent||'';
+  return txt;
+}
+
+function _emailOpenMailto(){
+  const to=g('em_to')?.value||'';
+  const cc=g('em_cc')?.value||'';
+  const subject=g('em_subject')?.value||'';
+  const body=_emailGetPlainBody();
+  let mailto='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  if(cc)mailto+='&cc='+encodeURIComponent(cc);
+  window.open(mailto,'_blank');
+  toast('Đã mở Email App');
+}
+
+function _emailDownloadEml(){
+  const to=g('em_to')?.value||'';
+  const cc=g('em_cc')?.value||'';
+  const subject=g('em_subject')?.value||'';
+  const htmlBody=g('em_preview')?.innerHTML||'';
+  // Build a .eml file (RFC 822) with HTML body
+  const boundary='----=_COCOSEA_'+Date.now();
+  const eml=
+    'From: COCOSEA <cocosea.bd@gmail.com>\r\n'+
+    'To: '+to+'\r\n'+
+    (cc?'Cc: '+cc+'\r\n':'')+
+    'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
+    'MIME-Version: 1.0\r\n'+
+    'Content-Type: text/html; charset=UTF-8\r\n'+
+    'Content-Transfer-Encoding: 8bit\r\n'+
+    '\r\n'+
+    '<html><body style="font-family:Arial,sans-serif;font-size:13px">'+htmlBody+'</body></html>';
+  const blob=new Blob([eml],{type:'message/rfc822'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=(subject.replace(/[^a-zA-Z0-9]/g,'_').slice(0,50)||'email')+'.eml';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url);},1000);
+  toast('Đã tạo file .eml — mở file để gửi qua Outlook/Mail');
+}
+function _encodeEmailHeader(str){
+  // UTF-8 subject encoding for non-ASCII
+  if(/^[\x00-\x7F]*$/.test(str))return str;
+  return '=?UTF-8?B?'+btoa(unescape(encodeURIComponent(str)))+'?=';
+}
+window._emailOpenMailto=_emailOpenMailto;
+window._emailDownloadEml=_emailDownloadEml;
 
 function sendStuffingEmail(){
   const info=_svcNccEmail('stuffing');
   const r=info.r;
   if(!info.nccName){toast('Chưa chọn NCC cho dịch vụ Đóng hàng tại bãi','error');return;}
-  if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Vui lòng cập nhật trong Đối tác.','error');return;}
+  if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
+  const co=_coInfo();
   const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
-  const subject='[ĐĂNG KÝ ĐÓNG HÀNG] '+bkgNos+(r.mblNo?' - '+r.mblNo:'');
-  const body='Kính gửi '+(info.contact||info.nccName)+',\n\n'
-    +'COCOSEA xin đăng ký đóng hàng cho lô hàng sau:\n\n'
-    +'────────────────────────────────\n'
-    +'  Booking No : '+bkgNos+'\n'
-    +'  MBL No     : '+(r.mblNo||'—')+'\n'
-    +'  Vessel     : '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'\n'
-    +'  ETD        : '+(r.etd||'—')+'\n'
-    +'  POL        : '+(r.pol||'—')+'\n'
-    +'  Tên hàng   : '+(r.tenHang||'—')+'\n'
-    +'  Số lượng   : '+(r.vol||'—')+' x '+(r.typeCont||'—')+'\n'
-    +'  Bãi/CY     : '+(r.cyLocation||r.icd||'—')+'\n'
-    +'────────────────────────────────\n'
-    +_buildContTable(r)
-    +'\nVui lòng xác nhận lịch đóng hàng. Trân trọng cảm ơn!\n\n'
-    +'Best regards,\nCOCOSEA CO., LTD\nKeep Going . Keep Growing';
-  const mailto='mailto:'+encodeURIComponent(info.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
-  window.open(mailto,'_blank');
-  toast('Đã mở email đăng ký đóng hàng → '+info.nccName);
+  const subject='Đăng ký đóng bãi: '+(r.cyLocation||r.icd||'').toUpperCase()+' - Booking: '+bkgNos+'- Vol: '+(r.vol||'')+' '+(r.typeCont||'')+' /COCOSEA';
+  const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#f2f2f2;font-size:12.5px;width:160px;vertical-align:top';
+  const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
+  const stuffDate=(_emailContList(r)[0]||{}).date||r.etd||'';
+  const bodyHtml=
+    '<div style="font-weight:700;font-size:14px;margin-bottom:8px">ĐĂNG KÝ ĐÓNG BÃI]</div>'+
+    '<div style="margin-bottom:4px"><strong>To: ['+(info.nccName).toUpperCase()+']</strong></div>'+
+    '<div>Kính gửi: Quý cảng</div>'+
+    '<div style="margin-bottom:10px">Cty COCOSEA đăng ký đóng bãi với chi tiết như sau: (em gửi lại thông tin ạ)</div>'+
+    '<table style="border-collapse:collapse;width:100%;max-width:680px">'+
+      '<tr><td style="'+cellL+'">Shipper</td><td style="'+cellR+'"><strong>COCOSEA</strong></td></tr>'+
+      '<tr><td style="'+cellL+'">Booking Number</td><td style="'+cellR+'">'+bkgNos+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Hãng tàu</td><td style="'+cellR+'">'+(r.carrier||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Loại cont</td><td style="'+cellR+'">'+(r.vol||'')+' x '+(r.typeCont||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Hàng hóa</td><td style="'+cellR+'">'+(r.tenHang||'').toUpperCase()+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Ngày đóng bãi</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+(stuffDate?stuffDate.replace(/-/g,'/'):'')+': '+(r.vol||'')+'x'+(r.typeCont||'')+'</span></td></tr>'+
+      '<tr><td style="'+cellL+'">Phương tiện</td><td style="'+cellR+'">Xe tải, Công nhân</td></tr>'+
+      '<tr><td style="'+cellL+'">Người liên hệ</td><td style="'+cellR+'"> Phone: 0348363294</td></tr>'+
+      '<tr><td style="'+cellL+'">Xuất hóa đơn</td><td style="'+cellR+'"> '+co.name+'<br><br>Đ/C: '+co.addr+'<br>MST: '+co.mst+'<br><br>email nhận hóa đơn: '+co.invEmail+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Ghi chú</td><td style="'+cellR+'"></td></tr>'+
+    '</table>'+
+    '<div style="color:#c00;font-style:italic;margin-top:12px">Kính nhờ Quý cảng cập nhật kế hoạch.</div>';
+  _openEmailModal({title:'Email Đăng ký đóng bãi → '+info.nccName, to:info.email, cc:'cocosea.acc@gmail.com; cocosea.doc@gmail.com', subject:subject, bodyHtml:bodyHtml});
 }
 window.sendStuffingEmail=sendStuffingEmail;
 
@@ -2655,30 +2820,32 @@ function sendTruckingEmail(){
   const info=_svcNccEmail('trucking');
   const r=info.r;
   if(!info.nccName){toast('Chưa chọn NCC cho dịch vụ Trucking','error');return;}
-  if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Vui lòng cập nhật trong Đối tác.','error');return;}
+  if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
+  const co=_coInfo();
   const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
-  const subject='[LỆNH TRUCKING] '+bkgNos+(r.mblNo?' - '+r.mblNo:'');
-  const body='Kính gửi '+(info.contact||info.nccName)+',\n\n'
-    +'COCOSEA xin gửi lệnh điều xe (trucking) cho lô hàng sau:\n\n'
-    +'────────────────────────────────\n'
-    +'  Booking No : '+bkgNos+'\n'
-    +'  MBL No     : '+(r.mblNo||'—')+'\n'
-    +'  Vessel     : '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'\n'
-    +'  ETD        : '+(r.etd||'—')+'\n'
-    +'  Tên hàng   : '+(r.tenHang||'—')+'\n'
-    +'  Số lượng   : '+(r.vol||'—')+' x '+(r.typeCont||'—')+'\n'
-    +'  Lấy rỗng   : '+(r.cyLocation||'—')+'\n'
-    +'  Đóng hàng  : '+(r.wh||r.icd||'—')+'\n'
-    +'  Hạ bãi     : '+(r.pol||'—')+'\n'
-    +'────────────────────────────────\n'
-    +_buildContTable(r)
-    +'\nVui lòng xác nhận và sắp xếp xe. Trân trọng cảm ơn!\n\n'
-    +'Best regards,\nCOCOSEA CO., LTD\nKeep Going . Keep Growing';
-  const mailto='mailto:'+encodeURIComponent(info.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
-  window.open(mailto,'_blank');
-  toast('Đã mở email Trucking → '+info.nccName);
+  const subject='Kéo cont - '+(r.carrier||'')+' - '+(r.vol||'')+'x'+(r.typeCont||'')+' - '+bkgNos+' - COCOSEA';
+  const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#fff;font-size:12.5px;width:150px;vertical-align:top';
+  const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
+  const bodyHtml=
+    '<div style="margin-bottom:4px"><strong>To: ['+(info.nccName).toUpperCase()+']</strong></div>'+
+    '<div>Kính gửi Quý công ty,</div>'+
+    '<div style="margin-bottom:10px">COCOSEA gửi lệnh kéo con-te-nơ đóng hàng với chi tiết như sau:</div>'+
+    '<table style="border-collapse:collapse;width:100%;max-width:680px">'+
+      '<tr><td style="'+cellL+'">So Booking:</td><td style="'+cellR+'">'+bkgNos+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Hãng tàu:</td><td style="'+cellR+'">'+(r.carrier||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Tàu /số chuyến:</td><td style="'+cellR+'">'+(r.vessel||'')+(r.voy?' '+r.voy:'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Loại con-te-nơ:</td><td style="'+cellR+'">'+(r.vol||'')+' x '+(r.typeCont||'')+' ( Hàng '+(r.tenHang||'').toLowerCase()+' )</td></tr>'+
+      '<tr><td style="'+cellL+'">Thời gian đóng hàng:</td><td style="'+cellR+'">'+(r.etd?r.etd.replace(/-/g,'/'):'')+' '+(r.vol||'')+'x'+(r.typeCont||'')+' – '+(r.wh||'kho')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Định vị kho:</td><td style="'+cellR+'">'+(r.wh||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Kho đóng hàng:</td><td style="'+cellR+'">'+(r.wh||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Người liên hệ:</td><td style="'+cellR+'"></td></tr>'+
+      '<tr><td style="'+cellL+'">Hạ cảng:</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+(r.pol||'')+'</span></td></tr>'+
+      '<tr><td style="'+cellL+'">Ghi chú:</td><td style="'+cellR+'"></td></tr>'+
+    '</table>';
+  _openEmailModal({title:'Email Trucking → '+info.nccName, to:info.email, cc:'cocosea.doc@gmail.com; cocosea.acc@gmail.com', subject:subject, bodyHtml:bodyHtml});
 }
 window.sendTruckingEmail=sendTruckingEmail;
+
 window.onSvcFinishToggle=onSvcFinishToggle;
 
 function addCustomSvc(){
@@ -3903,8 +4070,19 @@ function renderSettings(){
         +'<button class="btn pri" onclick="saveCargoNames()"><i class="ti ti-check"></i> Lưu danh sách tên hàng</button>'
       +'</div>'
     +'</div>'
+    +'<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border-light)"/>'
+    +'<div class="table-card" style="padding:1.25rem">'
+      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-key" style="font-size:14px"></i>Thông tin tài khoản (lưu thông tin quan trọng)</div>'
+      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Lưu thông tin đăng nhập Ecosys, PQS và ghi chú khác theo từng Shipper</div>'
+      +'<div id="acctInfoList"></div>'
+      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
+        +'<button class="btn" onclick="addAcctInfoRow()"><i class="ti ti-plus"></i> Thêm dòng</button>'
+        +'<button class="btn pri" onclick="saveAcctInfo()"><i class="ti ti-check"></i> Lưu thông tin tài khoản</button>'
+      +'</div>'
+    +'</div>'
     +'</div>';
   renderCargoNamesList();
+  renderAcctInfoList();
 }
 
 function addBankRow(prefix){
@@ -6724,7 +6902,7 @@ function _dmSI(d){
     +'<table class="gt" style="width:100%;font-size:9.5px"><thead><tr><th class="c">#</th><th class="c">Container Number</th><th class="c">Seal Number</th><th class="c">Size/Type</th><th class="c">No. of Package</th><th class="c">Unit</th><th class="c">Gross Weight<br>KGS</th><th class="c">Tare<br>KGS</th><th class="c">VGM<br>(kgs)</th><th class="c">Measurement<br>CBM</th></tr></thead>'
     +'<tbody>'+rows+'</tbody>'
     +'<tfoot><tr><td colspan="4" class="c b">TOTAL</td><td class="c b">'+d.totalPkg.toLocaleString()+'</td><td></td><td class="r b">'+d.totalGW.toLocaleString()+'</td><td class="r b">'+(totalTare?totalTare.toLocaleString():'')+'</td><td class="r b">'+(totalVGM?totalVGM.toLocaleString():'')+'</td><td></td></tr></tfoot></table>'
-    +'<table class="gt" style="width:100%;margin-top:6px;font-size:10px"><tr><td style="width:50%"><span class="b">25. Shipping Mark</span><br>N/M</td><td><span class="b">26. Description of Goods</span><br>'+d.goods+'</td></tr>'
+    +'<table class="gt" style="width:100%;margin-top:6px;font-size:10px"><tr><td style="width:50%"><span class="b">25. Shipping Mark</span><br>N/M</td><td><span class="b">26. Description of Goods</span><br>'+d.goods+(d.totalNW?'<br>Total N.W: '+d.totalNW.toLocaleString()+' KGS':'')+'</td></tr>'
     +'<tr><td><span class="b">27. Payment Term</span><br>FREIGHT PREPAID</td><td><span class="b">REMARK</span><br>FREIGHT PREPAID</td></tr></table>'
     +'<div style="margin-top:18px;text-align:right" class="b">FOR AND ON BEHALF OF '+(d.sShort||d.sName)+'</div>'
     +'</body></html>';
