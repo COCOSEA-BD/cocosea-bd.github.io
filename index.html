@@ -711,7 +711,10 @@ function renderLotTable(tt){
     return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`+cols.map(c=>{
       if(c.k==='bookingNo'){
         const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
-        return`<td style="max-width:140px"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${r.bookingNo||'—'}</button>${urgDot}</td>`;
+        // Show all booking numbers comma-separated
+        const bkList=(r.bookings&&r.bookings.length)?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean):[r.bookingNo].filter(Boolean);
+        const bkDisplay=bkList.length?bkList.join(', '):'—';
+        return`<td style="max-width:150px"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${bkDisplay}</button>${urgDot}</td>`;
       }
       if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
       if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${tc}</span>`:'—'}</td>`;}
@@ -973,11 +976,7 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<button class="btn" onclick="showCheckEport()"><i class="ti ti-clipboard-check"></i> Check</button>';
       sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
       sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
-      if(r.locked){
-        sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="toggleCurrentLotLock()" style="margin-left:auto;background:var(--red);color:#fff;border-color:var(--red)"><i class="ti ti-lock-open"></i> Mở khóa</button>';
-      } else {
-        sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
-      }
+      sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
       sectionsHtml+='</div></div>';
       // Tkhai rows
       sectionsHtml+='<div style="padding:8px 12px;border-bottom:1px solid var(--border-light)">';
@@ -998,7 +997,8 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<th style="'+thBase+'">Stuff Date</th>';
       sectionsHtml+='<th style="'+thBase+'"></th>';
       sectionsHtml+='</tr></thead>';
-      sectionsHtml+='<tbody>'+bContRows(conts,bkVol,bkNo)+'</tbody></table>';
+      sectionsHtml+='<tbody class="contBody_'+bkKey+'">'+bContRows(conts,bkVol,bkNo)+'</tbody></table>';
+      sectionsHtml+='<div style="padding:6px 12px;border-top:1px solid var(--border-light)"><button class="btn sm" data-bk="'+bkNo+'" data-bkkey="'+bkKey+'" onclick="addBkContRow(this)"><i class="ti ti-plus"></i> Thêm cont</button></div>';
       sectionsHtml+='</div>';
     });
 
@@ -1024,11 +1024,7 @@ function renderDetailPanel(r,tt){
     sectionsHtml+='<button class="btn" onclick="showCheckEport()"><i class="ti ti-clipboard-check"></i> Check Eport</button>';
     sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Nhập từ Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importContFromExcel(this)"/></label>';
     sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" onclick="openDocMakerTab(detailId,detailTt)"><i class="ti ti-file-certificate"></i> Document Maker (tổng)</button>';
-    if(r.locked){
-      sectionsHtml+='<button class="btn" style="background:var(--red);color:#fff;border-color:var(--red)" onclick="toggleCurrentLotLock()"><i class="ti ti-lock-open"></i> Mở khóa để sửa</button>';
-    } else {
-      sectionsHtml+='<button class="btn pri" onclick="saveContSealAll()"><i class="ti ti-check"></i> Lưu</button>';
-    }
+    sectionsHtml+='<button class="btn pri" onclick="saveContSealAll()"><i class="ti ti-check"></i> Lưu</button>';
     sectionsHtml+='</div>';
     sectionsHtml+='</div>';
 
@@ -1439,8 +1435,8 @@ window.addTkhaiRow=addTkhaiRow;
 
 
 async function saveContSealAll(){
-  if(isLotLocked(detailTt,detailId)){toast('Lô hàng đã khóa','error');return;}
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  // Note: Cont/Seal is operational data, allowed even when lot is locked
   const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:parseInt(r.vol)||1,typeCont:r.typeCont||'40HC'}];
   const bookingConts={};
   // Collect tờ khai for each booking
@@ -1587,6 +1583,36 @@ function delContRow(btn){
 }
 window.delContRow=delContRow;
 
+function bkContRowHtml(c2, i, bkNo){
+  c2=c2||{};
+  const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+  const bl='1px solid var(--border-light)';
+  return '<tr>'
+    +'<td style="padding:4px;border-bottom:'+bl+';text-align:center;font-size:11px">'+(i+1)+'</td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="text" class="cno_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.no||'')+'" placeholder="Cont No" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="text" class="cseal_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cpkg_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cnw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cgw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.gw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="ctare_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.tare||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="date" class="cdate_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.date||'')+'" style="font-size:11px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px;border-bottom:'+bl+';text-align:center;width:28px"><button type="button" onclick="delBkContRow(this)" data-bk="'+bkNo+'" data-bkkey="'+bkKey+'" class="rac red" style="font-size:11px;padding:2px 4px" title="Xóa dòng này"><i class="ti ti-trash"></i></button></td>'
+    +'</tr>';
+}
+window.bkContRowHtml=bkContRowHtml;
+
+function addBkContRow(btn){
+  const bkNo=btn.dataset.bk;
+  const bkKey=btn.dataset.bkkey;
+  const tbody=document.querySelector('.contBody_'+bkKey);
+  if(!tbody){toast('Không tìm thấy bảng cont','error');return;}
+  const i=tbody.querySelectorAll('tr').length;
+  const div=document.createElement('tbody');
+  div.innerHTML=bkContRowHtml({},i,bkNo);
+  tbody.appendChild(div.firstElementChild);
+}
+window.addBkContRow=addBkContRow;
+
 function delBkContRow(btn){
   const tr=btn.closest('tr'); if(!tr)return;
   const tbody=tr.closest('tbody');
@@ -1611,7 +1637,7 @@ window.autoGw=autoGw;
 async function isLotLocked(tt,id){const r=cache[tt]&&cache[tt].find(x=>x._id===id);return r&&r.locked;}
 async function saveContSeal(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
-  if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
+  // Note: Cont/Seal is operational data, allowed even when lot is locked
   // Read only rows that actually exist in DOM (handles deleted rows)
   const containers=[];
   const panel=g('detailPanel');
