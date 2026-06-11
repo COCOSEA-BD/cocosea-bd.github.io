@@ -1078,6 +1078,7 @@ function renderDetailPanel(r,tt){
         const tdRStyle=tdStyle+';text-align:right;font-weight:600';
         const r2=cache[detailTt].find(x=>x._id===detailId)||{};
         const partyName=r2.shipper||r2.supplier||r2.cnee||'';
+        const lotVol=parseInt(r2.vol)||(r2.bookings&&r2.bookings.length?r2.bookings.reduce(function(s,b){return s+(parseInt(b.vol)||0);},0):0)||1;
         const rows2=allOn.map(function(s){
           const sv=svcs[s.key]||{};
           const curOpts=CURRENCIES.map(function(c){return '<option'+(c===(sv.cur||'VND')?' selected':'')+'>'+c+'</option>';}).join('');
@@ -1088,7 +1089,7 @@ function renderDetailPanel(r,tt){
             +'<td style="'+tdStyle+'"><div style="font-weight:500">'+s.name+'</div>'+desc+'</td>'
             +'<td style="'+tdRStyle+'"><input type="number" id="fpp_'+s.key+'" value="'+(sv.price||'')+'" min="0" placeholder="0" oninput="updDetailFpTotal()" style="font-size:12px;text-align:right;width:90px"/></td>'
             +'<td style="'+tdStyle+'"><select id="fpcur_'+s.key+'" onchange="updDetailFpTotal()" style="font-size:12px;width:68px">'+curOpts+'</select></td>'
-            +'<td style="'+tdRStyle+'"><input type="number" id="fpq_'+s.key+'" value="'+(sv.qty||1)+'" min="0" placeholder="1" oninput="updDetailFpTotal()" style="font-size:12px;text-align:right;width:52px"/></td>'
+            +'<td style="'+tdRStyle+'"><input type="number" id="fpq_'+s.key+'" value="'+(sv.qty||lotVol||1)+'" min="0" placeholder="1" oninput="updDetailFpTotal()" style="font-size:12px;text-align:right;width:52px"/></td>'
             +'<td style="'+tdStyle+'"><select id="fpu_'+s.key+'" data-key="'+s.key+'" onchange="autoFpQtyByUnit(this.dataset.key)" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
             +'<td style="'+tdRStyle+';color:var(--blue)" id="fpamt_'+s.key+'">—</td>'
             +'<td style="'+tdStyle+'"><select id="fpinv_'+s.key+'" style="font-size:12px;width:72px">'+invOpts+'</select></td>'
@@ -1331,7 +1332,7 @@ function renderDetailPanel(r,tt){
             +buildDnPartyRows(r,svcs)
           +'</div>'
           +'<div style="display:flex;justify-content:flex-end;gap:8px">'
-            +'<button class="btn pri" onclick="saveInvoiceSettings()"><i class="ti ti-device-floppy"></i> Lưu cài đặt</button>'
+            +'<button class="btn pri" onclick="saveInvoiceSettings()"><i class="ti ti-device-floppy"></i> Lưu</button>'
           +'</div>';
       }
     }
@@ -1426,9 +1427,9 @@ async function saveInvoiceSettings(){
   setLoading(true,'Đang lưu...');
   try{
     await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
-    toast('Đã lưu cài đặt Invoice');
-    const fresh=cache[detailTt].find(x=>x._id===detailId)||r;
-    renderDetailPanel(fresh,detailTt);
+    // Update cache only, do NOT re-render (keeps current view, avoids reloading all prices)
+    const arr=cache[detailTt]||[];const ci=arr.findIndex(x=>x._id===detailId);if(ci>=0)arr[ci].svcs=svcs;
+    toast('Đã lưu');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -2589,8 +2590,10 @@ function svcRowHTML(s, sv){
     <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
     <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả / Ghi chú..." ${sv.on?'':'disabled'} style="font-size:11px"/>
     <div style="display:flex;justify-content:center" title="Hoàn thành"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer"/></div>
-    <div style="display:flex;justify-content:flex-end">
-      ${isCustom?`<button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>`:'<div></div>'}
+    <div style="display:flex;justify-content:flex-end;gap:3px">
+      ${(s.key==='stuffing')?`<button class="rac" onclick="sendStuffingEmail()" title="Gửi email đăng ký đóng hàng" style="font-size:13px;color:var(--blue)"><i class="ti ti-mail"></i></button>`:''}
+      ${(s.key==='trucking')?`<button class="rac" onclick="sendTruckingEmail()" title="Gửi email Trucking" style="font-size:13px;color:var(--blue)"><i class="ti ti-mail"></i></button>`:''}
+      ${isCustom?`<button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>`:''}
     </div>
   </div>`;
 }
@@ -2598,6 +2601,84 @@ function svcRowHTML(s, sv){
 
 
 function onSvcFinishToggle(){ /* live toggle - state saved on Lưu dịch vụ */ }
+
+function _svcNccEmail(svcKey){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const sv=(r.svcs||{})[svcKey]||{};
+  const nccName=sv.svcSupplier||'';
+  const ncc=cache.partners[nccName]||{};
+  return {r:r, ncc:ncc, nccName:nccName, email:ncc.email||'', contact:ncc.contact||''};
+}
+
+function _buildContTable(r){
+  // Build a simple cont list from bookingConts or containers
+  let conts=[];
+  if(r.bookingConts&&Object.keys(r.bookingConts).length){
+    Object.values(r.bookingConts).forEach(function(bk){(bk.containers||[]).forEach(function(c2){if(c2.no)conts.push(c2);});});
+  }
+  if(conts.length===0)conts=(r.containers||[]).filter(function(c){return c.no;});
+  if(conts.length===0)return '';
+  let t='\nDanh sách container:\n';
+  conts.forEach(function(c,i){t+='  '+(i+1)+'. '+c.no+(c.seal?' / Seal: '+c.seal:'')+'\n';});
+  return t;
+}
+
+function sendStuffingEmail(){
+  const info=_svcNccEmail('stuffing');
+  const r=info.r;
+  if(!info.nccName){toast('Chưa chọn NCC cho dịch vụ Đóng hàng tại bãi','error');return;}
+  if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Vui lòng cập nhật trong Đối tác.','error');return;}
+  const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
+  const subject='[ĐĂNG KÝ ĐÓNG HÀNG] '+bkgNos+(r.mblNo?' - '+r.mblNo:'');
+  const body='Kính gửi '+(info.contact||info.nccName)+',\n\n'
+    +'COCOSEA xin đăng ký đóng hàng cho lô hàng sau:\n\n'
+    +'────────────────────────────────\n'
+    +'  Booking No : '+bkgNos+'\n'
+    +'  MBL No     : '+(r.mblNo||'—')+'\n'
+    +'  Vessel     : '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'\n'
+    +'  ETD        : '+(r.etd||'—')+'\n'
+    +'  POL        : '+(r.pol||'—')+'\n'
+    +'  Tên hàng   : '+(r.tenHang||'—')+'\n'
+    +'  Số lượng   : '+(r.vol||'—')+' x '+(r.typeCont||'—')+'\n'
+    +'  Bãi/CY     : '+(r.cyLocation||r.icd||'—')+'\n'
+    +'────────────────────────────────\n'
+    +_buildContTable(r)
+    +'\nVui lòng xác nhận lịch đóng hàng. Trân trọng cảm ơn!\n\n'
+    +'Best regards,\nCOCOSEA CO., LTD\nKeep Going . Keep Growing';
+  const mailto='mailto:'+encodeURIComponent(info.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  window.open(mailto,'_blank');
+  toast('Đã mở email đăng ký đóng hàng → '+info.nccName);
+}
+window.sendStuffingEmail=sendStuffingEmail;
+
+function sendTruckingEmail(){
+  const info=_svcNccEmail('trucking');
+  const r=info.r;
+  if(!info.nccName){toast('Chưa chọn NCC cho dịch vụ Trucking','error');return;}
+  if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Vui lòng cập nhật trong Đối tác.','error');return;}
+  const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
+  const subject='[LỆNH TRUCKING] '+bkgNos+(r.mblNo?' - '+r.mblNo:'');
+  const body='Kính gửi '+(info.contact||info.nccName)+',\n\n'
+    +'COCOSEA xin gửi lệnh điều xe (trucking) cho lô hàng sau:\n\n'
+    +'────────────────────────────────\n'
+    +'  Booking No : '+bkgNos+'\n'
+    +'  MBL No     : '+(r.mblNo||'—')+'\n'
+    +'  Vessel     : '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'\n'
+    +'  ETD        : '+(r.etd||'—')+'\n'
+    +'  Tên hàng   : '+(r.tenHang||'—')+'\n'
+    +'  Số lượng   : '+(r.vol||'—')+' x '+(r.typeCont||'—')+'\n'
+    +'  Lấy rỗng   : '+(r.cyLocation||'—')+'\n'
+    +'  Đóng hàng  : '+(r.wh||r.icd||'—')+'\n'
+    +'  Hạ bãi     : '+(r.pol||'—')+'\n'
+    +'────────────────────────────────\n'
+    +_buildContTable(r)
+    +'\nVui lòng xác nhận và sắp xếp xe. Trân trọng cảm ơn!\n\n'
+    +'Best regards,\nCOCOSEA CO., LTD\nKeep Going . Keep Growing';
+  const mailto='mailto:'+encodeURIComponent(info.email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  window.open(mailto,'_blank');
+  toast('Đã mở email Trucking → '+info.nccName);
+}
+window.sendTruckingEmail=sendTruckingEmail;
 window.onSvcFinishToggle=onSvcFinishToggle;
 
 function addCustomSvc(){
