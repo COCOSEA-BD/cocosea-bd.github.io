@@ -579,9 +579,15 @@ function updateSidebar(){
   g('sbName').textContent=u.name||u.email||'';
   g('sbEmail').textContent=currentUser?.email||'';
   g('sbRole').innerHTML=`<span class="${r.cls}">${r.label}</span>`;
-  const alerts=getDeadlineAlerts();
+  // Badge: count active export lots that are NOT fully done (progress incomplete)
+  const PCOLS=['si','tqtk','phyto','fumi','co','bct'];
+  const pendingCount=cache.xuat.filter(function(r){
+    if(r.status==='Done'||r.status==='Cancel'||r.status==='Xóa CB')return false;
+    const prog=r.progress||{};
+    return !PCOLS.every(function(k){return prog[k]===true;});
+  }).length;
   const dot=g('deadlineBadge');
-  if(alerts.length){dot.style.display='';dot.textContent=alerts.length;}else dot.style.display='none';
+  if(pendingCount){dot.style.display='';dot.textContent=pendingCount;}else dot.style.display='none';
 }
 
 /* ─────────────────────────────────────────────
@@ -2979,31 +2985,80 @@ async function saveTask(){
    DEADLINE PAGE
 ───────────────────────────────────────────── */
 function renderDeadline(){
-  const alerts=getDeadlineAlerts();
-  const etdA=alerts.filter(a=>a.type==='etd');
-  const etaA=alerts.filter(a=>a.type==='eta');
-  const taskA=alerts.filter(a=>a.type==='task');
+  // Progress tracking for Export lots
+  const PROGRESS_COLS=[
+    {k:'si',label:'SI'},
+    {k:'tqtk',label:'TQTK'},
+    {k:'phyto',label:'Phyto'},
+    {k:'fumi',label:'Fumi'},
+    {k:'co',label:'C/O'},
+    {k:'bct',label:'Gửi BCT'}
+  ];
+  // Only export lots that are still active (not done/cancel)
+  const exportLots=cache.xuat.filter(function(r){
+    return r.status!=='Done'&&r.status!=='Cancel'&&r.status!=='Xóa CB';
+  }).sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');});
+
+  function rowProgress(r){
+    const prog=r.progress||{};
+    const allDone=PROGRESS_COLS.every(function(col){return prog[col.k]===true;});
+    return {prog:prog,allDone:allDone};
+  }
+
+  const rowsHtml=exportLots.map(function(r){
+    const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||'—'));
+    const pinfo=rowProgress(r);
+    const checks=PROGRESS_COLS.map(function(col){
+      const on=pinfo.prog[col.k]===true;
+      return '<td style="text-align:center;padding:6px 4px"><input type="checkbox" '+(on?'checked':'')+' onchange="toggleProgress(\''+r._id+'\',\''+col.k+'\',this.checked)" style="width:17px;height:17px;cursor:pointer;accent-color:var(--green)"/></td>';
+    }).join('');
+    const statusBadge=pinfo.allDone
+      ?'<span style="display:inline-block;padding:3px 12px;border-radius:20px;background:#e8f3ef;color:#0F6E56;font-weight:700;font-size:11px"><i class="ti ti-circle-check" style="font-size:12px;vertical-align:-1px"></i> DONE</span>'
+      :'<span style="display:inline-block;padding:3px 12px;border-radius:20px;background:#fdecea;color:#A32D2D;font-weight:700;font-size:11px"><i class="ti ti-loader" style="font-size:12px;vertical-align:-1px"></i> Đang xử lý</span>';
+    const rowBg=pinfo.allDone?'background:#f6fbf9':'';
+    return '<tr style="'+rowBg+'">'
+      +'<td style="font-weight:600;font-size:12px;padding:8px 10px"><button class="plink" style="font-weight:600;text-align:left" onclick="openDetail(\''+r._id+'\',\'xuat\')">'+bkgNos+'</button></td>'
+      +'<td style="font-size:11.5px;padding:8px 10px">'+(r.mblNo||'—')+'</td>'
+      +checks
+      +'<td style="text-align:center;padding:8px 10px">'+statusBadge+'</td>'
+      +'</tr>';
+  }).join('');
+
+  const doneCount=exportLots.filter(function(r){return rowProgress(r).allDone;}).length;
+  const headerChecks=PROGRESS_COLS.map(function(col){return '<th style="text-align:center;padding:8px 4px;font-size:10px;white-space:nowrap">'+col.label+'</th>';}).join('');
+
   g('page-deadline').innerHTML=`
-  <div class="dl-settings">
-    <i class="ti ti-settings" style="font-size:16px;color:var(--text-secondary)"></i>
-    <span style="font-size:12.5px;color:var(--text-secondary)">Cảnh báo trước:</span>
-    <input type="number" id="ddInput" value="${deadlineDays}" min="1" max="30" style="width:64px" oninput="deadlineDays=parseInt(this.value)||5;renderDeadline();updateSidebar()"/>
-    <span style="font-size:12.5px;color:var(--text-secondary)">ngày</span>
-    <span style="font-size:11.5px;color:var(--text-secondary);margin-left:auto">${alerts.length} cảnh báo hoạt động</span>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:1.25rem;flex-wrap:wrap">
+    <div style="font-size:15px;font-weight:700"><i class="ti ti-checklist" style="color:var(--blue)"></i> Tiến độ công việc</div>
+    <span style="font-size:12px;color:var(--text-secondary)">Lô xuất khẩu đang xử lý: <strong>${exportLots.length}</strong></span>
+    <span style="font-size:12px;color:var(--green);margin-left:auto"><i class="ti ti-circle-check"></i> Hoàn thành: <strong>${doneCount}/${exportLots.length}</strong></span>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
-    <div>
-      <div class="sec-label"><i class="ti ti-calendar-event"></i> ETD sắp đến hạn (${etdA.length})</div>
-      ${etdA.length?etdA.map(a=>`<div class="alert-item ${a.days<=2?'danger':a.days<=4?'warn':'info'}"><i class="ti ti-calendar-event ai"></i><div><div class="alert-title">${a.r.bookingNo} — ${a.r.shipper||a.r.supplier||''}</div><div class="alert-sub">ETD: <strong>${a.r.etd}</strong> | Còn <strong>${a.days} ngày</strong></div><div class="alert-sub">${a.r.pol||''} → ${a.r.pod||''}</div></div></div>`).join(''):'<div class="empty-state" style="padding:1rem"><i class="ti ti-checks"></i>Không có ETD sắp đến hạn</div>'}
-    </div>
-    <div>
-      <div class="sec-label"><i class="ti ti-anchor"></i> ETA sắp đến hạn (${etaA.length})</div>
-      ${etaA.length?etaA.map(a=>`<div class="alert-item ${a.days<=2?'danger':a.days<=4?'warn':'info'}"><i class="ti ti-anchor ai"></i><div><div class="alert-title">${a.r.bookingNo} — ${a.r.cnee||a.r.consignee||''}</div><div class="alert-sub">ETA: <strong>${a.r.eta}</strong> | Còn <strong>${a.days} ngày</strong></div><div class="alert-sub">${a.r.tenHang||'—'} → ${a.r.pod||'—'}</div></div></div>`).join(''):'<div class="empty-state" style="padding:1rem"><i class="ti ti-checks"></i>Không có ETA sắp đến hạn</div>'}
-    </div>
-  </div>
-  <div class="sec-label" style="margin-bottom:.6rem"><i class="ti ti-checklist"></i> Công việc chưa hoàn thành (${taskA.length} lô)</div>
-  ${taskA.length?`<div class="table-card"><div class="table-wrap"><table><thead><tr><th>Booking No</th><th>Trạng thái</th><th>ETD</th><th>Đối tác</th><th>Việc còn thiếu</th></tr></thead><tbody>${taskA.map(a=>`<tr><td style="font-weight:600">${a.r.bookingNo}</td><td><span class="bdg ${SB[a.r.status]||'bdg-gr'}">${a.r.status}</span></td><td>${a.r.etd||'—'}</td><td>${a.r.shipper||a.r.supplier||'—'}</td><td><div class="pill-row">${a.incompleteTasks.map(t=>`<span class="bdg bdg-r">${t.label}</span>`).join('')}</div></td></tr>`).join('')}</tbody></table></div></div>`:'<p style="font-size:12.5px;color:var(--text-secondary)">Tất cả lô hàng đang hoạt động đã hoàn thành công việc.</p>'}`;
+  ${exportLots.length?`<div class="table-card"><div class="table-wrap"><table style="width:100%;border-collapse:collapse">
+    <thead><tr style="background:var(--bg-secondary)">
+      <th style="text-align:left;padding:8px 10px;font-size:10px">Booking No</th>
+      <th style="text-align:left;padding:8px 10px;font-size:10px">MBL</th>
+      ${headerChecks}
+      <th style="text-align:center;padding:8px 10px;font-size:10px">Trạng thái</th>
+    </tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table></div></div>`:'<div class="empty-state" style="padding:2rem"><i class="ti ti-checks"></i>Không có lô xuất khẩu nào đang xử lý</div>'}`;
 }
+
+async function toggleProgress(id, key, checked){
+  const r=cache.xuat.find(x=>x._id===id);
+  if(!r)return;
+  const progress=Object.assign({},r.progress||{});
+  progress[key]=checked;
+  // Update cache immediately for snappy UI
+  r.progress=progress;
+  // Re-render to update status badge/color
+  renderDeadline();
+  try{
+    await fsSet('lots_xuat',id,{progress,updatedAt:Date.now(),updatedBy:currentUser.email});
+  }catch(e){toast('Lỗi lưu tiến độ: '+e.message,'error');}
+}
+window.toggleProgress=toggleProgress;
+
 
 /* ─────────────────────────────────────────────
    DEBT PAGE
@@ -3778,7 +3833,7 @@ tr:hover td{background:var(--bg-secondary)}
     <button class="sb-item" id="sb-xuat" onclick="goTab('xuat')"><i class="ti ti-arrow-up-right"></i> Xuất khẩu</button>
     <button class="sb-item" id="sb-nhap" onclick="goTab('nhap')"><i class="ti ti-arrow-down-left"></i> Nhập khẩu</button>
     <div class="sb-section" style="margin-top:.4rem">Vận hành</div>
-    <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-bell"></i> Nhắc nhở<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
+    <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-checklist"></i> Tiến độ công việc<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
     <button class="sb-item" id="sb-cong-no" onclick="goTab('cong-no')"><i class="ti ti-chart-bar"></i> Công nợ</button>
     <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> Đối tác</button>
     <div class="sb-section" style="margin-top:.4rem">Hệ thống</div>
