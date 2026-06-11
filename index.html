@@ -863,6 +863,7 @@ function renderDetailPanel(r,tt){
       {k:'costing',label:'Costing',icon:'ti-calculator'},
       {k:'invoice',label:'Invoice',icon:'ti-file-invoice'},
     ]:[]),
+    {k:'document',label:'Document',icon:'ti-folder'},
   ];
   const tabsHtml=tabs.map(t=>`<button class="dtab${detailTab===t.k?' active':''}" onclick="switchDetailTab('${t.k}')"><i class="ti ${t.icon}" style="font-size:13px"></i> ${t.label}</button>`).join('');
 
@@ -1091,7 +1092,13 @@ function renderDetailPanel(r,tt){
             +'<td style="'+tdStyle+'"><select id="fpu_'+s.key+'" data-key="'+s.key+'" onchange="autoFpQtyByUnit(this.dataset.key)" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
             +'<td style="'+tdRStyle+';color:var(--blue)" id="fpamt_'+s.key+'">—</td>'
             +'<td style="'+tdStyle+'"><select id="fpinv_'+s.key+'" style="font-size:12px;width:72px">'+invOpts+'</select></td>'
-            +'<td style="'+tdStyle+'"><select id="fpparty_'+s.key+'" style="font-size:11px;width:100px"><option value="">— Party —</option>'+( (function(){var r2=cache[detailTt].find(x=>x._id===detailId)||{};var opts=[];if(r2.shipper||r2.supplier)opts.push('<option'+(sv.party===(r2.shipper||r2.supplier)?' selected':'')+'>'+( r2.shipper||r2.supplier)+'</option>');if(r2.carrier)opts.push('<option'+(sv.party===r2.carrier?' selected':'')+'>'+r2.carrier+'</option>');return opts.join('');})())+'</select></td>'
+            +'<td style="'+tdStyle+'"><select id="fpparty_'+s.key+'" style="font-size:11px;width:120px"><option value="">— Party —</option>'+( (function(){var r2=cache[detailTt].find(x=>x._id===detailId)||{};var opts=[];var seen={};function addOpt(name){if(!name||seen[name])return;seen[name]=1;opts.push('<option'+(sv.party===name?' selected':'')+'>'+name+'</option>');}
+            addOpt(r2.shipper||r2.supplier);
+            addOpt(r2.carrier);
+            // Include all NCC (svcSupplier) chosen in the Dịch vụ tab
+            var allSvcs=r2.svcs||{};
+            Object.keys(allSvcs).forEach(function(k){var sup=allSvcs[k]&&allSvcs[k].svcSupplier;if(sup)addOpt(sup);});
+            return opts.join('');})())+'</select></td>'
             +'</tr>';
         }).join('');
         bodyHtml=hdr+rows2+'</tbody></table>'
@@ -1328,6 +1335,37 @@ function renderDetailPanel(r,tt){
           +'</div>';
       }
     }
+  }
+
+  else if(detailTab==='document'){
+    const savedDocs=r.savedDocs||[];
+    let docRows='';
+    if(savedDocs.length===0){
+      docRows='<div style="text-align:center;padding:40px 20px;color:var(--text-secondary)"><i class="ti ti-folder-open" style="font-size:32px;opacity:.4"></i><div style="margin-top:8px;font-size:13px">Chưa có chứng từ nào được lưu cho lô hàng này</div><div style="font-size:11px;margin-top:4px">Vào Document Maker → tạo chứng từ → bấm "Lưu vào lô hàng"</div></div>';
+    } else {
+      const DOC_TYPE_LABEL={si:'Shipping Instruction',pkl:'Packing List',contract:'Sales Contract',invoice:'Commercial Invoice',merged:'Bộ chứng từ (gộp)'};
+      const DOC_TYPE_ICON={si:'ti-file-text',pkl:'ti-list-details',contract:'ti-file-certificate',invoice:'ti-file-invoice',merged:'ti-files'};
+      docRows='<div style="display:flex;flex-direction:column;gap:8px">';
+      savedDocs.slice().reverse().forEach(function(doc){
+        const dt=new Date(doc.createdAt||Date.now());
+        const dtStr=dt.getDate().toString().padStart(2,'0')+'/'+(dt.getMonth()+1).toString().padStart(2,'0')+'/'+dt.getFullYear()+' '+dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0');
+        docRows+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px">';
+        docRows+='<i class="ti '+(DOC_TYPE_ICON[doc.type]||'ti-file')+'" style="font-size:22px;color:var(--blue)"></i>';
+        docRows+='<div style="flex:1;min-width:0">';
+        docRows+='<div style="font-size:13px;font-weight:600">'+(DOC_TYPE_LABEL[doc.type]||doc.type||'Chứng từ')+(doc.name?' — '+doc.name:'')+'</div>';
+        docRows+='<div style="font-size:11px;color:var(--text-secondary)">'+dtStr+(doc.createdBy?' · '+doc.createdBy:'')+'</div>';
+        docRows+='</div>';
+        docRows+='<button class="btn sm" onclick="viewSavedDoc(\''+doc.id+'\')"><i class="ti ti-eye"></i> Xem</button>';
+        docRows+='<button class="btn sm" onclick="printSavedDoc(\''+doc.id+'\')"><i class="ti ti-printer"></i> In</button>';
+        docRows+='<button class="rac red" onclick="deleteSavedDoc(\''+doc.id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>';
+        docRows+='</div>';
+      });
+      docRows+='</div>';
+    }
+    bodyHtml='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<div style="font-size:13px;font-weight:600;color:var(--text-primary)"><i class="ti ti-folder"></i> Chứng từ đã lưu của lô hàng</div>'
+      +'<button class="btn pri" onclick="openDocMakerTab(detailId,detailTt)"><i class="ti ti-plus"></i> Tạo chứng từ mới</button>'
+      +'</div>'+docRows;
   }
 
   g('detailPanel').innerHTML=`
@@ -6612,6 +6650,60 @@ function _dmSI(d){
 }
 
 
+
+/* ═══ SAVED DOCUMENTS (Document tab) ═══ */
+async function saveDocToLot(type, html, name){
+  if(!_dmLot){toast('Chưa chọn lô hàng','error');return;}
+  const tt=_dmLot._tt, id=_dmLot._id;
+  const r=cache[tt].find(x=>x._id===id)||{};
+  const savedDocs=(r.savedDocs||[]).slice();
+  const docId='doc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+  savedDocs.push({id:docId,type:type,name:name||'',html:html,createdAt:Date.now(),createdBy:currentUser.email});
+  setLoading(true,'Đang lưu chứng từ...');
+  try{
+    await fsSet(tt==='xuat'?'lots_xuat':'lots_nhap',id,{savedDocs});
+    const arr=cache[tt]||[];const ci=arr.findIndex(x=>x._id===id);if(ci>=0)arr[ci].savedDocs=savedDocs;
+    toast('Đã lưu chứng từ vào lô hàng');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveDocToLot=saveDocToLot;
+
+function _getSavedDoc(docId){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  return (r.savedDocs||[]).find(function(d){return d.id===docId;});
+}
+function viewSavedDoc(docId){
+  const doc=_getSavedDoc(docId);
+  if(!doc){toast('Không tìm thấy chứng từ','error');return;}
+  const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
+  w.document.write(doc.html);w.document.close();w.focus();
+}
+window.viewSavedDoc=viewSavedDoc;
+function printSavedDoc(docId){
+  const doc=_getSavedDoc(docId);
+  if(!doc){toast('Không tìm thấy chứng từ','error');return;}
+  const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
+  w.document.write(doc.html);w.document.close();w.focus();
+  setTimeout(function(){w.print();},500);
+}
+window.printSavedDoc=printSavedDoc;
+async function deleteSavedDoc(docId){
+  if(!confirm('Xóa chứng từ này khỏi lô hàng?'))return;
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const savedDocs=(r.savedDocs||[]).filter(function(d){return d.id!==docId;});
+  setLoading(true,'Đang xóa...');
+  try{
+    await fsSet(detailTt==='xuat'?'lots_xuat':'lots_nhap',detailId,{savedDocs});
+    const arr=cache[detailTt]||[];const ci=arr.findIndex(x=>x._id===detailId);if(ci>=0)arr[ci].savedDocs=savedDocs;
+    renderDetailPanel(arr[ci]||r,detailTt);
+    toast('Đã xóa chứng từ');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.deleteSavedDoc=deleteSavedDoc;
+/* ═══ END SAVED DOCUMENTS ═══ */
+
 function dmExport(type){
   const d=dmGetData();
   if(!d){toast('Chưa có dữ liệu','error');return;}
@@ -6621,6 +6713,9 @@ function dmExport(type){
   w.document.write(entry[0]);w.document.close();w.focus();w.document.title=entry[1];
   setTimeout(function(){w.print();},600);
   toast('Đã mở: '+entry[1]+' — Ctrl+P → Save as PDF');
+  // Auto-save a copy to the lot's Document tab
+  const typeMap={'INV':'invoice','PKL':'pkl','CONTRACT':'contract','INV_TK':'invoice','SI':'si'};
+  saveDocToLot(typeMap[type]||type.toLowerCase(), entry[0], entry[1]);
 }
 
 function dmMergePdf(){
@@ -6665,6 +6760,7 @@ function dmDoMerge(){
   const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
   w.document.write(merged);w.document.close();w.focus();w.document.title='Combined_'+(d.invoiceNo||d.mbl||'docs');
   setTimeout(function(){w.print();},700);
+  saveDocToLot('merged', merged, 'Combined_'+(d.invoiceNo||d.mbl||'docs'));
   toast('Đã gộp '+chosen.length+' chứng từ — Ctrl+P → Save as PDF');
 }
 window.dmMergePdf=dmMergePdf;
