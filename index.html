@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>TradeFlow — Xuất Nhập Khẩu</title>
+<title>COCOFLOW — Xuất Nhập Khẩu</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.x/dist/tabler-icons.min.css"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
 
@@ -420,12 +420,12 @@ auth.onAuthStateChanged(async (user) => {
         || null;
       if(!currentProfile){
         // No profile found - log details for debugging
-        console.warn('TradeFlow: No profile found for', user.email, '(UID:', user.uid+')');
+        console.warn('COCOFLOW: No profile found for', user.email, '(UID:', user.uid+')');
         console.warn('Available docs:', profiles.map(p=>p._docId+'/'+p.email).join(', '));
         // Default to viewer - admin should create profile in Firestore
         currentProfile = {role:'viewer',name:user.displayName||user.email,avatar:(user.email||'??').slice(0,2).toUpperCase(),email:user.email};
       } else {
-        console.log('TradeFlow: Profile found, role=', currentProfile.role, 'docId=', currentProfile._docId);
+        console.log('COCOFLOW: Profile found, role=', currentProfile.role, 'docId=', currentProfile._docId);
       }
     } catch(e) {
       console.error('Profile load error:', e);
@@ -574,7 +574,7 @@ function showApp(){
 function updateSidebar(){
   const u=currentProfile; if(!u)return;
   const r=ROLES[u.role||'viewer'];
-  console.log('TradeFlow: user='+u.email+' role='+u.role+' docId='+u._docId);
+  console.log('COCOFLOW: user='+u.email+' role='+u.role+' docId='+u._docId);
   g('sbAvatar').textContent=u.avatar||'??';
   g('sbName').textContent=u.name||u.email||'';
   g('sbEmail').textContent=currentUser?.email||'';
@@ -2730,7 +2730,7 @@ function _openEmailModal(opts){
     <div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">
       <button class="btn" onclick="closeOv('emailOv')">Hủy</button>
       <button class="btn" onclick="_emailOpenMailto()"><i class="ti ti-external-link"></i> Mở Email App</button>
-      <button class="btn pri" onclick="_emailDownloadEml()"><i class="ti ti-download"></i> Tạo file .eml (gửi)</button>
+      <button class="btn pri" onclick="_emailDownloadEml()"><i class="ti ti-download"></i> Tạo file .eml</button>
     </div>
   </div>`;
   openOv('emailOv');
@@ -2763,6 +2763,7 @@ function _emailDownloadEml(){
   // Build a .eml file (RFC 822) with HTML body
   const boundary='----=_COCOSEA_'+Date.now();
   const eml=
+    'X-Unsent: 1\r\n'+
     'From: COCOSEA <cocosea.bd@gmail.com>\r\n'+
     'To: '+to+'\r\n'+
     (cc?'Cc: '+cc+'\r\n':'')+
@@ -2994,10 +2995,19 @@ function renderDeadline(){
     {k:'co',label:'C/O'},
     {k:'bct',label:'Gửi BCT'}
   ];
+  const search=(window._progressSearch||'').toLowerCase().trim();
   // Only export lots that are still active (not done/cancel)
-  const exportLots=cache.xuat.filter(function(r){
+  let exportLots=cache.xuat.filter(function(r){
     return r.status!=='Done'&&r.status!=='Cancel'&&r.status!=='Xóa CB';
   }).sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');});
+  // Apply search filter (booking, mbl, shipper)
+  if(search){
+    exportLots=exportLots.filter(function(r){
+      const bk=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).join(' '):(r.bookingNo||''));
+      const hay=(bk+' '+(r.mblNo||'')+' '+(r.shipper||r.supplier||'')+' '+(r.tenHang||'')).toLowerCase();
+      return hay.indexOf(search)>=0;
+    });
+  }
 
   function rowProgress(r){
     const prog=r.progress||{};
@@ -3018,31 +3028,41 @@ function renderDeadline(){
     const rowBg=pinfo.allDone?'background:#f6fbf9':'';
     return '<tr style="'+rowBg+'">'
       +'<td style="font-weight:600;font-size:12px;padding:8px 10px"><button class="plink" style="font-weight:600;text-align:left" onclick="openDetail(\''+r._id+'\',\'xuat\')">'+bkgNos+'</button></td>'
+      +'<td style="font-size:11.5px;padding:8px 10px">'+(r.shipper||r.supplier||'—')+'</td>'
       +'<td style="font-size:11.5px;padding:8px 10px">'+(r.mblNo||'—')+'</td>'
+      +'<td style="font-size:11.5px;padding:8px 10px">'+((r.etd||'—').replace(/-/g,'/'))+'</td>'
       +checks
       +'<td style="text-align:center;padding:8px 10px">'+statusBadge+'</td>'
       +'</tr>';
   }).join('');
 
-  const doneCount=exportLots.filter(function(r){return rowProgress(r).allDone;}).length;
+  const allActive=cache.xuat.filter(function(r){return r.status!=='Done'&&r.status!=='Cancel'&&r.status!=='Xóa CB';});
+  const doneCount=allActive.filter(function(r){return rowProgress(r).allDone;}).length;
   const headerChecks=PROGRESS_COLS.map(function(col){return '<th style="text-align:center;padding:8px 4px;font-size:10px;white-space:nowrap">'+col.label+'</th>';}).join('');
 
   g('page-deadline').innerHTML=`
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:1.25rem;flex-wrap:wrap">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem;flex-wrap:wrap">
     <div style="font-size:15px;font-weight:700"><i class="ti ti-checklist" style="color:var(--blue)"></i> Tiến độ công việc</div>
-    <span style="font-size:12px;color:var(--text-secondary)">Lô xuất khẩu đang xử lý: <strong>${exportLots.length}</strong></span>
-    <span style="font-size:12px;color:var(--green);margin-left:auto"><i class="ti ti-circle-check"></i> Hoàn thành: <strong>${doneCount}/${exportLots.length}</strong></span>
+    <span style="font-size:12px;color:var(--text-secondary)">Lô xuất khẩu đang xử lý: <strong>${allActive.length}</strong></span>
+    <span style="font-size:12px;color:var(--green)"><i class="ti ti-circle-check"></i> Hoàn thành: <strong>${doneCount}/${allActive.length}</strong></span>
+  </div>
+  <div style="margin-bottom:1rem;position:relative;max-width:340px">
+    <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-tertiary);font-size:14px"></i>
+    <input type="text" id="progressSearch" value="${(window._progressSearch||'').replace(/"/g,'&quot;')}" placeholder="Tìm Booking, MBL, Shipper, tên hàng..." oninput="window._progressSearch=this.value;renderDeadline();setTimeout(function(){const el=g('progressSearch');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},0)" style="font-size:12.5px;padding:7px 10px 7px 32px;width:100%"/>
   </div>
   ${exportLots.length?`<div class="table-card"><div class="table-wrap"><table style="width:100%;border-collapse:collapse">
     <thead><tr style="background:var(--bg-secondary)">
       <th style="text-align:left;padding:8px 10px;font-size:10px">Booking No</th>
+      <th style="text-align:left;padding:8px 10px;font-size:10px">Shipper</th>
       <th style="text-align:left;padding:8px 10px;font-size:10px">MBL</th>
+      <th style="text-align:left;padding:8px 10px;font-size:10px">ETD</th>
       ${headerChecks}
       <th style="text-align:center;padding:8px 10px;font-size:10px">Trạng thái</th>
     </tr></thead>
     <tbody>${rowsHtml}</tbody>
-  </table></div></div>`:'<div class="empty-state" style="padding:2rem"><i class="ti ti-checks"></i>Không có lô xuất khẩu nào đang xử lý</div>'}`;
+  </table></div></div>`:'<div class="empty-state" style="padding:2rem"><i class="ti ti-checks"></i>'+(search?'Không tìm thấy lô hàng phù hợp':'Không có lô xuất khẩu nào đang xử lý')+'</div>'}`;
 }
+
 
 async function toggleProgress(id, key, checked){
   const r=cache.xuat.find(x=>x._id===id);
@@ -3801,7 +3821,7 @@ tr:hover td{background:var(--bg-secondary)}
     <div class="login-logo">
       <div class="login-logo-ic"><i class="ti ti-ship"></i></div>
       <div>
-        <div style="font-size:18px;font-weight:700">TradeFlow</div>
+        <div style="font-size:18px;font-weight:700">COCOFLOW</div>
         <div style="font-size:11px;color:var(--text-secondary)">Import / Export Management</div>
       </div>
     </div>
@@ -3824,7 +3844,7 @@ tr:hover td{background:var(--bg-secondary)}
     <div class="sb-logo">
       <div class="sb-logo-ic"><i class="ti ti-ship"></i></div>
       <div>
-        <div style="font-size:13px;font-weight:700">TradeFlow</div>
+        <div style="font-size:13px;font-weight:700">COCOFLOW</div>
         <div style="font-size:10px;color:var(--text-secondary)">v2.0 — Firebase</div>
       </div>
     </div>
@@ -7307,7 +7327,7 @@ function exportExcel(tt){
   const blob=new Blob([html],{type:'application/vnd.ms-excel;charset=utf-8'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  a.href=url; a.download='TradeFlow_'+tt+'_'+new Date().toISOString().slice(0,10)+'.xls';
+  a.href=url; a.download='COCOFLOW_'+tt+'_'+new Date().toISOString().slice(0,10)+'.xls';
   a.click(); URL.revokeObjectURL(url);
   toast('Đã xuất Excel (định dạng màu)');
 }
