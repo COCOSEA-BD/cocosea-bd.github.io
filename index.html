@@ -852,11 +852,11 @@ function openDetail(id, tt){
   g('detailBackdrop').classList.add('open');
 }
 
-function openDocMakerTab(id, tt){
+function openDocMakerTab(id, tt, targetBk){
   const key='docmaker';
   let t=_openTabs.find(x=>x.key===key);
-  if(!t){t={key,type:'docmaker',label:'Document Maker',id:id||null,tt:tt||null};_openTabs.push(t);}
-  else if(id&&tt){t.id=id;t.tt=tt;} // remember last lot
+  if(!t){t={key,type:'docmaker',label:'Document Maker',id:id||null,tt:tt||null,bk:targetBk||null};_openTabs.push(t);}
+  else if(id&&tt){t.id=id;t.tt=tt;t.bk=targetBk||null;} // remember last lot + booking
   _activeTabKey=key;
   g('detailPanel').innerHTML='<div class="dpanel-tabbar" id="dpanelTabbar"></div><div id="dmPanelHost" style="padding:1rem"></div>';
   renderDpanelTabs();
@@ -865,10 +865,10 @@ function openDocMakerTab(id, tt){
   g('detailPanel').classList.add('open');
   g('detailBackdrop').classList.add('open');
   // Auto-pick the lot once the form DOM exists
-  const pickId=id||t.id, pickTt=tt||t.tt;
+  const pickId=id||t.id, pickTt=tt||t.tt, pickBk=(targetBk!==undefined?targetBk:t.bk);
   if(pickId&&pickTt){
     const tryPick=function(tries){
-      if(window.dmPickLot&&g('dmSearch')){dmPickLot(pickId,pickTt);}
+      if(window.dmPickLot&&g('dmSearch')){window._dmTargetBooking=pickBk||'';dmPickLot(pickId,pickTt,pickBk);}
       else if(tries>0){setTimeout(function(){tryPick(tries-1);},80);}
     };
     tryPick(15);
@@ -1060,8 +1060,8 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--blue-bg);border-bottom:1px solid var(--border-light)">';
       sectionsHtml+='<div><span style="font-weight:700;color:var(--blue);font-size:13px">'+bkNo+'</span><span style="display:inline-flex;align-items:center;gap:5px;margin-left:10px"><span style="font-size:10.5px;font-weight:600;background:#fff;border:1px solid var(--border-light);border-radius:6px;padding:2px 8px;color:var(--text-secondary)">Vol: <strong style="color:var(--blue)">'+bkVol+'</strong></span><span style="font-size:10.5px;font-weight:600;background:#fff;border:1px solid var(--border-light);border-radius:6px;padding:2px 8px;color:var(--text-secondary)">'+bk.typeCont+'</span></span></div>';
       sectionsHtml+='<div style="display:flex;gap:6px">';
-      sectionsHtml+='<button class="btn" onclick="showKhaiEport()"><i class="ti ti-file-export"></i> Khai Eport</button>';
-      sectionsHtml+='<button class="btn" onclick="showCheckEport()"><i class="ti ti-clipboard-check"></i> Check</button>';
+      sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showKhaiEport(this.dataset.bk)"><i class="ti ti-file-export"></i> Khai Eport</button>';
+      sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showCheckEport(this.dataset.bk)"><i class="ti ti-clipboard-check"></i> Check</button>';
       sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
       sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
       sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
@@ -1679,7 +1679,7 @@ function importContFromExcelBk(input){
 function openDocMakerForBooking(bkNo){
   // Store the target booking key so dmPickLot can use it
   window._dmTargetBooking=bkNo;
-  openDocMakerTab(detailId,detailTt);
+  openDocMakerTab(detailId,detailTt,bkNo);
 }
 window.openDocMakerForBooking=openDocMakerForBooking;
 
@@ -6370,35 +6370,67 @@ function getAllLotContainers(r){
 }
 window.getAllLotContainers=getAllLotContainers;
 
-function showKhaiEport(){
+function getBookingContainers(r,bkNo){
+  // Get containers for ONE specific booking only
+  if(!bkNo)return getAllLotContainers(r);
+  const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+  if(r.bookingConts&&r.bookingConts[bkKey]){
+    return (r.bookingConts[bkKey].containers||[]).filter(function(c){return c.no;});
+  }
+  // Backward-compat: old single-booking lot, first booking falls back to r.containers
+  const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+  if(bookings[0]&&bookings[0].bookingNo===bkNo){
+    return (r.containers||[]).filter(function(c){return c.no;});
+  }
+  return [];
+}
+window.getBookingContainers=getBookingContainers;
+
+function getBookingInfo(r,bkNo){
+  // Return booking-specific tờ khai + meta, else lot-level
+  const bkKey=(bkNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+  const bkData=(r.bookingConts&&r.bookingConts[bkKey])||{};
+  const tk=(bkData.tkhaiList&&bkData.tkhaiList[0])||{};
+  const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+  const isFirst=bookings[0]&&bookings[0].bookingNo===bkNo;
+  return {
+    soTkhai:tk.soTkhai||(isFirst?r.soTkhai:'')||'',
+    maChiCuc:tk.maChiCuc||(isFirst?r.maChiCuc:'')||'',
+    phanLuong:tk.phanLuong||(isFirst?r.phanLuong:'')||''
+  };
+}
+window.getBookingInfo=getBookingInfo;
+
+function showKhaiEport(bkNo){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
-  const containers=getAllLotContainers(r);
+  const containers=getBookingContainers(r,bkNo);
+  const bkInfo=getBookingInfo(r,bkNo);
   const contLines=containers.map(function(c){
     return (c.no||'—')+' / '+(c.seal||'—')+' / '+(c.gw?c.gw.toLocaleString()+'.00':'—');
   }).join('\n');
 
   const text='Thông tin khai eport / Vô sổ tàu :\n'
     +'------------------------\n'
-    +'Booking: '+(r.bookingNo||'—')+'\n'
+    +'Booking: '+(bkNo||r.bookingNo||'—')+'\n'
     +'Tên tàu: '+(r.vessel||'—')+(r.voy?' V.'+(r.voy):'')+'\n'
     +'Hạ cảng: '+(r.pol||'—')+'\n'
     +'Giờ cắt máng: '+(r.cutoffCY||'—')+'\n'
     +'----\n'
     +'Mst: '+(function(){const sp=cache.partners[r.shipper||r.supplier||''];return sp?sp.mst||'—':'—';})()+'\n'
-    +'Số tờ khai: '+(r.soTkhai||'—')+'\n'
-    +'Mã chi cục: '+(r.maChiCuc||'—')+'\n'
-    +'Phân luồng: '+(r.phanLuong||'—')+'\n'
+    +'Số tờ khai: '+(bkInfo.soTkhai||'—')+'\n'
+    +'Mã chi cục: '+(bkInfo.maChiCuc||'—')+'\n'
+    +'Phân luồng: '+(bkInfo.phanLuong||'—')+'\n'
     +'Cont/ Seal / Netweight:\n'
     +contLines;
 
-  showEportModal('Khai Eport', text);
+  showEportModal('Khai Eport — '+(bkNo||''), text);
 }
 
-function showCheckEport(){
+function showCheckEport(bkNo){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
-  const containers=getAllLotContainers(r);
+  const containers=getBookingContainers(r,bkNo);
   const text=containers.map(function(c){return c.no;}).join(', ');
-  showEportModal('Check Eport — Danh sách Container', text);
+  showEportModal('Check Eport — '+(bkNo||'')+' — Danh sách Container', text);
 }
 
 function showEportModal(title, text){
@@ -6682,28 +6714,35 @@ function dmSearchLot(){
   }).join('');
 }
 
-function dmPickLot(id,tt){
+function dmPickLot(id,tt,targetBkArg){
   const r=(cache[tt]||[]).find(x=>x._id===id)||{};
   _dmLot={...r,_tt:tt};
   // ── Multi-booking: if a specific booking was targeted, use THAT booking's containers & info ──
-  const targetBk=window._dmTargetBooking||'';
-  if(targetBk&&r.bookingConts){
+  const targetBk=(targetBkArg!==undefined&&targetBkArg!==null)?targetBkArg:(window._dmTargetBooking||'');
+  if(targetBk){
     const bkKey=targetBk.replace(/[^a-zA-Z0-9]/g,'_');
-    const bkData=r.bookingConts[bkKey];
+    const bkData=(r.bookingConts&&r.bookingConts[bkKey])||null;
+    const bookingsArr=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+    const isFirstBk=bookingsArr[0]&&bookingsArr[0].bookingNo===targetBk;
     if(bkData){
       _dmLot.containers=(bkData.containers||[]).filter(function(c){return c.no;});
       _dmLot.pkgUnit=bkData.pkgUnit||r.pkgUnit;
-      _dmLot.bookingNo=targetBk;
-      // tờ khai for this booking
       if(bkData.tkhaiList&&bkData.tkhaiList.length){
         _dmLot.soTkhai=bkData.tkhaiList[0].soTkhai||'';
         _dmLot.maChiCuc=bkData.tkhaiList[0].maChiCuc||'';
         _dmLot.phanLuong=bkData.tkhaiList[0].phanLuong||'';
-      }
+      } else if(!isFirstBk){ _dmLot.soTkhai='';_dmLot.maChiCuc='';_dmLot.phanLuong=''; }
+    } else if(isFirstBk){
+      // Backward-compat: old single-booking lot, first booking uses legacy r.containers
+      _dmLot.containers=(r.containers||[]).filter(function(c){return c.no;});
+    } else {
+      // Targeted booking has no saved containers — show empty, NOT another booking's data
+      _dmLot.containers=[];_dmLot.soTkhai='';_dmLot.maChiCuc='';_dmLot.phanLuong='';
     }
+    _dmLot.bookingNo=targetBk;
     // booking-specific vol/typeCont from bookings array
-    const bkInfo=(r.bookings||[]).find(function(b){return b.bookingNo===targetBk;});
-    if(bkInfo){_dmLot.vol=bkInfo.vol;_dmLot.typeCont=bkInfo.typeCont;}
+    const bkInfo2=bookingsArr.find(function(b){return b.bookingNo===targetBk;});
+    if(bkInfo2){_dmLot.vol=bkInfo2.vol;_dmLot.typeCont=bkInfo2.typeCont;}
   } else if(r.bookingConts&&Object.keys(r.bookingConts).length){
     // No specific target = whole lot: aggregate ALL bookings' containers
     let allC=[];
