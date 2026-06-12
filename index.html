@@ -1042,7 +1042,7 @@ function renderDetailPanel(r,tt){
       // Backward compat: old jobs store containers in r.containers (no bookingConts).
       // For the first/only booking, fall back to r.containers if this booking has no saved conts.
       let conts=bkData.containers||[];
-      if(conts.length===0 && bk===bookings[0] && (r.containers&&r.containers.length)){
+      if(conts.length===0 && bk===bookings[0] && (r.containers&&r.containers.length) && !(r.bookingConts&&Object.keys(r.bookingConts).length)){
         conts=r.containers;
       }
       const bkVol=parseInt(bk.vol)||1;
@@ -6377,9 +6377,9 @@ function getBookingContainers(r,bkNo){
   if(r.bookingConts&&r.bookingConts[bkKey]){
     return (r.bookingConts[bkKey].containers||[]).filter(function(c){return c.no;});
   }
-  // Backward-compat: old single-booking lot, first booking falls back to r.containers
+  // Backward-compat: only TRULY old single-booking lot (no bookingConts) falls back to legacy
   const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
-  if(bookings[0]&&bookings[0].bookingNo===bkNo){
+  if(bookings[0]&&bookings[0].bookingNo===bkNo&&!(r.bookingConts&&Object.keys(r.bookingConts).length)){
     return (r.containers||[]).filter(function(c){return c.no;});
   }
   return [];
@@ -6719,6 +6719,7 @@ function dmPickLot(id,tt,targetBkArg){
   _dmLot={...r,_tt:tt};
   // ── Multi-booking: if a specific booking was targeted, use THAT booking's containers & info ──
   const targetBk=(targetBkArg!==undefined&&targetBkArg!==null)?targetBkArg:(window._dmTargetBooking||'');
+  console.log('[DM] dmPickLot id='+id+' targetBkArg='+JSON.stringify(targetBkArg)+' targetBk='+JSON.stringify(targetBk)+' bookingConts keys='+JSON.stringify(Object.keys(r.bookingConts||{})));
   if(targetBk){
     const bkKey=targetBk.replace(/[^a-zA-Z0-9]/g,'_');
     const bkData=(r.bookingConts&&r.bookingConts[bkKey])||null;
@@ -6732,11 +6733,11 @@ function dmPickLot(id,tt,targetBkArg){
         _dmLot.maChiCuc=bkData.tkhaiList[0].maChiCuc||'';
         _dmLot.phanLuong=bkData.tkhaiList[0].phanLuong||'';
       } else if(!isFirstBk){ _dmLot.soTkhai='';_dmLot.maChiCuc='';_dmLot.phanLuong=''; }
-    } else if(isFirstBk){
-      // Backward-compat: old single-booking lot, first booking uses legacy r.containers
+    } else if(isFirstBk && !(r.bookingConts&&Object.keys(r.bookingConts).length)){
+      // Backward-compat: TRULY old single-booking lot (no bookingConts at all) uses legacy r.containers
       _dmLot.containers=(r.containers||[]).filter(function(c){return c.no;});
     } else {
-      // Targeted booking has no saved containers — show empty, NOT another booking's data
+      // Targeted booking has no saved containers of its own — show empty, NOT legacy/another booking's data
       _dmLot.containers=[];_dmLot.soTkhai='';_dmLot.maChiCuc='';_dmLot.phanLuong='';
     }
     _dmLot.bookingNo=targetBk;
@@ -6777,6 +6778,7 @@ function dmPickLot(id,tt,targetBkArg){
   // Container rows - _dmLot.containers already set to the correct booking (or whole lot) above
   window._dmTargetBooking=null; // reset after use
   const conts=(_dmLot.containers||[]).filter(function(c){return c.no;});
+  console.log('[DM] final booking='+_dmLot.bookingNo+' container count='+conts.length+' nos='+conts.map(function(c){return c.no;}).join(','));
   const tbody=g('dmContBody');
   tbody.innerHTML=conts.map(function(c,i){
     const gw=parseFloat(c.gw)||0;
