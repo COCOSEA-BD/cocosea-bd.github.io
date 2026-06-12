@@ -6549,6 +6549,7 @@ function renderDocMaker(){
     <button class="btn" id="dmBtnCont" onclick="dmExport('CONTRACT')" disabled style="opacity:.4"><i class="ti ti-file-contract"></i> CONTRACT</button>
     <button class="btn" id="dmBtnInvTk" onclick="dmExport('INV_TK')" disabled style="opacity:.4"><i class="ti ti-receipt-2"></i> INV T.KHAI</button>
     <button class="btn" id="dmBtnSI" onclick="dmExport('SI')" disabled style="opacity:.4"><i class="ti ti-send"></i> SI</button>
+    <button class="btn" id="dmBtnSIHede" onclick="dmExportSIHede()" disabled style="opacity:.4;color:var(--green);border-color:var(--green)"><i class="ti ti-file-spreadsheet"></i> SI (HEDE)</button>
     <button class="btn" id="dmBtnMerge" onclick="dmMergePdf()" disabled style="opacity:.4;color:var(--blue);border-color:var(--blue)"><i class="ti ti-files"></i> Gộp PDF</button>
   </div>
   <label style="display:flex;align-items:center;gap:8px;margin-bottom:.75rem;font-size:12px;cursor:pointer;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
@@ -6670,7 +6671,7 @@ function dmPickLot(id,tt){
     const items=window._cargoNames||[];
     gs.innerHTML='<option value="">— Chọn / nhập tay —</option>'+items.map(function(it,i){return '<option value="'+i+'">'+(it.name||it.enName||'')+'</option>';}).join('');
   }
-  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=true;b.style.opacity='.4';}});
+  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=true;b.style.opacity='.4';}});
   // Load previously saved doc data
   if(r.docData)setTimeout(function(){dmLoadSaved(r.docData);},100);
 }
@@ -6770,7 +6771,7 @@ function dmPreview(){
   const d=dmGetData();
   if(!d){toast('Chưa chọn lô hàng','error');return;}
   if(!d.sName){toast('Shipper chưa có tên tiếng Anh — vào Đối tác để nhập','error');return;}
-  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
+  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
   g('dmPreviewBox').innerHTML=
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">'
@@ -7035,6 +7036,116 @@ async function deleteSavedDoc(docId){
 }
 window.deleteSavedDoc=deleteSavedDoc;
 /* ═══ END SAVED DOCUMENTS ═══ */
+
+function dmExportSIHede(){
+  const d=dmGetData();
+  if(!d){toast('Chưa có dữ liệu','error');return;}
+  if(!window.XLSX){toast('Đang tải thư viện XLSX, thử lại sau','error');return;}
+  const conts=(d.conts||[]).filter(function(c){return c.no;});
+  if(conts.length===0){toast('Lô hàng chưa có container nào','error');return;}
+
+  const shipperBlock=(d.sName||'')+'\n'+(d.sAddr||'')+(d.sTel?'\nTel: '+d.sTel:'')+(d.sEmail?'\nEmail: '+d.sEmail:'');
+  const cneeBlock=(d.cnee||'')+'\n'+(d.cneeAddr||'')+(d.cneeUsci?'\nUSCI：'+d.cneeUsci:'')+(d.cneePic?'\nPIC：'+d.cneePic+(d.cneeTel?'  -  TEL : '+d.cneeTel:''):'')+(d.cneeEmail?'\nE-mail:'+d.cneeEmail:'');
+  const bkg=d.bkgNo||d.allBkgNos||'';
+  const vessel=d.vessel||'';
+  const totalNW=conts.reduce(function(s,c){return s+(c.nw||0);},0);
+  const totalGW=conts.reduce(function(s,c){return s+(c.gw||0);},0);
+
+  /* ===== VGM SHEET ===== */
+  const vgm=[];
+  vgm.push([]); // row1 empty
+  vgm.push(['Biểu mẫu']);
+  vgm.push(['(Ban hành kèm theo văn bản số 2428/CHHVN-VTDVHH Ngày 15 tháng 6 năm 2016 của Cục Hành hải Việt Nam)']);
+  vgm.push([]);
+  vgm.push(['XÁC NHẬN KHỐI LƯỢNG TOÀN BỘ CÔNG-TE-NƠ VẬN CHUYỂN QUỐC TẾ']);
+  vgm.push(['VERIFIIED GROSS MASS OF CONTAINER ON INTERNATIONAL TRANSPORT (VGM)']);
+  vgm.push([]);
+  vgm.push(['1. Tên người gửi hàng, địa chỉ, số điện thoại/Name of shipper, address, phone number….']);
+  vgm.push([shipperBlock]);
+  vgm.push(["2. Thông số công -te-nơ/Container's particular:"]);
+  vgm.push([]);
+  vgm.push(['STT/ Seq.','Số Booking\nBooking No','Số công-te-nơ\nContainer No.','Số chì\nSeal No.',"Kích cỡ công-te-nơ\nSize of container (20'/40'/other)",'Khối lượng sử \ndụng lớn nhất\nMax gross weight (kg)','Xác nhận khối lượng \ntoàn bộ của công-te-nơ\nVerified gross mass of a packed container (kg)','Tên đơn vị, địa chỉ cân\nName of weighing scale, address','Tên tàu/ chuyến\n(Vessel/ Voy.No)']);
+  conts.forEach(function(c,i){
+    vgm.push([i+1, bkg, (c.no||'').toUpperCase(), (c.seal||'').toUpperCase(), c.type||d.r.typeCont||'40HC', 32500, c.gw||0, '', vessel]);
+  });
+  vgm.push([]); // separator after table
+  vgm.push(['Chúng tôi cam kết và chịu trách nhiệm việc xác nhận khối lượng toàn bộ công-te-nơ nói trên là đúng sự thật.']);
+  vgm.push(['We are committed to and responsible for the VGM of the container above is true.']);
+  vgm.push([]);
+  vgm.push(['','','ĐƠN VỊ CÂN','','','','','NGƯỜI GỬI HÀNG']);
+  vgm.push(['','','WEIGHINGS SCALE','','','','','SHIPPER']);
+  vgm.push(['','','(ký, ghi rõ họ tên)','','','','','(ký, ghi rõ họ tên, đóng dấu)']);
+  vgm.push(['','','(SIGNED, FULL NAME)','','','','','(SIGNED, FULL NAME, STAMPED)']);
+  const wsVGM=XLSX.utils.aoa_to_sheet(vgm);
+  wsVGM['!cols']=[{wch:6.3},{wch:26.4},{wch:17.7},{wch:15.9},{wch:22.3},{wch:21.7},{wch:29.7},{wch:34.3},{wch:23.9}];
+  const tEnd=12+conts.length; // last table row index (1-based) for merges
+  wsVGM['!merges']=[
+    {s:{r:1,c:0},e:{r:1,c:8}}, // A2:I2
+    {s:{r:2,c:0},e:{r:2,c:8}}, // A3:I3
+    {s:{r:4,c:0},e:{r:4,c:8}}, // A5:I5
+    {s:{r:5,c:0},e:{r:5,c:8}}, // A6:I6
+    {s:{r:7,c:0},e:{r:7,c:7}}, // A8:H8
+    {s:{r:8,c:0},e:{r:8,c:7}}  // A9:H9 shipper
+  ];
+
+  /* ===== SI SHEET ===== */
+  const si=[];
+  for(let i=0;i<5;i++)si.push([]); // rows 1-5 empty
+  si.push(['','','BOOKING NO.', bkg]); // row6: C6 label, D6 value
+  si.push(['1. Shipper']); // row7
+  si.push([shipperBlock]); // row8
+  si.push(['2. Consignee']); // row9
+  si.push([cneeBlock]); // row10
+  si.push(['3. Notify party']); // row11
+  si.push(['SAME AS CONSIGNEE']); // row12
+  si.push(['4. Route']); // row13
+  si.push(['Vessel/  Voyage:', vessel]); // row14
+  si.push([]); // row15
+  si.push(['Port of loading:', d.r.pol||'HOCHIMINH CITY, VIETNAM']); // row16
+  si.push([]); // row17
+  si.push(['Port of dischage: ', d.pod||d.r.pod||'']); // row18
+  si.push([]); // row19
+  si.push(['Place of delivery:', d.pod||d.r.pod||'']); // row20
+  si.push([]); // row21
+  si.push(['5. Freight','PREPAID']); // row22
+  si.push([]); // row23
+  si.push(['6. Type of Bill','Surrendered']); // row24
+  si.push([]); // row25
+  si.push(['7. Description of goods and packaging']); // row26
+  si.push([]); // row27
+  si.push(['Shipping Mark','Container','Description of Goods','Qty','Unit','NET (KGS)','GW (KGS)','CBM']); // row28 header
+  // goods rows start row29
+  const goodsDesc=(d.goods||'')+'\nNET WEIGHT : '+totalNW.toLocaleString('en-US',{minimumFractionDigits:2})+' KGS';
+  conts.forEach(function(c,i){
+    const contRef=(c.no||'').toUpperCase()+'/ '+(c.seal||'').toUpperCase()+'/ '+(c.type||d.r.typeCont||'40HC');
+    si.push([ i===0?'N/M':'', contRef, i===0?goodsDesc:'', c.pkg||0, d.unit||'BAGS', (c.nw||((c.gw||0)-70)), c.gw||0, 50 ]);
+  });
+  // TOTAL row
+  const firstRow=29, lastRow=28+conts.length;
+  si.push(['TOTAL','','', {f:'SUM(D'+firstRow+':D'+lastRow+')'}, d.unit||'BAGS', {f:'SUM(F'+firstRow+':F'+lastRow+')'}, {f:'SUM(G'+firstRow+':G'+lastRow+')'}, {f:'SUM(H'+firstRow+':H'+lastRow+')'} ]);
+  const wsSI=XLSX.utils.aoa_to_sheet(si);
+  wsSI['!cols']=[{wch:20.3},{wch:37.1},{wch:29.4},{wch:7.3},{wch:7.7},{wch:11},{wch:10.9},{wch:7.3}];
+  const giEnd=lastRow-1; // 0-based last goods row
+  wsSI['!merges']=[
+    {s:{r:5,c:3},e:{r:5,c:7}}, // D6:H6
+    {s:{r:7,c:0},e:{r:7,c:7}}, // A8:H8 shipper
+    {s:{r:9,c:0},e:{r:9,c:7}}, // A10:H10 cnee
+    {s:{r:11,c:0},e:{r:11,c:7}}, // A12:H12 notify
+    {s:{r:28,c:0},e:{r:giEnd,c:0}}, // A29:A.. shipping mark
+    {s:{r:28,c:2},e:{r:giEnd,c:2}}, // C29:C.. description
+    {s:{r:lastRow,c:0},e:{r:lastRow,c:2}} // A..:C.. TOTAL
+  ];
+
+  /* ===== BUILD WORKBOOK ===== */
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsVGM, 'VGM');
+  XLSX.utils.book_append_sheet(wb, wsSI, 'SI');
+  const fname='SI_VGM_HEDE_'+(bkg.replace(/[^a-zA-Z0-9]/g,'_')||'shipment')+'.xlsx';
+  XLSX.writeFile(wb, fname);
+  toast('Đã xuất '+fname);
+}
+window.dmExportSIHede=dmExportSIHede;
+
 
 function dmExport(type){
   const d=dmGetData();
