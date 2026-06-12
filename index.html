@@ -1466,6 +1466,7 @@ function renderDetailPanel(r,tt){
   // After render, update fp total if on price tab
   if(detailTab==='price') setTimeout(updDetailFpTotal, 50);
   if(detailTab==='costing') setTimeout(updateCostingTotal, 100);
+  if(detailTab==='cont') setTimeout(function(){document.querySelectorAll('[class*="cno_"]').forEach(function(inp){if(inp.value)validateContNo(inp);});}, 80);
 
   // LOCK BANNER: show a read-only notice when lot is locked (no disabling of elements)
   if(r.locked){
@@ -1700,13 +1701,64 @@ function delContRow(btn){
 }
 window.delContRow=delContRow;
 
+
+/* ═══ CONTAINER NUMBER VALIDATION (ISO 6346) ═══ */
+function checkContNoValid(raw){
+  // Returns {valid:bool, reason:str}
+  if(!raw)return {valid:null,reason:''}; // empty = neutral
+  const s=raw.toUpperCase().replace(/[\s-]/g,'');
+  // Format: 4 letters + 6 digits + 1 check digit = 11 chars
+  if(!/^[A-Z]{4}[0-9]{7}$/.test(s)){
+    return {valid:false,reason:'Sai định dạng (cần 4 chữ + 7 số, vd: ABCU1234567)'};
+  }
+  // 4th letter must be U, J, or Z (category identifier)
+  const cat=s[3];
+  if(cat!=='U'&&cat!=='J'&&cat!=='Z'){
+    return {valid:false,reason:'Ký tự thứ 4 phải là U, J hoặc Z'};
+  }
+  // ISO 6346 check digit calculation
+  const letterVals={A:10,B:12,C:13,D:14,E:15,F:16,G:17,H:18,I:19,J:20,K:21,L:23,M:24,N:25,O:26,P:27,Q:28,R:29,S:30,T:31,U:32,V:34,W:35,X:36,Y:37,Z:38};
+  let sum=0;
+  for(let i=0;i<10;i++){
+    const ch=s[i];
+    const val=isNaN(ch)?letterVals[ch]:parseInt(ch);
+    sum+=val*Math.pow(2,i);
+  }
+  let checkCalc=sum%11;
+  if(checkCalc===10)checkCalc=0;
+  const checkActual=parseInt(s[10]);
+  if(checkCalc!==checkActual){
+    return {valid:false,reason:'Sai số kiểm tra (check digit). Đúng phải là: '+checkCalc};
+  }
+  return {valid:true,reason:'Hợp lệ'};
+}
+
+function validateContNo(input){
+  const res=checkContNoValid(input.value);
+  const wrap=input.parentElement;
+  const chk=wrap?wrap.querySelector('.contChk'):null;
+  if(res.valid===null){
+    input.style.borderColor='';
+    if(chk){chk.innerHTML='';chk.title='';}
+  } else if(res.valid){
+    input.style.borderColor='var(--green)';
+    if(chk){chk.innerHTML='<i class="ti ti-circle-check" style="color:var(--green)"></i>';chk.title='Số container hợp lệ';}
+  } else {
+    input.style.borderColor='var(--red)';
+    if(chk){chk.innerHTML='<i class="ti ti-alert-triangle" style="color:var(--red)"></i>';chk.title='⚠ '+res.reason;}
+  }
+}
+window.validateContNo=validateContNo;
+window.checkContNoValid=checkContNoValid;
+/* ═══ END CONTAINER VALIDATION ═══ */
+
 function bkContRowHtml(c2, i, bkNo){
   c2=c2||{};
   const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
   const bl='1px solid var(--border-light)';
   return '<tr>'
     +'<td style="padding:4px;border-bottom:'+bl+';text-align:center;font-size:11px">'+(i+1)+'</td>'
-    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="text" class="cno_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.no||'')+'" placeholder="Cont No" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+';position:relative"><div style="display:flex;align-items:center;gap:3px"><input type="text" class="cno_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.no||'')+'" placeholder="Cont No" oninput="validateContNo(this)" onblur="validateContNo(this)" style="font-size:11.5px;flex:1;min-width:0;box-sizing:border-box"/><span class="contChk" style="font-size:13px;flex-shrink:0;width:14px"></span></div></td>'
     +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="text" class="cseal_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
     +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cpkg_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
     +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cnw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
@@ -6304,9 +6356,23 @@ window.selectAllCombine=selectAllCombine;
 window.updateCombinePreview=updateCombinePreview;
 window.executeCombine=executeCombine;
 
+function getAllLotContainers(r){
+  // Aggregate containers from ALL bookings (bookingConts), fallback to legacy r.containers
+  let conts=[];
+  if(r.bookingConts&&Object.keys(r.bookingConts).length){
+    Object.keys(r.bookingConts).forEach(function(bkKey){
+      const bk=r.bookingConts[bkKey];
+      (bk&&bk.containers||[]).forEach(function(c){if(c.no)conts.push(c);});
+    });
+  }
+  if(conts.length===0)conts=(r.containers||[]).filter(function(c){return c.no;});
+  return conts;
+}
+window.getAllLotContainers=getAllLotContainers;
+
 function showKhaiEport(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
-  const containers=(r.containers||[]).filter(function(c){return c.no;});
+  const containers=getAllLotContainers(r);
   const contLines=containers.map(function(c){
     return (c.no||'—')+' / '+(c.seal||'—')+' / '+(c.gw?c.gw.toLocaleString()+'.00':'—');
   }).join('\n');
@@ -6330,7 +6396,7 @@ function showKhaiEport(){
 
 function showCheckEport(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
-  const containers=(r.containers||[]).filter(function(c){return c.no;});
+  const containers=getAllLotContainers(r);
   const text=containers.map(function(c){return c.no;}).join(', ');
   showEportModal('Check Eport — Danh sách Container', text);
 }
@@ -6590,7 +6656,7 @@ function renderDmSavedList(){
   box.innerHTML='<div style="display:flex;flex-direction:column;gap:5px">'+saved.map(function(r){
     const dd=r.docData||{};
     const dt=dd.savedAt?new Date(dd.savedAt).toLocaleDateString('vi-VN'):'';
-    return '<div onclick="dmPickLot(\''+r._id+'\',\''+r._tt+'\')" style="padding:8px 10px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;font-size:12px;background:var(--bg-primary);display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'var(--bg-primary)\'">'
+    return '<div onclick="window._dmTargetBooking=\'\';dmPickLot(\''+r._id+'\',\''+r._tt+'\')" style="padding:8px 10px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;font-size:12px;background:var(--bg-primary);display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'var(--bg-primary)\'">'
       +'<div><strong style="color:var(--blue)">'+(r.jobNo||'—')+'</strong> <span style="color:var(--text-secondary)">| INV '+(dd.invoiceNo||'—')+'</span>'
       +'<div style="font-size:10.5px;color:var(--text-secondary)">'+(r.shipper||r.supplier||'')+' → '+(dd.pod||r.pod||'')+'</div></div>'
       +'<div style="font-size:10px;color:var(--text-tertiary);white-space:nowrap">'+dt+' <i class="ti ti-chevron-right"></i></div>'
@@ -6609,7 +6675,7 @@ function dmSearchLot(){
   }).slice(0,6);
   if(!matches.length){box.innerHTML='<div style="font-size:11px;color:var(--text-tertiary);padding:6px">Không tìm thấy lô hàng</div>';return;}
   box.innerHTML=matches.map(function(r){
-    return '<div onclick="dmPickLot(\''+r._id+'\',\''+r._tt+'\')" style="padding:7px 10px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:4px;cursor:pointer;font-size:12px;background:var(--bg-primary)" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'var(--bg-primary)\'">'
+    return '<div onclick="window._dmTargetBooking=\'\';dmPickLot(\''+r._id+'\',\''+r._tt+'\')" style="padding:7px 10px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:4px;cursor:pointer;font-size:12px;background:var(--bg-primary)" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'var(--bg-primary)\'">'
       +'<strong style="color:var(--blue)">'+(r.jobNo||'—')+'</strong> | '+(r.bookingNo||'')+' | MBL: '+(r.mblNo||'—')
       +'<div style="font-size:10.5px;color:var(--text-secondary)">'+(r.shipper||r.supplier||'')+' → '+(r.pod||'')+' ('+(r.etd||'')+')</div>'
     +'</div>';
@@ -6619,6 +6685,32 @@ function dmSearchLot(){
 function dmPickLot(id,tt){
   const r=(cache[tt]||[]).find(x=>x._id===id)||{};
   _dmLot={...r,_tt:tt};
+  // ── Multi-booking: if a specific booking was targeted, use THAT booking's containers & info ──
+  const targetBk=window._dmTargetBooking||'';
+  if(targetBk&&r.bookingConts){
+    const bkKey=targetBk.replace(/[^a-zA-Z0-9]/g,'_');
+    const bkData=r.bookingConts[bkKey];
+    if(bkData){
+      _dmLot.containers=(bkData.containers||[]).filter(function(c){return c.no;});
+      _dmLot.pkgUnit=bkData.pkgUnit||r.pkgUnit;
+      _dmLot.bookingNo=targetBk;
+      // tờ khai for this booking
+      if(bkData.tkhaiList&&bkData.tkhaiList.length){
+        _dmLot.soTkhai=bkData.tkhaiList[0].soTkhai||'';
+        _dmLot.maChiCuc=bkData.tkhaiList[0].maChiCuc||'';
+        _dmLot.phanLuong=bkData.tkhaiList[0].phanLuong||'';
+      }
+    }
+    // booking-specific vol/typeCont from bookings array
+    const bkInfo=(r.bookings||[]).find(function(b){return b.bookingNo===targetBk;});
+    if(bkInfo){_dmLot.vol=bkInfo.vol;_dmLot.typeCont=bkInfo.typeCont;}
+  } else if(r.bookingConts&&Object.keys(r.bookingConts).length){
+    // No specific target = whole lot: aggregate ALL bookings' containers
+    let allC=[];
+    Object.keys(r.bookingConts).forEach(function(k){(r.bookingConts[k].containers||[]).forEach(function(c){if(c.no)allC.push(c);});});
+    if(allC.length)_dmLot.containers=allC;
+  }
+  _dmLot._targetBooking=targetBk;
   g('dmSearch').value=(r.jobNo||r.mblNo||'');
   g('dmSearchResults').innerHTML='<div style="padding:6px 10px;background:rgba(15,110,86,.08);border:1px solid var(--green);border-radius:8px;font-size:11.5px;color:var(--green);font-weight:600"><i class="ti ti-check"></i> '+(r.jobNo||'')+' — '+(r.shipper||r.supplier||'')+'</div>';
 
@@ -6643,19 +6735,9 @@ function dmPickLot(id,tt){
   else if(cnees.length===1){g('dm_cnee').value='0';dmOnCneeChange();}
   else g('dm_cneeInfo').innerHTML='';
 
-  // Container rows - use specific booking if _dmTargetBooking set, else combine all
-  let allBkConts=[];
-  if(r.bookingConts&&Object.keys(r.bookingConts).length){
-    const targetBk=window._dmTargetBooking;
-    if(targetBk){
-      const bkKey=targetBk.replace(/[^a-zA-Z0-9]/g,'_');
-      allBkConts=(r.bookingConts[bkKey]&&r.bookingConts[bkKey].containers)||[];
-    } else {
-      Object.values(r.bookingConts).forEach(function(bk){(bk.containers||[]).forEach(function(c2){if(c2.no)allBkConts.push(c2);});});
-    }
-  }
+  // Container rows - _dmLot.containers already set to the correct booking (or whole lot) above
   window._dmTargetBooking=null; // reset after use
-  const conts=(allBkConts.length?allBkConts:(r.containers||[])).filter(function(c){return c.no;});
+  const conts=(_dmLot.containers||[]).filter(function(c){return c.no;});
   const tbody=g('dmContBody');
   tbody.innerHTML=conts.map(function(c,i){
     const gw=parseFloat(c.gw)||0;
