@@ -81,6 +81,13 @@ if(!window.ExcelJS){
   se.onload=function(){console.log('ExcelJS loaded');};
   document.head.appendChild(se);
 }
+// Load pdf-lib for merging real PDF files
+if(!window.PDFLib){
+  var sp=document.createElement('script');
+  sp.src='https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+  sp.onload=function(){console.log('pdf-lib loaded');};
+  document.head.appendChild(sp);
+}
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
@@ -1428,8 +1435,8 @@ function renderDetailPanel(r,tt){
     if(savedDocs.length===0){
       docRows='<div style="text-align:center;padding:40px 20px;color:var(--text-secondary)"><i class="ti ti-folder-open" style="font-size:32px;opacity:.4"></i><div style="margin-top:8px;font-size:13px">Chưa có chứng từ nào được lưu cho lô hàng này</div><div style="font-size:11px;margin-top:4px">Vào Document Maker → tạo chứng từ → bấm "Lưu vào lô hàng"</div></div>';
     } else {
-      const DOC_TYPE_LABEL={si:'Shipping Instruction',pkl:'Packing List',contract:'Sales Contract',invoice:'Commercial Invoice',merged:'Bộ chứng từ (gộp)'};
-      const DOC_TYPE_ICON={si:'ti-file-text',pkl:'ti-list-details',contract:'ti-file-certificate',invoice:'ti-file-invoice',merged:'ti-files'};
+      const DOC_TYPE_LABEL={si:'Shipping Instruction',pkl:'Packing List',contract:'Sales Contract',invoice:'Commercial Invoice',merged:'Bộ chứng từ (gộp)',tokhai:'Tờ khai Hải Quan',bol:'Bill of Lading',phyto:'Phyto',fumi:'Fumi',other:'Chứng từ khác'};
+      const DOC_TYPE_ICON={si:'ti-file-text',pkl:'ti-list-details',contract:'ti-file-certificate',invoice:'ti-file-invoice',merged:'ti-files',tokhai:'ti-file-description',bol:'ti-ship',phyto:'ti-plant',fumi:'ti-spray',other:'ti-file'};
       docRows='<div style="display:flex;flex-direction:column;gap:8px">';
       savedDocs.slice().reverse().forEach(function(doc){
         const dt=new Date(doc.createdAt||Date.now());
@@ -1437,11 +1444,15 @@ function renderDetailPanel(r,tt){
         docRows+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px">';
         docRows+='<i class="ti '+(DOC_TYPE_ICON[doc.type]||'ti-file')+'" style="font-size:22px;color:var(--blue)"></i>';
         docRows+='<div style="flex:1;min-width:0">';
-        docRows+='<div style="font-size:13px;font-weight:600">'+(DOC_TYPE_LABEL[doc.type]||doc.type||'Chứng từ')+(doc.name?' — '+doc.name:'')+'</div>';
+        docRows+='<div style="font-size:13px;font-weight:600">'+(doc.isUpload?((doc.typeLabel||DOC_TYPE_LABEL[doc.type]||'Chứng từ')+(doc.docNo?' - '+doc.docNo:'')+' <span style="font-size:9px;color:var(--blue);border:1px solid var(--blue);border-radius:4px;padding:0 4px">UPLOAD</span>'):((DOC_TYPE_LABEL[doc.type]||doc.type||'Chứng từ')+(doc.name?' — '+doc.name:'')))+'</div>';
         docRows+='<div style="font-size:11px;color:var(--text-secondary)">'+dtStr+(doc.createdBy?' · '+doc.createdBy:'')+'</div>';
         docRows+='</div>';
-        docRows+='<button class="btn sm" onclick="viewSavedDoc(\''+doc.id+'\')"><i class="ti ti-eye"></i> Xem</button>';
-        docRows+='<button class="btn sm" onclick="printSavedDoc(\''+doc.id+'\')"><i class="ti ti-printer"></i> In</button>';
+        if(doc.isUpload){
+          docRows+='<button class="btn sm" onclick="viewUploadedDoc(\''+doc.id+'\')"><i class="ti ti-download"></i> Tải file</button>';
+        } else {
+          docRows+='<button class="btn sm" onclick="viewSavedDoc(\''+doc.id+'\')"><i class="ti ti-eye"></i> Xem</button>';
+          docRows+='<button class="btn sm" onclick="printSavedDoc(\''+doc.id+'\')"><i class="ti ti-printer"></i> In</button>';
+        }
         docRows+='<button class="rac red" onclick="deleteSavedDoc(\''+doc.id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>';
         docRows+='</div>';
       });
@@ -1449,7 +1460,11 @@ function renderDetailPanel(r,tt){
     }
     bodyHtml='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
       +'<div style="font-size:13px;font-weight:600;color:var(--text-primary)"><i class="ti ti-folder"></i> Chứng từ đã lưu của lô hàng</div>'
-      +'<button class="btn pri" onclick="openDocMakerTab(detailId,detailTt)"><i class="ti ti-plus"></i> Tạo chứng từ mới</button>'
+      +'<div style="display:flex;gap:8px">'
+        +'<button class="btn" onclick="openUploadDocModal()"><i class="ti ti-upload"></i> Upload chứng từ</button>'
+        +'<button class="btn" onclick="openMergeDocModal()"><i class="ti ti-files"></i> Gộp PDF</button>'
+        +'<button class="btn pri" onclick="openDocMakerTab(detailId,detailTt)"><i class="ti ti-plus"></i> Tạo chứng từ mới</button>'
+      +'</div>'
       +'</div>'+docRows;
   }
 
@@ -7213,6 +7228,172 @@ async function deleteSavedDoc(docId){
 }
 window.deleteSavedDoc=deleteSavedDoc;
 /* ═══ END SAVED DOCUMENTS ═══ */
+
+/* ═══ UPLOAD & MERGE DOCUMENTS (Document tab) ═══ */
+const DOC_UPLOAD_TYPES=[
+  {v:'tokhai',l:'Tờ khai Hải Quan'},
+  {v:'bol',l:'Bill of Lading'},
+  {v:'phyto',l:'Phyto'},
+  {v:'fumi',l:'Fumi'},
+  {v:'other',l:'Chứng từ khác'}
+];
+function _docTypeLabel(v, customLabel){
+  if(v==='other')return customLabel||'Chứng từ khác';
+  const t=DOC_UPLOAD_TYPES.find(function(x){return x.v===v;});
+  return t?t.l:v;
+}
+
+function openUploadDocModal(){
+  const opts=DOC_UPLOAD_TYPES.map(function(t){return '<option value="'+t.v+'">'+t.l+'</option>';}).join('');
+  g('combineOv').innerHTML='<div class="modal" style="max-width:460px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-upload" style="margin-right:6px"></i>Upload chứng từ</div>'
+    +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">'
+      +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Loại chứng từ</label>'
+        +'<select id="upDocType" onchange="_upDocTypeChange()" style="width:100%;font-size:13px">'+opts+'</select></div>'
+      +'<div id="upDocOtherWrap" style="display:none"><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Ghi rõ loại chứng từ</label>'
+        +'<input type="text" id="upDocOther" placeholder="VD: Giấy chứng nhận xuất xứ" style="width:100%;font-size:13px"/></div>'
+      +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Số chứng từ</label>'
+        +'<input type="text" id="upDocNo" placeholder="Nhập số chứng từ" style="width:100%;font-size:13px"/></div>'
+      +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Chọn file</label>'
+        +'<input type="file" id="upDocFile" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" style="width:100%;font-size:12px"/></div>'
+      +'<div style="font-size:11px;color:var(--text-tertiary)">Dung lượng tối đa ~4MB/file (lưu trong Firestore).</div>'
+    +'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button>'
+      +'<button class="btn pri" onclick="doUploadDoc()"><i class="ti ti-upload"></i> Upload</button>'
+    +'</div></div>';
+  openOv('combineOv');
+}
+window.openUploadDocModal=openUploadDocModal;
+
+function _upDocTypeChange(){
+  const t=g('upDocType')?.value;
+  const wrap=g('upDocOtherWrap');
+  if(wrap)wrap.style.display=(t==='other')?'':'none';
+}
+window._upDocTypeChange=_upDocTypeChange;
+
+async function doUploadDoc(){
+  const r=cache[detailTt].find(x=>x._id===detailId);
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  const type=g('upDocType')?.value||'other';
+  const otherLabel=g('upDocOther')?.value||'';
+  const docNo=g('upDocNo')?.value.trim()||'';
+  const fileEl=g('upDocFile');
+  const file=fileEl&&fileEl.files&&fileEl.files[0];
+  if(type==='other'&&!otherLabel){toast('Vui lòng ghi rõ loại chứng từ','error');return;}
+  if(!file){toast('Vui lòng chọn file','error');return;}
+  if(file.size>4*1024*1024){toast('File quá lớn (>4MB). Vui lòng chọn file nhỏ hơn.','error');return;}
+  setLoading(true,'Đang upload...');
+  try{
+    const fileData=await new Promise(function(res,rej){
+      const fr=new FileReader();
+      fr.onload=function(){res(fr.result);};
+      fr.onerror=function(){rej(new Error('Đọc file thất bại'));};
+      fr.readAsDataURL(file);
+    });
+    const savedDocs=(r.savedDocs||[]).slice();
+    const docId='doc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    savedDocs.push({
+      id:docId, type:type, typeLabel:_docTypeLabel(type,otherLabel),
+      name:_docTypeLabel(type,otherLabel)+(docNo?' - '+docNo:''),
+      docNo:docNo, isUpload:true, fileData:fileData, fileName:file.name, mimeType:file.type||'application/octet-stream',
+      createdAt:Date.now(), createdBy:currentUser.email
+    });
+    await fsSet(detailTt==='xuat'?'lots_xuat':'lots_nhap',detailId,{savedDocs});
+    const arr=cache[detailTt]||[];const ci=arr.findIndex(x=>x._id===detailId);if(ci>=0)arr[ci].savedDocs=savedDocs;
+    closeOv('combineOv');
+    renderDetailPanel(arr[ci]||r,detailTt);
+    toast('Đã upload chứng từ');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.doUploadDoc=doUploadDoc;
+
+// View/download an uploaded file
+function viewUploadedDoc(docId){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const doc=(r.savedDocs||[]).find(function(d){return d.id===docId;});
+  if(!doc||!doc.fileData){toast('Không tìm thấy file','error');return;}
+  const a=document.createElement('a');
+  a.href=doc.fileData; a.download=doc.fileName||(doc.name+'.pdf');
+  a.target='_blank';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+window.viewUploadedDoc=viewUploadedDoc;
+
+/* ── MERGE PDF ── */
+function openMergeDocModal(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const docs=(r.savedDocs||[]);
+  // Only PDF-capable docs: uploaded PDFs + generated HTML docs (can be printed to PDF, but for real merge we need PDFs)
+  const pdfDocs=docs.filter(function(d){return d.isUpload&&(d.mimeType==='application/pdf'||(d.fileName||'').toLowerCase().endsWith('.pdf'));});
+  if(pdfDocs.length<2){
+    toast('Cần ít nhất 2 file PDF đã upload để gộp. Hãy upload các chứng từ PDF trước.','error');
+    return;
+  }
+  const rows=pdfDocs.map(function(d){
+    return '<label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer">'
+      +'<input type="checkbox" class="mergeChk" value="'+d.id+'" checked style="width:16px;height:16px"/>'
+      +'<i class="ti ti-file-typ-pdf" style="color:var(--red)"></i>'
+      +'<span style="font-size:12.5px;flex:1">'+(d.typeLabel||d.name)+(d.docNo?' <span style="color:var(--text-secondary)">('+d.docNo+')</span>':'')+'</span>'
+      +'</label>';
+  }).join('');
+  g('combineOv').innerHTML='<div class="modal" style="max-width:460px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-files" style="margin-right:6px"></i>Gộp chứng từ PDF</div>'
+    +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px">'
+      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Chọn các chứng từ PDF cần gộp (theo thứ tự):</div>'
+      +'<div style="display:flex;flex-direction:column;gap:6px">'+rows+'</div>'
+    +'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button>'
+      +'<button class="btn pri" onclick="doMergeDocs()"><i class="ti ti-files"></i> Gộp & Tải về</button>'
+    +'</div></div>';
+  openOv('combineOv');
+}
+window.openMergeDocModal=openMergeDocModal;
+
+async function doMergeDocs(){
+  if(!window.PDFLib){toast('Đang tải thư viện PDF, thử lại sau vài giây','error');return;}
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const chosen=Array.from(document.querySelectorAll('.mergeChk:checked')).map(function(el){return el.value;});
+  if(chosen.length<2){toast('Chọn ít nhất 2 chứng từ để gộp','error');return;}
+  setLoading(true,'Đang gộp PDF...');
+  try{
+    const PDFDocument=window.PDFLib.PDFDocument;
+    const merged=await PDFDocument.create();
+    const docs=(r.savedDocs||[]);
+    for(let i=0;i<chosen.length;i++){
+      const doc=docs.find(function(d){return d.id===chosen[i];});
+      if(!doc||!doc.fileData)continue;
+      // fileData is a data URL: data:application/pdf;base64,XXXX
+      const base64=doc.fileData.split(',')[1];
+      const bytes=Uint8Array.from(atob(base64),function(ch){return ch.charCodeAt(0);});
+      const src=await PDFDocument.load(bytes);
+      const pages=await merged.copyPages(src, src.getPageIndices());
+      pages.forEach(function(p){merged.addPage(p);});
+    }
+    const mergedBytes=await merged.save();
+    // Filename = bill no + cnee name
+    const billNo=r.mblNo||r.bookingNo||'BL';
+    const cneeName=(r.cnee||r.consignee||'').replace(/[^a-zA-Z0-9 ]/g,'').trim().replace(/\s+/g,'_')||'CNEE';
+    const fname=(billNo.replace(/[^a-zA-Z0-9]/g,'_')+'_'+cneeName).slice(0,80)+'.pdf';
+    const blob=new Blob([mergedBytes],{type:'application/pdf'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=fname;
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    closeOv('combineOv');
+    toast('Đã gộp '+chosen.length+' chứng từ → '+fname);
+  }catch(e){toast('Lỗi gộp PDF: '+e.message,'error');}
+  setLoading(false);
+}
+window.doMergeDocs=doMergeDocs;
+/* ═══ END UPLOAD & MERGE ═══ */
+
 
 async function dmExportSIHede(){
   const d=dmGetData();
