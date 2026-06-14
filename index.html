@@ -1072,6 +1072,7 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showKhaiEport(this.dataset.bk)"><i class="ti ti-file-export"></i> Khai Eport</button>';
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showCheckEport(this.dataset.bk)"><i class="ti ti-clipboard-check"></i> Check</button>';
       sectionsHtml+='<label class="btn" style="cursor:pointer"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
+      sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="exportContSealExcel(this.dataset.bk)"><i class="ti ti-table-export"></i> Xuất Excel</button>';
       sectionsHtml+='<button class="btn" style="color:var(--blue);border-color:var(--blue)" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
       sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
       sectionsHtml+='</div></div>';
@@ -2257,7 +2258,7 @@ function openFillPrice(id, tt){
   let rows='';
   allOn.forEach(function(s){
     const sv=svcs[s.key]||{};
-    const curOpts=CURRENCIES.map(function(c){ return '<option'+(c===(sv.cur||'USD')?' selected':'')+'>'+c+'</option>'; }).join('');
+    const curOpts=CURRENCIES.map(function(c){ return '<option'+(c===(sv.cur||'VND')?' selected':'')+'>'+c+'</option>'; }).join('');
     rows+='<div style="display:grid;grid-template-columns:160px 110px 110px 90px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:7px 8px;margin-bottom:4px;border:1px solid var(--border-light)">'
       +'<span style="font-size:12px;font-weight:500">'+s.name+'</span>'
       +'<input type="number" id="fpc_'+s.key+'" value="'+(sv.cost||'')+'" min="0" placeholder="0" oninput="updFpTotal()" style="font-size:12px"/>'
@@ -6510,6 +6511,56 @@ function showEportModal(title, text){
   openOv('eportOv');
 }
 
+
+function exportContSealExcel(bkNo){
+  const XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải thư viện XLSX, thử lại sau','error');return;}
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  // Lấy đúng container của booking tương ứng
+  let conts=[];
+  if(typeof getBookingContainers==='function'&&bkNo){
+    conts=getBookingContainers(r,bkNo);
+  }
+  if(!conts||!conts.length){
+    // fallback: bookingConts theo key
+    const bkKey=(bkNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+    if(r.bookingConts&&r.bookingConts[bkKey]){
+      conts=(r.bookingConts[bkKey].containers||[]).filter(function(x){return x.no;});
+    }
+  }
+  if(!conts||!conts.length){toast('Booking này chưa có dữ liệu cont/seal để xuất','error');return;}
+
+  // Build sheet: header + rows
+  const header=['STT','Số Container','Số Seal','Số kiện (PKG)','N.W (kg)','G.W (kg)','Tare (kg)','Loại cont','Ngày'];
+  const aoa=[header];
+  conts.forEach(function(ct,i){
+    aoa.push([
+      i+1,
+      (ct.no||'').toUpperCase(),
+      ct.seal||'',
+      ct.pkg||'',
+      ct.nw||'',
+      ct.gw||'',
+      ct.tare||'',
+      ct.type||r.typeCont||'',
+      ct.date||''
+    ]);
+  });
+  // Totals row
+  const sum=function(f){return conts.reduce(function(s,x){return s+(parseFloat(x[f])||0);},0);};
+  aoa.push(['','TỔNG','', sum('pkg')||'', sum('nw')||'', sum('gw')||'', sum('tare')||'', '', '']);
+
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=[{wch:5},{wch:18},{wch:16},{wch:13},{wch:11},{wch:11},{wch:10},{wch:12},{wch:12}];
+  const wb=XLSX.utils.book_new();
+  const sheetName=(bkNo||'ContSeal').replace(/[^a-zA-Z0-9]/g,'_').slice(0,28)||'ContSeal';
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+  const fname=('ContSeal_'+(bkNo||r.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_')).slice(0,80)+'.xlsx';
+  XLSX.writeFile(wb, fname);
+  toast('Đã xuất '+conts.length+' container → '+fname);
+}
+window.exportContSealExcel=exportContSealExcel;
 
 function importContFromExcel(input){
   const file=input.files[0]; if(!file)return;
