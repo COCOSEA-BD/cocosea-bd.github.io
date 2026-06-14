@@ -333,9 +333,10 @@ const NCOLS_LIST=[
 // All columns used in the edit form
 const XCOLS=[
   {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'shipper',l:'Shipper',partner:true},
   {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'cnee',l:'Cnee',type:'cnee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
   {k:'_bookingBlock',l:'',type:'bookingBlock'},
-  {k:'shipper',l:'Shipper',partner:true},{k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
+  {k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
@@ -347,9 +348,10 @@ const XCOLS=[
 ];
 const NCOLS=[
   {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'supplier',l:'Nhà cung cấp',partner:true},
   {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'consignee',l:'Consignee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
   {k:'_bookingBlock',l:'',type:'bookingBlock'},
-  {k:'supplier',l:'Nhà cung cấp',partner:true},{k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
+  {k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
@@ -836,16 +838,16 @@ let detailId=null, detailTt=null, detailTab='info';
 let _openTabs=[]; // {key, type:'lot'|'docmaker', id, tt, label, tab}
 let _activeTabKey=null;
 
-function openDetail(id, tt){
+function openDetail(id, tt, startTab){
   const r=cache[tt].find(x=>x._id===id)||{};
   const key='lot_'+id;
   let t=_openTabs.find(x=>x.key===key);
   if(!t){
-    t={key,type:'lot',id,tt,label:(r.jobNo||r.bookingNo||'Lô hàng'),tab:'info'};
+    t={key,type:'lot',id,tt,label:(r.jobNo||r.bookingNo||'Lô hàng'),tab:startTab||'info'};
     _openTabs.push(t);
-  }
+  } else if(startTab){ t.tab=startTab; }
   _activeTabKey=key;
-  detailId=id; detailTt=tt; detailTab=t.tab;
+  detailId=id; detailTt=tt; detailTab=startTab||t.tab;
   renderDpanelTabs();
   renderDetailPanel(r,tt);
   g('detailPanel').classList.add('open');
@@ -1500,11 +1502,15 @@ async function saveInvoiceSettings(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
   SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
-    const vat=g('invvat_'+s.key)?.value||'0%';
-    const inv=g('invinv_'+s.key)?.value||'Yes';
+    // Only update services whose inputs actually exist in the DOM.
+    // (Waived services are filtered out of the table, so g(...) would be null and
+    //  would wrongly reset them to defaults — skip them to preserve saved state.)
+    const vatEl=g('invvat_'+s.key);
+    const invEl=g('invinv_'+s.key);
+    if(!vatEl&&!invEl)return;
+    if(vatEl)svcs[s.key].vat=vatEl.value||'0%';
+    if(invEl)svcs[s.key].invoice=invEl.value||'Yes';
     const customName=g('invname_'+s.key)?.value||'';
-    svcs[s.key].vat=vat;
-    svcs[s.key].invoice=inv;
     if(customName&&customName!==s.name) svcs[s.key].customName=customName;
   });
   setLoading(true,'Đang lưu...');
@@ -3254,7 +3260,7 @@ function runDebtReport(){
       invSvcs.forEach(function(e){const sv=e[1];const cur=sv.cur||'USD';const amt=sv.amount||(sv.price||0)*(sv.qty||1);if(!rowTotal[cur])rowTotal[cur]=0;rowTotal[cur]+=amt;});
       const rowTotalStr=Object.entries(rowTotal).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'—';
       return '<tr>'
-        +'<td style="'+tdS+';font-weight:600">'+r.bookingNo+'</td>'
+        +'<td style="'+tdS+';font-weight:600"><button class="plink" data-id="'+r._id+'" data-tt="'+(r.loai==='Xuất'?'xuat':'nhap')+'" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-align:left" onclick="openDetail(this.dataset.id,this.dataset.tt,&#39;invoice&#39;)">'+r.bookingNo+'</button></td>'
         +'<td style="'+tdS+'"><span class="bdg '+(r.loai==='Xuất'?'bdg-b':'bdg-a')+'">'+r.loai+'</span></td>'
         +'<td style="'+tdS+'">'+(r.etd||'—')+'</td>'
         +'<td style="'+tdS+'">'+(r.mblNo||'—')+'</td>'
@@ -6440,7 +6446,7 @@ function showKhaiEport(bkNo){
     +'------------------------\n'
     +'Booking: '+(bkNo||r.bookingNo||'—')+'\n'
     +'Tên tàu: '+(r.vessel||'—')+(r.voy?' V.'+(r.voy):'')+'\n'
-    +'Hạ cảng: '+(r.pol||'—')+'\n'
+    +'Hạ cảng: '+(r.icd||r.pol||'—')+'\n'
     +'Giờ cắt máng: '+(r.cutoffCY||'—')+'\n'
     +'----\n'
     +'Mst: '+(function(){const sp=cache.partners[r.shipper||r.supplier||''];return sp?sp.mst||'—':'—';})()+'\n'
@@ -7675,6 +7681,15 @@ function exportExcel(tt){
 /* ═══════════════════════════════════════════
    SOA - STATEMENT OF ACCOUNT
 ═══════════════════════════════════════════ */
+function _partyMatchesShipper(svParty, sh, sp){
+  var p=(svParty||'').trim().toLowerCase();
+  if(!p)return true;
+  var cands=[sh, sp&&sp.fullname, sp&&sp.enName, sp&&sp.enShort, sp&&sp.shortname]
+    .filter(Boolean).map(function(x){return String(x).trim().toLowerCase();});
+  return cands.indexOf(p)>=0;
+}
+window._partyMatchesShipper=_partyMatchesShipper;
+
 function exportSOA(){
   var filterShipper=g('cnReportShipper')?.value||'';
   var from=g('cnFrom')?.value||'';
@@ -7705,8 +7720,7 @@ function exportSOA(){
     SVCS.forEach(function(s){
       var sv=svcs[s.key];
       if(!sv||!sv.on||sv.invoice==='Waived')return;
-      var svParty=(sv.party||'').trim();
-      if(svParty&&svParty!==sh3&&svParty!==(sp4.fullname||'')&&svParty!==(sp4.enName||'')&&svParty!==(sp4.enShort||''))return;
+      if(!_partyMatchesShipper(sv.party, sh3, sp4))return;
       var amt=sv.amount||(sv.price||0)*(sv.qty||1);
       var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
       var vatPct=parseFloat((sv.vat||'0%').replace('%',''))||0;
@@ -7923,9 +7937,7 @@ function exportExcelDebt(){
         // If filterShipper is set, only count services assigned to this shipper's party
         // Party is stored in sv.party; match against shipper shortname, fullname, or enName
         if(filterShipper){
-          var svParty=(sv.party||'').trim();
-          var partyMatch=!svParty||(svParty===sh)||(svParty===(sp&&sp.fullname))||(svParty===(sp&&sp.enName))||(svParty===(sp&&sp.enShort));
-          if(!partyMatch)return;
+          if(!_partyMatchesShipper(sv.party, sh, sp))return;
         }
         var amt=sv.amount||(sv.price||0)*(sv.qty||1);
         var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
