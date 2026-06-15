@@ -1495,7 +1495,7 @@ function renderDetailPanel(r,tt){
   // After render, update fp total if on price tab
   if(detailTab==='price') setTimeout(updDetailFpTotal, 50);
   if(detailTab==='costing') setTimeout(updateCostingTotal, 100);
-  if(detailTab==='cont') setTimeout(function(){document.querySelectorAll('[class*="cno_"]').forEach(function(inp){if(inp.value)validateContNo(inp);});}, 80);
+  if(detailTab==='cont') setTimeout(function(){document.querySelectorAll('[class*="cno_"]').forEach(function(inp){if(inp.value)validateContNo(inp);});if(typeof checkDupContSeal==='function')checkDupContSeal();}, 80);
 
   // LOCK BANNER: show a read-only notice when lot is locked (no disabling of elements)
   if(r.locked){
@@ -1610,6 +1610,20 @@ async function saveContSealAll(){
     if(invalid.length){
       toast('⚠ Không thể lưu! '+invalid.length+' số container SAI chuẩn ISO 6346 (ô viền đỏ). Vui lòng kiểm tra và nhập lại: '+invalid.join('; '),'error');
       return;
+    }
+    // ── Chặn lưu nếu có container hoặc seal TRÙNG trong cùng lô ──
+    if(typeof checkDupContSeal==='function'){
+      const dup=checkDupContSeal();
+      const dupConts=[]; dup.contDups.forEach(function(inp){const v=(inp.value||'').trim().toUpperCase();if(v&&dupConts.indexOf(v)<0)dupConts.push(v);});
+      const dupSeals=[]; dup.sealDups.forEach(function(inp){const v=(inp.value||'').trim().toUpperCase();if(v&&dupSeals.indexOf(v)<0)dupSeals.push(v);});
+      if(dupConts.length||dupSeals.length){
+        let msg='⚠ Không thể lưu! Trong lô có dữ liệu TRÙNG (ô viền đỏ): ';
+        if(dupConts.length)msg+='Container trùng: '+dupConts.join(', ')+'. ';
+        if(dupSeals.length)msg+='Seal trùng: '+dupSeals.join(', ')+'. ';
+        msg+='Vui lòng kiểm tra và nhập lại.';
+        toast(msg,'error');
+        return;
+      }
     }
   }
   const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:parseInt(r.vol)||1,typeCont:r.typeCont||'40HC'}];
@@ -1781,6 +1795,59 @@ function checkContNoValid(raw){
   return {valid:true,reason:'Hợp lệ'};
 }
 
+
+/* ═══ CONT/SEAL DUPLICATE DETECTION (trong cùng 1 lô hàng) ═══ */
+function _collectContSealInputs(){
+  const panel=g('detailPanel');
+  if(!panel)return {conts:[],seals:[]};
+  const conts=Array.from(panel.querySelectorAll('[class*="cno_"]'));
+  const seals=Array.from(panel.querySelectorAll('[class*="cseal_"]'));
+  return {conts:conts,seals:seals};
+}
+
+function _findDupGroups(inputs){
+  // Returns a Set of input elements whose (trimmed, uppercased) value duplicates another
+  const byVal={};
+  inputs.forEach(function(inp){
+    const v=(inp.value||'').trim().toUpperCase();
+    if(!v)return;
+    (byVal[v]=byVal[v]||[]).push(inp);
+  });
+  const dups=new Set();
+  Object.keys(byVal).forEach(function(v){
+    if(byVal[v].length>1)byVal[v].forEach(function(inp){dups.add(inp);});
+  });
+  return dups;
+}
+
+function checkDupContSeal(){
+  // Highlight duplicate conts & seals across the WHOLE lot (all bookings). Returns {contDups, sealDups}
+  const {conts,seals}=_collectContSealInputs();
+  const contDups=_findDupGroups(conts);
+  const sealDups=_findDupGroups(seals);
+  conts.forEach(function(inp){
+    if(contDups.has(inp)){inp.style.background='rgba(239,68,68,.12)';inp.style.borderColor='var(--red)';inp.title='⚠ Số container bị trùng trong lô';}
+    else if(inp.title&&inp.title.indexOf('trùng')>=0){inp.style.background='';inp.title='';}
+  });
+  seals.forEach(function(inp){
+    if(sealDups.has(inp)){inp.style.background='rgba(239,68,68,.12)';inp.style.borderColor='var(--red)';inp.title='⚠ Số seal bị trùng trong lô';}
+    else{inp.style.background='';inp.style.borderColor='';if(inp.title&&inp.title.indexOf('trùng')>=0)inp.title='';}
+  });
+  return {contDups:contDups, sealDups:sealDups};
+}
+window.checkDupContSeal=checkDupContSeal;
+
+function checkDupContSealBlur(input, kind){
+  const res=checkDupContSeal();
+  const set=(kind==='seal')?res.sealDups:res.contDups;
+  if(input&&set.has(input)){
+    const label=(kind==='seal')?'Số seal':'Số container';
+    toast('⚠ '+label+' "'+(input.value||'').trim().toUpperCase()+'" bị TRÙNG trong lô hàng. Vui lòng kiểm tra và nhập lại!','error');
+  }
+}
+window.checkDupContSealBlur=checkDupContSealBlur;
+/* ═══ END DUPLICATE DETECTION ═══ */
+
 function validateContNo(input){
   const res=checkContNoValid(input.value);
   const wrap=input.parentElement;
@@ -1818,8 +1885,8 @@ function bkContRowHtml(c2, i, bkNo){
   const bl='1px solid var(--border-light)';
   return '<tr>'
     +'<td style="padding:4px;border-bottom:'+bl+';text-align:center;font-size:11px">'+(i+1)+'</td>'
-    +'<td style="padding:3px 5px;border-bottom:'+bl+';position:relative"><div style="display:flex;align-items:center;gap:3px"><input type="text" class="cno_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.no||'')+'" placeholder="Cont No" oninput="validateContNo(this)" onblur="validateContNoBlur(this)" style="font-size:11.5px;flex:1;min-width:0;box-sizing:border-box"/><span class="contChk" style="font-size:13px;flex-shrink:0;width:14px"></span></div></td>'
-    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="text" class="cseal_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+';position:relative"><div style="display:flex;align-items:center;gap:3px"><input type="text" class="cno_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.no||'')+'" placeholder="Cont No" oninput="validateContNo(this);checkDupContSeal()" onblur="validateContNoBlur(this);checkDupContSealBlur(this,&#39;cont&#39;)" style="font-size:11.5px;flex:1;min-width:0;box-sizing:border-box"/><span class="contChk" style="font-size:13px;flex-shrink:0;width:14px"></span></div></td>'
+    +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="text" class="cseal_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.seal||'')+'" placeholder="Seal" oninput="checkDupContSeal()" onblur="checkDupContSealBlur(this,&#39;seal&#39;)" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
     +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cpkg_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
     +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cnw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
     +'<td style="padding:3px 5px;border-bottom:'+bl+'"><input type="number" class="cgw_'+bkKey+'" data-bk="'+bkNo+'" data-i="'+i+'" value="'+(c2.gw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
@@ -7521,7 +7588,7 @@ function renderVesselTool(){
       <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-tertiary);font-size:14px"></i>
       <input type="text" id="vesselSearch" value="${(window._vesselSearch||'').replace(/"/g,'&quot;')}" placeholder="Tìm Vessel, Voy, POL, POD, Carrier..." oninput="window._vesselSearch=this.value;renderVesselTool();setTimeout(function(){const el=g('vesselSearch');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},0)" style="font-size:12.5px;padding:8px 10px 8px 32px;width:100%;box-sizing:border-box"/>
     </div>
-    <button class="btn pri" onclick="openVesselEditor()"><i class="ti ti-plus"></i> Thêm tàu</button>
+    <div style="display:flex;gap:8px"><button class="btn" onclick="scanVesselsFromLots()"><i class="ti ti-radar"></i> Quét từ dữ liệu</button><button class="btn pri" onclick="openVesselEditor()"><i class="ti ti-plus"></i> Thêm tàu</button></div>
   </div>
   <div class="table-card" style="padding:0;overflow:auto">
     <table style="width:100%;border-collapse:collapse">
@@ -7811,6 +7878,106 @@ function onVesselPick(){
   }
 }
 window.onVesselPick=onVesselPick;
+
+
+/* ── Quét tên tàu từ dữ liệu lô hàng hiện có & tổng hợp ── */
+function _scanAggregateVessels(){
+  // Group lots by vessel (+voy). Aggregate carriers, pol/etd, pods+eta.
+  const all=[].concat(cache.xuat||[], cache.nhap||[]);
+  const map={}; // key = vessel|voy (lowercase)
+  all.forEach(function(r){
+    const vessel=(r.vessel||'').trim();
+    if(!vessel)return;
+    const voy=(r.voy||'').trim();
+    const key=(vessel+'|'+voy).toLowerCase();
+    if(!map[key]){map[key]={vessel:vessel, voy:voy, carriers:[], pol:'', etd:'', pods:[], _lotCount:0};}
+    const e=map[key];
+    e._lotCount++;
+    // carrier
+    const car=(r.carrier||'').trim();
+    if(car&&e.carriers.indexOf(car)<0)e.carriers.push(car);
+    // pol/etd (take first non-empty)
+    if(!e.pol&&r.pol)e.pol=(r.pol||'').trim();
+    if(!e.etd&&r.etd)e.etd=r.etd;
+    // pod + eta
+    const pod=(r.pod||'').trim();
+    if(pod){
+      const ex=e.pods.find(function(p){return p.pod.toLowerCase()===pod.toLowerCase();});
+      if(ex){ if(!ex.eta&&r.eta)ex.eta=r.eta; }
+      else e.pods.push({pod:pod, eta:r.eta||''});
+    }
+  });
+  return Object.keys(map).map(function(k){return map[k];}).sort(function(a,b){return b._lotCount-a._lotCount;});
+}
+
+function scanVesselsFromLots(){
+  const found=_scanAggregateVessels();
+  if(!found.length){toast('Không tìm thấy tên tàu nào trong dữ liệu lô hàng','error');return;}
+  // Mark which already exist in cache.vessels (by vessel+voy, case-insensitive)
+  const existKeys={};
+  (cache.vessels||[]).forEach(function(v){existKeys[((v.vessel||'')+'|'+(v.voy||'')).toLowerCase()]=true;});
+  window._scanVesselData=found;
+  const rows=found.map(function(e,i){
+    const key=((e.vessel||'')+'|'+(e.voy||'')).toLowerCase();
+    const dup=existKeys[key];
+    const carriers=e.carriers.length?e.carriers.join(', '):'<span style="color:var(--text-tertiary)">— chưa có —</span>';
+    const pods=e.pods.length?e.pods.map(function(p){return p.pod+(p.eta?' ('+_vesFmtDate(p.eta)+')':'');}).join(', '):'—';
+    return '<tr style="'+(dup?'opacity:.5':'')+'">'
+      +'<td style="padding:6px;text-align:center"><input type="checkbox" class="scanChk" data-i="'+i+'" '+(dup?'disabled':'checked')+'/></td>'
+      +'<td style="padding:6px;font-size:12px;font-weight:600">'+e.vessel+(dup?' <span style="font-size:9px;color:var(--orange)">(đã có)</span>':'')+'</td>'
+      +'<td style="padding:6px;font-size:12px">'+(e.voy||'—')+'</td>'
+      +'<td style="padding:6px;font-size:11.5px">'+carriers+'</td>'
+      +'<td style="padding:6px;font-size:11.5px"><b>'+(e.pol||'—')+'</b>'+(e.etd?' '+_vesFmtDate(e.etd):'')+'</td>'
+      +'<td style="padding:6px;font-size:11.5px">'+pods+'</td>'
+      +'<td style="padding:6px;font-size:11px;text-align:center;color:var(--text-secondary)">'+e._lotCount+'</td>'
+      +'</tr>';
+  }).join('');
+  const newCount=found.filter(function(e){return !existKeys[((e.vessel||'')+'|'+(e.voy||'')).toLowerCase()];}).length;
+  g('combineOv').innerHTML='<div class="modal" style="max-width:760px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-radar" style="margin-right:6px"></i>Quét tàu từ dữ liệu lô hàng</div>'
+    +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px;max-height:62vh;overflow:auto">'
+      +'<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Tìm thấy <b>'+found.length+'</b> tàu trong dữ liệu ('+newCount+' tàu mới chưa có trong Vessel tool). Tick chọn tàu muốn thêm:</div>'
+      +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
+        +'<th style="padding:6px;font-size:10px"><input type="checkbox" id="scanAll" checked onchange="_scanToggleAll(this.checked)"/></th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Vessel</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Voy</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Carrier</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">POL/ETD</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">POD/ETA</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary)">Số lô</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>'
+    +'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button>'
+      +'<button class="btn pri" onclick="doImportScannedVessels()"><i class="ti ti-download"></i> Thêm tàu đã chọn</button>'
+    +'</div></div>';
+  openOv('combineOv');
+}
+window.scanVesselsFromLots=scanVesselsFromLots;
+function _scanToggleAll(on){document.querySelectorAll('.scanChk:not(:disabled)').forEach(function(x){x.checked=on;});}
+window._scanToggleAll=_scanToggleAll;
+
+async function doImportScannedVessels(){
+  const data=window._scanVesselData||[];
+  const chosen=Array.from(document.querySelectorAll('.scanChk:checked')).map(function(el){return data[parseInt(el.dataset.i)];}).filter(Boolean);
+  if(!chosen.length){toast('Chưa chọn tàu nào','error');return;}
+  setLoading(true,'Đang thêm '+chosen.length+' tàu...');
+  try{
+    for(let i=0;i<chosen.length;i++){
+      const e=chosen[i];
+      const newId='ves_'+Date.now()+'_'+Math.random().toString(36).slice(2,6)+'_'+i;
+      await fsSet('vessels',newId,{
+        vessel:e.vessel, voy:e.voy, carriers:e.carriers, pol:e.pol, etd:e.etd||'',
+        pods:e.pods, createdAt:Date.now(), createdBy:currentUser.email, _fromScan:true
+      });
+    }
+    setLoading(false);
+    closeOv('combineOv');
+    toast('Đã thêm '+chosen.length+' tàu từ dữ liệu');
+  }catch(err){setLoading(false);toast('Lỗi: '+err.message,'error');}
+}
+window.doImportScannedVessels=doImportScannedVessels;
 
 /* ═══ END VESSEL TOOL ═══ */
 
