@@ -339,9 +339,9 @@ const NCOLS_LIST=[
 ];
 // All columns used in the edit form
 const XCOLS=[
-  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'loaiHang',l:'Type Shipment',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service'],compact:true},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
   {k:'shipper',l:'Shipper',partner:true},
-  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'cnee',l:'Cnee',type:'cnee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'tenHang',l:'Tên hàng',compact:true},{k:'cnee',l:'Cnee',type:'cnee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
   {k:'_bookingBlock',l:'',type:'bookingBlock'},
   {k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
@@ -354,9 +354,9 @@ const XCOLS=[
   {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
 ];
 const NCOLS=[
-  {k:'loaiHang',l:'Loại lô hàng',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service']},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'loaiHang',l:'Type Shipment',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service'],compact:true},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
   {k:'supplier',l:'Nhà cung cấp',partner:true},
-  {k:'_rowStart',l:'',type:'rowStart'},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'tenHang',l:'Tên hàng',compact:true},{k:'consignee',l:'Consignee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
+  {k:'_rowStart',l:'',type:'rowStart'},{k:'tenHang',l:'Tên hàng',compact:true},{k:'consignee',l:'Consignee',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
   {k:'_bookingBlock',l:'',type:'bookingBlock'},
   {k:'carrier',l:'Carrier',partner:true},{k:'fwd',l:'FWD',partner:true},
   {k:'vessel',l:'Vessel'},{k:'voy',l:'Voy'},
@@ -581,11 +581,11 @@ async function fsDel(colPath, docId){
 }
 
 function fmtDMY(s){
-  // Format any date string/Date to dd/mm/yy. Returns '' for empty, raw for invalid.
+  // Format any date string/Date to dd-Mon-yyyy (16-Jun-2026). Returns '' for empty, raw for invalid.
   if(!s)return '';
   const d=new Date(s);
   if(isNaN(d))return s;
-  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'});
+  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).replace(/ /g,'-');
 }
 window.fmtDMY=fmtDMY;
 
@@ -2101,7 +2101,12 @@ function openLot(id, tt){
   g('lotFields').innerHTML=cols.map(c=>{
     const val=r[c.k]||'';
     const full=(c.k==='tenHang'||c.k==='shipper'||c.k==='supplier'||c.k==='pol'||c.k==='pod')?' full':'';
-    if(c.type==='select') return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+    if(c.type==='select'){
+      if(c.compact){
+        return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><select id="f_${c.k}" style="font-size:12px">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+      }
+      return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+    }
     if(c.type==='cutoffField'){
       const etdVal=r['etd']||'';
       const defaultVal=r[c.k]||calcDefaultCutoff(etdVal,-2,'11:00');
@@ -6694,8 +6699,16 @@ function exportContSealExcel(bkNo){
   if(!conts||!conts.length){toast('Booking này chưa có dữ liệu cont/seal để xuất','error');return;}
 
   // Build sheet: header + rows
-  const header=['STT','Số Container','Số Seal','Số kiện (PKG)','N.W (kg)','G.W (kg)','Tare (kg)','Loại cont','Ngày'];
+  // Headers khớp CHÍNH XÁC với từ khóa nhận diện khi nhập lại (import) để không sai cột
+  const header=['STT','Container No','Seal No','Package','Net Weight','Gross Weight','Tare Weight','Size Type','Stuff Date'];
   const aoa=[header];
+  // Xuất ngày dạng yyyy-mm-dd (chuẩn, import luôn đọc đúng cột Stuff Date)
+  const toISO=function(v){
+    if(!v)return '';
+    if(/^\d{4}-\d{2}-\d{2}/.test(v))return (v+'').slice(0,10);
+    var d=new Date(v); if(isNaN(d))return v;
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  };
   conts.forEach(function(ct,i){
     aoa.push([
       i+1,
@@ -6706,7 +6719,7 @@ function exportContSealExcel(bkNo){
       ct.gw||'',
       ct.tare||'',
       ct.type||r.typeCont||'',
-      ct.date||''
+      toISO(ct.date||'')
     ]);
   });
   // Totals row
@@ -6793,6 +6806,15 @@ function importContFromExcel(input){
         if(m){var y=m[3].length===2?'20'+m[3]:m[3];return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');}
         // yyyy-mm-dd already
         if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+        // dd-Mon-yyyy (16-Jun-2026) or dd Mon yyyy
+        var mn=s.match(/^(\d{1,2})[\-\s]([A-Za-z]{3,})[\-\s](\d{2,4})$/);
+        if(mn){
+          var months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+          var mo=months[mn[2].slice(0,3).toLowerCase()];
+          if(mo){var yy=mn[3].length===2?'20'+mn[3]:mn[3];return yy+'-'+String(mo).padStart(2,'0')+'-'+mn[1].padStart(2,'0');}
+        }
+        // last resort: let Date try
+        var dd=new Date(s); if(!isNaN(dd))return dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
         return '';
       };
 
@@ -7154,7 +7176,7 @@ function dmGetData(){
   const amount=parseFloat(g('dm_amount')?.value)||Math.round(qty*unitPrice*100)/100;
   const freight=parseFloat(g('dm_freight')?.value)||0;
   const freightTotal=Math.round(freight*conts.length*100)/100;
-  function fmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'});}
+  function fmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).replace(/ /g,'-');}
   return {r,sp,conts,totalPkg,totalNW,totalGW,qty,unitPrice,amount,freight,freightTotal,
     contractNo:g('dm_cno')?.value||'',invoiceNo:g('dm_ino')?.value||'',
     date:fmtDate(g('dm_date')?.value),dateRaw:g('dm_date')?.value||'',
@@ -7263,7 +7285,7 @@ function _dmPKL2(d){
   const n=d.conts.length;
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2});};
   const rows=d.conts.map(function(c,i){
-    const dt=c.date?new Date(c.date).toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'}):'';
+    const dt=c.date?new Date(c.date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).replace(/ /g,'-'):'';
     const descCell=(i===0)?'<td class="c b" rowspan="'+n+'" style="vertical-align:middle">'+d.goods+'</td>':'';
     return '<tr>'+descCell
       +'<td class="c">'+c.no+'</td>'
@@ -7619,7 +7641,7 @@ let _vesselEditId=null;
 let _vesselDraft=null;
 window._vesselSearch=window._vesselSearch||'';
 
-function _vesFmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'});}
+function _vesFmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).replace(/ /g,'-');}
 
 function _carrierList(){
   return Object.values(cache.partners).filter(function(p){return p.type==='carrier';}).map(function(p){return p.shortname;}).sort();
@@ -8076,7 +8098,7 @@ function populateVesselPicker(){
   const curVessel=g('f_vessel')?.value||'';
   let opts='<option value="">— Chọn tàu từ Vessel tool —</option>';
   list.forEach(function(v){
-    const label=(v.vessel||'')+(v.voy?' / '+v.voy:'')+(v.pol?' · '+v.pol:'');
+    const label=(v.vessel||'')+(v.voy?' / '+v.voy:'')+(v.etd?' · ETD '+(typeof fmtDMY==='function'?fmtDMY(v.etd):v.etd):'');
     const sel=(v.vessel===curVessel)?' selected':'';
     opts+='<option value="'+v._id+'"'+sel+'>'+label+'</option>';
   });
