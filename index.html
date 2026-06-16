@@ -580,6 +580,15 @@ async function fsDel(colPath, docId){
   await db.collection(colPath).doc(docId).delete();
 }
 
+function fmtDMY(s){
+  // Format any date string/Date to dd/mm/yy. Returns '' for empty, raw for invalid.
+  if(!s)return '';
+  const d=new Date(s);
+  if(isNaN(d))return s;
+  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'});
+}
+window.fmtDMY=fmtDMY;
+
 function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 
 /* ─────────────────────────────────────────────
@@ -833,11 +842,11 @@ function renderLotTable(tt){
       if(c.k==='etd'){
         const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
         return`<td class="td-etd" style="vertical-align:top">
-          <div style="font-weight:600">${r.etd||'—'}</div>
+          <div style="font-weight:600">${r.etd?fmtDMY(r.etd):'—'}</div>
           ${cy?`<div style="font-size:10px;color:rgba(26,75,140,.65);margin-top:2px;white-space:nowrap"><i class="ti ti-clock" style="font-size:9px"></i> CY ${cy}</div>`:''}
         </td>`;
       }
-      if(c.k==='eta') return`<td style="color:var(--text-secondary)">${r.eta||'—'}</td>`;
+      if(c.k==='eta') return`<td style="color:var(--text-secondary)">${r.eta?fmtDMY(r.eta):'—'}</td>`;
       if(c.type==='cutoff'){
         const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
         const si=r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00');
@@ -7145,7 +7154,7 @@ function dmGetData(){
   const amount=parseFloat(g('dm_amount')?.value)||Math.round(qty*unitPrice*100)/100;
   const freight=parseFloat(g('dm_freight')?.value)||0;
   const freightTotal=Math.round(freight*conts.length*100)/100;
-  function fmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}).replace(/ /g,'-');}
+  function fmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'});}
   return {r,sp,conts,totalPkg,totalNW,totalGW,qty,unitPrice,amount,freight,freightTotal,
     contractNo:g('dm_cno')?.value||'',invoiceNo:g('dm_ino')?.value||'',
     date:fmtDate(g('dm_date')?.value),dateRaw:g('dm_date')?.value||'',
@@ -7254,7 +7263,7 @@ function _dmPKL2(d){
   const n=d.conts.length;
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2});};
   const rows=d.conts.map(function(c,i){
-    const dt=c.date?new Date(c.date).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}).replace(' ','-'):'';
+    const dt=c.date?new Date(c.date).toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'}):'';
     const descCell=(i===0)?'<td class="c b" rowspan="'+n+'" style="vertical-align:middle">'+d.goods+'</td>':'';
     return '<tr>'+descCell
       +'<td class="c">'+c.no+'</td>'
@@ -7610,7 +7619,7 @@ let _vesselEditId=null;
 let _vesselDraft=null;
 window._vesselSearch=window._vesselSearch||'';
 
-function _vesFmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}).replace(/ /g,'-');}
+function _vesFmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit'});}
 
 function _carrierList(){
   return Object.values(cache.partners).filter(function(p){return p.type==='carrier';}).map(function(p){return p.shortname;}).sort();
@@ -7727,6 +7736,7 @@ function openVesselEditor(id){
   const v=id?((cache.vessels||[]).find(function(x){return x._id===id;})||{}):{};
   _vesselDraft={
     vessel:v.vessel||'', voy:v.voy||'', pol:v.pol||'', etd:v.etd||'',
+    polCountry:v.polCountry||(typeof _findCountryForPort==='function'?_findCountryForPort(v.pol):''),
     carriers:(v.carriers||[]).slice(),
     pods:(v.pods&&v.pods.length?v.pods.map(function(p){return {pod:p.pod||'',eta:p.eta||'',country:p.country||(typeof _findCountryForPort==='function'?_findCountryForPort(p.pod):'')};}):[{pod:'',eta:'',country:''}])
   };
@@ -7778,6 +7788,11 @@ function renderVesselEditor(){
   const carrierChecks='<div style="display:flex;flex-wrap:wrap;gap:6px">'+carrierChips+'</div>'+carrierAddSel;
 
   const _countryOptsList=(typeof PORT_COUNTRIES!=='undefined'?PORT_COUNTRIES:[]);
+  // POL country + port options
+  const _polCountryOpts='<option value="">— Quốc gia —</option>'+_countryOptsList.map(function(cn){return '<option'+(cn===d.polCountry?' selected':'')+'>'+cn+'</option>';}).join('');
+  const _polPorts=(d.polCountry&&PORTS_BY_COUNTRY[d.polCountry])?PORTS_BY_COUNTRY[d.polCountry]:(typeof PORTS!=='undefined'?PORTS:[]);
+  let _polPortOpts='<option value="">— Chọn cảng —</option>'+_polPorts.map(function(pt){return '<option'+(pt===d.pol?' selected':'')+'>'+pt+'</option>';}).join('');
+  if(d.pol&&_polPorts.indexOf(d.pol)<0){_polPortOpts+='<option selected>'+d.pol+'</option>';}
   const podRows=d.pods.map(function(p,i){
     const cOpts='<option value="">— Quốc gia —</option>'+_countryOptsList.map(function(cn){return '<option'+(cn===p.country?' selected':'')+'>'+cn+'</option>';}).join('');
     const portsForC=(p.country&&PORTS_BY_COUNTRY[p.country])?PORTS_BY_COUNTRY[p.country]:(typeof PORTS!=='undefined'?PORTS:[]);
@@ -7806,7 +7821,7 @@ function renderVesselEditor(){
         +carrierChecks+'</div>'
       +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">'
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">POL (cảng đi)</label>'
-          +'<input type="text" id="vesPol" value="'+(d.pol||'').replace(/"/g,'&quot;')+'" oninput="_vesselDraft.pol=this.value" placeholder="VD: HOCHIMINH" style="width:100%;font-size:13px"/></div>'
+          +'<div style="display:flex;gap:6px"><select id="vesPolCountry" onchange="_vesselPolCountryChange()" style="width:120px;flex-shrink:0;font-size:12px">'+_polCountryOpts+'</select><select id="vesPol" onchange="_vesselDraft.pol=this.value" style="flex:1;min-width:0;font-size:12px">'+_polPortOpts+'</select></div></div>'
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">ETD</label>'
           +'<input type="date" id="vesEtd" value="'+(d.etd||'')+'" oninput="_vesselDraft.etd=this.value" style="width:100%;font-size:13px"/></div>'
       +'</div>'
@@ -7854,9 +7869,21 @@ function _vesselCaptureBasics(){
   if(g('vesVessel'))_vesselDraft.vessel=g('vesVessel').value;
   if(g('vesVoy'))_vesselDraft.voy=g('vesVoy').value;
   if(g('vesPol'))_vesselDraft.pol=g('vesPol').value;
+  if(g('vesPolCountry'))_vesselDraft.polCountry=g('vesPolCountry').value;
   if(g('vesEtd'))_vesselDraft.etd=g('vesEtd').value;
 }
 window._vesselCaptureBasics=_vesselCaptureBasics;
+
+function _vesselPolCountryChange(){
+  const ctry=g('vesPolCountry'); const portSel=g('vesPol');
+  if(!ctry||!portSel)return;
+  const country=ctry.value;
+  _vesselDraft.polCountry=country;
+  const ports=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:(typeof PORTS!=='undefined'?PORTS:[]);
+  portSel.innerHTML='<option value="">— Chọn cảng —</option>'+ports.map(function(pt){return '<option>'+pt+'</option>';}).join('');
+  _vesselDraft.pol='';
+}
+window._vesselPolCountryChange=_vesselPolCountryChange;
 
 function _vesselSyncPods(){
   const pods=[];
@@ -7925,7 +7952,7 @@ async function saveVessel(){
   setLoading(true,'Đang lưu tàu...');
   try{
     const payload={
-      vessel:d.vessel.trim(), voy:d.voy.trim(), carriers:d.carriers, pol:d.pol.trim(), etd:d.etd||'',
+      vessel:d.vessel.trim(), voy:d.voy.trim(), carriers:d.carriers, pol:(d.pol||'').trim(), polCountry:d.polCountry||'', etd:d.etd||'',
       pods:pods, updatedAt:Date.now(), updatedBy:currentUser.email
     };
     if(_vesselEditId){
