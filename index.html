@@ -442,6 +442,13 @@ auth.onAuthStateChanged(async (user) => {
         currentProfile = {role:'viewer',name:user.displayName||user.email,avatar:(user.email||'??').slice(0,2).toUpperCase(),email:user.email};
       } else {
         console.log('COCOFLOW: Profile found, role=', currentProfile.role, 'docId=', currentProfile._docId);
+        // DENY check: if the account has been disabled, block access
+        if(currentProfile.active===false){
+          setLoading(false);
+          await auth.signOut();
+          alert('Tài khoản của bạn đã bị chặn truy cập. Vui lòng liên hệ quản trị viên.');
+          return;
+        }
       }
     } catch(e) {
       console.error('Profile load error:', e);
@@ -838,6 +845,9 @@ function renderLotTable(tt){
           <div><span style="color:var(--text-tertiary);font-size:9.5px">CY</span> <span style="font-weight:500">${cy||'—'}</span></div>
           <div><span style="color:var(--text-tertiary);font-size:9.5px">SI</span> <span style="font-weight:500">${si||'—'}</span></div>
         </td>`;
+      }
+      if(c.k==='vessel'&&r.vessel){
+        return`<td><button class="plink" onclick="openVesselQuick(this.dataset.v,this.dataset.voy)" data-v="${(r.vessel||'').replace(/"/g,'&quot;')}" data-voy="${(r.voy||'').replace(/"/g,'&quot;')}" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left" title="Mở Vessel tool để cập nhật nhanh">${r.vessel}</button></td>`;
       }
       return`<td>${r[c.k]||'—'}</td>`;
     }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
@@ -2151,6 +2161,8 @@ function openLot(id, tt){
   }).join('');
   openOv('lotOv');
   if(typeof populateVesselPicker==='function')populateVesselPicker();
+  // Ensure cnee dropdown is populated & the saved value re-selected when editing
+  if(id){const _cn=g('f_cnee');if(_cn&&r.cnee){if(typeof refreshCneeOptions==='function')refreshCneeOptions();_cn.value=r.cnee;}}
 }
 
 function toggleTenHangCustom(sel){
@@ -2267,6 +2279,15 @@ async function saveLot(){
       rec[c.k]=el.value;
     }
   });
+  // Cnee/Consignee: read explicitly to be safe (compact-row select)
+  const cneeEl=g('f_cnee')||g('f_consignee');
+  if(cneeEl){
+    const cneeKey=g('f_cnee')?'cnee':'consignee';
+    // Only overwrite with empty if user truly cleared it; if dropdown lost options but lot had a cnee, keep it
+    if(cneeEl.value){ rec[cneeKey]=cneeEl.value; }
+    else if(existing&&existing[cneeKey]&&cneeEl.options&&cneeEl.options.length<=1){ rec[cneeKey]=existing[cneeKey]; }
+    else { rec[cneeKey]=cneeEl.value; }
+  }
   // Save country selections for port cascade
   ['pol','pod'].forEach(pk=>{const el=g('f_'+pk+'Country');if(el)rec[pk+'Country']=el.value;});
   // Save multi-booking data
@@ -3630,7 +3651,7 @@ function renderUsers(){
       +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light)">'
         +'<div style="display:flex;align-items:center;gap:8px">'
           +'<div style="width:32px;height:32px;border-radius:50%;background:var(--bg-secondary);border:1px solid var(--border-light);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">'+(u.avatar||'??')+'</div>'
-          +'<div><div style="font-weight:500;font-size:12.5px">'+(u.name||u.email)+(isSelf?' <span style="font-size:10px;color:var(--green)">(bạn)</span>':'')+'</div>'
+          +'<div><div style="font-weight:500;font-size:12.5px">'+(u.name||u.email)+(isSelf?' <span style="font-size:10px;color:var(--green)">(bạn)</span>':'')+(u.active===false?' <span style="font-size:9px;color:#fff;background:var(--red);border-radius:4px;padding:1px 5px">BỊ CHẶN</span>':'')+'</div>'
           +'<div style="font-size:10.5px;color:var(--text-secondary)">'+(u.email||'')+'</div></div>'
         +'</div>'
       +'</td>'
@@ -3644,6 +3665,10 @@ function renderUsers(){
         +'<div style="display:flex;gap:3px;justify-content:center">'
           +'<button class="rac grn" onclick="openUserEdit('+i+')" title="Sửa thông tin"><i class="ti ti-edit"></i></button>'
           +(!isSelf?'<button class="rac" onclick="saveUserRole('+i+')" title="Lưu vai trò" style="color:#854F0B"><i class="ti ti-device-floppy"></i></button>':'')
+          +(!isSelf?(u.active===false
+              ?'<button class="rac" onclick="setUserActive('+i+',true)" title="Bỏ chặn (cho phép truy cập)" style="color:var(--green)"><i class="ti ti-lock-open"></i></button>'
+              :'<button class="rac" onclick="setUserActive('+i+',false)" title="Chặn truy cập (Deny)" style="color:var(--orange)"><i class="ti ti-ban"></i></button>'):'')
+          +(!isSelf?'<button class="rac red" onclick="deleteUser('+i+')" title="Xóa user"><i class="ti ti-trash"></i></button>':'')
         +'</div>'
       +'</td>'
     +'</tr>';
@@ -3729,6 +3754,37 @@ async function saveUserRole(idx){
   setLoading(false);
 }
 
+
+async function setUserActive(idx, active){
+  const u=cache.users[idx];
+  if(!u){toast('Không tìm thấy user','error');return;}
+  if(u.email===currentUser?.email){toast('Không thể tự chặn chính mình','error');return;}
+  if(!active && !confirm('Chặn truy cập của "'+u.email+'"? Người dùng này sẽ không vào được app.'))return;
+  setLoading(true, active?'Đang bỏ chặn...':'Đang chặn...');
+  try{
+    const docId=u._docId||u.uid||u.email.replace(/\./g,'_');
+    await fsSet('users',docId,{active:active,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast(active?('Đã bỏ chặn '+u.email):('Đã chặn truy cập '+u.email));
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.setUserActive=setUserActive;
+
+async function deleteUser(idx){
+  const u=cache.users[idx];
+  if(!u){toast('Không tìm thấy user','error');return;}
+  if(u.email===currentUser?.email){toast('Không thể tự xóa chính mình','error');return;}
+  if(!confirm('XÓA HOÀN TOÀN user "'+u.email+'"?\n\nHồ sơ user sẽ bị xóa khỏi hệ thống và mất quyền truy cập app ngay lập tức. Thao tác không thể hoàn tác.'))return;
+  setLoading(true,'Đang xóa user...');
+  try{
+    const docId=u._docId||u.uid||u.email.replace(/\./g,'_');
+    await fsDel('users',docId);
+    toast('Đã xóa user '+u.email+'. Lưu ý: tài khoản đăng nhập (Auth) cần xóa thủ công trong Firebase Console nếu muốn xóa hẳn.');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.deleteUser=deleteUser;
+
 function startPermEdit(){
   editingPerms=true;
   renderUsers();
@@ -3789,12 +3845,23 @@ async function saveUser(){
       // Creating new user
       const pass=g('uf_pass')?.value||'';
       if(pass.length<6){toast('Mật khẩu tối thiểu 6 ký tự','error');setLoading(false);return;}
-      // Step 1: Create Firebase Auth account
-      const cred=await auth.createUserWithEmailAndPassword(email, pass);
-      uid=cred.user.uid;
+      // Step 1: Create Firebase Auth account via a SECONDARY app instance,
+      // so the current admin session is NOT replaced by the new user's session.
+      let secApp=null;
+      try{
+        secApp = firebase.apps.find(function(a){return a.name==='userCreator';}) || firebase.initializeApp(firebaseConfig, 'userCreator');
+        const secAuth = secApp.auth();
+        const cred = await secAuth.createUserWithEmailAndPassword(email, pass);
+        uid = cred.user.uid;
+        await secAuth.signOut(); // detach the new user from the secondary app
+      }catch(secErr){
+        setLoading(false);
+        toast('Lỗi tạo tài khoản: '+(secErr&&secErr.message||secErr),'error');
+        return;
+      }
       // Step 2: Save profile to Firestore using UID as document ID (most reliable)
       const docId=uid||email.replace(/\./g,'_');
-      await fsSet('users', docId, {uid,email,name,role,avatar:av,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
+      await fsSet('users', docId, {uid,email,name,role,avatar:av,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
       toast('Đã tạo người dùng: '+email+' ('+ROLES[role].label+')');
     } else {
       // Editing existing user
@@ -7553,12 +7620,27 @@ function renderVesselTool(){
   const pg=g('page-vessel');
   if(!pg)return;
   const q=(window._vesselSearch||'').toLowerCase().trim();
+  const fCarrier=window._vesselFilterCarrier||'';
+  const fPod=window._vesselFilterPod||'';
   let vessels=(cache.vessels||[]).slice();
+  // Build distinct carrier + POD lists from all vessels (for filter dropdowns)
+  const allCarriers=[]; const allPods=[];
+  (cache.vessels||[]).forEach(function(v){
+    (v.carriers||[]).forEach(function(cn){if(cn&&allCarriers.indexOf(cn)<0)allCarriers.push(cn);});
+    (v.pods||[]).forEach(function(p){if(p.pod&&allPods.indexOf(p.pod)<0)allPods.push(p.pod);});
+  });
+  allCarriers.sort(); allPods.sort();
   if(q){
     vessels=vessels.filter(function(v){
       const hay=((v.vessel||'')+' '+(v.voy||'')+' '+(v.pol||'')+' '+((v.pods||[]).map(function(p){return p.pod;}).join(' '))+' '+((v.carriers||[]).join(' '))).toLowerCase();
       return hay.indexOf(q)>=0;
     });
+  }
+  if(fCarrier){
+    vessels=vessels.filter(function(v){return (v.carriers||[]).some(function(cn){return cn===fCarrier;});});
+  }
+  if(fPod){
+    vessels=vessels.filter(function(v){return (v.pods||[]).some(function(p){return p.pod===fPod;});});
   }
   let rows='';
   if(!vessels.length){
@@ -7588,6 +7670,15 @@ function renderVesselTool(){
       <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-tertiary);font-size:14px"></i>
       <input type="text" id="vesselSearch" value="${(window._vesselSearch||'').replace(/"/g,'&quot;')}" placeholder="Tìm Vessel, Voy, POL, POD, Carrier..." oninput="window._vesselSearch=this.value;renderVesselTool();setTimeout(function(){const el=g('vesselSearch');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},0)" style="font-size:12.5px;padding:8px 10px 8px 32px;width:100%;box-sizing:border-box"/>
     </div>
+    <select id="vesselFilterCarrier" onchange="window._vesselFilterCarrier=this.value;renderVesselTool()" style="font-size:12px;padding:7px 8px;max-width:160px">
+      <option value="">— Tất cả Carrier —</option>
+      ${allCarriers.map(function(cn){return '<option value="'+cn+'"'+(cn===fCarrier?' selected':'')+'>'+cn+'</option>';}).join('')}
+    </select>
+    <select id="vesselFilterPod" onchange="window._vesselFilterPod=this.value;renderVesselTool()" style="font-size:12px;padding:7px 8px;max-width:160px">
+      <option value="">— Tất cả POD —</option>
+      ${allPods.map(function(p){return '<option value="'+p+'"'+(p===fPod?' selected':'')+'>'+p+'</option>';}).join('')}
+    </select>
+    ${(fCarrier||fPod)?'<button class="btn" onclick="window._vesselFilterCarrier=\'\';window._vesselFilterPod=\'\';renderVesselTool()" title="Xóa lọc"><i class="ti ti-filter-off"></i></button>':''}
     <div style="display:flex;gap:8px"><button class="btn" onclick="scanVesselsFromLots()"><i class="ti ti-radar"></i> Quét từ dữ liệu</button><button class="btn pri" onclick="openVesselEditor()"><i class="ti ti-plus"></i> Thêm tàu</button></div>
   </div>
   <div class="table-card" style="padding:0;overflow:auto">
@@ -7618,6 +7709,37 @@ function openVesselEditor(id){
   openOv('combineOv');
 }
 window.openVesselEditor=openVesselEditor;
+
+function openVesselQuick(vesselName, voy){
+  // Mở nhanh Vessel tool editor cho tàu tương ứng (từ màn hình chính)
+  vesselName=(vesselName||'').trim();
+  voy=(voy||'').trim();
+  if(!vesselName)return;
+  const vN=vesselName.toLowerCase(), vV=voy.toLowerCase();
+  // Tìm tàu khớp tên (+voy nếu có) trong Vessel tool
+  let match=(cache.vessels||[]).find(function(x){
+    const xn=(x.vessel||'').trim().toLowerCase();
+    const xv=(x.voy||'').trim().toLowerCase();
+    if(xn!==vN)return false;
+    if(vV&&xv)return xv===vV;
+    return true;
+  });
+  if(!match){
+    // Khớp theo tên tàu bất kỳ voy
+    match=(cache.vessels||[]).find(function(x){return (x.vessel||'').trim().toLowerCase()===vN;});
+  }
+  if(match){
+    openVesselEditor(match._id);
+  } else {
+    // Chưa có trong Vessel tool → mở editor mới, điền sẵn tên + voy
+    if(!confirm('Tàu "'+vesselName+'" chưa có trong Vessel tool. Tạo mới?'))return;
+    _vesselEditId=null;
+    _vesselDraft={vessel:vesselName, voy:voy, pol:'', etd:'', carriers:[], pods:[{pod:'',eta:''}]};
+    renderVesselEditor();
+    openOv('combineOv');
+  }
+}
+window.openVesselQuick=openVesselQuick;
 
 function renderVesselEditor(){
   const d=_vesselDraft;
@@ -7656,7 +7778,7 @@ function renderVesselEditor(){
       +'<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
         +'<label style="font-size:12px;font-weight:600;color:var(--text-secondary)">POD (cảng đến) & ETA — có thể nhiều</label>'
         +'<button class="btn sm" onclick="_vesselAddPod()"><i class="ti ti-plus"></i> Thêm POD</button></div>'
-        +'<div id="vesPodList">'+podRows+'</div></div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:4px"><div style="flex:1;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">POD (cảng đến)</div><div style="width:140px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">ETA</div><div style="width:32px"></div></div>'+'<div id="vesPodList">'+podRows+'</div></div>'
     +'</div>'
     +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
       +'<button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button>'
