@@ -7751,8 +7751,8 @@ function renderVesselEditor(){
 
   const podRows=d.pods.map(function(p,i){
     return '<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">'
-      +'<input type="text" class="vesPod" data-i="'+i+'" value="'+(p.pod||'').replace(/"/g,'&quot;')+'" oninput="_vesselSyncPods()" placeholder="POD" style="flex:1;font-size:12.5px"/>'
-      +'<input type="date" class="vesEta" data-i="'+i+'" value="'+(p.eta||'')+'" oninput="_vesselSyncPods()" style="font-size:12.5px"/>'
+      +'<input type="text" class="vesPod" data-i="'+i+'" value="'+(p.pod||'').replace(/"/g,'&quot;')+'" oninput="_vesselSyncPods()" placeholder="POD" style="flex:1;min-width:0;font-size:12.5px;box-sizing:border-box"/>'
+      +'<input type="date" class="vesEta" data-i="'+i+'" value="'+(p.eta||'')+'" oninput="_vesselSyncPods()" style="width:140px;flex-shrink:0;font-size:12.5px;box-sizing:border-box"/>'
       +'<button class="rac red" onclick="_vesselDelPod('+i+')" title="Xóa POD"'+(d.pods.length<=1?' style="visibility:hidden"':'')+'><i class="ti ti-x"></i></button>'
       +'</div>';
   }).join('');
@@ -7981,20 +7981,54 @@ function onCarrierChangeVessel(){
 }
 window.onCarrierChangeVessel=onCarrierChangeVessel;
 
+function _findCountryForPort(port){
+  // Reverse-lookup: which country does this port belong to?
+  if(!port||typeof PORTS_BY_COUNTRY==='undefined')return '';
+  const p=(port||'').trim().toLowerCase();
+  let found='';
+  Object.keys(PORTS_BY_COUNTRY).forEach(function(cn){
+    if(found)return;
+    if((PORTS_BY_COUNTRY[cn]||[]).some(function(x){return (x||'').trim().toLowerCase()===p;}))found=cn;
+  });
+  return found;
+}
+window._findCountryForPort=_findCountryForPort;
+
+// Set a port field (pol/pod) together with its country, refreshing the cascade
+function _setPortWithCountry(portKey, portVal){
+  if(!portVal)return;
+  const countryKey=portKey+'Country';
+  const country=_findCountryForPort(portVal);
+  const countryEl=g('f_'+countryKey);
+  if(country&&countryEl){
+    countryEl.value=country;
+    if(typeof updatePortOptions==='function')updatePortOptions(portKey, countryKey);
+  }
+  const portEl=g('f_'+portKey);
+  if(portEl){
+    // Ensure the option exists even if country wasn't matched
+    const exists=Array.from(portEl.options).some(function(o){return o.value===portVal;});
+    if(!exists){const opt=document.createElement('option');opt.value=portVal;opt.text=portVal;portEl.appendChild(opt);}
+    portEl.value=portVal;
+  }
+}
+window._setPortWithCountry=_setPortWithCountry;
+
 function onVesselPick(){
   const pick=g('f_vesselPick');
   if(!pick||!pick.value)return;
   const v=(cache.vessels||[]).find(function(x){return x._id===pick.value;});
   if(!v)return;
-  // Auto-fill vessel, voy, pol, etd
+  // Auto-fill vessel, voy, etd
   if(g('f_vessel'))g('f_vessel').value=v.vessel||'';
   if(g('f_voy'))g('f_voy').value=v.voy||'';
-  if(g('f_pol')&&v.pol)g('f_pol').value=v.pol;
   if(g('f_etd')&&v.etd){g('f_etd').value=v.etd; if(typeof updateEtdCutoffs==='function')updateEtdCutoffs();}
-  // POD: if vessel has exactly 1 POD, fill it + its ETA. If multiple, fill first and notify.
+  // POL + country
+  if(v.pol)_setPortWithCountry('pol', v.pol);
+  // POD: if vessel has exactly 1 POD, fill it + its ETA + country. If multiple, fill first and notify.
   const pods=v.pods||[];
   if(pods.length){
-    if(g('f_pod')&&!g('f_pod').value)g('f_pod').value=pods[0].pod||'';
+    if(g('f_pod')&&!g('f_pod').value)_setPortWithCountry('pod', pods[0].pod||'');
     if(g('f_eta')&&pods[0].eta)g('f_eta').value=pods[0].eta;
     if(pods.length>1)toast('Tàu có nhiều POD — đã điền POD đầu, chỉnh lại nếu cần','success');
   }
