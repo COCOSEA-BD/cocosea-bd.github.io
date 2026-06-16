@@ -7622,6 +7622,17 @@ function renderVesselTool(){
   const q=(window._vesselSearch||'').toLowerCase().trim();
   const fCarrier=window._vesselFilterCarrier||'';
   const fPod=window._vesselFilterPod||'';
+  // Date filter: default ETD từ (hôm nay - 4 ngày) đến (hôm nay + 20 ngày)
+  if(window._vesselDateFrom===undefined||window._vesselDateTo===undefined){
+    const today=new Date(); today.setHours(0,0,0,0);
+    const from=new Date(today); from.setDate(from.getDate()-4);
+    const to=new Date(today); to.setDate(to.getDate()+20);
+    const iso=function(dt){return dt.toISOString().slice(0,10);};
+    if(window._vesselDateFrom===undefined)window._vesselDateFrom=iso(from);
+    if(window._vesselDateTo===undefined)window._vesselDateTo=iso(to);
+  }
+  const fDateFrom=window._vesselDateFrom||'';
+  const fDateTo=window._vesselDateTo||'';
   let vessels=(cache.vessels||[]).slice();
   // Build distinct carrier + POD lists from all vessels (for filter dropdowns)
   const allCarriers=[]; const allPods=[];
@@ -7641,6 +7652,14 @@ function renderVesselTool(){
   }
   if(fPod){
     vessels=vessels.filter(function(v){return (v.pods||[]).some(function(p){return p.pod===fPod;});});
+  }
+  if(fDateFrom||fDateTo){
+    vessels=vessels.filter(function(v){
+      if(!v.etd)return false; // không có ETD thì ẩn khi đang lọc theo ngày
+      if(fDateFrom&&v.etd<fDateFrom)return false;
+      if(fDateTo&&v.etd>fDateTo)return false;
+      return true;
+    });
   }
   let rows='';
   if(!vessels.length){
@@ -7678,7 +7697,13 @@ function renderVesselTool(){
       <option value="">— Tất cả POD —</option>
       ${allPods.map(function(p){return '<option value="'+p+'"'+(p===fPod?' selected':'')+'>'+p+'</option>';}).join('')}
     </select>
-    ${(fCarrier||fPod)?'<button class="btn" onclick="window._vesselFilterCarrier=\'\';window._vesselFilterPod=\'\';renderVesselTool()" title="Xóa lọc"><i class="ti ti-filter-off"></i></button>':''}
+    <div style="display:flex;align-items:center;gap:4px">
+      <span style="font-size:11px;color:var(--text-secondary)">ETD:</span>
+      <input type="date" id="vesselDateFrom" value="${fDateFrom}" onchange="window._vesselDateFrom=this.value;renderVesselTool()" style="font-size:12px;padding:6px"/>
+      <span style="font-size:11px;color:var(--text-secondary)">→</span>
+      <input type="date" id="vesselDateTo" value="${fDateTo}" onchange="window._vesselDateTo=this.value;renderVesselTool()" style="font-size:12px;padding:6px"/>
+    </div>
+    ${(fCarrier||fPod||fDateFrom||fDateTo)?'<button class="btn" onclick="window._vesselFilterCarrier=\'\';window._vesselFilterPod=\'\';window._vesselDateFrom=\'\';window._vesselDateTo=\'\';renderVesselTool()" title="Xóa tất cả lọc"><i class="ti ti-filter-off"></i></button>':''}
     <div style="display:flex;gap:8px"><button class="btn" onclick="scanVesselsFromLots()"><i class="ti ti-radar"></i> Quét từ dữ liệu</button><button class="btn pri" onclick="openVesselEditor()"><i class="ti ti-plus"></i> Thêm tàu</button></div>
   </div>
   <div class="table-card" style="padding:0;overflow:auto">
@@ -7703,7 +7728,7 @@ function openVesselEditor(id){
   _vesselDraft={
     vessel:v.vessel||'', voy:v.voy||'', pol:v.pol||'', etd:v.etd||'',
     carriers:(v.carriers||[]).slice(),
-    pods:(v.pods&&v.pods.length?v.pods.map(function(p){return {pod:p.pod||'',eta:p.eta||''};}):[{pod:'',eta:''}])
+    pods:(v.pods&&v.pods.length?v.pods.map(function(p){return {pod:p.pod||'',eta:p.eta||'',country:p.country||(typeof _findCountryForPort==='function'?_findCountryForPort(p.pod):'')};}):[{pod:'',eta:'',country:''}])
   };
   renderVesselEditor();
   openOv('combineOv');
@@ -7744,15 +7769,25 @@ window.openVesselQuick=openVesselQuick;
 function renderVesselEditor(){
   const d=_vesselDraft;
   const carriers=_carrierList();
-  const carrierChecks=carriers.length?carriers.map(function(cn){
-    const checked=d.carriers.indexOf(cn)>=0?'checked':'';
-    return '<label style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid var(--border-light);border-radius:6px;cursor:pointer;font-size:12px"><input type="checkbox" class="vesCarrierChk" value="'+cn+'" '+checked+' onchange="_vesselSyncCarriers()"/> '+cn+'</label>';
-  }).join(''):'<span style="font-size:12px;color:var(--text-tertiary)">Chưa có Carrier nào. Thêm đối tác loại Carrier trước.</span>';
+  // Carrier: dạng list (chip) có nút xóa + dropdown thêm
+  const _availCarriers=carriers.filter(function(cn){return d.carriers.indexOf(cn)<0;});
+  const carrierChips=d.carriers.length?d.carriers.map(function(cn){
+    return '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:6px;font-size:12px">'+cn+'<button class="rac red" onclick="_vesselRemoveCarrier(\''+cn.replace(/'/g,"\\'")+'\')" title="Xóa" style="width:18px;height:18px;font-size:11px"><i class="ti ti-x"></i></button></span>';
+  }).join(''):'<span style="font-size:12px;color:var(--text-tertiary)">Chưa chọn Carrier nào</span>';
+  const carrierAddSel=carriers.length?('<div style="display:flex;gap:6px;margin-top:8px"><select id="vesCarrierAdd" style="flex:1;font-size:12px"><option value="">— Chọn Carrier để thêm —</option>'+_availCarriers.map(function(cn){return '<option>'+cn+'</option>';}).join('')+'</select><button class="btn sm" onclick="_vesselAddCarrier()"><i class="ti ti-plus"></i> Thêm</button></div>'):'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">Chưa có đối tác loại Carrier. Thêm ở mục Đối tác trước.</div>';
+  const carrierChecks='<div style="display:flex;flex-wrap:wrap;gap:6px">'+carrierChips+'</div>'+carrierAddSel;
 
+  const _countryOptsList=(typeof PORT_COUNTRIES!=='undefined'?PORT_COUNTRIES:[]);
   const podRows=d.pods.map(function(p,i){
-    return '<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">'
-      +'<input type="text" class="vesPod" data-i="'+i+'" value="'+(p.pod||'').replace(/"/g,'&quot;')+'" oninput="_vesselSyncPods()" placeholder="POD" style="flex:1;min-width:0;font-size:12.5px;box-sizing:border-box"/>'
-      +'<input type="date" class="vesEta" data-i="'+i+'" value="'+(p.eta||'')+'" oninput="_vesselSyncPods()" style="width:140px;flex-shrink:0;font-size:12.5px;box-sizing:border-box"/>'
+    const cOpts='<option value="">— Quốc gia —</option>'+_countryOptsList.map(function(cn){return '<option'+(cn===p.country?' selected':'')+'>'+cn+'</option>';}).join('');
+    const portsForC=(p.country&&PORTS_BY_COUNTRY[p.country])?PORTS_BY_COUNTRY[p.country]:(typeof PORTS!=='undefined'?PORTS:[]);
+    let pOpts='<option value="">— Chọn cảng —</option>'+portsForC.map(function(pt){return '<option'+(pt===p.pod?' selected':'')+'>'+pt+'</option>';}).join('');
+    // nếu pod đã lưu không nằm trong list, vẫn thêm option để giữ giá trị
+    if(p.pod&&portsForC.indexOf(p.pod)<0){pOpts+='<option selected>'+p.pod+'</option>';}
+    return '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">'
+      +'<select class="vesPodCountry" data-i="'+i+'" onchange="_vesselPodCountryChange('+i+')" style="width:130px;flex-shrink:0;font-size:12px;box-sizing:border-box">'+cOpts+'</select>'
+      +'<select class="vesPod" data-i="'+i+'" onchange="_vesselSyncPods()" style="flex:1;min-width:0;font-size:12px;box-sizing:border-box">'+pOpts+'</select>'
+      +'<input type="date" class="vesEta" data-i="'+i+'" value="'+(p.eta||'')+'" oninput="_vesselSyncPods()" style="width:140px;flex-shrink:0;font-size:12px;box-sizing:border-box"/>'
       +'<button class="rac red" onclick="_vesselDelPod('+i+')" title="Xóa POD"'+(d.pods.length<=1?' style="visibility:hidden"':'')+'><i class="ti ti-x"></i></button>'
       +'</div>';
   }).join('');
@@ -7767,8 +7802,8 @@ function renderVesselEditor(){
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Số chuyến (Voy)</label>'
           +'<input type="text" id="vesVoy" value="'+(d.voy||'').replace(/"/g,'&quot;')+'" oninput="_vesselDraft.voy=this.value" placeholder="VD: 245W" style="width:100%;font-size:13px"/></div>'
       +'</div>'
-      +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px">Carrier (chọn nhiều)</label>'
-        +'<div style="display:flex;flex-wrap:wrap;gap:6px">'+carrierChecks+'</div></div>'
+      +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px">Carrier (có thể nhiều)</label>'
+        +carrierChecks+'</div>'
       +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">'
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">POL (cảng đi)</label>'
           +'<input type="text" id="vesPol" value="'+(d.pol||'').replace(/"/g,'&quot;')+'" oninput="_vesselDraft.pol=this.value" placeholder="VD: HOCHIMINH" style="width:100%;font-size:13px"/></div>'
@@ -7778,7 +7813,7 @@ function renderVesselEditor(){
       +'<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
         +'<label style="font-size:12px;font-weight:600;color:var(--text-secondary)">POD (cảng đến) & ETA — có thể nhiều</label>'
         +'<button class="btn sm" onclick="_vesselAddPod()"><i class="ti ti-plus"></i> Thêm POD</button></div>'
-        +'<div style="display:flex;gap:8px;margin-bottom:4px"><div style="flex:1;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">POD (cảng đến)</div><div style="width:140px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">ETA</div><div style="width:32px"></div></div>'+'<div id="vesPodList">'+podRows+'</div></div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:4px"><div style="width:130px;flex-shrink:0;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">Quốc gia</div><div style="flex:1;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">POD (cảng đến)</div><div style="width:140px;flex-shrink:0;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">ETA</div><div style="width:32px"></div></div>'+'<div id="vesPodList">'+podRows+'</div></div>'
     +'</div>'
     +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
       +'<button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button>'
@@ -7787,24 +7822,71 @@ function renderVesselEditor(){
 }
 
 function _vesselSyncCarriers(){
-  _vesselDraft.carriers=Array.from(document.querySelectorAll('.vesCarrierChk:checked')).map(function(el){return el.value;});
+  // List-based now; carriers managed via add/remove. Kept for backward compatibility (no-op if no checkboxes).
+  const chks=document.querySelectorAll('.vesCarrierChk:checked');
+  if(chks.length||document.querySelector('.vesCarrierChk')){
+    _vesselDraft.carriers=Array.from(chks).map(function(el){return el.value;});
+  }
 }
 window._vesselSyncCarriers=_vesselSyncCarriers;
+
+function _vesselAddCarrier(){
+  const sel=g('vesCarrierAdd');
+  if(!sel||!sel.value)return;
+  if(_vesselDraft.carriers.indexOf(sel.value)<0)_vesselDraft.carriers.push(sel.value);
+  // preserve other field edits before re-render
+  if(typeof _vesselSyncPods==='function')_vesselSyncPods();
+  _vesselCaptureBasics();
+  renderVesselEditor();
+}
+window._vesselAddCarrier=_vesselAddCarrier;
+
+function _vesselRemoveCarrier(cn){
+  _vesselDraft.carriers=_vesselDraft.carriers.filter(function(x){return x!==cn;});
+  if(typeof _vesselSyncPods==='function')_vesselSyncPods();
+  _vesselCaptureBasics();
+  renderVesselEditor();
+}
+window._vesselRemoveCarrier=_vesselRemoveCarrier;
+
+function _vesselCaptureBasics(){
+  // Capture vessel/voy/pol/etd from current inputs before a re-render
+  if(g('vesVessel'))_vesselDraft.vessel=g('vesVessel').value;
+  if(g('vesVoy'))_vesselDraft.voy=g('vesVoy').value;
+  if(g('vesPol'))_vesselDraft.pol=g('vesPol').value;
+  if(g('vesEtd'))_vesselDraft.etd=g('vesEtd').value;
+}
+window._vesselCaptureBasics=_vesselCaptureBasics;
 
 function _vesselSyncPods(){
   const pods=[];
   document.querySelectorAll('.vesPod').forEach(function(el){
     const i=el.dataset.i;
     const eta=document.querySelector('.vesEta[data-i="'+i+'"]');
-    pods.push({pod:el.value,eta:eta?eta.value:''});
+    const ctry=document.querySelector('.vesPodCountry[data-i="'+i+'"]');
+    pods.push({pod:el.value,eta:eta?eta.value:'',country:ctry?ctry.value:''});
   });
-  _vesselDraft.pods=pods.length?pods:[{pod:'',eta:''}];
+  _vesselDraft.pods=pods.length?pods:[{pod:'',eta:'',country:''}];
 }
 window._vesselSyncPods=_vesselSyncPods;
 
+function _vesselPodCountryChange(i){
+  // When country changes for a POD row, update its port dropdown options
+  _vesselSyncPods();
+  const ctry=document.querySelector('.vesPodCountry[data-i="'+i+'"]');
+  const podSel=document.querySelector('.vesPod[data-i="'+i+'"]');
+  if(!ctry||!podSel)return;
+  const country=ctry.value;
+  const ports=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:(typeof PORTS!=='undefined'?PORTS:[]);
+  podSel.innerHTML='<option value="">— Chọn cảng —</option>'+ports.map(function(pt){return '<option>'+pt+'</option>';}).join('');
+  // update draft
+  if(_vesselDraft.pods[i]){_vesselDraft.pods[i].country=country;_vesselDraft.pods[i].pod='';}
+}
+window._vesselPodCountryChange=_vesselPodCountryChange;
+
 function _vesselAddPod(){
   _vesselSyncPods();
-  _vesselDraft.pods.push({pod:'',eta:''});
+  _vesselDraft.pods.push({pod:'',eta:'',country:''});
   renderVesselEditor();
 }
 window._vesselAddPod=_vesselAddPod;
@@ -7812,12 +7894,13 @@ window._vesselAddPod=_vesselAddPod;
 function _vesselDelPod(i){
   _vesselSyncPods();
   _vesselDraft.pods.splice(i,1);
-  if(!_vesselDraft.pods.length)_vesselDraft.pods=[{pod:'',eta:''}];
+  if(!_vesselDraft.pods.length)_vesselDraft.pods=[{pod:'',eta:'',country:''}];
   renderVesselEditor();
 }
 window._vesselDelPod=_vesselDelPod;
 
 async function saveVessel(){
+  if(typeof _vesselCaptureBasics==='function')_vesselCaptureBasics();
   _vesselSyncCarriers();_vesselSyncPods();
   const d=_vesselDraft;
   if(!d.vessel.trim()){toast('Nhập tên tàu','error');return;}
