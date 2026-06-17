@@ -109,6 +109,166 @@ function loadCargoNames(){
   }).catch(function(){window._cargoNames=[];});
 }
 
+// Load service catalog (codes + default flags) from Firestore
+function loadServices(){
+  db.collection('_config').doc('services').get().then(function(snap){
+    if(snap.exists && Array.isArray(snap.data().list) && snap.data().list.length){
+      const list=snap.data().list;
+      // Merge: keep built-in keys, apply saved code/default/name, add custom ones
+      SVCS=list.map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
+    }
+    // Ensure every service has a code
+    SVCS.forEach(function(s){if(!s.code)s.code=genSvcCode(s.name,SVCS.filter(function(x){return x!==s;}));});
+    if(typeof detailId!=='undefined'&&detailId&&detailTab==='svc'&&typeof openDetail==='function'){/* refresh later */}
+  }).catch(function(){});
+}
+window.loadServices=loadServices;
+
+// Persist the current SVCS catalog to Firestore
+async function saveServices(){
+  const list=SVCS.map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
+  await db.collection('_config').doc('services').set({list:list,updatedAt:Date.now(),updatedBy:(currentUser?currentUser.email:'')},{merge:true});
+}
+window.saveServices=saveServices;
+
+// ── Service catalog management (Settings) ──
+let _svcCatDraft=null;
+function renderSvcCatList(){
+  const box=g('svcCatList');
+  if(!box)return;
+  if(!_svcCatDraft)_svcCatDraft=SVCS.map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
+  box.innerHTML=_svcCatDraft.map(function(s,i){
+    return '<div style="display:grid;grid-template-columns:90px 1fr 110px 36px;gap:8px;margin-bottom:6px;align-items:center">'
+      +'<input type="text" maxlength="3" value="'+(s.code||'').replace(/"/g,'&quot;')+'" oninput="_svcCatSet('+i+',\'code\',this.value.toUpperCase());this.value=this.value.toUpperCase()" placeholder="ABC" style="font-size:12px;text-transform:uppercase;text-align:center;font-weight:600"/>'
+      +'<input type="text" value="'+(s.name||'').replace(/"/g,'&quot;')+'" oninput="_svcCatSet('+i+',\'name\',this.value)" placeholder="Tên dịch vụ" style="font-size:12px"/>'
+      +'<div style="display:flex;justify-content:center"><button type="button" class="tgl '+(s.default?'on':'off')+'" onclick="_svcCatToggleDefault('+i+')"></button></div>'
+      +'<button class="rac red" onclick="delSvcCatRow('+i+')" title="Xóa dịch vụ"><i class="ti ti-trash"></i></button>'
+      +'</div>';
+  }).join('');
+}
+window.renderSvcCatList=renderSvcCatList;
+
+function _svcCatSet(i,field,val){
+  if(!_svcCatDraft[i])return;
+  _svcCatDraft[i][field]=val;
+}
+window._svcCatSet=_svcCatSet;
+
+function _svcCatToggleDefault(i){
+  if(!_svcCatDraft[i])return;
+  _svcCatDraft[i].default=!_svcCatDraft[i].default;
+  renderSvcCatList();
+}
+window._svcCatToggleDefault=_svcCatToggleDefault;
+
+function addSvcCatRow(){
+  if(!_svcCatDraft)_svcCatDraft=[];
+  const key='custom_'+Date.now();
+  _svcCatDraft.push({key:key,name:'',code:'',default:false,custom:true});
+  renderSvcCatList();
+}
+window.addSvcCatRow=addSvcCatRow;
+
+function delSvcCatRow(i){
+  if(!_svcCatDraft[i])return;
+  if(!confirm('Xóa dịch vụ "'+(_svcCatDraft[i].name||'')+'" khỏi danh mục?'))return;
+  _svcCatDraft.splice(i,1);
+  renderSvcCatList();
+}
+window.delSvcCatRow=delSvcCatRow;
+
+async function saveSvcCatalog(){
+  if(!_svcCatDraft)return;
+  // Validate: name required; auto-generate missing codes; ensure unique codes
+  const seen={};
+  for(let i=0;i<_svcCatDraft.length;i++){
+    const s=_svcCatDraft[i];
+    if(!(s.name||'').trim()){toast('Dịch vụ #'+(i+1)+' chưa có tên','error');return;}
+    if(!(s.code||'').trim()){s.code=genSvcCode(s.name,_svcCatDraft.filter(function(x){return x!==s;}));}
+    s.code=(s.code||'').toUpperCase().slice(0,3);
+    if(seen[s.code]){toast('Mã "'+s.code+'" bị trùng (dịch vụ "'+s.name+'"). Mỗi mã chỉ ứng với 1 dịch vụ.','error');return;}
+    seen[s.code]=true;
+  }
+  setLoading(true,'Đang lưu danh mục dịch vụ...');
+  try{
+    SVCS=_svcCatDraft.map(function(s){return {key:s.key,name:s.name.trim(),code:s.code,default:!!s.default,custom:!!s.custom};});
+    await saveServices();
+    setLoading(false);
+    toast('Đã lưu danh mục dịch vụ');
+  }catch(e){setLoading(false);toast('Lỗi: '+e.message,'error');}
+}
+window.saveSvcCatalog=saveSvcCatalog;
+
+// Quét tất cả lô hàng, tìm dịch vụ ĐÃ DÙNG nhưng KHÔNG còn trong danh mục (orphan), gợi ý thêm lại vào danh mục
+function scanOrphanSvcs(){
+  const catalogKeys=(_svcCatDraft||SVCS).map(function(s){return s.key;});
+  const all=[].concat(cache.xuat||[], cache.nhap||[]);
+  const orphans={}; // key -> {key,name,code,lotCount, hasPrice}
+  all.forEach(function(r){
+    const svcs=r.svcs||{};
+    Object.keys(svcs).forEach(function(k){
+      if(catalogKeys.indexOf(k)>=0)return; // còn trong danh mục
+      if(!svcs[k])return;
+      const nm=svcs[k]._name||_BUILTIN_SVC_NAMES[k]||k;
+      if(!orphans[k])orphans[k]={key:k,name:nm,code:svcs[k]._code||'',lotCount:0,hasData:false};
+      orphans[k].lotCount++;
+      if(svcs[k].on||svcs[k].price||svcs[k].cost||svcs[k].amount)orphans[k].hasData=true;
+    });
+  });
+  const list=Object.keys(orphans).map(function(k){return orphans[k];});
+  if(!list.length){
+    toast('Tất cả dịch vụ trong các lô đều đã có trong danh mục. Không có gì cần đồng bộ.','success');
+    return;
+  }
+  window._orphanSvcList=list;
+  const rows=list.map(function(o,i){
+    return '<tr>'
+      +'<td style="padding:6px;text-align:center"><input type="checkbox" class="orphanChk" data-i="'+i+'" checked/></td>'
+      +'<td style="padding:6px;font-size:12px;font-weight:600">'+o.name+'</td>'
+      +'<td style="padding:6px;font-size:11px;color:var(--text-secondary)">'+o.key+'</td>'
+      +'<td style="padding:6px;font-size:11px;text-align:center">'+o.lotCount+'</td>'
+      +'<td style="padding:6px;text-align:center">'+(o.hasData?'<span style="color:var(--orange);font-size:11px">Có giá/chi phí</span>':'<span style="color:var(--text-tertiary);font-size:11px">—</span>')+'</td>'
+      +'</tr>';
+  }).join('');
+  g('combineOv').innerHTML='<div class="modal" style="max-width:600px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-refresh" style="margin-right:6px"></i>Đồng bộ dịch vụ lô cũ</div>'
+    +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px;max-height:60vh;overflow:auto">'
+      +'<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Tìm thấy <b>'+list.length+'</b> dịch vụ đang được dùng trong lô hàng nhưng KHÔNG có trong danh mục hiện tại. Các lô này vẫn giữ nguyên dữ liệu giá/chi phí. Tick để thêm lại các dịch vụ này vào danh mục (đề xuất chọn hết để không mất liên kết):</div>'
+      +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
+        +'<th style="padding:6px;font-size:10px"><input type="checkbox" checked onchange="_orphanToggleAll(this.checked)"/></th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Dịch vụ</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Key</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary)">Số lô</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary)">Dữ liệu</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody></table>'
+    +'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="closeOv(\'combineOv\')">Đóng</button>'
+      +'<button class="btn pri" onclick="doSyncOrphanSvcs()"><i class="ti ti-check"></i> Thêm vào danh mục</button>'
+    +'</div></div>';
+  openOv('combineOv');
+}
+window.scanOrphanSvcs=scanOrphanSvcs;
+
+function doSyncOrphanSvcs(){
+  const list=window._orphanSvcList||[];
+  const chosen=Array.from(document.querySelectorAll('.orphanChk:checked')).map(function(el){return list[parseInt(el.dataset.i)];}).filter(Boolean);
+  if(!chosen.length){toast('Chưa chọn dịch vụ nào','error');return;}
+  if(!_svcCatDraft)_svcCatDraft=SVCS.map(function(s){return {key:s.key,name:s.name,code:s.code,default:!!s.default,custom:!!s.custom};});
+  chosen.forEach(function(o){
+    if(_svcCatDraft.find(function(s){return s.key===o.key;}))return;
+    const isBuiltin=!!_BUILTIN_SVC_NAMES[o.key];
+    _svcCatDraft.push({key:o.key,name:o.name,code:o.code||genSvcCode(o.name,_svcCatDraft),default:false,custom:!isBuiltin});
+  });
+  closeOv('combineOv');
+  renderSvcCatList();
+  toast('Đã thêm '+chosen.length+' dịch vụ vào danh mục. Bấm "Lưu danh mục dịch vụ" để lưu lại.','success');
+}
+window.doSyncOrphanSvcs=doSyncOrphanSvcs;
+function _orphanToggleAll(on){document.querySelectorAll('.orphanChk').forEach(function(x){x.checked=on;});}
+window._orphanToggleAll=_orphanToggleAll;
+
 
 /* ═══ THÔNG TIN TÀI KHOẢN (Settings) ═══ */
 function loadAcctInfo(){
@@ -221,12 +381,47 @@ function loadBankAccounts(){
    CONSTANTS
 ───────────────────────────────────────────── */
 let SVCS=[
-  {key:'freight',name:'Cước vận tải QT'},{key:'customs',name:'Thông quan'},
-  {key:'quarantine',name:'Kiểm dịch'},{key:'co',name:'C/O'},
-  {key:'fumi',name:'Fumi'},{key:'stuffing',name:'Đóng hàng tại bãi'},
-  {key:'trucking',name:'Trucking'},{key:'ddl',name:'DDL'},
-  {key:'docfee',name:'Phí chứng từ xuất khẩu'},
+  {key:'freight',name:'Cước vận tải QT',code:'FRE',default:false},{key:'customs',name:'Thông quan',code:'CUS',default:false},
+  {key:'quarantine',name:'Kiểm dịch',code:'QUA',default:false},{key:'co',name:'C/O',code:'COO',default:false},
+  {key:'fumi',name:'Fumi',code:'FUM',default:false},{key:'stuffing',name:'Đóng hàng tại bãi',code:'STU',default:false},
+  {key:'trucking',name:'Trucking',code:'TRU',default:false},{key:'ddl',name:'DDL',code:'DDL',default:false},
+  {key:'docfee',name:'Phí chứng từ xuất khẩu',code:'DOC',default:false},
 ];
+// Auto-generate a 3-letter code from a service name
+function genSvcCode(name, existing){
+  let base=(name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z]/g,'').toUpperCase();
+  if(base.length<3)base=(base+'XXX').slice(0,3);
+  let code=base.slice(0,3);
+  const used=(existing||[]).map(function(s){return (s.code||'').toUpperCase();});
+  let i=1;
+  while(used.indexOf(code)>=0){
+    // try other letters from the name, else append number
+    code=(base.slice(0,2)+(base[2+i]||String(i))).slice(0,3).toUpperCase();
+    i++;
+    if(i>20){code=base.slice(0,2)+i;break;}
+  }
+  return code;
+}
+window.genSvcCode=genSvcCode;
+
+// Tên gốc của các dịch vụ built-in (để khôi phục liên kết cho lô CŨ nếu danh mục bị đổi/xóa)
+const _BUILTIN_SVC_NAMES={freight:'Cước vận tải QT',customs:'Thông quan',quarantine:'Kiểm dịch',co:'C/O',fumi:'Fumi',stuffing:'Đóng hàng tại bãi',trucking:'Trucking',ddl:'DDL',docfee:'Phí chứng từ xuất khẩu'};
+window._BUILTIN_SVC_NAMES=_BUILTIN_SVC_NAMES;
+
+// Đảm bảo mọi dịch vụ ĐANG CÓ DỮ LIỆU trong lô đều tồn tại trong SVCS để các tab (Fill giá/Costing/Invoice) hiển thị đúng.
+// Không làm mất liên kết khi danh mục thay đổi; lô cũ vẫn giữ nguyên dịch vụ đã điền.
+function _ensureSvcInCatalog(svcs){
+  if(!svcs)return;
+  Object.keys(svcs).forEach(function(k){
+    if(!svcs[k])return;
+    if(SVCS.find(function(s){return s.key===k;}))return; // đã có
+    // Tên: ưu tiên _name đã lưu, rồi tên built-in, cuối cùng là key
+    const nm=svcs[k]._name||_BUILTIN_SVC_NAMES[k]||k;
+    const isBuiltin=!!_BUILTIN_SVC_NAMES[k];
+    SVCS.push({key:k,name:nm,code:svcs[k]._code||(isBuiltin?genSvcCode(nm,SVCS):''),custom:!isBuiltin,default:false,_orphan:true});
+  });
+}
+window._ensureSvcInCatalog=_ensureSvcInCatalog;
 const CURRENCIES=['USD','VND','EUR','JPY','CNY','KRW'];
 const TASKS=[
   {key:'mbl',label:'Nhập MBL No'},{key:'cnee',label:'Nhập thông tin Cnee'},
@@ -489,6 +684,8 @@ async function doLogout(){
 function startListeners(){
   loadBankAccounts();
   loadCargoNames();
+  loadServices();
+  if(typeof loadCocoQuote==='function'&&can('manageUsers'))loadCocoQuote();
   loadAcctInfo();
   stopListeners();
 
@@ -628,6 +825,9 @@ function updateSidebar(){
   }).length;
   const dot=g('deadlineBadge');
   if(pendingCount){dot.style.display='';dot.textContent=pendingCount;}else dot.style.display='none';
+  // Báo giá Dừa: chỉ admin thấy
+  const cocoBtn=g('sb-cocoquote');
+  if(cocoBtn)cocoBtn.style.display=can('manageUsers')?'':'none';
 }
 
 /* ─────────────────────────────────────────────
@@ -635,17 +835,18 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  ['xuat','nhap','deadline','cong-no','doi-tac','vessel','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
+  ['xuat','nhap','deadline','cong-no','doi-tac','vessel','cocoquote','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
-  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','vessel':'Vessel tool','users':'User','quote':'Quotation'};
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','vessel':'Vessel tool','cocoquote':'Báo giá Xơ dừa / Mụn dừa','users':'User','quote':'Quotation'};
   g('pageTitle').textContent=titles[t]||t;
   if(t==='xuat'||t==='nhap') renderLot(t);
   if(t==='deadline') renderDeadline();
   if(t==='cong-no') renderDebt();
   if(t==='doi-tac') renderPartners();
   if(t==='vessel') renderVesselTool();
+  if(t==='cocoquote') renderCocoQuote();
   if(t==='users') renderUsers();
   if(t==='docs') renderDocMaker();
   if(t==='costing-report') renderCostingReport();
@@ -1163,7 +1364,7 @@ function renderDetailPanel(r,tt){
   else if(detailTab==='svc'){
     // Restore custom svcs
     const svcs=r.svcs||{};
-    Object.keys(svcs).forEach(k=>{if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name)SVCS.push({key:k,name:svcs[k]._name,custom:true});});
+    _ensureSvcInCatalog(svcs);
     bodyHtml=`${ (can('fillPrice')||can('viewCost')) ? '<div style="display:grid;grid-template-columns:22px 130px 95px 80px 62px 90px 48px 85px 190px 42px 26px;gap:5px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Đơn giá</div><div>SL</div><div>Đơn vị</div><div>Thành tiền</div><div>Curr</div><div>NCC</div><div>Mô tả</div><div style="text-align:center">Finish</div><div></div></div>' : '<div style="display:grid;grid-template-columns:22px 1fr 1fr 26px;gap:8px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div></div></div>'}
     <div id="detailSvcGrid">${SVCS.map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')}</div>
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
@@ -1407,7 +1608,7 @@ function renderDetailPanel(r,tt){
     if(!can('viewInvoice')){bodyHtml='<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền xem Invoice</div></div>';}
     else {
       const svcs=r.svcs||{};
-      Object.keys(svcs).forEach(k=>{ if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name) SVCS.push({key:k,name:svcs[k]._name,custom:true}); });
+      _ensureSvcInCatalog(svcs);
       const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
       if(!allOn.length){
         bodyHtml='<div class="empty-state"><i class="ti ti-clipboard-list"></i>Chưa có dịch vụ. Vào tab Dịch vụ để chọn trước.</div>';
@@ -1535,15 +1736,55 @@ function renderDetailPanel(r,tt){
 }
 
 function addCustomSvcDetail(){
-  const key='custom_'+Date.now();
-  const s={key,name:'Dịch vụ mới',custom:true};
-  SVCS.push(s);
-  const div=document.createElement('div');
-  div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcQty:1,svcCur:'USD',svcSupplier:'',svcStatus:''});
-  g('detailSvcGrid').appendChild(div.firstChild);
-  ['sd_','scost_','sstatus_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=false;});
-  const tg=g('tg_'+key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
+  // Mở popup chọn dịch vụ từ danh mục (những dịch vụ chưa hiển thị trong lô)
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const svcs=r.svcs||{};
+  // Dịch vụ đã hiện trong grid = đã có trong SVCS đang render. Cho phép chọn bất kỳ dịch vụ nào trong danh mục chưa "on".
+  const shown=Array.from(document.querySelectorAll('#detailSvcGrid [id^="tg_"]')).map(function(el){return el.id.slice(3);});
+  const avail=SVCS.filter(function(s){return shown.indexOf(s.key)<0;});
+  let opts='<option value="">— Chọn dịch vụ —</option>'+avail.map(function(s){return '<option value="'+s.key+'">'+(s.code?'['+s.code+'] ':'')+s.name+'</option>';}).join('');
+  opts+='<option value="__new__">+ Tạo dịch vụ mới...</option>';
+  g('combineOv').innerHTML='<div class="modal" style="max-width:420px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-plus" style="margin-right:6px"></i>Thêm dịch vụ</div>'
+    +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:18px 20px">'
+      +'<label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px">Chọn dịch vụ từ danh mục</label>'
+      +'<select id="svcAddPick" style="width:100%;font-size:13px">'+opts+'</select>'
+      +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:8px">Quản lý danh mục & mã dịch vụ tại Cài đặt → Danh mục dịch vụ.</div>'
+    +'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button>'
+      +'<button class="btn pri" onclick="doAddSvcToLot()"><i class="ti ti-check"></i> Thêm</button>'
+    +'</div></div>';
+  openOv('combineOv');
 }
+window.addCustomSvcDetail=addCustomSvcDetail;
+
+function doAddSvcToLot(){
+  const pick=g('svcAddPick');
+  if(!pick||!pick.value){toast('Chọn một dịch vụ','error');return;}
+  let s;
+  if(pick.value==='__new__'){
+    const key='custom_'+Date.now();
+    s={key:key,name:'Dịch vụ mới',code:'',custom:true,default:false};
+    SVCS.push(s);
+  } else {
+    s=SVCS.find(function(x){return x.key===pick.value;});
+    if(!s){toast('Không tìm thấy dịch vụ','error');return;}
+  }
+  closeOv('combineOv');
+  // Append row to grid + enable it
+  if(g('tg_'+s.key)){ // already in grid (shouldn't happen), just enable
+    const tg=g('tg_'+s.key);tg.classList.add('on');tg.classList.remove('off');
+  } else {
+    const div=document.createElement('div');
+    div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcQty:1,svcCur:'VND',svcSupplier:'',svcStatus:''});
+    g('detailSvcGrid').appendChild(div.firstChild);
+    ['sd_','scost_','sstatus_'].forEach(function(p){const el=g(p+s.key);if(el)el.disabled=false;});
+    const tg=g('tg_'+s.key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
+  }
+}
+window.doAddSvcToLot=doAddSvcToLot;
 
 async function saveInvoiceSettings(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
@@ -2285,6 +2526,15 @@ async function saveLot(){
   const cols=currentTab==='xuat'?XCOLS:NCOLS;
   const existing=lotIdx?cache[currentTab].find(x=>x._id===lotIdx):null;
   const rec={svcs:existing?.svcs||{},tasks:existing?.tasks||{}};
+  // Lô MỚI: tự bật các dịch vụ được đánh dấu 'default'
+  if(!existing){
+    SVCS.forEach(function(s){
+      if(s.default && !rec.svcs[s.key]){
+        rec.svcs[s.key]={on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:1,svcCur:'VND'};
+        if(s.custom)rec.svcs[s.key]._name=s.name;
+      }
+    });
+  }
   cols.forEach(c=>{
     const el=g('f_'+c.k);
     if(!el)return;
@@ -2368,7 +2618,7 @@ function openFillPrice(id, tt){
   svcIdx=id; currentTab=tt;
   const r=cache[tt].find(x=>x._id===id)||{};
   const svcs=r.svcs||{};
-  Object.keys(svcs).forEach(k=>{ if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name) SVCS.push({key:k,name:svcs[k]._name,custom:true}); });
+  _ensureSvcInCatalog(svcs);
   const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
   g('fpTitle').textContent='Fill giá dịch vụ';
   g('fpSub').textContent=(r.bookingNo||'')+(r.shipper?' — '+r.shipper:r.supplier?' — '+r.supplier:'');
@@ -2447,7 +2697,7 @@ function openInvoice(id, tt, tempR){
   }
 
   const svcs=r.svcs||{};
-  Object.keys(svcs).forEach(k=>{ if(!SVCS.find(s=>s.key===k)&&svcs[k]&&svcs[k]._name) SVCS.push({key:k,name:svcs[k]._name,custom:true}); });
+  _ensureSvcInCatalog(svcs);
   // Split services: Yes (có HĐ) and No (không HĐ), exclude Waived
   const svcsYes=SVCS.filter(s=>svcs[s.key]?.on && (svcs[s.key]?.invoice||'Yes')==='Yes');
   const svcsNo=SVCS.filter(s=>svcs[s.key]?.on && svcs[s.key]?.invoice==='No');
@@ -2875,7 +3125,7 @@ function svcRowHTML(s, sv){
     return`<div style="display:grid;grid-template-columns:22px 1fr 1fr 26px;gap:8px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
       <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
       <div style="display:flex;align-items:center;gap:3px;min-width:0">
-        ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:500;flex:1;min-width:0" oninput="renameSvc('${s.key}',this.value)"/>`:`<span style="font-size:12px;font-weight:500">${s.name}</span>`}
+        ${s.code?`<span style="font-size:9px;font-weight:700;color:var(--blue);background:rgba(26,75,140,.1);padding:1px 4px;border-radius:3px;margin-right:4px;flex-shrink:0">${s.code}</span>`:''}${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:500;flex:1;min-width:0" oninput="renameSvc('${s.key}',this.value)"/>`:`<span style="font-size:12px;font-weight:500">${s.name}</span>`}
       </div>
       <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả / Ghi chú..." ${sv.on?'':'disabled'} style="font-size:11.5px"/>
       <div style="display:flex;justify-content:flex-end">
@@ -3123,7 +3373,9 @@ async function saveSvc(){
     const desc=g('sd_'+s.key)?.value||'';
     const prev=existing[s.key]||{};
     svcs[s.key]={on,desc,cost:prev.cost||0,price:prev.price||0,cur:prev.cur||'USD'};
-    if(s.custom) svcs[s.key]._name=g('sname_'+s.key)?.value||s.name;
+    // Lưu kèm tên + mã cho MỌI dịch vụ (kể cả built-in) để không mất liên kết nếu danh mục thay đổi
+    svcs[s.key]._name=(s.custom?(g('sname_'+s.key)?.value||s.name):s.name);
+    if(s.code)svcs[s.key]._code=s.code;
   });
   setLoading(true,'Đang lưu dịch vụ...');
   try {
@@ -4142,6 +4394,7 @@ tr:hover td{background:var(--bg-secondary)}
     <button class="sb-item" id="sb-cong-no" onclick="goTab('cong-no')"><i class="ti ti-chart-bar"></i> Công nợ</button>
     <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> Đối tác</button>
     <button class="sb-item" id="sb-vessel" onclick="goTab('vessel')"><i class="ti ti-ship"></i> Vessel tool</button>
+    <button class="sb-item" id="sb-cocoquote" onclick="goTab('cocoquote')"><i class="ti ti-calculator"></i> Báo giá Dừa</button>
     <div class="sb-section" style="margin-top:.4rem">Hệ thống</div>
     <button class="sb-item" id="sb-users" onclick="goTab('users')"><i class="ti ti-users"></i> User</button>
     <button class="sb-item" id="sb-docs" onclick="goTab('docs')"><i class="ti ti-file-certificate"></i> Document Maker</button>
@@ -4177,6 +4430,7 @@ tr:hover td{background:var(--bg-secondary)}
       <div id="page-cong-no" style="display:none"></div>
       <div id="page-doi-tac" style="display:none"></div>
       <div id="page-vessel" style="display:none"></div>
+      <div id="page-cocoquote" style="display:none"></div>
       <div id="page-users" style="display:none"></div>
       <div id="page-docs" style="display:none"></div>
       <div id="page-costing-report" style="display:none"></div>
@@ -4378,6 +4632,7 @@ function downloadEmlFile(id, tt){
 
 function renderSettings(){
   const pg=g('page-settings');
+  _svcCatDraft=null;
   if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Chỉ Admin mới truy cập được cài đặt</div></div>';return;}
   const banks=window._bankAccounts||{company:[],personal:[]};
   const coBanks=Array.isArray(banks)?banks:(banks.company||[{beneficiary:'',account:'',bank:''}]);
@@ -4413,6 +4668,17 @@ function renderSettings(){
       +'</div>'
     +'</div>'
     +'<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border-light)"/>'
+    +'<div class="card" style="margin-bottom:1.5rem">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-list-details" style="font-size:14px"></i>Danh mục dịch vụ</div>'
+      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Mỗi dịch vụ có mã 3 chữ cái (sửa được). Bật "Mặc định" để dịch vụ tự xuất hiện khi tạo lô hàng mới.</div>'
+      +'<div style="display:grid;grid-template-columns:90px 1fr 110px 36px;gap:8px;padding:0 2px 4px;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase"><div>Mã</div><div>Tên dịch vụ</div><div style="text-align:center">Mặc định</div><div></div></div>'
+      +'<div id="svcCatList"></div>'
+      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
+        +'<button class="btn" onclick="addSvcCatRow()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>'
+        +'<button class="btn" onclick="scanOrphanSvcs()"><i class="ti ti-refresh"></i> Quét & đồng bộ lô cũ</button>'
+        +'<button class="btn pri" onclick="saveSvcCatalog()"><i class="ti ti-check"></i> Lưu danh mục dịch vụ</button>'
+      +'</div>'
+    +'</div>'
     +'<div class="table-card" style="padding:1.25rem">'
       +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-key" style="font-size:14px"></i>Thông tin tài khoản (lưu thông tin quan trọng)</div>'
       +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Lưu thông tin đăng nhập Ecosys, PQS và ghi chú khác theo từng Shipper</div>'
@@ -4446,6 +4712,7 @@ function renderSettings(){
     +'</div>';
   renderCargoNamesList();
   renderAcctInfoList();
+  if(typeof renderSvcCatList==='function')renderSvcCatList();
 }
 
 function addBankRow(prefix){
@@ -8292,6 +8559,495 @@ async function doImportScannedVessels(){
 window.doImportScannedVessels=doImportScannedVessels;
 
 /* ═══ END VESSEL TOOL ═══ */
+
+/* ═══════════════════════════════════════════════════════════
+   MODULE: BÁO GIÁ DỪA (CocoQuote) — xơ dừa & mụn dừa, VND
+   Lưu Firestore _config/cocoquote (chỉ admin)
+   Tab1: chi phí xơ dừa | Tab2: mụn dừa | Tab3: review giá | Tab4: báo giá
+═══════════════════════════════════════════════════════════ */
+let _coco=null;           // dữ liệu hiện tại
+let _cocoTab='input1';    // tab đang xem
+window._cocoTab=_cocoTab;
+
+function _cocoDefault(){
+  return {
+    fiber:{
+      stuff:{ // đóng bãi
+        fixed:[
+          {name:'Bill, AMS, Telex',qty:1,unit:'Shipment',price:0},
+          {name:'Phyto',qty:1,unit:'Shipment',price:0},
+          {name:'Fumi',qty:1,unit:'Shipment',price:0},
+          {name:'C/O',qty:1,unit:'Shipment',price:0},
+          {name:'Phí CSHT',qty:1,unit:'Unit',price:0},
+          {name:'Thông quan',qty:1,unit:'Shipment',price:0},
+          {name:'OPS phí',qty:1,unit:'Shipment',price:0},
+          {name:'Ghe',qty:1,unit:'Unit',price:0}
+        ],
+        port:[
+          {name:'Công nhân',hiepPhuoc:0,spitc:0},
+          {name:'Phí cảng',hiepPhuoc:0,spitc:0},
+          {name:'Chuyển cont đầy',hiepPhuoc:0,spitc:0},
+          {name:'Chuyển cont rỗng',hiepPhuoc:0,spitc:0}
+        ]
+      },
+      wh:[ // đóng kho
+        {name:'Bill, AMS, Telex',qty:1,unit:'Shipment',price:0},
+        {name:'Phyto',qty:1,unit:'Shipment',price:0},
+        {name:'Fumi',qty:1,unit:'Shipment',price:0},
+        {name:'C/O',qty:1,unit:'Shipment',price:0},
+        {name:'Phí CSHT',qty:1,unit:'Unit',price:0},
+        {name:'Thông quan',qty:1,unit:'Shipment',price:0},
+        {name:'OPS phí',qty:1,unit:'Shipment',price:0},
+        {name:'Trucking (gồm nâng hạ)',qty:1,unit:'Unit',price:0}
+      ]
+    },
+    pith:null, // sẽ clone từ fiber khi khởi tạo
+    rate:25400, vol:1,
+    freight:[
+      {pod:'Shanghai',carrier:'SJJ',fiber:0,pith:0},
+      {pod:'Shanghai',carrier:'OOCL',fiber:0,pith:0}
+    ],
+    profit:{ type:'amount', fiber:0, pith:0 },
+    updatedAt:0
+  };
+}
+
+function _cocoNormalize(d){
+  if(!d)d=_cocoDefault();
+  if(!d.fiber)d.fiber=_cocoDefault().fiber;
+  if(!d.pith){d.pith=JSON.parse(JSON.stringify(d.fiber));}
+  if(!d.freight)d.freight=[];
+  if(!d.profit)d.profit={type:'amount',fiber:0,pith:0};
+  if(d.rate==null)d.rate=25400;
+  if(d.vol==null)d.vol=1;
+  return d;
+}
+
+function loadCocoQuote(cb){
+  db.collection('_config').doc('cocoquote').get().then(function(snap){
+    _coco=_cocoNormalize(snap.exists?snap.data():null);
+    if(cb)cb();
+  }).catch(function(){ _coco=_cocoNormalize(null); if(cb)cb(); });
+}
+window.loadCocoQuote=loadCocoQuote;
+
+async function saveCocoQuote(silent){
+  if(!_coco)return;
+  _coco.updatedAt=Date.now(); _coco.updatedBy=(currentUser?currentUser.email:'');
+  try{
+    await db.collection('_config').doc('cocoquote').set(_coco,{merge:false});
+    if(!silent)toast('Đã lưu báo giá');
+  }catch(e){ toast('Lỗi lưu: '+e.message,'error'); }
+}
+window.saveCocoQuote=saveCocoQuote;
+
+// Helper format VND
+function _vnd(n){ n=Math.round(parseFloat(n)||0); return n.toLocaleString('en-US'); }
+function _num(v){ return parseFloat((v+'').replace(/[^0-9.\-]/g,''))||0; }
+
+function renderCocoQuote(){
+  const pg=g('page-cocoquote');
+  if(!pg)return;
+  if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Chỉ Admin mới truy cập được công cụ báo giá</div></div>';return;}
+  if(!_coco){ pg.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-secondary)">Đang tải...</div>'; loadCocoQuote(renderCocoQuote); return; }
+
+  const tabs=[
+    {k:'input1',l:'1. Chi phí Xơ dừa'},
+    {k:'input2',l:'2. Chi phí Mụn dừa'},
+    {k:'review',l:'3. Review giá'},
+    {k:'quote',l:'4. Báo giá'}
+  ];
+  const tabBar='<div style="display:flex;gap:4px;border-bottom:2px solid var(--border-light);margin-bottom:1rem;flex-wrap:wrap">'
+    +tabs.map(function(t){
+      const active=_cocoTab===t.k;
+      return '<button class="btn'+(active?' pri':'')+'" style="border-radius:6px 6px 0 0;'+(active?'':'background:transparent;border:none;color:var(--text-secondary)')+'" onclick="_cocoGoTab(\''+t.k+'\')">'+t.l+'</button>';
+    }).join('')
+    +'</div>';
+
+  let body='';
+  if(_cocoTab==='input1')body=_cocoRenderInput('fiber','Xơ dừa');
+  else if(_cocoTab==='input2')body=_cocoRenderInput('pith','Mụn dừa');
+  else if(_cocoTab==='review')body=_cocoRenderReview();
+  else if(_cocoTab==='quote')body=_cocoRenderQuote();
+
+  pg.innerHTML=tabBar+'<div id="cocoBody">'+body+'</div>';
+}
+window.renderCocoQuote=renderCocoQuote;
+
+function _cocoGoTab(k){
+  // capture current inputs before switching
+  _cocoCaptureInputs();
+  _cocoTab=k; window._cocoTab=k;
+  renderCocoQuote();
+}
+window._cocoGoTab=_cocoGoTab;
+
+// ─────────── TAB 1 & 2: COST INPUT ───────────
+function _cocoRenderInput(type, label){
+  const d=_coco[type];
+  const UNIT_OPTS=['Unit','Shipment'];
+
+  // Bảng chi phí cố định (đóng bãi)
+  function fixedRows(list, group){
+    return list.map(function(row,i){
+      const amount=(row.unit==='Shipment')?_num(row.price):(_num(row.price)*(_coco.vol||1));
+      return '<tr>'
+        +'<td style="padding:4px"><input type="text" value="'+(row.name||'').replace(/"/g,'&quot;')+'" oninput="_cocoSet(\''+type+'\',\''+group+'\','+i+',\'name\',this.value)" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+        +'<td style="padding:4px;width:90px"><select onchange="_cocoSet(\''+type+'\',\''+group+'\','+i+',\'unit\',this.value);renderCocoQuote()" style="font-size:12px">'+UNIT_OPTS.map(function(u){return '<option'+(u===row.unit?' selected':'')+'>'+u+'</option>';}).join('')+'</select></td>'
+        +'<td style="padding:4px;width:60px;text-align:center;font-size:12px;color:var(--text-secondary)">'+(row.unit==='Shipment'?1:(_coco.vol||1))+'</td>'
+        +'<td style="padding:4px;width:130px"><input type="text" value="'+_vnd(row.price)+'" oninput="_cocoSetNum(\''+type+'\',\''+group+'\','+i+',\'price\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box"/></td>'
+        +'<td style="padding:4px;width:130px;text-align:right;font-size:12px;font-weight:600">'+_vnd(amount)+'</td>'
+        +'<td style="padding:4px;width:30px"><button class="rac red" onclick="_cocoDelRow(\''+type+'\',\''+group+'\','+i+')"><i class="ti ti-x"></i></button></td>'
+        +'</tr>';
+    }).join('');
+  }
+
+  const fixedTotal=d.stuff.fixed.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*(_coco.vol||1));},0);
+
+  // Bảng chi phí theo cảng (2 cột Hiệp Phước / SPITC)
+  const portRows=d.stuff.port.map(function(row,i){
+    return '<tr>'
+      +'<td style="padding:4px"><input type="text" value="'+(row.name||'').replace(/"/g,'&quot;')+'" oninput="_cocoSetPort(\''+type+'\','+i+',\'name\',this.value)" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px;width:150px"><input type="text" value="'+_vnd(row.hiepPhuoc)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'hiepPhuoc\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px;width:150px"><input type="text" value="'+_vnd(row.spitc)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'spitc\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px;width:30px"><button class="rac red" onclick="_cocoDelPort(\''+type+'\','+i+')"><i class="ti ti-x"></i></button></td>'
+      +'</tr>';
+  }).join('');
+  const portTotalHP=d.stuff.port.reduce(function(s,r){return s+_num(r.hiepPhuoc);},0);
+  const portTotalSP=d.stuff.port.reduce(function(s,r){return s+_num(r.spitc);},0);
+
+  // Bảng đóng kho
+  const whTotal=d.wh.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*(_coco.vol||1));},0);
+
+  const hdr='<thead><tr style="background:var(--bg-secondary)">'
+    +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Tên dịch vụ</th>'
+    +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary)">Đơn vị</th>'
+    +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary)">SL</th>'
+    +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Đơn giá</th>'
+    +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Thành tiền</th>'
+    +'<th></th></tr></thead>';
+
+  return '<div style="display:flex;gap:12px;align-items:center;margin-bottom:1rem;flex-wrap:wrap">'
+      +'<div style="font-size:15px;font-weight:700;color:var(--text-primary)"><i class="ti ti-leaf" style="color:var(--green);margin-right:4px"></i>Chi phí đầu vào — '+label+'</div>'
+      +'<div style="display:flex;align-items:center;gap:6px;margin-left:auto"><span style="font-size:12px;color:var(--text-secondary)">Vol (cont):</span><input type="number" value="'+(_coco.vol||1)+'" oninput="_coco.vol=parseInt(this.value)||1" onblur="renderCocoQuote()" style="width:70px;font-size:13px;text-align:center"/></div>'
+      +'<button class="btn pri" onclick="_cocoCaptureInputs();saveCocoQuote()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+    +'</div>'
+
+    // ĐÓNG BÃI
+    +'<div class="card" style="margin-bottom:1.25rem">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--blue);margin-bottom:.5rem">A. Đóng bãi — Chi phí cố định</div>'
+      +'<table style="width:100%;border-collapse:collapse">'+hdr+'<tbody>'+fixedRows(d.stuff.fixed,'fixed')+'</tbody>'
+        +'<tfoot><tr style="border-top:2px solid var(--border-light)"><td colspan="4" style="padding:6px;text-align:right;font-weight:700;font-size:12px">TỔNG cố định</td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--blue)">'+_vnd(fixedTotal)+'</td><td></td></tr></tfoot>'
+      +'</table>'
+      +'<button class="btn sm" style="margin-top:6px" onclick="_cocoAddRow(\''+type+'\',\'fixed\')"><i class="ti ti-plus"></i> Thêm dòng</button>'
+
+      +'<div style="font-size:13px;font-weight:700;color:var(--blue);margin:1rem 0 .5rem">Chi phí theo cảng</div>'
+      +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Tên dịch vụ</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Cảng Hiệp Phước</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">SPITC</th>'
+        +'<th></th></tr></thead><tbody>'+portRows+'</tbody>'
+        +'<tfoot><tr style="border-top:2px solid var(--border-light)"><td style="padding:6px;text-align:right;font-weight:700;font-size:12px">TỔNG theo cảng</td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--blue)">'+_vnd(portTotalHP)+'</td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--blue)">'+_vnd(portTotalSP)+'</td><td></td></tr></tfoot>'
+      +'</table>'
+      +'<button class="btn sm" style="margin-top:6px" onclick="_cocoAddPort(\''+type+'\')"><i class="ti ti-plus"></i> Thêm dòng</button>'
+
+      +'<div style="margin-top:1rem;padding:10px;background:var(--bg-secondary);border-radius:8px;display:flex;gap:24px;flex-wrap:wrap">'
+        +'<div style="font-size:13px"><b>Tổng đóng bãi (Hiệp Phước):</b> <span style="color:var(--green);font-weight:700">'+_vnd(fixedTotal+portTotalHP)+'</span> VND</div>'
+        +'<div style="font-size:13px"><b>Tổng đóng bãi (SPITC):</b> <span style="color:var(--green);font-weight:700">'+_vnd(fixedTotal+portTotalSP)+'</span> VND</div>'
+      +'</div>'
+    +'</div>'
+
+    // ĐÓNG KHO
+    +'<div class="card">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--orange);margin-bottom:.5rem">B. Đóng kho</div>'
+      +'<table style="width:100%;border-collapse:collapse">'+hdr+'<tbody>'+fixedRows(d.wh,'wh')+'</tbody>'
+        +'<tfoot><tr style="border-top:2px solid var(--border-light)"><td colspan="4" style="padding:6px;text-align:right;font-weight:700;font-size:12px">TỔNG đóng kho</td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--orange)">'+_vnd(whTotal)+'</td><td></td></tr></tfoot>'
+      +'</table>'
+      +'<button class="btn sm" style="margin-top:6px" onclick="_cocoAddRow(\''+type+'\',\'wh\')"><i class="ti ti-plus"></i> Thêm dòng</button>'
+    +'</div>';
+}
+
+// ─────────── SETTERS for input tables ───────────
+function _cocoSet(type, group, i, field, val){
+  if(group==='fixed'){ if(_coco[type].stuff.fixed[i])_coco[type].stuff.fixed[i][field]=val; }
+  else if(group==='wh'){ if(_coco[type].wh[i])_coco[type].wh[i][field]=val; }
+}
+window._cocoSet=_cocoSet;
+function _cocoSetNum(type, group, i, field, val){ _cocoSet(type,group,i,field,_num(val)); }
+window._cocoSetNum=_cocoSetNum;
+
+function _cocoSetPort(type, i, field, val){ if(_coco[type].stuff.port[i])_coco[type].stuff.port[i][field]=val; }
+window._cocoSetPort=_cocoSetPort;
+function _cocoSetPortNum(type, i, field, val){ if(_coco[type].stuff.port[i])_coco[type].stuff.port[i][field]=_num(val); }
+window._cocoSetPortNum=_cocoSetPortNum;
+
+function _cocoAddRow(type, group){
+  _cocoCaptureInputs();
+  const row={name:'',qty:1,unit:'Shipment',price:0};
+  if(group==='fixed')_coco[type].stuff.fixed.push(row); else _coco[type].wh.push(row);
+  renderCocoQuote();
+}
+window._cocoAddRow=_cocoAddRow;
+function _cocoDelRow(type, group, i){
+  _cocoCaptureInputs();
+  if(group==='fixed')_coco[type].stuff.fixed.splice(i,1); else _coco[type].wh.splice(i,1);
+  renderCocoQuote();
+}
+window._cocoDelRow=_cocoDelRow;
+function _cocoAddPort(type){
+  _cocoCaptureInputs();
+  _coco[type].stuff.port.push({name:'',hiepPhuoc:0,spitc:0});
+  renderCocoQuote();
+}
+window._cocoAddPort=_cocoAddPort;
+function _cocoDelPort(type, i){
+  _cocoCaptureInputs();
+  _coco[type].stuff.port.splice(i,1);
+  renderCocoQuote();
+}
+window._cocoDelPort=_cocoDelPort;
+
+// Capture inputs is mostly handled by oninput; this is a safety no-op placeholder
+// (all inputs write directly to _coco via oninput handlers)
+function _cocoCaptureInputs(){ /* inputs already bound to _coco */ }
+window._cocoCaptureInputs=_cocoCaptureInputs;
+
+// ─────────── Tính tổng chi phí 1 loại hàng (trả về theo từng phương án) ───────────
+function _cocoCostSummary(type){
+  const d=_coco[type];
+  const vol=_coco.vol||1;
+  const fixedTotal=d.stuff.fixed.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*vol);},0);
+  const portHP=d.stuff.port.reduce(function(s,r){return s+_num(r.hiepPhuoc);},0);
+  const portSP=d.stuff.port.reduce(function(s,r){return s+_num(r.spitc);},0);
+  const whTotal=d.wh.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*vol);},0);
+  return {
+    stuffHP:fixedTotal+portHP,   // tổng đóng bãi - Hiệp Phước (cho cả vol)
+    stuffSP:fixedTotal+portSP,   // tổng đóng bãi - SPITC
+    wh:whTotal,                  // tổng đóng kho
+    vol:vol
+  };
+}
+window._cocoCostSummary=_cocoCostSummary;
+
+// ─────────── TAB 3: REVIEW GIÁ ───────────
+function _cocoRenderReview(){
+  const fb=_cocoCostSummary('fiber');
+  const pt=_cocoCostSummary('pith');
+  const rate=_coco.rate||25400;
+  const vol=_coco.vol||1;
+  const prof=_coco.profit||{type:'amount',fiber:0,pith:0};
+
+  // chi phí nội địa / 1 cont (đóng bãi - dùng SPITC làm mặc định hiển thị; cả 2 cảng đều show ở bảng cuối)
+  // Ocean freight rows
+  const freightRows=(_coco.freight||[]).map(function(f,i){
+    return '<tr>'
+      +'<td style="padding:4px"><input type="text" value="'+(f.pod||'').replace(/"/g,'&quot;')+'" oninput="_cocoFreightSet('+i+',\'pod\',this.value)" placeholder="POD" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px"><input type="text" value="'+(f.carrier||'').replace(/"/g,'&quot;')+'" oninput="_cocoFreightSet('+i+',\'carrier\',this.value)" placeholder="Carrier" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px;width:120px"><input type="text" value="'+_vnd(f.fiber)+'" oninput="_cocoFreightSetNum('+i+',\'fiber\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box" title="Cước xơ dừa (VND/cont)"/></td>'
+      +'<td style="padding:4px;width:120px"><input type="text" value="'+_vnd(f.pith)+'" oninput="_cocoFreightSetNum('+i+',\'pith\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box" title="Cước mụn dừa (VND/cont)"/></td>'
+      +'<td style="padding:4px;width:30px"><button class="rac red" onclick="_cocoFreightDel('+i+')"><i class="ti ti-x"></i></button></td>'
+      +'</tr>';
+  }).join('');
+
+  // Chi phí nội địa / 1 cont = tổng (cho vol) / vol
+  const fbStuffHP=fb.stuffHP/vol, fbStuffSP=fb.stuffSP/vol, fbWh=fb.wh/vol;
+  const ptStuffHP=pt.stuffHP/vol, ptStuffSP=pt.stuffSP/vol, ptWh=pt.wh/vol;
+
+  function profitVal(base,type){
+    if(prof.type==='percent')return base*(_num(prof[type])/100);
+    return _num(prof[type]);
+  }
+
+  // Bảng kết quả: cho mỗi POD/Carrier → giá thu khách (xơ dừa & mụn dừa) theo từng phương án cảng + đóng kho
+  const resultRows=(_coco.freight||[]).map(function(f){
+    const fFreight=_num(f.fiber), pFreight=_num(f.pith);
+    // tổng chi phí/cont theo từng phương án
+    const fb_HP=fbStuffHP+fFreight, fb_SP=fbStuffSP+fFreight, fb_WH=fbWh+fFreight;
+    const pt_HP=ptStuffHP+pFreight, pt_SP=ptStuffSP+pFreight, pt_WH=ptWh+pFreight;
+    // + lợi nhuận
+    const fb_HP_s=fb_HP+profitVal(fb_HP,'fiber'), fb_SP_s=fb_SP+profitVal(fb_SP,'fiber'), fb_WH_s=fb_WH+profitVal(fb_WH,'fiber');
+    const pt_HP_s=pt_HP+profitVal(pt_HP,'pith'), pt_SP_s=pt_SP+profitVal(pt_SP,'pith'), pt_WH_s=pt_WH+profitVal(pt_WH,'pith');
+    return '<tr>'
+      +'<td style="padding:5px;font-size:12px;font-weight:600">'+(f.pod||'—')+'</td>'
+      +'<td style="padding:5px;font-size:12px">'+(f.carrier||'—')+'</td>'
+      +'<td style="padding:5px;font-size:12px;text-align:right">'+_vnd(fb_HP_s)+'</td>'
+      +'<td style="padding:5px;font-size:12px;text-align:right">'+_vnd(fb_SP_s)+'</td>'
+      +'<td style="padding:5px;font-size:12px;text-align:right;color:var(--green);font-weight:600">'+_vnd(fb_WH_s)+'</td>'
+      +'<td style="padding:5px;font-size:12px;text-align:right">'+_vnd(pt_HP_s)+'</td>'
+      +'<td style="padding:5px;font-size:12px;text-align:right">'+_vnd(pt_SP_s)+'</td>'
+      +'<td style="padding:5px;font-size:12px;text-align:right;color:var(--green);font-weight:600">'+_vnd(pt_WH_s)+'</td>'
+      +'</tr>';
+  }).join('');
+
+  return '<div style="display:flex;gap:16px;align-items:center;margin-bottom:1rem;flex-wrap:wrap">'
+      +'<div style="font-size:15px;font-weight:700"><i class="ti ti-report-money" style="color:var(--blue);margin-right:4px"></i>Review giá</div>'
+      +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;color:var(--text-secondary)">Tỷ giá VND/USD:</span><input type="text" value="'+_vnd(rate)+'" oninput="_coco.rate=_num(this.value)" onblur="renderCocoQuote()" style="width:100px;font-size:13px;text-align:right"/></div>'
+      +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;color:var(--text-secondary)">Vol:</span><input type="number" value="'+vol+'" oninput="_coco.vol=parseInt(this.value)||1" onblur="renderCocoQuote()" style="width:70px;font-size:13px;text-align:center"/></div>'
+      +'<button class="btn pri" style="margin-left:auto" onclick="saveCocoQuote()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+    +'</div>'
+
+    +'<div class="card" style="margin-bottom:1.25rem">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--blue);margin-bottom:.5rem">Ocean Freight theo POD / Carrier (VND/cont)</div>'
+      +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">POD</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Carrier</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Cước Xơ dừa</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Cước Mụn dừa</th>'
+        +'<th></th></tr></thead><tbody>'+freightRows+'</tbody></table>'
+      +'<button class="btn sm" style="margin-top:6px" onclick="_cocoFreightAdd()"><i class="ti ti-plus"></i> Thêm POD/Carrier</button>'
+    +'</div>'
+
+    +'<div class="card" style="margin-bottom:1.25rem">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--orange);margin-bottom:.5rem">Lợi nhuận mong muốn / cont</div>'
+      +'<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">'
+        +'<label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="radio" name="cocoProfitType" '+(prof.type==='percent'?'checked':'')+' onchange="_coco.profit.type=\'percent\';renderCocoQuote()"/> Theo %</label>'
+        +'<label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="radio" name="cocoProfitType" '+(prof.type==='amount'?'checked':'')+' onchange="_coco.profit.type=\'amount\';renderCocoQuote()"/> Số tiền cụ thể (VND)</label>'
+        +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px">Xơ dừa:</span><input type="text" value="'+(prof.type==='percent'?_num(prof.fiber):_vnd(prof.fiber))+'" oninput="_coco.profit.fiber=_num(this.value)" onblur="renderCocoQuote()" style="width:100px;font-size:13px;text-align:right"/><span style="font-size:12px">'+(prof.type==='percent'?'%':'VND')+'</span></div>'
+        +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px">Mụn dừa:</span><input type="text" value="'+(prof.type==='percent'?_num(prof.pith):_vnd(prof.pith))+'" oninput="_coco.profit.pith=_num(this.value)" onblur="renderCocoQuote()" style="width:100px;font-size:13px;text-align:right"/><span style="font-size:12px">'+(prof.type==='percent'?'%':'VND')+'</span></div>'
+      +'</div>'
+    +'</div>'
+
+    +'<div class="card">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:.5rem">Số tiền phải thu khách / cont (đã gồm lợi nhuận)</div>'
+      +'<table style="width:100%;border-collapse:collapse"><thead>'
+        +'<tr style="background:var(--bg-secondary)"><th rowspan="2" style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left;vertical-align:bottom">POD</th><th rowspan="2" style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left;vertical-align:bottom">Carrier</th><th colspan="3" style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--green);text-align:center;border-bottom:1px solid var(--border-light)">Xơ dừa</th><th colspan="3" style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--orange);text-align:center;border-bottom:1px solid var(--border-light)">Mụn dừa</th></tr>'
+        +'<tr style="background:var(--bg-secondary)"><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Hiệp Phước</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">SPITC</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Đóng kho</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Hiệp Phước</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">SPITC</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Đóng kho</th></tr>'
+        +'</thead><tbody>'+resultRows+'</tbody></table>'
+      +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:8px">* Chi phí nội địa/cont = Tổng chi phí (cho '+vol+' cont) ÷ '+vol+'. Cước đã tính theo VND/cont. Giá đã cộng lợi nhuận.</div>'
+    +'</div>';
+}
+
+function _cocoFreightSet(i, field, val){ if(_coco.freight[i])_coco.freight[i][field]=val; }
+window._cocoFreightSet=_cocoFreightSet;
+function _cocoFreightSetNum(i, field, val){ if(_coco.freight[i])_coco.freight[i][field]=_num(val); }
+window._cocoFreightSetNum=_cocoFreightSetNum;
+function _cocoFreightAdd(){ _coco.freight.push({pod:'',carrier:'',fiber:0,pith:0}); renderCocoQuote(); }
+window._cocoFreightAdd=_cocoFreightAdd;
+function _cocoFreightDel(i){ _coco.freight.splice(i,1); renderCocoQuote(); }
+window._cocoFreightDel=_cocoFreightDel;
+
+// ─────────── TAB 4: BÁO GIÁ (bảng gửi khách) ───────────
+function _cocoQuoteData(){
+  // Tính giá thu khách cuối cùng cho mỗi POD/Carrier (dùng cảng SPITC cho đóng bãi mặc định + đóng kho riêng)
+  const fb=_cocoCostSummary('fiber');
+  const pt=_cocoCostSummary('pith');
+  const vol=_coco.vol||1;
+  const prof=_coco.profit||{type:'amount',fiber:0,pith:0};
+  const fbStuffSP=fb.stuffSP/vol, fbWh=fb.wh/vol;
+  const ptStuffSP=pt.stuffSP/vol, ptWh=pt.wh/vol;
+  function profitVal(base,type){ return prof.type==='percent'?base*(_num(prof[type])/100):_num(prof[type]); }
+  return (_coco.freight||[]).map(function(f){
+    const fFreight=_num(f.fiber), pFreight=_num(f.pith);
+    // Xơ dừa (đóng bãi SPITC), Mụn dừa (đóng bãi SPITC), Đóng kho (giá xơ dừa đóng kho)
+    const fiber=fbStuffSP+fFreight; const fiberS=fiber+profitVal(fiber,'fiber');
+    const pith=ptStuffSP+pFreight; const pithS=pith+profitVal(pith,'pith');
+    const whBase=fbWh+fFreight; const whS=whBase+profitVal(whBase,'fiber');
+    return {pod:f.pod||'',carrier:f.carrier||'',etd:f.etd||'',fiber:Math.round(fiberS),pith:Math.round(pithS),wh:Math.round(whS)};
+  });
+}
+
+function _cocoRenderQuote(){
+  const rows=_cocoQuoteData();
+  // group by POD for display (giống mẫu hình)
+  const byPod={};
+  rows.forEach(function(r){ (byPod[r.pod]=byPod[r.pod]||[]).push(r); });
+  let tbody='';
+  Object.keys(byPod).forEach(function(pod){
+    const list=byPod[pod];
+    list.forEach(function(r,idx){
+      tbody+='<tr>'
+        +(idx===0?'<td rowspan="'+list.length+'" style="padding:6px;font-weight:700;font-size:12.5px;border:1px solid var(--border-light);background:var(--bg-secondary);vertical-align:middle">'+pod+'</td>':'')
+        +'<td style="padding:6px;font-size:12px;border:1px solid var(--border-light)">'+r.carrier+'</td>'
+        +'<td style="padding:6px;font-size:12px;border:1px solid var(--border-light);text-align:right">'+_vnd(r.fiber)+'</td>'
+        +'<td style="padding:6px;font-size:12px;border:1px solid var(--border-light);text-align:right">'+_vnd(r.pith)+'</td>'
+        +'<td style="padding:6px;font-size:12px;border:1px solid var(--border-light);text-align:right;background:#FFF9C4">'+_vnd(r.wh)+'</td>'
+        +'<td style="padding:6px;font-size:11.5px;border:1px solid var(--border-light)"><input type="text" value="'+(r.etd||'').replace(/"/g,'&quot;')+'" oninput="_cocoSetEtd(\''+r.pod.replace(/'/g,"\\'")+'\',\''+r.carrier.replace(/'/g,"\\'")+'\',this.value)" placeholder="vd: 6/6, 13/6, 20/6" style="font-size:11.5px;width:100%;box-sizing:border-box;border:none;background:transparent"/></td>'
+        +'</tr>';
+    });
+  });
+  if(!rows.length)tbody='<tr><td colspan="6" style="padding:1.5rem;text-align:center;color:var(--text-tertiary)">Chưa có POD/Carrier. Thêm ở Tab 3 - Review giá.</td></tr>';
+
+  return '<div style="display:flex;gap:16px;align-items:center;margin-bottom:1rem;flex-wrap:wrap">'
+      +'<div style="font-size:15px;font-weight:700"><i class="ti ti-file-invoice" style="color:var(--green);margin-right:4px"></i>Báo giá gửi khách (VND)</div>'
+      +'<div style="margin-left:auto;display:flex;gap:8px">'
+        +'<button class="btn" onclick="saveCocoQuote()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+        +'<button class="btn" onclick="exportCocoExcel()"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
+        +'<button class="btn pri" onclick="exportCocoPDF()"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>'
+      +'</div>'
+    +'</div>'
+    +'<div class="card"><div id="cocoQuoteTable"><table style="width:100%;border-collapse:collapse">'
+      +'<thead><tr style="background:#2E7D32;color:#fff">'
+        +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">POD</th>'
+        +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">Hãng tàu</th>'
+        +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">Xơ dừa</th>'
+        +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">Mụn dừa</th>'
+        +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">Đóng kho</th>'
+        +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">ETD (Lịch tàu)</th>'
+      +'</tr></thead><tbody>'+tbody+'</tbody></table></div>'
+      +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:8px">Đơn vị: VND/cont. Giá Xơ dừa & Mụn dừa tính theo đóng bãi (SPITC). Cột Đóng kho tính theo phương án đóng kho.</div>'
+    +'</div>';
+}
+
+function _cocoSetEtd(pod, carrier, val){
+  const f=(_coco.freight||[]).find(function(x){return (x.pod||'')===pod&&(x.carrier||'')===carrier;});
+  if(f)f.etd=val;
+}
+window._cocoSetEtd=_cocoSetEtd;
+
+// ─────────── EXPORT EXCEL ───────────
+function exportCocoExcel(){
+  const rows=_cocoQuoteData();
+  if(!rows.length){toast('Chưa có dữ liệu báo giá','error');return;}
+  const aoa=[['POD','Hãng tàu','Xơ dừa','Mụn dừa','Đóng kho','ETD (Lịch tàu)']];
+  rows.forEach(function(r){ aoa.push([r.pod,r.carrier,r.fiber,r.pith,r.wh,r.etd||'']); });
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=[{wch:14},{wch:12},{wch:14},{wch:14},{wch:14},{wch:30}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Báo giá');
+  XLSX.writeFile(wb,'BaoGia_Dua_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  toast('Đã xuất Excel');
+}
+window.exportCocoExcel=exportCocoExcel;
+
+// ─────────── EXPORT PDF (in trình duyệt) ───────────
+function exportCocoPDF(){
+  const rows=_cocoQuoteData();
+  if(!rows.length){toast('Chưa có dữ liệu báo giá','error');return;}
+  const byPod={}; rows.forEach(function(r){ (byPod[r.pod]=byPod[r.pod]||[]).push(r); });
+  let tb='';
+  Object.keys(byPod).forEach(function(pod){
+    const list=byPod[pod];
+    list.forEach(function(r,idx){
+      tb+='<tr>'
+        +(idx===0?'<td rowspan="'+list.length+'" style="border:1px solid #999;padding:5px;font-weight:bold;background:#f0f0f0;text-align:center;vertical-align:middle">'+pod+'</td>':'')
+        +'<td style="border:1px solid #999;padding:5px">'+r.carrier+'</td>'
+        +'<td style="border:1px solid #999;padding:5px;text-align:right">'+_vnd(r.fiber)+'</td>'
+        +'<td style="border:1px solid #999;padding:5px;text-align:right">'+_vnd(r.pith)+'</td>'
+        +'<td style="border:1px solid #999;padding:5px;text-align:right;background:#FFF9C4">'+_vnd(r.wh)+'</td>'
+        +'<td style="border:1px solid #999;padding:5px">'+(r.etd||'')+'</td>'
+        +'</tr>';
+    });
+  });
+  const html='<html><head><meta charset="utf-8"><title>Báo giá Dừa</title></head>'
+    +'<body style="font-family:Arial,sans-serif;padding:20px">'
+    +'<h2 style="text-align:center;color:#2E7D32">BẢNG BÁO GIÁ XUẤT KHẨU — XƠ DỪA / MỤN DỪA</h2>'
+    +'<p style="text-align:center;font-size:13px;color:#666">Ngày: '+fmtDMY(new Date().toISOString())+' — Đơn vị: VND/cont</p>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+    +'<thead><tr style="background:#2E7D32;color:#fff">'
+    +'<th style="border:1px solid #999;padding:6px">POD</th><th style="border:1px solid #999;padding:6px">Hãng tàu</th>'
+    +'<th style="border:1px solid #999;padding:6px">Xơ dừa</th><th style="border:1px solid #999;padding:6px">Mụn dừa</th>'
+    +'<th style="border:1px solid #999;padding:6px">Đóng kho</th><th style="border:1px solid #999;padding:6px">ETD</th></tr></thead>'
+    +'<tbody>'+tb+'</tbody></table>'
+    +'<p style="font-size:11px;color:#888;margin-top:16px">* Giá Xơ dừa & Mụn dừa theo đóng bãi (SPITC). Báo giá tham khảo, có hiệu lực theo lịch tàu.</p>'
+    +'</body></html>';
+  const w=window.open('','_blank');
+  if(!w){toast('Trình duyệt chặn popup — cho phép popup để xuất PDF','error');return;}
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
+}
+window.exportCocoPDF=exportCocoPDF;
+/* ═══ END COCOQUOTE ═══ */
+
 
 
 
