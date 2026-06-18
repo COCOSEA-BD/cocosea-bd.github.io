@@ -717,6 +717,7 @@ function startListeners(){
     cache.partners = {};
     snap.docs.forEach(d=>{ cache.partners[d.id]={shortname:d.id,...d.data()}; });
     if(currentTab==='doi-tac') renderPartners();
+    if(currentTab==='contract'&&typeof _ctrRefreshPartnerSelect==='function') _ctrRefreshPartnerSelect();
   });
 
   // Users
@@ -9486,6 +9487,8 @@ function renderContractTool(){
     +'</div>'
   +'</div>';
   _ctrRenderSaved();
+  // Nếu cache.partners rỗng (chưa load kịp), thử refresh lại sau 1 nhịp
+  if(!Object.keys(cache.partners||{}).length){ setTimeout(_ctrRefreshPartnerSelect,400); }
 }
 window.renderContractTool=renderContractTool;
 
@@ -9498,11 +9501,27 @@ function _ctrOnPartnerChange(){
 }
 window._ctrOnPartnerChange=_ctrOnPartnerChange;
 
+// Cập nhật lại danh sách đối tác Bên B (khi cache.partners load xong sau khi mở tab)
+function _ctrRefreshPartnerSelect(){
+  const sel=g('ctr_partnerB'); if(!sel)return;
+  const cur=sel.value;
+  const partners=cache.partners||{};
+  const pKeys=Object.keys(partners).sort();
+  sel.innerHTML='<option value="">— Chọn đối tác (Bên B) —</option>'+pKeys.map(function(k){
+    const p=partners[k];
+    return '<option value="'+k+'"'+(cur===k?' selected':'')+'>'+(p.fullname||k)+(p.type?' ('+p.type+')':'')+'</option>';
+  }).join('');
+}
+window._ctrRefreshPartnerSelect=_ctrRefreshPartnerSelect;
+
 function _ctrCreditWords(){
   const v=_num(g('ctr_credit')?.value||0);
-  const el=g('ctr_creditWords'); if(el)el.textContent=_ctrVndToWords(v);
-  // format with thousands
-  const inp=g('ctr_credit'); if(inp){const pos=inp.selectionStart;inp.value=_ctrVnd(v);}
+  const el=g('ctr_creditWords');
+  if(el){
+    if(v>0){el.textContent=_ctrVndToWords(v);el.style.color='var(--green)';}
+    else{el.textContent='Hạn mức = 0 → Hợp đồng sẽ tự bỏ điều khoản hạn mức công nợ (4.2.2) và dồn số thứ tự.';el.style.color='var(--orange)';}
+  }
+  const inp=g('ctr_credit'); if(inp){inp.value=v>0?_ctrVnd(v):'';}
 }
 window._ctrCreditWords=_ctrCreditWords;
 
@@ -9679,11 +9698,18 @@ function _ctrBuildHtml(d){
     +'<div class="cl"><span class="n">4.1</span><span><b>Giao nhận chứng từ của lô hàng.</b></span></div>'
     +'<div class="cl"><span class="n">4.1.1</span><span>Bên A sẽ gửi chuyển phát hoặc trực tiếp giao bộ chứng từ hoàn chỉnh của lô hàng cho bên B tại văn phòng của bên B hoặc thực hiện theo các thông tin chỉ dẫn của bên B trong vòng ba (03) ngày làm việc kể từ ngày tàu chạy.</span></div>'
     +'<div class="cl"><span class="n">4.2</span><span><b>Điều kiện thanh toán hợp đồng.</b></span></div>'
-    +'<div class="cl"><span class="n">4.2.1</span><span>Bên A tổng hợp và phát hành thông báo Giấy báo nợ (Debit note) theo từng lô hàng bao gồm cả phí phát sinh (nếu có) cho bên B.</span></div>'
-    +'<div class="cl"><span class="n">4.2.2</span><span>Bên A đồng ý cung cấp cho Bên B hạn mức công nợ '+creditStr+' VND (Bằng chữ: '+creditWords+'.), trong trường hợp số tiền nợ cộng dồn phát sinh vượt hạn mức, Bên B có trách nhiệm thanh toán cho Bên A phần vượt hạn mức dù chưa đến hạn.</span></div>'
-    +'<div class="cl"><span class="n">4.2.3</span><span>Trong trường hợp Bên B đang nợ Bên A cước hoặc các chi phí khác, thì Bên B phải đảm bảo có đơn hàng gối đầu gửi cho Bên A vận chuyển và đang trên hành trình. Nếu không đáp ứng việc có hàng gối đầu đang trên hành trình, thì Bên B phải thanh toán dứt điểm toàn bộ công nợ cho Bên A trước khi Bên A giao vận đơn gốc (đối với lô hàng xuất sau cùng) hoặc trước khi Bên A giao hàng tại nơi đến (đối với lô hàng nhập hay hàng nội địa sau cùng).</span></div>'
-    +'<div class="cl"><span class="n">4.2.4</span><span>Bên B có trách nhiệm thanh toán cho Bên A công nợ phát sinh trong vòng '+(d.paymentDays||45)+' ngày kể từ ngày phát hành Giấy báo nợ (Debit note).</span></div>'
-    +'<div class="cl"><span class="n">4.2.5</span><span>Trong trường hợp bên B chậm thanh toán vì bất kỳ lý do gì, Bên B phải chịu lãi phạt 8%/năm tương đương trên số tiền chậm trả. Bên B có trách nhiệm thanh toán đầy đủ công nợ, phí, lãi phạt phát sinh cho bên A.</span></div>'
+    +(function(){
+      // Đánh số động cho mục 4.2.x. Nếu hạn mức công nợ = 0 thì BỎ dòng hạn mức và dồn số lên.
+      const hasCredit=(parseFloat(d.creditLimit)||0)>0;
+      let n=0; const pre='4.2.';
+      function row(txt){ n++; return '<div class="cl"><span class="n">'+pre+n+'</span><span>'+txt+'</span></div>'; }
+      let out=row('Bên A tổng hợp và phát hành thông báo Giấy báo nợ (Debit note) theo từng lô hàng bao gồm cả phí phát sinh (nếu có) cho bên B.');
+      if(hasCredit){ out+=row('Bên A đồng ý cung cấp cho Bên B hạn mức công nợ '+creditStr+' VND (Bằng chữ: '+creditWords+'.), trong trường hợp số tiền nợ cộng dồn phát sinh vượt hạn mức, Bên B có trách nhiệm thanh toán cho Bên A phần vượt hạn mức dù chưa đến hạn.'); }
+      out+=row('Trong trường hợp Bên B đang nợ Bên A cước hoặc các chi phí khác, thì Bên B phải đảm bảo có đơn hàng gối đầu gửi cho Bên A vận chuyển và đang trên hành trình. Nếu không đáp ứng việc có hàng gối đầu đang trên hành trình, thì Bên B phải thanh toán dứt điểm toàn bộ công nợ cho Bên A trước khi Bên A giao vận đơn gốc (đối với lô hàng xuất sau cùng) hoặc trước khi Bên A giao hàng tại nơi đến (đối với lô hàng nhập hay hàng nội địa sau cùng).');
+      out+=row('Bên B có trách nhiệm thanh toán cho Bên A công nợ phát sinh trong vòng '+(d.paymentDays||45)+' ngày kể từ ngày phát hành Giấy báo nợ (Debit note).');
+      out+=row('Trong trường hợp bên B chậm thanh toán vì bất kỳ lý do gì, Bên B phải chịu lãi phạt 8%/năm tương đương trên số tiền chậm trả. Bên B có trách nhiệm thanh toán đầy đủ công nợ, phí, lãi phạt phát sinh cho bên A.');
+      return out;
+    })()
     +'<div class="cl"><span class="n">4.3</span><span><b>Phương thức thanh toán</b></span></div>'
     +'<div class="cl"><span class="n">4.3.1</span><span>Thanh toán chuyển khoản, hoặc tiền mặt trong trường hợp phát sinh các chi phí chi hộ.</span></div>'
     +'<div class="cl"><span class="n">4.3.2</span><span>Thanh toán bằng VNĐ hoặc ngoại tệ được quy đổi VNĐ theo tỷ giá bán ra của Ngân hàng TMCP Ngoại Thương Việt Nam (Vietcombank) / hoặc theo tỷ giá niêm yết của hãng tàu (trong trường hợp hãng tàu áp dụng tỷ giá riêng) tại ngày thực tế tàu chạy.</span></div>'
