@@ -696,7 +696,7 @@ function startListeners(){
     if(currentTab==='xuat') renderLotTable('xuat');
     if(detailId&&detailTt==='xuat'&&g('detailPanel').classList.contains('open')){
       const fresh=cache.xuat.find(x=>x._id===detailId);
-      if(fresh) renderDetailPanel(fresh,'xuat');
+      if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'xuat');
     }
     updateSidebar();
   });
@@ -707,7 +707,7 @@ function startListeners(){
     if(currentTab==='nhap') renderLotTable('nhap');
     if(detailId&&detailTt==='nhap'&&g('detailPanel').classList.contains('open')){
       const fresh=cache.nhap.find(x=>x._id===detailId);
-      if(fresh) renderDetailPanel(fresh,'nhap');
+      if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'nhap');
     }
     updateSidebar();
   });
@@ -1170,6 +1170,24 @@ function switchDetailTab(tab){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   renderDetailPanel(r,detailTt);
 }
+
+// Phát hiện người dùng đang nhập liệu trong panel chi tiết (tránh listener Firestore vẽ lại làm mất input đang gõ)
+function _isEditingDetailPanel(){
+  const panel=g('detailPanel');
+  if(!panel)return false;
+  const ae=document.activeElement;
+  if(!ae)return false;
+  // Đang focus vào ô nhập trong panel?
+  if(panel.contains(ae)){
+    const tag=(ae.tagName||'').toLowerCase();
+    if(tag==='input'||tag==='select'||tag==='textarea')return true;
+  }
+  // Đang ở tab dễ mất dữ liệu (dịch vụ/costing/giá): hoãn vẽ lại tự động để không mất
+  // dòng/giá đang nhập mà chưa lưu. Khi người dùng Lưu hoặc đổi tab, panel sẽ tự vẽ lại.
+  if(typeof detailTab!=='undefined' && (detailTab==='svc'||detailTab==='costing'||detailTab==='price'||detailTab==='cont'||detailTab==='invoice')) return true;
+  return false;
+}
+window._isEditingDetailPanel=_isEditingDetailPanel;
 
 function renderDetailPanel(r,tt){
   // Tab buttons
@@ -7241,7 +7259,7 @@ function renderDocMaker(){
   <span style="font-weight:700;font-size:15px">Document Maker</span>
   <span style="font-size:11px;color:var(--text-secondary)">— Invoice / Packing List / Contract / INV T.Khai / SI</span>
 </div>
-<div style="display:grid;grid-template-columns:400px 1fr;gap:1.25rem;align-items:start">
+<div style="display:grid;grid-template-columns:minmax(0,560px) 1fr;gap:1.25rem;align-items:start">
 <div>
 <div class="table-card" style="padding:1.1rem">
   <label class="lbl">Tìm lô hàng (Job ID hoặc MBL)</label>
@@ -7460,13 +7478,13 @@ function dmPickLot(id,tt,targetBkArg){
     const gw=parseFloat(c.gw)||0;
     return '<tr>'
       +'<td style="padding:2px 4px;border:1px solid var(--border-light);text-align:center;font-size:11px">'+(i+1)+'</td>'
-      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_cont_'+i+'" value="'+c.no+'" style="font-size:11px;width:108px"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_cont_'+i+'" value="'+c.no+'" style="font-size:11px;width:100px"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_seal_'+i+'" value="'+(c.seal||'')+'" style="font-size:11px;width:92px"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_pkg_'+i+'" value="'+(c.pkg||'')+'" placeholder="pkg" style="font-size:11px;width:50px;text-align:center" oninput="dmUpdateTotals()"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_nw_'+i+'" value="'+(c.nw||'')+'" placeholder="NW" style="font-size:11px;width:62px;text-align:right" oninput="dmNWChange('+i+')"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_gw_'+i+'" value="'+(gw||'')+'" placeholder="GW" style="font-size:11px;width:62px;text-align:right" oninput="dmUpdateTotals()"/></td>'
       +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_tare_'+i+'" value="'+(c.tare||'')+'" placeholder="Tare" style="font-size:11px;width:55px;text-align:right"/></td>'
-      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="date" id="dmc_date_'+i+'" value="'+(c.date||r.etd||'')+'" style="font-size:11px;width:106px"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="date" id="dmc_date_'+i+'" value="'+(c.date||r.etd||'')+'" style="font-size:11px;width:88px"/></td>'
     +'</tr>';
   }).join('');
   dmUpdateTotals();
@@ -7564,6 +7582,7 @@ function dmGetData(){
     pkgUnit:(r.pkgUnit||'Bales').toUpperCase(),
     priceLabel:g('dm_priceLabel')?.value||'CNF',
     cnee:cnee.name||'',cneeAddr:cnee.addr||'',cneePic:cnee.pic||'',cneeTel:cnee.tel||'',cneeEmail:cnee.email||'',cneeUsci:cnee.usci||'',
+    cneeName:cnee.name||'',buyerCompany:(sp.enName||sp.fullname||sp.shortname||''),
     pod:g('dm_pod')?.value||r.pod||'',vessel:(r.vessel||'')+(r.voy?' V.'+r.voy:''),
     mbl:r.mblNo||'',bkgNo:r.bookingNo||'',
     allBkgNos:(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(' / '):(r.bookingNo||'')),
@@ -7609,13 +7628,14 @@ function _dmDocNos(d,showInv){
     +'<tr><td class="lbl">Date</td><td>: '+theDate+'</td></tr>'
     +'</table></td></tr></table>';
 }
-function _dmParties(d){
+function _dmParties(d, showCnee){
   return '<table class="nb" style="width:100%;margin-bottom:6px">'
     +'<tr><td class="lbl" style="width:130px">SELLER</td><td style="width:14px">:</td><td class="b">'+d.sName+'</td></tr>'
     +'<tr><td class="lbl">ADDRESS</td><td>:</td><td>'+d.sAddr+(d.sTel?'<br>Tel: '+d.sTel:'')+(d.sEmail?'<br>Email: '+d.sEmail:'')+'</td></tr>'
     +'<tr><td style="height:8px"></td></tr>'
     +'<tr><td class="lbl">BUYER</td><td>:</td><td class="b">'+d.cnee+'</td></tr>'
     +'<tr><td class="lbl">ADDRESS</td><td>:</td><td>'+d.cneeAddr+(d.cneeUsci?'<br>USCI : '+d.cneeUsci:'')+(d.cneePic?'<br>PIC : '+d.cneePic+(d.cneeTel?'   - TEL : '+d.cneeTel:''):'')+(d.cneeEmail?'<br>E-mail: '+d.cneeEmail:'')+'</td></tr>'
+    +((showCnee&&d.cneeName)?'<tr><td class="lbl">CNEE</td><td>:</td><td class="b">'+d.cneeName+'</td></tr>':'')
     +'</table>';
 }
 function _dmShipInfo(d){
@@ -7713,7 +7733,7 @@ function _dmContract(d){
   const compactCSS='<style>tr{height:auto !important}body{font-size:10.5px !important;padding:14px 20px !important}h1{font-size:13px !important}.title{font-size:13px !important;margin:8px 0 !important}td,th{padding:3px 5px !important}.nb td{padding:1px 3px !important}p{margin:1px 0 !important;line-height:1.35 !important}table{margin:4px 0 !important}@media print{body{padding:8px 12px !important}@page{margin:8mm;size:A4}}</style>';
   return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+_dmCSS()+compactCSS+'<title>CONTRACT '+d.contractNo+'</title></head><body>'
     +_dmTop(d)+'<div class="title">CONTRACT</div>'+_dmDocNos(d,false)
-    +_dmParties(d)
+    +_dmParties(d,true)
     +'<table class="nb" style="width:100%;margin:6px 0"><tr><td class="lbl" style="width:130px">SHIPMENT FROM</td><td style="width:14px">:</td><td>'+d.pol+'</td></tr><tr><td class="lbl">SHIPMENT TO</td><td>:</td><td>'+d.pod+'</td></tr></table>'
     +_dmBank(d)
     +'<p style="margin:6px 0">This Purchase Contract is made between the Seller and the Buyer where by the Seller agree to sell and the Buyer agree to buy the under-mentioned goods according to the terms and conditions stipulated below:</p>'
