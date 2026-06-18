@@ -8773,8 +8773,8 @@ function _cocoDefault(){
     pith:null, // sẽ clone từ fiber khi khởi tạo
     rate:25400, vol:1,
     freight:[
-      {pod:'Shanghai',carrier:'SJJ',fiber:0,pith:0},
-      {pod:'Shanghai',carrier:'OOCL',fiber:0,pith:0}
+      {pod:'Shanghai',carrier:'SJJ',freight:0,etd:''},
+      {pod:'Shanghai',carrier:'OOCL',freight:0,etd:''}
     ],
     profit:{ type:'amount', fiber:0, pith:0 },
     valid:'',
@@ -8791,6 +8791,14 @@ function _cocoNormalize(d){
   if(d.rate==null)d.rate=25400;
   if(d.vol==null)d.vol=1;
   if(d.valid==null)d.valid='';
+  // Migrate freight rows: cũ {fiber,pith} -> mới {freight} (1 giá 40HC dùng chung)
+  if(Array.isArray(d.freight)){
+    d.freight=d.freight.map(function(f){
+      if(f.freight===undefined){ f.freight=(f.fiber!=null?f.fiber:(f.pith!=null?f.pith:0)); }
+      if(f.etd===undefined)f.etd='';
+      return f;
+    });
+  }
   // Migrate port rows: cấu trúc cũ {hiepPhuoc,spitc} -> mới {hpQty,hpUnit,hpPrice,spQty,spUnit,spPrice}
   ['fiber','pith'].forEach(function(t){
     if(d[t]&&d[t].stuff&&Array.isArray(d[t].stuff.port)){
@@ -9052,13 +9060,17 @@ function _cocoRenderReview(){
 
   // chi phí nội địa / 1 cont (đóng bãi - dùng SPITC làm mặc định hiển thị; cả 2 cảng đều show ở bảng cuối)
   // Ocean freight rows
-  const freightRows=(_coco.freight||[]).map(function(f,i){
+  // sắp xếp theo POD để các dòng cùng POD nằm gần nhau (giữ index gốc để set/del đúng)
+  const freightIdx=(_coco.freight||[]).map(function(f,i){return {f:f,i:i};});
+  freightIdx.sort(function(a,b){ return (a.f.pod||'').localeCompare(b.f.pod||'')|| (a.i-b.i); });
+  const freightRows=freightIdx.map(function(o){
+    const f=o.f, i=o.i;
     return '<tr>'
-      +'<td style="padding:4px"><input type="text" value="'+(f.pod||'').replace(/"/g,'&quot;')+'" oninput="_cocoFreightSet('+i+',\'pod\',this.value)" placeholder="POD" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
-      +'<td style="padding:4px"><input type="text" value="'+(f.carrier||'').replace(/"/g,'&quot;')+'" oninput="_cocoFreightSet('+i+',\'carrier\',this.value)" placeholder="Carrier" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
-      +'<td style="padding:4px;width:120px"><input type="text" value="'+_vnd(f.fiber)+'" oninput="_cocoFreightSetNum('+i+',\'fiber\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box" title="Cước xơ dừa (VND/cont)"/></td>'
-      +'<td style="padding:4px;width:120px"><input type="text" value="'+_vnd(f.pith)+'" oninput="_cocoFreightSetNum('+i+',\'pith\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box" title="Cước mụn dừa (VND/cont)"/></td>'
-      +'<td style="padding:4px;width:30px"><button class="rac red" onclick="_cocoFreightDel('+i+')"><i class="ti ti-x"></i></button></td>'
+      +'<td style="padding:4px;width:150px"><input type="text" value="'+(f.pod||'').replace(/"/g,'&quot;')+'" oninput="_cocoFreightSet('+i+',\'pod\',this.value)" onblur="renderCocoQuote()" placeholder="POD" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px;width:110px"><input type="text" value="'+(f.carrier||'').replace(/"/g,'&quot;')+'" oninput="_cocoFreightSet('+i+',\'carrier\',this.value)" placeholder="Carrier" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px;width:130px"><input type="text" value="'+_vnd(f.freight)+'" oninput="_cocoFreightSetNum('+i+',\'freight\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box" title="Cước 40HC (VND/cont) — dùng chung xơ dừa & mụn dừa"/></td>'
+      +'<td style="padding:4px"><input type="text" value="'+(f.etd||'').replace(/"/g,'&quot;')+'" oninput="_cocoFreightSet('+i+',\'etd\',this.value)" placeholder="VD: 6/6, 13/6, 20/6" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:4px;width:30px"><button class="rac red" onclick="_cocoFreightDel('+i+')" title="Xóa dòng"><i class="ti ti-x"></i></button></td>'
       +'</tr>';
   }).join('');
 
@@ -9073,7 +9085,7 @@ function _cocoRenderReview(){
 
   // Bảng kết quả: cho mỗi POD/Carrier → giá thu khách (xơ dừa & mụn dừa) theo từng phương án cảng + đóng kho
   const resultRows=(_coco.freight||[]).map(function(f){
-    const fFreight=_num(f.fiber), pFreight=_num(f.pith);
+    const fFreight=_num(f.freight), pFreight=_num(f.freight);
     // tổng chi phí/cont theo từng phương án
     const fb_HP=fbStuffHP+fFreight, fb_SP=fbStuffSP+fFreight, fb_WH=fbWh+fFreight;
     const pt_HP=ptStuffHP+pFreight, pt_SP=ptStuffSP+pFreight, pt_WH=ptWh+pFreight;
@@ -9100,14 +9112,17 @@ function _cocoRenderReview(){
     +'</div>'
 
     +'<div class="card" style="margin-bottom:1.25rem">'
-      +'<div style="font-size:13px;font-weight:700;color:var(--blue);margin-bottom:.5rem">Ocean Freight theo POD / Carrier (VND/cont)</div>'
+      +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:.5rem;flex-wrap:wrap"><div style="font-size:13px;font-weight:700;color:var(--blue)">Ocean Freight theo POD (VND/cont — 40HC)</div>'
+        +'<label class="btn sm" style="cursor:pointer;margin-left:auto" title="Nhập giá cước từ file Excel"><i class="ti ti-file-spreadsheet"></i> Nhập từ Excel<input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="_cocoFreightImportExcel(this)"/></label>'
+        +'<button class="btn sm" onclick="_cocoFreightTemplate()" title="Tải file mẫu Excel"><i class="ti ti-download"></i> File mẫu</button>'
+      +'</div>'
       +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
         +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">POD</th>'
         +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Carrier</th>'
-        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Cước Xơ dừa</th>'
-        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Cước Mụn dừa</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Cước (40HC)</th>'
+        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Lịch tàu (ETD)</th>'
         +'<th></th></tr></thead><tbody>'+freightRows+'</tbody></table>'
-      +'<button class="btn sm" style="margin-top:6px" onclick="_cocoFreightAdd()"><i class="ti ti-plus"></i> Thêm POD/Carrier</button>'
+      +'<button class="btn sm" style="margin-top:6px" onclick="_cocoFreightAdd()"><i class="ti ti-plus"></i> Thêm dòng</button>'
     +'</div>'
 
     +'<div class="card" style="margin-bottom:1.25rem">'
@@ -9134,10 +9149,66 @@ function _cocoFreightSet(i, field, val){ if(_coco.freight[i])_coco.freight[i][fi
 window._cocoFreightSet=_cocoFreightSet;
 function _cocoFreightSetNum(i, field, val){ if(_coco.freight[i])_coco.freight[i][field]=_num(val); }
 window._cocoFreightSetNum=_cocoFreightSetNum;
-function _cocoFreightAdd(){ _coco.freight.push({pod:'',carrier:'',fiber:0,pith:0}); renderCocoQuote(); }
+function _cocoFreightAdd(){ _coco.freight.push({pod:'',carrier:'',freight:0,etd:''}); renderCocoQuote(); }
 window._cocoFreightAdd=_cocoFreightAdd;
 function _cocoFreightDel(i){ _coco.freight.splice(i,1); renderCocoQuote(); }
 window._cocoFreightDel=_cocoFreightDel;
+
+// Nhập giá cước từ Excel. Cột: POD | Carrier | Cước (40HC) | Lịch tàu (ETD)
+function _cocoFreightImportExcel(input){
+  const file=input.files[0]; if(!file)return;
+  if(typeof XLSX==='undefined'){toast('Thư viện Excel chưa tải xong, thử lại sau','error');input.value='';return;}
+  setLoading(true,'Đang đọc Excel...');
+  const fr=new FileReader();
+  fr.onload=function(e){
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+      // bỏ dòng tiêu đề nếu ô đầu chứa 'pod'
+      let start=0;
+      if(rows.length&&(''+rows[0][0]).toLowerCase().indexOf('pod')>=0)start=1;
+      const added=[];
+      for(let i=start;i<rows.length;i++){
+        const r=rows[i]; if(!r)continue;
+        const pod=(''+(r[0]||'')).trim();
+        const carrier=(''+(r[1]||'')).trim();
+        const freight=_num(r[2]||0);
+        const etd=(''+(r[3]||'')).trim();
+        if(!pod&&!carrier&&!freight&&!etd)continue; // bỏ dòng trống
+        added.push({pod:pod,carrier:carrier,freight:freight,etd:etd});
+      }
+      if(!added.length){toast('Không tìm thấy dữ liệu trong file','error');setLoading(false);input.value='';return;}
+      // gộp vào danh sách hiện có rồi sắp xếp theo POD
+      _coco.freight=(_coco.freight||[]).concat(added);
+      _coco.freight.sort(function(a,b){return (a.pod||'').localeCompare(b.pod||'');});
+      toast('Đã nhập '+added.length+' dòng giá cước');
+      renderCocoQuote();
+    }catch(err){ toast('Lỗi đọc Excel: '+err.message,'error'); }
+    setLoading(false); input.value='';
+  };
+  fr.onerror=function(){setLoading(false);toast('Đọc file thất bại','error');input.value='';};
+  fr.readAsArrayBuffer(file);
+}
+window._cocoFreightImportExcel=_cocoFreightImportExcel;
+
+// Tải file Excel mẫu cho bảng giá cước
+function _cocoFreightTemplate(){
+  if(typeof XLSX==='undefined'){toast('Thư viện Excel chưa tải xong','error');return;}
+  const aoa=[
+    ['POD','Carrier','Cước (40HC)','Lịch tàu (ETD)'],
+    ['Shanghai','SJJ',13000000,'6/6, 13/6, 20/6'],
+    ['Shanghai','OOCL',11300000,'1/6, 5/6, 8/6'],
+    ['Qingdao','Maersk',9800000,'5/6, 12/6, 19/6']
+  ];
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=[{wch:16},{wch:12},{wch:14},{wch:30}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'OceanFreight');
+  XLSX.writeFile(wb,'Mau_Gia_Cuoc.xlsx');
+  toast('Đã tải file mẫu');
+}
+window._cocoFreightTemplate=_cocoFreightTemplate;
 
 // ─────────── TAB 4: BÁO GIÁ (bảng gửi khách) ───────────
 function _cocoQuoteData(){
@@ -9150,7 +9221,7 @@ function _cocoQuoteData(){
   const ptStuffSP=pt.stuffSP/vol, ptWh=pt.wh/vol;
   function profitVal(base,type){ return prof.type==='percent'?base*(_num(prof[type])/100):_num(prof[type]); }
   return (_coco.freight||[]).map(function(f){
-    const fFreight=_num(f.fiber), pFreight=_num(f.pith);
+    const fFreight=_num(f.freight), pFreight=_num(f.freight);
     // Xơ dừa (đóng bãi SPITC), Mụn dừa (đóng bãi SPITC), Đóng kho (giá xơ dừa đóng kho)
     const fiber=fbStuffSP+fFreight; const fiberS=fiber+profitVal(fiber,'fiber');
     const pith=ptStuffSP+pFreight; const pithS=pith+profitVal(pith,'pith');
