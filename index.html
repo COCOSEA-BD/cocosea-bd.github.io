@@ -686,6 +686,7 @@ function startListeners(){
   loadCargoNames();
   loadServices();
   if(typeof loadCocoQuote==='function'&&can('manageUsers'))loadCocoQuote();
+  if(typeof loadContractPartyA==='function'&&can('manageUsers')){loadContractPartyA();loadContracts();}
   loadAcctInfo();
   stopListeners();
 
@@ -828,6 +829,8 @@ function updateSidebar(){
   // Báo giá Dừa: chỉ admin thấy
   const cocoBtn=g('sb-cocoquote');
   if(cocoBtn)cocoBtn.style.display=can('manageUsers')?'':'none';
+  const ctrBtn=g('sb-contract');
+  if(ctrBtn)ctrBtn.style.display=can('manageUsers')?'':'none';
 }
 
 /* ─────────────────────────────────────────────
@@ -835,11 +838,11 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  ['xuat','nhap','deadline','cong-no','doi-tac','vessel','cocoquote','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
+  ['xuat','nhap','deadline','cong-no','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
-  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','users':'User','quote':'Quotation'};
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Hợp đồng dịch vụ','users':'User','quote':'Quotation'};
   g('pageTitle').textContent=titles[t]||t;
   if(t==='xuat'||t==='nhap') renderLot(t);
   if(t==='deadline') renderDeadline();
@@ -847,6 +850,7 @@ function goTab(t){
   if(t==='doi-tac') renderPartners();
   if(t==='vessel') renderVesselTool();
   if(t==='cocoquote') renderCocoQuote();
+  if(t==='contract') renderContractTool();
   if(t==='users') renderUsers();
   if(t==='docs') renderDocMaker();
   if(t==='costing-report') renderCostingReport();
@@ -4445,6 +4449,7 @@ tr:hover td{background:var(--bg-secondary)}
     <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> Đối tác</button>
     <button class="sb-item" id="sb-vessel" onclick="goTab('vessel')"><i class="ti ti-ship"></i> Vessel tool</button>
     <button class="sb-item" id="sb-cocoquote" onclick="goTab('cocoquote')"><i class="ti ti-calculator"></i> Coconut tool</button>
+    <button class="sb-item" id="sb-contract" onclick="goTab('contract')"><i class="ti ti-file-contract"></i> Hợp đồng DV</button>
     <div class="sb-section" style="margin-top:.4rem">Hệ thống</div>
     <button class="sb-item" id="sb-users" onclick="goTab('users')"><i class="ti ti-users"></i> User</button>
     <button class="sb-item" id="sb-docs" onclick="goTab('docs')"><i class="ti ti-file-certificate"></i> Document Maker</button>
@@ -4481,6 +4486,7 @@ tr:hover td{background:var(--bg-secondary)}
       <div id="page-doi-tac" style="display:none"></div>
       <div id="page-vessel" style="display:none"></div>
       <div id="page-cocoquote" style="display:none"></div>
+      <div id="page-contract" style="display:none"></div>
       <div id="page-users" style="display:none"></div>
       <div id="page-docs" style="display:none"></div>
       <div id="page-costing-report" style="display:none"></div>
@@ -4758,12 +4764,56 @@ function renderSettings(){
     +'</div>'
 
     +'<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>'
-    
+    +_contractPartyASettingsHtml()
     +'</div>';
   renderCargoNamesList();
   renderAcctInfoList();
   if(typeof renderSvcCatList==='function')renderSvcCatList();
 }
+
+// ─────────── SETTINGS: Thông tin Bên A (công ty cung cấp dịch vụ) cho Hợp đồng ───────────
+function _contractPartyASettingsHtml(){
+  const a=window._contractPartyA||{};
+  function fld(id,label,val,ph,wide){
+    return '<div style="'+(wide?'grid-column:1/-1;':'')+'">'
+      +'<label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:3px">'+label+'</label>'
+      +'<input type="text" id="'+id+'" value="'+(val||'').replace(/"/g,'&quot;')+'" placeholder="'+(ph||'')+'" style="font-size:12px;width:100%;box-sizing:border-box"/></div>';
+  }
+  return '<div class="table-card" style="padding:1.25rem;margin:1.25rem 0">'
+    +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-file-contract" style="font-size:14px"></i>Hợp đồng DV — Thông tin Bên A (Công ty ta)</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+      +fld('ctrA_name','Tên giao dịch',a.name||'CÔNG TY TNHH HANA COCO SEA','',true)
+      +fld('ctrA_mst','Mã số thuế',a.mst||'0319570124','')
+      +fld('ctrA_phone','Điện thoại',a.phone||'+84 938 038 713','')
+      +fld('ctrA_addr','Địa chỉ giao dịch',a.addr||'991B Tân Kỳ Tân Quý, Phường Bình Hưng Hòa, Thành phố Hồ Chí Minh, Việt Nam','',true)
+      +fld('ctrA_rep','Đại diện',a.rep||'Bà Nguyễn Thị Cẩm Tiên','')
+      +fld('ctrA_title','Chức vụ',a.title||'Giám Đốc','')
+    +'</div>'
+    +'<button class="btn pri" onclick="saveContractPartyA()"><i class="ti ti-check"></i> Lưu thông tin Bên A</button>'
+    +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">Tài khoản thụ hưởng của hợp đồng lấy từ mục "Tài khoản Công ty" ở trên.</div>'
+  +'</div>';
+}
+
+function loadContractPartyA(cb){
+  db.collection('_config').doc('contractPartyA').get().then(function(snap){
+    window._contractPartyA=snap.exists?snap.data():{};
+    if(cb)cb();
+  }).catch(function(){ window._contractPartyA={}; if(cb)cb(); });
+}
+window.loadContractPartyA=loadContractPartyA;
+
+async function saveContractPartyA(){
+  const a={
+    name:g('ctrA_name')?.value||'',mst:g('ctrA_mst')?.value||'',phone:g('ctrA_phone')?.value||'',
+    addr:g('ctrA_addr')?.value||'',rep:g('ctrA_rep')?.value||'',title:g('ctrA_title')?.value||'',
+    updatedAt:Date.now()
+  };
+  setLoading(true,'Đang lưu...');
+  try{ await db.collection('_config').doc('contractPartyA').set(a,{merge:true}); window._contractPartyA=a; toast('Đã lưu thông tin Bên A'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveContractPartyA=saveContractPartyA;
 
 function addBankRow(prefix){
   const banks=window._bankAccounts||{company:[],personal:[]};
@@ -9294,6 +9344,387 @@ function exportCocoPDF(){
 }
 window.exportCocoPDF=exportCocoPDF;
 /* ═══ END COCOQUOTE ═══ */
+
+/* ═══════════════════════════════════════════════════════════
+   MODULE: HỢP ĐỒNG DỊCH VỤ (Contract) — chỉ admin
+   Bên A = công ty ta (Settings/_config/contractPartyA)
+   Bên B = đối tác (shipper); TK thụ hưởng từ _config/banks (company)
+   Lưu Firestore: _config/contracts (field list[])
+═══════════════════════════════════════════════════════════ */
+let _ctrEditing=null; // bản hợp đồng đang soạn
+
+function loadContracts(cb){
+  db.collection('_config').doc('contracts').get().then(function(snap){
+    window._contracts=(snap.exists&&snap.data().list)?snap.data().list:[];
+    if(cb)cb();
+    if(currentTab==='contract')renderContractTool();
+  }).catch(function(){ window._contracts=[]; if(cb)cb(); });
+}
+window.loadContracts=loadContracts;
+
+// Sinh số hợp đồng: SCCO-<2 ký tự đầu shipper>-<năm>-<2 số thứ tự>
+function _ctrGenNo(shipperShort){
+  const yr=new Date().getFullYear();
+  const pfx=(shipperShort||'XX').replace(/[^a-zA-Z0-9]/g,'').toUpperCase().slice(0,2)||'XX';
+  const base='SCCO-'+pfx+'-'+yr+'-';
+  // tìm số thứ tự lớn nhất hiện có cùng prefix+năm
+  let max=0;
+  (window._contracts||[]).forEach(function(c){
+    const no=c.contractNo||'';
+    if(no.indexOf(base)===0){
+      const seq=parseInt(no.slice(base.length))||0;
+      if(seq>max)max=seq;
+    }
+  });
+  const next=(max+1).toString().padStart(2,'0');
+  return base+next;
+}
+
+// Đổi số tiền VND sang chữ tiếng Việt
+function _ctrVndToWords(n){
+  n=Math.round(parseFloat(n)||0);
+  if(n===0)return 'Không đồng';
+  const ch=['không','một','hai','ba','bốn','năm','sáu','bảy','tám','chín'];
+  function doc3(num,full){
+    let tr=Math.floor(num/100), ch2=Math.floor((num%100)/10), dv=num%10, s='';
+    if(full||tr>0){ s+=ch[tr]+' trăm'; }
+    if(ch2>1){ s+=' '+ch[ch2]+' mươi'; if(dv===1)s+=' mốt'; else if(dv===5)s+=' lăm'; else if(dv>0)s+=' '+ch[dv]; }
+    else if(ch2===1){ s+=' mười'; if(dv===5)s+=' lăm'; else if(dv>0)s+=' '+ch[dv]; }
+    else if(ch2===0&&dv>0){ s+=(tr>0||full)?' lẻ '+ch[dv]:ch[dv]; }
+    return s.trim();
+  }
+  const units=['',' nghìn',' triệu',' tỷ'];
+  let groups=[]; let x=n;
+  while(x>0){ groups.unshift(x%1000); x=Math.floor(x/1000); }
+  let res='';
+  const len=groups.length;
+  for(let i=0;i<len;i++){
+    const g=groups[i];
+    if(g===0)continue;
+    const full=(i>0); // các nhóm sau nhóm đầu đọc đủ 3 chữ số
+    res+=' '+doc3(g, i!==0 && i!==len-1 ? true : (i>0))+units[len-1-i];
+  }
+  res=res.trim();
+  res=res.charAt(0).toUpperCase()+res.slice(1);
+  return res+' đồng';
+}
+window._ctrVndToWords=_ctrVndToWords;
+
+function _ctrFmtDMY(iso){
+  if(!iso)return '';
+  const d=new Date(iso); if(isNaN(d))return iso;
+  return ('0'+d.getDate()).slice(-2)+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+d.getFullYear();
+}
+function _ctrVnd(n){ return (Math.round(parseFloat(n)||0)).toLocaleString('en-US'); }
+
+function renderContractTool(){
+  const pg=g('page-contract');
+  if(!pg)return;
+  if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Chỉ Admin mới truy cập được</div></div>';return;}
+  if(window._contracts===undefined){ pg.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-secondary)">Đang tải...</div>'; loadContracts(renderContractTool); return; }
+  if(window._contractPartyA===undefined){ loadContractPartyA(renderContractTool); }
+
+  const partners=cache.partners||{};
+  // Bên B: ưu tiên shipper, nhưng cho chọn mọi đối tác
+  const pKeys=Object.keys(partners).sort();
+  const ed=_ctrEditing||{};
+  const partnerOpts='<option value="">— Chọn đối tác (Bên B) —</option>'+pKeys.map(function(k){
+    const p=partners[k];
+    return '<option value="'+k+'"'+(ed.partnerB===k?' selected':'')+'>'+(p.fullname||k)+(p.type?' ('+p.type+')':'')+'</option>';
+  }).join('');
+
+  // bank accounts (company)
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const coBanks=Array.isArray(banks)?banks:(banks.company||[]);
+
+  pg.innerHTML='<div style="display:grid;grid-template-columns:minmax(0,460px) 1fr;gap:1.25rem;align-items:start">'
+    // ─── LEFT: form ───
+    +'<div><div class="table-card" style="padding:1.25rem">'
+      +'<div style="font-weight:700;font-size:14px;margin-bottom:1rem;display:flex;align-items:center;gap:8px"><i class="ti ti-file-contract" style="color:var(--blue)"></i>Tạo Hợp đồng dịch vụ</div>'
+
+      +'<label class="lbl">Bên B (Khách hàng / Đối tác)</label>'
+      +'<select id="ctr_partnerB" onchange="_ctrOnPartnerChange()" style="font-size:12px;width:100%;margin-bottom:10px">'+partnerOpts+'</select>'
+
+      +'<label class="lbl">Số hợp đồng <span style="color:var(--text-tertiary);font-weight:400">(tự sinh)</span></label>'
+      +'<input type="text" id="ctr_no" value="'+(ed.contractNo||'').replace(/"/g,'&quot;')+'" placeholder="Chọn Bên B để sinh số" style="font-size:12px;width:100%;margin-bottom:10px"/>'
+
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+        +'<div><label class="lbl">Ngày bắt đầu</label><input type="date" id="ctr_start" value="'+(ed.startDate||new Date().toISOString().slice(0,10))+'" style="font-size:12px;width:100%;box-sizing:border-box"/></div>'
+        +'<div><label class="lbl">Ngày kết thúc</label><input type="date" id="ctr_end" value="'+(ed.endDate||(new Date().getFullYear()+'-12-31'))+'" style="font-size:12px;width:100%;box-sizing:border-box"/></div>'
+      +'</div>'
+
+      +'<label class="lbl">Hạn mức công nợ (VND) — Điều 4.2.2</label>'
+      +'<input type="text" id="ctr_credit" value="'+(ed.creditLimit?_ctrVnd(ed.creditLimit):'1,000,000,000')+'" oninput="_ctrCreditWords()" style="font-size:12px;width:100%"/>'
+      +'<div id="ctr_creditWords" style="font-size:11px;color:var(--green);font-style:italic;margin:3px 0 10px">'+_ctrVndToWords(ed.creditLimit||1000000000)+'</div>'
+
+      +'<label class="lbl">Thời hạn thanh toán công nợ (ngày) — Điều 4.2.4</label>'
+      +'<input type="number" id="ctr_payDays" value="'+(ed.paymentDays||45)+'" min="1" style="font-size:12px;width:100%;margin-bottom:10px"/>'
+
+      +'<label class="lbl">Tài khoản thụ hưởng (từ Cài đặt → Tài khoản Công ty)</label>'
+      +'<div style="border:1px solid var(--border-light);border-radius:8px;padding:8px;margin-bottom:12px;background:var(--bg-secondary)">'
+        +(coBanks.length?coBanks.map(function(b){
+          return '<div style="font-size:11.5px;padding:2px 0"><b>'+(b.beneficiary||'')+'</b> — '+(b.account||'')+' ('+(b.bank||'')+')</div>';
+        }).join(''):'<div style="font-size:11.5px;color:var(--text-tertiary)">Chưa có tài khoản. Thêm ở Cài đặt → Tài khoản Công ty.</div>')
+      +'</div>'
+
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+        +'<button class="btn pri" onclick="_ctrPreview()" style="flex:1"><i class="ti ti-eye"></i> Xem trước</button>'
+        +'<button class="btn" onclick="saveContract()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+        +'<button class="btn" onclick="exportContractPDF()" style="color:var(--red);border-color:var(--red)"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>'
+      +'</div>'
+      +(_ctrEditing&&_ctrEditing._id?'<button class="btn" onclick="_ctrNew()" style="margin-top:8px;width:100%"><i class="ti ti-plus"></i> Tạo hợp đồng mới</button>':'')
+    +'</div></div>'
+
+    // ─── RIGHT: preview + saved list ───
+    +'<div>'
+      +'<div id="ctrPreviewBox" style="background:#fff;border-radius:10px;border:1px solid var(--border-light);padding:0;min-height:300px;overflow:auto;max-height:70vh"><div style="text-align:center;padding:3rem;color:var(--text-tertiary)"><i class="ti ti-file-contract" style="font-size:40px;opacity:.25"></i><div style="margin-top:.5rem;font-size:12px">Chọn Bên B → Điền thông tin → Xem trước</div></div></div>'
+      +'<div style="margin-top:1rem">'
+        +'<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem"><i class="ti ti-files" style="font-size:13px"></i> Hợp đồng đã lưu</div>'
+        +'<input type="text" id="ctrSearch" placeholder="Tìm theo số HĐ / tên Bên B..." oninput="_ctrRenderSaved()" style="font-size:11.5px;width:100%;margin-bottom:6px;box-sizing:border-box"/>'
+        +'<div id="ctrSavedList"></div>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+  _ctrRenderSaved();
+}
+window.renderContractTool=renderContractTool;
+
+function _ctrOnPartnerChange(){
+  const k=g('ctr_partnerB')?.value||'';
+  if(k && !( _ctrEditing&&_ctrEditing._id)){
+    // sinh số mới khi chọn đối tác (chỉ khi đang tạo mới)
+    g('ctr_no').value=_ctrGenNo(k);
+  }
+}
+window._ctrOnPartnerChange=_ctrOnPartnerChange;
+
+function _ctrCreditWords(){
+  const v=_num(g('ctr_credit')?.value||0);
+  const el=g('ctr_creditWords'); if(el)el.textContent=_ctrVndToWords(v);
+  // format with thousands
+  const inp=g('ctr_credit'); if(inp){const pos=inp.selectionStart;inp.value=_ctrVnd(v);}
+}
+window._ctrCreditWords=_ctrCreditWords;
+
+function _ctrNew(){ _ctrEditing=null; renderContractTool(); }
+window._ctrNew=_ctrNew;
+
+function _ctrRenderSaved(){
+  const box=g('ctrSavedList'); if(!box)return;
+  const q=(g('ctrSearch')?.value||'').toLowerCase().trim();
+  let list=(window._contracts||[]).slice().sort(function(a,b){return (b.savedAt||0)-(a.savedAt||0);});
+  if(q)list=list.filter(function(c){return (c.contractNo||'').toLowerCase().includes(q)||(c.partnerBName||'').toLowerCase().includes(q);});
+  if(!list.length){box.innerHTML='<div style="font-size:11.5px;color:var(--text-tertiary);padding:8px">'+(q?'Không tìm thấy':'Chưa có hợp đồng nào được lưu')+'</div>';return;}
+  box.innerHTML='<div style="display:flex;flex-direction:column;gap:5px">'+list.map(function(c){
+    const dt=c.savedAt?new Date(c.savedAt).toLocaleDateString('vi-VN'):'';
+    return '<div style="padding:8px 10px;border:1px solid var(--border-light);border-radius:8px;font-size:12px;background:var(--bg-primary);display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      +'<div style="cursor:pointer;flex:1" onclick="_ctrLoad(\''+c._id+'\')"><strong style="color:var(--blue)">'+(c.contractNo||'—')+'</strong>'
+      +'<div style="font-size:10.5px;color:var(--text-secondary)">'+(c.partnerBName||'')+'</div></div>'
+      +'<div style="font-size:10px;color:var(--text-tertiary);white-space:nowrap">'+dt+'</div>'
+      +'<button class="rac" onclick="_ctrLoad(\''+c._id+'\')" title="Xem/Sửa" style="color:var(--blue)"><i class="ti ti-eye"></i></button>'
+      +'<button class="rac red" onclick="_ctrDelete(\''+c._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>'
+    +'</div>';
+  }).join('')+'</div>';
+}
+window._ctrRenderSaved=_ctrRenderSaved;
+
+function _ctrLoad(id){
+  const c=(window._contracts||[]).find(function(x){return x._id===id;});
+  if(!c){toast('Không tìm thấy hợp đồng','error');return;}
+  _ctrEditing=JSON.parse(JSON.stringify(c));
+  renderContractTool();
+  setTimeout(_ctrPreview,100);
+}
+window._ctrLoad=_ctrLoad;
+
+async function _ctrDelete(id){
+  const c=(window._contracts||[]).find(function(x){return x._id===id;});
+  if(!c)return;
+  if(!confirm('Xóa hợp đồng "'+(c.contractNo||'')+'"?'))return;
+  const list=(window._contracts||[]).filter(function(x){return x._id!==id;});
+  window._contracts=list;
+  setLoading(true,'Đang xóa...');
+  try{ await db.collection('_config').doc('contracts').set({list:list},{merge:false}); toast('Đã xóa'); if(_ctrEditing&&_ctrEditing._id===id)_ctrEditing=null; renderContractTool(); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window._ctrDelete=_ctrDelete;
+
+// Thu thập dữ liệu từ form
+function _ctrGetData(){
+  const k=g('ctr_partnerB')?.value||'';
+  if(!k){toast('Chọn Bên B (đối tác)','error');return null;}
+  const p=(cache.partners||{})[k]||{};
+  const a=window._contractPartyA||{};
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const coBanks=Array.isArray(banks)?banks:(banks.company||[]);
+  const credit=_num(g('ctr_credit')?.value||0);
+  return {
+    _id:(_ctrEditing&&_ctrEditing._id)||('ctr_'+Date.now()),
+    contractNo:g('ctr_no')?.value||'',
+    partnerB:k, partnerBName:p.fullname||k,
+    startDate:g('ctr_start')?.value||'', endDate:g('ctr_end')?.value||'',
+    creditLimit:credit, paymentDays:parseInt(g('ctr_payDays')?.value)||45,
+    // snapshot Bên A + Bên B + banks tại thời điểm tạo (để hợp đồng không đổi khi sửa đối tác sau này)
+    partyA:{name:a.name||'',mst:a.mst||'',addr:a.addr||'',phone:a.phone||'',rep:a.rep||'',title:a.title||''},
+    partyB:{name:p.fullname||'',mst:p.mst||'',addr:p.addr||'',phone:p.phone||'',rep:p.contact||'',title:'Giám Đốc'},
+    banks:coBanks.map(function(b){return {beneficiary:b.beneficiary||'',account:b.account||'',bank:b.bank||''};}),
+    savedAt:(_ctrEditing&&_ctrEditing.savedAt)||0, savedBy:(currentUser?currentUser.email:'')
+  };
+}
+
+// Tạo HTML hợp đồng theo mẫu
+function _ctrBuildHtml(d){
+  const A=d.partyA||{}, B=d.partyB||{};
+  const startDMY=_ctrFmtDMY(d.startDate)||'..-..-....';
+  const endDMY=_ctrFmtDMY(d.endDate)||'..-..-....';
+  const creditStr=_ctrVnd(d.creditLimit);
+  const creditWords=_ctrVndToWords(d.creditLimit);
+  const bankRows=(d.banks||[]).map(function(b){
+    return '<tr><td style="border:1px solid #000;padding:4px 8px">'+(b.beneficiary||'')+'</td><td style="border:1px solid #000;padding:4px 8px">'+(b.account||'')+'</td><td style="border:1px solid #000;padding:4px 8px">'+(b.bank||'')+'</td></tr>';
+  }).join('')||'<tr><td style="border:1px solid #000;padding:4px 8px" colspan="3">—</td></tr>';
+
+  function party(label,P){
+    return '<table style="width:100%;border-collapse:collapse;margin:4px 0 10px"><tbody>'
+      +'<tr><td style="width:170px;font-weight:bold;padding:2px 0;vertical-align:top">Tên giao dịch</td><td style="padding:2px 0">'+(P.name||'')+'</td></tr>'
+      +'<tr><td style="font-weight:bold;padding:2px 0">Mã số thuế</td><td style="padding:2px 0">'+(P.mst||'')+'</td></tr>'
+      +'<tr><td style="font-weight:bold;padding:2px 0;vertical-align:top">Địa chỉ giao dịch</td><td style="padding:2px 0">'+(P.addr||'')+'</td></tr>'
+      +'<tr><td style="font-weight:bold;padding:2px 0">Điện thoại</td><td style="padding:2px 0">'+(P.phone||'')+'&nbsp;&nbsp;&nbsp;&nbsp;Số Fax:</td></tr>'
+      +'<tr><td style="font-weight:bold;padding:2px 0">Đại diện</td><td style="padding:2px 0">'+(P.rep||'')+'</td></tr>'
+      +'<tr><td style="font-weight:bold;padding:2px 0">Chức vụ</td><td style="padding:2px 0">'+(P.title||'Giám Đốc')+'</td></tr>'
+      +'</tbody></table>';
+  }
+
+  const css='<style>'
+    +'.ctrDoc{font-family:"Times New Roman",Times,serif;font-size:13px;line-height:1.5;color:#000;background:#fff;padding:32px 40px;max-width:800px;margin:0 auto}'
+    +'.ctrDoc h1{text-align:center;font-size:20px;margin:6px 0 2px;font-weight:bold}'
+    +'.ctrDoc .sub{text-align:center;font-size:13px;margin-bottom:14px}'
+    +'.ctrDoc .recital{font-style:italic;font-size:12px;margin:3px 0;padding-left:18px;position:relative}'
+    +'.ctrDoc .recital:before{content:"•";position:absolute;left:4px;color:#c0392b}'
+    +'.ctrDoc h2{font-size:13px;font-weight:bold;margin:12px 0 4px;text-transform:uppercase}'
+    +'.ctrDoc p{margin:3px 0;text-align:justify}'
+    +'.ctrDoc .cl{display:flex;gap:8px;margin:2px 0}.ctrDoc .cl .n{flex-shrink:0;font-weight:600;min-width:34px}'
+    +'.ctrDoc ul{margin:2px 0 2px 22px;padding:0}.ctrDoc li{margin:1px 0}'
+    +'.ctrDoc table.bank{width:100%;border-collapse:collapse;margin:6px 0;font-size:12.5px}'
+    +'.ctrDoc table.bank th{border:1px solid #000;padding:4px 8px;background:#f0f0f0;text-align:left}'
+    +'@media print{.ctrDoc{padding:0}@page{margin:18mm 16mm;size:A4}}'
+    +'</style>';
+
+  return css+'<div class="ctrDoc">'
+    +'<h1>HỢP ĐỒNG DỊCH VỤ</h1>'
+    +'<div class="sub">Số: '+(d.contractNo||'')+'</div>'
+    +'<p class="recital">Căn cứ Luật thương mại số 36/2005/QH11 ban hành ngày 14/06/2005 của Quốc Hội Nước CHXHCN Việt Nam có hiệu lực ngày 01/01/2006.</p>'
+    +'<p class="recital">Căn cứ Luật Hàng Hải Việt Nam số 95/2015/QH13 do Quốc Hội nước Cộng Hòa Xã Hội Chủ Nghĩa Việt Nam ban hành ngày 25/11/2015, có hiệu lực từ ngày 01/07/2017.</p>'
+    +'<p class="recital">Căn cứ Luật Dân Sự số 91/2015/QH13 do Quốc Hội nước Cộng Hòa Xã Hội Chủ Nghĩa Việt Nam ban hành ngày 24/11/2015, có hiệu lực ngày 01/01/2017.</p>'
+    +'<p class="recital">Căn cứ theo nhu cầu của hai bên, ngày '+startDMY+', chúng tôi gồm:</p>'
+    +party('A',A)+'<p style="font-style:italic;margin-left:18px">Sau đây gọi tắt là Bên A</p>'
+    +party('B',B)+'<p style="font-style:italic;margin-left:18px">Sau đây gọi tắt là Bên B</p>'
+
+    +'<h2>ĐIỀU 1: ĐỐI TƯỢNG CỦA HỢP ĐỒNG</h2>'
+    +'<div class="cl"><span class="n">1.1</span><span>Bên A đồng ý nhận cung cấp dịch vụ giao nhận và vận chuyển hàng hóa từ cảng bất kỳ tại Việt Nam đến các cảng nước ngoài (hoặc ngược lại) theo yêu cầu của bên B, bao gồm:</span></div>'
+    +'<ul><li>Dịch vụ vận chuyển bằng đường biển.</li><li>Dịch vụ vận chuyển bằng đường bộ.</li><li>Dịch vụ vận chuyển đa phương thức kết hợp.</li></ul>'
+    +'<div class="cl"><span class="n">1.2</span><span>Bên B đồng ý thuê bên A cung cấp dịch vụ giao nhận và vận chuyển hàng hóa cho bên B và trả cước cùng các chi phí hợp lý phát sinh tương ứng cho bên A.</span></div>'
+
+    +'<h2>ĐIỀU 2: THỜI GIAN VẬN CHUYỂN</h2>'
+    +'<div class="cl"><span class="n">2.1</span><span>Thời gian vận chuyển được thông báo qua mail theo từng lô hàng cụ thể.</span></div>'
+    +'<div class="cl"><span class="n">2.2</span><span>Trường hợp thời gian vận chuyển thay đổi so với dự kiến thì Bên A phải thông báo cho Bên B kịp thời. Trường hợp thời gian vận chuyển thay đổi gây thiệt hại cho Bên B (trừ trường hợp bất khả kháng) thì Bên A phải bồi thường toàn bộ thiệt hại theo luật hàng hải được thể hiện phía sau vận đơn gốc.</span></div>'
+
+    +'<h2>ĐIỀU 3: GIÁ HỢP ĐỒNG VÀ PHƯƠNG THỨC GIAO DỊCH</h2>'
+    +'<div class="cl"><span class="n">3.1</span><span><b>Quy định về Giá.</b></span></div>'
+    +'<div class="cl"><span class="n">3.1.1</span><span>Giá Hợp Đồng của bên A không bao gồm giá trị hàng hóa hay các khoản thuế, khoản thu xuất khẩu (nếu có) được áp dụng bởi cơ quan có thẩm quyền mà liên quan đến lô hàng của bên B.</span></div>'
+    +'<div class="cl"><span class="n">3.1.2</span><span>Phụ lục giá hợp đồng/ chào giá hoặc các chứng từ có tính chất tương đương được thống nhất bởi hai bên là căn cứ để tính toán và phát hành phiếu thu cho mỗi đơn hàng.</span></div>'
+    +'<div class="cl"><span class="n">3.1.3</span><span>Giá Hợp Đồng được tính toán theo từng lô hàng với chi tiết dịch vụ cụ thể tại mỗi thời điểm, hoặc chi phí phát sinh ngoài dự kiến phải được báo trước và có sự đồng ý của cả hai bên.</span></div>'
+    +'<div class="cl"><span class="n">3.2</span><span><b>Phương thức giao dịch.</b></span></div>'
+    +'<div class="cl"><span class="n">3.2.1</span><span>Các giao dịch thông báo, xác nhận giá hay yêu cầu bằng văn bản, fax, email, điện thoại là được chấp nhận.</span></div>'
+    +'<div class="cl"><span class="n">3.2.2</span><span>Các căn cứ xác nhận giao dịch phát sinh có thể dựa trên các loại giấy tờ sau: (bao gồm nhưng không giới hạn)</span></div>'
+    +'<ul><li>Vận tải đơn do bên A đóng vai trò đặt chỗ;</li><li>Giấy báo nợ (debit note) / Hóa đơn thương mại do bên A phát hành;</li><li>Các thư điện tử (email) / tin nhắn đặt chỗ / trao đổi xác nhận đơn hàng giữa nhân viên bên A và người có liên quan của bên B.</li></ul>'
+
+    +'<h2>ĐIỀU 4: GIAO NHẬN CHỨNG TỪ VÀ THANH TOÁN HỢP ĐỒNG</h2>'
+    +'<div class="cl"><span class="n">4.1</span><span><b>Giao nhận chứng từ của lô hàng.</b></span></div>'
+    +'<div class="cl"><span class="n">4.1.1</span><span>Bên A sẽ gửi chuyển phát hoặc trực tiếp giao bộ chứng từ hoàn chỉnh của lô hàng cho bên B tại văn phòng của bên B hoặc thực hiện theo các thông tin chỉ dẫn của bên B trong vòng ba (03) ngày làm việc kể từ ngày tàu chạy.</span></div>'
+    +'<div class="cl"><span class="n">4.2</span><span><b>Điều kiện thanh toán hợp đồng.</b></span></div>'
+    +'<div class="cl"><span class="n">4.2.1</span><span>Bên A tổng hợp và phát hành thông báo Giấy báo nợ (Debit note) theo từng lô hàng bao gồm cả phí phát sinh (nếu có) cho bên B.</span></div>'
+    +'<div class="cl"><span class="n">4.2.2</span><span>Bên A đồng ý cung cấp cho Bên B hạn mức công nợ '+creditStr+' VND (Bằng chữ: '+creditWords+'.), trong trường hợp số tiền nợ cộng dồn phát sinh vượt hạn mức, Bên B có trách nhiệm thanh toán cho Bên A phần vượt hạn mức dù chưa đến hạn.</span></div>'
+    +'<div class="cl"><span class="n">4.2.3</span><span>Trong trường hợp Bên B đang nợ Bên A cước hoặc các chi phí khác, thì Bên B phải đảm bảo có đơn hàng gối đầu gửi cho Bên A vận chuyển và đang trên hành trình. Nếu không đáp ứng việc có hàng gối đầu đang trên hành trình, thì Bên B phải thanh toán dứt điểm toàn bộ công nợ cho Bên A trước khi Bên A giao vận đơn gốc (đối với lô hàng xuất sau cùng) hoặc trước khi Bên A giao hàng tại nơi đến (đối với lô hàng nhập hay hàng nội địa sau cùng).</span></div>'
+    +'<div class="cl"><span class="n">4.2.4</span><span>Bên B có trách nhiệm thanh toán cho Bên A công nợ phát sinh trong vòng '+(d.paymentDays||45)+' ngày kể từ ngày phát hành Giấy báo nợ (Debit note).</span></div>'
+    +'<div class="cl"><span class="n">4.2.5</span><span>Trong trường hợp bên B chậm thanh toán vì bất kỳ lý do gì, Bên B phải chịu lãi phạt 8%/năm tương đương trên số tiền chậm trả. Bên B có trách nhiệm thanh toán đầy đủ công nợ, phí, lãi phạt phát sinh cho bên A.</span></div>'
+    +'<div class="cl"><span class="n">4.3</span><span><b>Phương thức thanh toán</b></span></div>'
+    +'<div class="cl"><span class="n">4.3.1</span><span>Thanh toán chuyển khoản, hoặc tiền mặt trong trường hợp phát sinh các chi phí chi hộ.</span></div>'
+    +'<div class="cl"><span class="n">4.3.2</span><span>Thanh toán bằng VNĐ hoặc ngoại tệ được quy đổi VNĐ theo tỷ giá bán ra của Ngân hàng TMCP Ngoại Thương Việt Nam (Vietcombank) / hoặc theo tỷ giá niêm yết của hãng tàu (trong trường hợp hãng tàu áp dụng tỷ giá riêng) tại ngày thực tế tàu chạy.</span></div>'
+    +'<div class="cl"><span class="n">4.4</span><span><b>Tài khoản thụ hưởng</b></span></div>'
+    +'<table class="bank"><thead><tr><th>Tên tài khoản thụ hưởng</th><th>Số tài khoản</th><th>Ngân hàng thụ hưởng</th></tr></thead><tbody>'+bankRows+'</tbody></table>'
+
+    +'<h2>ĐIỀU 5: TRÁCH NHIỆM CỦA CÁC BÊN</h2>'
+    +'<div class="cl"><span class="n">5.1</span><span><b>Trách nhiệm của Bên A</b></span></div>'
+    +'<div class="cl"><span class="n">5.1.1</span><span>Đảm bảo cung cấp phương tiện vận chuyển hàng hóa và hoàn thành chứng từ. Thanh toán và chi hộ cho bên thứ ba các chi phí, hóa đơn vận tải có liên quan đến các lô hàng của bên B.</span></div>'
+    +'<div class="cl"><span class="n">5.1.2</span><span>Luôn bảo vệ quyền lợi, giữ bí mật hàng hóa, các thông tin kinh doanh của bên B. Tích cực hỗ trợ hoặc thay mặt bên B (nếu có yêu cầu) giải quyết các vấn đề phát sinh hoặc với bên thứ ba có liên quan.</span></div>'
+    +'<div class="cl"><span class="n">5.1.3</span><span>Thông báo cho Bên B chi tiết liên quan đến lô hàng như: Tên hàng, số kiện, trọng lượng hàng, số hiệu Cont, số seal, tên tàu, số chuyến, số vận đơn, ngày dự kiến tàu khởi hành và ngày dự kiến tàu cập cảng cho Bên B.</span></div>'
+    +'<div class="cl"><span class="n">5.1.4</span><span>Đảm bảo an toàn tối đa cho hàng hóa trong quá trình vận chuyển và thông tin thường xuyên cho Bên B về tình trạng lô hàng trong suốt quá trình giao nhận, vận chuyển không để xảy ra mất mát. Trong trường hợp xảy ra mất mát hư hỏng Bên A sẽ phối hợp với Bên B để tìm cách giải quyết. Nếu việc mất mát hư hỏng xảy ra do lỗi Bên A, Bên A sẽ có trách nhiệm bồi thường theo quy định về trách nhiệm của người vận chuyển trong luật hàng hải.</span></div>'
+    +'<div class="cl"><span class="n">5.1.5</span><span>Bồi thường trong trường hợp Bên A vận chuyển hàng hóa đến cảng chậm trễ gây thiệt hại cho Bên B trừ trường hợp bất khả kháng theo quy định của luật hàng hải quốc tế và quy định về vận chuyển hàng hóa trên mặt sau của vận đơn.</span></div>'
+    +'<div class="cl"><span class="n">5.1.6</span><span>Được quyền không giải phóng hàng nếu Bên B chưa thanh toán tiền hàng. Bên A sẽ không chịu trách nhiệm cho bất cứ chi phí phát sinh nào do việc giữ hàng như: lưu kho, lưu container, bồi thường thiệt hại cho phía người nhận do hàng đến trễ, chi phí khác tại nơi đi và nơi đến.</span></div>'
+    +'<div class="cl"><span class="n">5.2</span><span><b>Trách nhiệm của Bên B</b></span></div>'
+    +'<div class="cl"><span class="n">5.2.1</span><span>Chịu trách nhiệm về thành phần, tên gọi, tính chất cũng như tính pháp lý của hàng hóa.</span></div>'
+    +'<div class="cl"><span class="n">5.2.2</span><span>Cung cấp đầy đủ các thông tin về người gửi hàng ở cảng đi của Bên B cho Bên A và đại lý của Bên A (nếu có) để thuận tiện cho người của Bên A liên hệ nhận hàng và sắp xếp vận chuyển.</span></div>'
+    +'<div class="cl"><span class="n">5.2.3</span><span>Chịu trách nhiệm cung cấp các chứng từ liên quan đến lô hàng cho Bên A khi các cơ quan hữu quan có thẩm quyền yêu cầu.</span></div>'
+    +'<div class="cl"><span class="n">5.2.4</span><span>Bên B phải có trách nhiệm thanh toán thuế xuất khẩu, thuế nhập khẩu, thuế GTGT, các chi phí phát sinh của hãng tàu, kho bãi và chi phí giám định hàng hóa (nếu có).</span></div>'
+    +'<div class="cl"><span class="n">5.2.5</span><span>Tích cực hỗ trợ bên A giải quyết các vấn đề phát sinh liên quan khi có yêu cầu.</span></div>'
+    +'<div class="cl"><span class="n">5.2.6</span><span>Ủy quyền cho bên A giải quyết các công việc liên quan với các hãng vận tải như thanh toán hộ, chi hộ và giao nhận các hóa đơn chứng từ.</span></div>'
+    +'<div class="cl"><span class="n">5.2.7</span><span>Bên B phải thanh toán đầy đủ tiền cước vận chuyển cho bên A theo đúng thời hạn đã thoả thuận trong hợp đồng trong mọi trường hợp.</span></div>'
+
+    +'<h2>ĐIỀU 6: ĐIỀU KHOẢN BẤT KHẢ KHÁNG</h2>'
+    +'<div class="cl"><span class="n">6.1</span><span>Trường hợp bất khả kháng là các trường hợp như thiên tai, hỏa hoạn, dịch bệnh, chiến tranh hoặc đe dọa chiến tranh, sự thay đổi của pháp luật, đình công, bãi công hoặc biểu tình.</span></div>'
+    +'<div class="cl"><span class="n">6.2</span><span>Bên gặp trường hợp bất khả kháng sẽ được miễn khỏi các trách nhiệm do không thực hiện một phần hoặc toàn bộ hợp đồng này, với điều kiện là:</span></div>'
+    +'<div class="cl"><span class="n">6.2.1</span><span>Bên gặp bất khả kháng đã áp dụng mọi biện pháp cần thiết để phòng ngừa, hạn chế hoặc khắc phục hậu quả của Bất khả kháng, nhưng sự kiện của bất khả kháng hoặc kết quả bất lợi của sự kiện bất khả kháng vẫn xảy ra.</span></div>'
+    +'<div class="cl"><span class="n">6.2.2</span><span>Bên bất khả kháng đã thông báo bằng văn bản, có xác nhận của cơ quan hoặc các cấp có thẩm quyền nơi xảy ra sự kiện bất khả kháng cho bên kia biết, trong thông báo có nói rõ về sự kiện hoặc hậu quả của sự kiện bất khả kháng, các biện pháp phòng ngừa, hạn chế, khắc phục hậu quả bất khả kháng đã áp dụng.</span></div>'
+    +'<div class="cl"><span class="n">6.3</span><span>Bên có nghĩa vụ thực hiện hợp đồng sẽ phải tiếp tục thực hiện hợp đồng khi sự kiện hoặc hậu quả của sự kiện Bất khả kháng chấm dứt và không ảnh hưởng đến việc tiếp tục thực hiện hợp đồng.</span></div>'
+
+    +'<h2>ĐIỀU 7: TRANH CHẤP VÀ GIẢI QUYẾT TRANH CHẤP</h2>'
+    +'<div class="cl"><span class="n">7.1</span><span>Trong quá trình thực hiện hợp đồng, nếu có những bất đồng hoặc tranh chấp phát sinh, hai Bên cùng thương lượng trực tiếp để giải quyết. Các vấn đề phát sinh nếu hai bên không thỏa thuận thống nhất được sẽ do Tòa Án có thẩm quyền tại TP. Hồ Chí Minh phân xử, bộ luật Hàng Hải Việt Nam sẽ được sử dụng trong quá trình xét xử.</span></div>'
+    +'<div class="cl"><span class="n">7.2</span><span>Quyết định của tòa án sẽ là quyết định cuối cùng buộc các bên phải tuân theo và bên thua kiện sẽ chịu toàn bộ án phí.</span></div>'
+
+    +'<h2>ĐIỀU 8: ĐIỀU KHOẢN CHUNG</h2>'
+    +'<div class="cl"><span class="n">8.1</span><span>Hai bên cam kết tuân thủ nghiêm chỉnh các điều khoản của Hợp đồng. Trong quá trình thực hiện hợp đồng, mọi vướng mắc phát sinh, hai bên cùng nhau bàn bạc giải quyết trên tinh thần hợp tác vì lợi ích của hai bên. Nếu tranh chấp phát sinh mà các bên không tự giải quyết được, vụ việc sẽ được đưa ra Toà án có thẩm quyền giải quyết.</span></div>'
+    +'<div class="cl"><span class="n">8.2</span><span>Hợp đồng này có hiệu lực đến hết ngày '+endDMY+'. Nếu không có bất kỳ thỏa thuận nào khác và (hoặc) hai bên đã thực hiện xong nghĩa vụ trách nhiệm thì Hợp đồng được xem là thanh lý ngay sau khi hết thời gian hiệu lực.</span></div>'
+    +'<div class="cl"><span class="n">8.3</span><span>Hợp đồng này có 04 (bốn) trang, có hiệu lực từ ngày ký và được lập thành 02 (hai) bản, mỗi bên giữ 01 (một) bản có giá trị pháp lý như nhau. Hai bên đọc, hiểu và đồng ý ký kết hợp đồng này.</span></div>'
+
+    +'<table style="width:100%;margin-top:28px;text-align:center"><tr><td style="width:50%;font-weight:bold">BÊN A</td><td style="width:50%;font-weight:bold">BÊN B</td></tr><tr><td style="height:90px"></td><td></td></tr></table>'
+  +'</div>';
+}
+
+function _ctrPreview(){
+  const d=_ctrGetData(); if(!d)return;
+  const box=g('ctrPreviewBox'); if(!box)return;
+  box.innerHTML=_ctrBuildHtml(d);
+}
+window._ctrPreview=_ctrPreview;
+
+async function saveContract(){
+  const d=_ctrGetData(); if(!d)return;
+  if(!d.contractNo){toast('Chưa có số hợp đồng','error');return;}
+  if(!d.savedAt)d.savedAt=Date.now(); else d.savedAt=Date.now();
+  const list=(window._contracts||[]).slice();
+  const idx=list.findIndex(function(x){return x._id===d._id;});
+  if(idx>=0)list[idx]=d; else list.unshift(d);
+  window._contracts=list;
+  _ctrEditing=d;
+  setLoading(true,'Đang lưu hợp đồng...');
+  try{ await db.collection('_config').doc('contracts').set({list:list},{merge:false}); toast('Đã lưu hợp đồng '+d.contractNo); renderContractTool(); setTimeout(_ctrPreview,100); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveContract=saveContract;
+
+function exportContractPDF(){
+  const d=_ctrGetData(); if(!d)return;
+  const html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>Hợp đồng '+d.contractNo+'</title></head><body>'+_ctrBuildHtml(d)+'</body></html>';
+  const w=window.open('','_blank');
+  if(!w){toast('Trình duyệt chặn popup — cho phép popup để xuất PDF','error');return;}
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 500);
+}
+window.exportContractPDF=exportContractPDF;
+/* ═══ END CONTRACT MODULE ═══ */
+
 
 
 
