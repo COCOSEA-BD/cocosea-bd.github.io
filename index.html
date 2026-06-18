@@ -8672,10 +8672,10 @@ function _cocoDefault(){
           {name:'Ghe',qty:1,unit:'Unit',price:0}
         ],
         port:[
-          {name:'Công nhân',hiepPhuoc:0,spitc:0},
-          {name:'Phí cảng',hiepPhuoc:0,spitc:0},
-          {name:'Chuyển cont đầy',hiepPhuoc:0,spitc:0},
-          {name:'Chuyển cont rỗng',hiepPhuoc:0,spitc:0}
+          {name:'Công nhân',hpQty:1,hpUnit:'Unit',hpPrice:0,spQty:1,spUnit:'Unit',spPrice:0},
+          {name:'Phí cảng',hpQty:1,hpUnit:'Unit',hpPrice:0,spQty:1,spUnit:'Unit',spPrice:0},
+          {name:'Chuyển cont đầy',hpQty:1,hpUnit:'Unit',hpPrice:0,spQty:1,spUnit:'Unit',spPrice:0},
+          {name:'Chuyển cont rỗng',hpQty:1,hpUnit:'Unit',hpPrice:0,spQty:1,spUnit:'Unit',spPrice:0}
         ]
       },
       wh:[ // đóng kho
@@ -8696,6 +8696,7 @@ function _cocoDefault(){
       {pod:'Shanghai',carrier:'OOCL',fiber:0,pith:0}
     ],
     profit:{ type:'amount', fiber:0, pith:0 },
+    valid:'',
     updatedAt:0
   };
 }
@@ -8708,6 +8709,24 @@ function _cocoNormalize(d){
   if(!d.profit)d.profit={type:'amount',fiber:0,pith:0};
   if(d.rate==null)d.rate=25400;
   if(d.vol==null)d.vol=1;
+  if(d.valid==null)d.valid='';
+  // Migrate port rows: cấu trúc cũ {hiepPhuoc,spitc} -> mới {hpQty,hpUnit,hpPrice,spQty,spUnit,spPrice}
+  ['fiber','pith'].forEach(function(t){
+    if(d[t]&&d[t].stuff&&Array.isArray(d[t].stuff.port)){
+      d[t].stuff.port=d[t].stuff.port.map(function(row){
+        if(row.hpPrice===undefined&&(row.hiepPhuoc!==undefined||row.spitc!==undefined)){
+          return {name:row.name||'',hpQty:1,hpUnit:'Unit',hpPrice:row.hiepPhuoc||0,spQty:1,spUnit:'Unit',spPrice:row.spitc||0};
+        }
+        if(row.hpQty===undefined)row.hpQty=1;
+        if(row.hpUnit===undefined)row.hpUnit='Unit';
+        if(row.hpPrice===undefined)row.hpPrice=0;
+        if(row.spQty===undefined)row.spQty=1;
+        if(row.spUnit===undefined)row.spUnit='Unit';
+        if(row.spPrice===undefined)row.spPrice=0;
+        return row;
+      });
+    }
+  });
   return d;
 }
 
@@ -8738,6 +8757,7 @@ function renderCocoQuote(){
   if(!pg)return;
   if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Chỉ Admin mới truy cập được công cụ báo giá</div></div>';return;}
   if(!_coco){ pg.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-secondary)">Đang tải...</div>'; loadCocoQuote(renderCocoQuote); return; }
+  if(window._cocoSaved===undefined){ window._cocoSaved=[]; _cocoLoadSavedList(function(){ if(_cocoTab==='quote')renderCocoQuote(); }); }
 
   const tabs=[
     {k:'input1',l:'1. Chi phí Xơ dừa'},
@@ -8792,17 +8812,32 @@ function _cocoRenderInput(type, label){
 
   const fixedTotal=d.stuff.fixed.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*(_coco.vol||1));},0);
 
-  // Bảng chi phí theo cảng (2 cột Hiệp Phước / SPITC)
+  // Bảng chi phí theo cảng — mỗi cảng (Hiệp Phước / SPITC) có SL, Đơn vị, Đơn giá, Thành tiền
+  const UNIT_OPTS_P=['Unit','Shipment'];
+  function portAmt(qty,unit,price){ return (unit==='Shipment')?_num(price):_num(price)*(_num(qty)||1); }
+  function unitSel(val,type2,i2,field2){
+    return '<select onchange="_cocoSetPort(\''+type2+'\','+i2+',\''+field2+'\',this.value);renderCocoQuote()" style="font-size:11px;width:100%">'+UNIT_OPTS_P.map(function(u){return '<option'+(u===val?' selected':'')+'>'+u+'</option>';}).join('')+'</select>';
+  }
   const portRows=d.stuff.port.map(function(row,i){
+    const hpAmt=portAmt(row.hpQty,row.hpUnit,row.hpPrice);
+    const spAmt=portAmt(row.spQty,row.spUnit,row.spPrice);
     return '<tr>'
-      +'<td style="padding:4px;width:230px"><input type="text" value="'+(row.name||'').replace(/"/g,'&quot;')+'" oninput="_cocoSetPort(\''+type+'\','+i+',\'name\',this.value)" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
-      +'<td style="padding:4px;width:150px"><input type="text" value="'+_vnd(row.hiepPhuoc)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'hiepPhuoc\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box"/></td>'
-      +'<td style="padding:4px;width:150px"><input type="text" value="'+_vnd(row.spitc)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'spitc\',this.value)" onblur="renderCocoQuote()" style="font-size:12px;text-align:right;width:100%;box-sizing:border-box"/></td>'
-      +'<td style="padding:4px;width:30px"><button class="rac red" onclick="_cocoDelPort(\''+type+'\','+i+')"><i class="ti ti-x"></i></button></td>'
+      +'<td style="padding:3px;width:150px"><input type="text" value="'+(row.name||'').replace(/"/g,'&quot;')+'" oninput="_cocoSetPort(\''+type+'\','+i+',\'name\',this.value)" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+      // Hiệp Phước: SL / Đơn vị / Đơn giá / Thành tiền
+      +'<td style="padding:3px;width:48px"><input type="number" value="'+(row.hpQty||1)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'hpQty\',this.value)" onblur="renderCocoQuote()" style="font-size:11px;text-align:right;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:3px;width:78px">'+unitSel(row.hpUnit||'Unit',type,i,'hpUnit')+'</td>'
+      +'<td style="padding:3px;width:100px"><input type="text" value="'+_vnd(row.hpPrice)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'hpPrice\',this.value)" onblur="renderCocoQuote()" style="font-size:11px;text-align:right;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:3px;width:100px;text-align:right;font-size:11px;font-weight:600;color:var(--blue)">'+_vnd(hpAmt)+'</td>'
+      // SPITC
+      +'<td style="padding:3px;width:48px;border-left:2px solid var(--border-light)"><input type="number" value="'+(row.spQty||1)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'spQty\',this.value)" onblur="renderCocoQuote()" style="font-size:11px;text-align:right;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:3px;width:78px">'+unitSel(row.spUnit||'Unit',type,i,'spUnit')+'</td>'
+      +'<td style="padding:3px;width:100px"><input type="text" value="'+_vnd(row.spPrice)+'" oninput="_cocoSetPortNum(\''+type+'\','+i+',\'spPrice\',this.value)" onblur="renderCocoQuote()" style="font-size:11px;text-align:right;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="padding:3px;width:100px;text-align:right;font-size:11px;font-weight:600;color:var(--blue)">'+_vnd(spAmt)+'</td>'
+      +'<td style="padding:3px;width:28px"><button class="rac red" onclick="_cocoDelPort(\''+type+'\','+i+')"><i class="ti ti-x"></i></button></td>'
       +'</tr>';
   }).join('');
-  const portTotalHP=d.stuff.port.reduce(function(s,r){return s+_num(r.hiepPhuoc);},0);
-  const portTotalSP=d.stuff.port.reduce(function(s,r){return s+_num(r.spitc);},0);
+  const portTotalHP=d.stuff.port.reduce(function(s,r){return s+portAmt(r.hpQty,r.hpUnit,r.hpPrice);},0);
+  const portTotalSP=d.stuff.port.reduce(function(s,r){return s+portAmt(r.spQty,r.spUnit,r.spPrice);},0);
 
   // Bảng đóng kho
   const whTotal=d.wh.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*(_coco.vol||1));},0);
@@ -8830,13 +8865,21 @@ function _cocoRenderInput(type, label){
       +'<button class="btn sm" style="margin-top:6px" onclick="_cocoAddRow(\''+type+'\',\'fixed\')"><i class="ti ti-plus"></i> Thêm dòng</button>'
 
       +'<div style="font-size:13px;font-weight:700;color:var(--blue);margin:1rem 0 .5rem">Chi phí theo cảng</div>'
-      +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
-        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left;width:230px">Tên dịch vụ</th>'
-        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">Cảng Hiệp Phước</th>'
-        +'<th style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:right">SPITC</th>'
-        +'<th></th></tr></thead><tbody>'+portRows+'</tbody>'
-        +'<tfoot><tr style="border-top:2px solid var(--border-light)"><td style="padding:6px;text-align:right;font-weight:700;font-size:12px">TỔNG theo cảng</td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--blue)">'+_vnd(portTotalHP)+'</td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--blue)">'+_vnd(portTotalSP)+'</td><td></td></tr></tfoot>'
-      +'</table>'
+      +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:760px">'
+        +'<thead>'
+        +'<tr style="background:var(--bg-secondary)">'
+          +'<th rowspan="2" style="padding:6px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left;width:150px;vertical-align:bottom">Tên dịch vụ</th>'
+          +'<th colspan="4" style="padding:5px;font-size:10px;text-transform:uppercase;color:var(--blue);text-align:center;border-bottom:1px solid var(--border-light)">Cảng Hiệp Phước</th>'
+          +'<th colspan="4" style="padding:5px;font-size:10px;text-transform:uppercase;color:var(--blue);text-align:center;border-bottom:1px solid var(--border-light);border-left:2px solid var(--border-light)">SPITC</th>'
+          +'<th rowspan="2"></th>'
+        +'</tr>'
+        +'<tr style="background:var(--bg-secondary)">'
+          +'<th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">SL</th><th style="padding:4px;font-size:9px;color:var(--text-secondary)">Đơn vị</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Đơn giá</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Thành tiền</th>'
+          +'<th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right;border-left:2px solid var(--border-light)">SL</th><th style="padding:4px;font-size:9px;color:var(--text-secondary)">Đơn vị</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Đơn giá</th><th style="padding:4px;font-size:9px;color:var(--text-secondary);text-align:right">Thành tiền</th>'
+        +'</tr>'
+        +'</thead><tbody>'+portRows+'</tbody>'
+        +'<tfoot><tr style="border-top:2px solid var(--border-light)"><td colspan="4" style="padding:6px;text-align:right;font-weight:700;font-size:12px">TỔNG theo cảng</td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--blue)">'+_vnd(portTotalHP)+'</td><td colspan="3" style="padding:6px;text-align:right;font-weight:700;font-size:12px;border-left:2px solid var(--border-light)"></td><td style="padding:6px;text-align:right;font-weight:700;font-size:13px;color:var(--blue)">'+_vnd(portTotalSP)+'</td><td></td></tr></tfoot>'
+      +'</table></div>'
       +'<button class="btn sm" style="margin-top:6px" onclick="_cocoAddPort(\''+type+'\')"><i class="ti ti-plus"></i> Thêm dòng</button>'
 
       +'<div style="margin-top:1rem;padding:10px;background:var(--bg-secondary);border-radius:8px;display:flex;gap:24px;flex-wrap:wrap">'
@@ -8884,7 +8927,7 @@ function _cocoDelRow(type, group, i){
 window._cocoDelRow=_cocoDelRow;
 function _cocoAddPort(type){
   _cocoCaptureInputs();
-  _coco[type].stuff.port.push({name:'',hiepPhuoc:0,spitc:0});
+  _coco[type].stuff.port.push({name:'',hpQty:1,hpUnit:'Unit',hpPrice:0,spQty:1,spUnit:'Unit',spPrice:0});
   renderCocoQuote();
 }
 window._cocoAddPort=_cocoAddPort;
@@ -8905,8 +8948,9 @@ function _cocoCostSummary(type){
   const d=_coco[type];
   const vol=_coco.vol||1;
   const fixedTotal=d.stuff.fixed.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*vol);},0);
-  const portHP=d.stuff.port.reduce(function(s,r){return s+_num(r.hiepPhuoc);},0);
-  const portSP=d.stuff.port.reduce(function(s,r){return s+_num(r.spitc);},0);
+  function pAmt(qty,unit,price){return (unit==='Shipment')?_num(price):_num(price)*(_num(qty)||1);}
+  const portHP=d.stuff.port.reduce(function(s,r){return s+pAmt(r.hpQty,r.hpUnit,r.hpPrice);},0);
+  const portSP=d.stuff.port.reduce(function(s,r){return s+pAmt(r.spQty,r.spUnit,r.spPrice);},0);
   const whTotal=d.wh.reduce(function(s,row){return s+((row.unit==='Shipment')?_num(row.price):_num(row.price)*vol);},0);
   return {
     stuffHP:fixedTotal+portHP,   // tổng đóng bãi - Hiệp Phước (cho cả vol)
@@ -9058,9 +9102,10 @@ function _cocoRenderQuote(){
   return '<div style="display:flex;gap:16px;align-items:center;margin-bottom:1rem;flex-wrap:wrap">'
       +'<div style="font-size:15px;font-weight:700"><i class="ti ti-file-invoice" style="color:var(--green);margin-right:4px"></i>Báo giá gửi khách (VND)</div>'
       +'<div style="margin-left:auto;display:flex;gap:8px">'
-        +'<button class="btn" onclick="saveCocoQuote()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+        +'<button class="btn" onclick="saveCocoQuote()"><i class="ti ti-device-floppy"></i> Lưu nháp</button>'
+        +'<button class="btn pri" onclick="_cocoSaveSnapshot()"><i class="ti ti-bookmark"></i> Lưu bản báo giá</button>'
         +'<button class="btn" onclick="exportCocoExcel()"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
-        +'<button class="btn pri" onclick="exportCocoPDF()"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>'
+        +'<button class="btn" onclick="exportCocoPDF()"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>'
       +'</div>'
     +'</div>'
     +'<div class="card"><div id="cocoQuoteTable"><table style="width:100%;border-collapse:collapse">'
@@ -9071,10 +9116,102 @@ function _cocoRenderQuote(){
         +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">Mụn dừa</th>'
         +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">Đóng kho</th>'
         +'<th style="padding:8px;font-size:12px;border:1px solid #1B5E20">ETD (Lịch tàu)</th>'
-      +'</tr></thead><tbody>'+tbody+'</tbody></table></div>'
+      +'</tr></thead><tbody>'+tbody+'</tbody>'
+      +'<tfoot><tr><td colspan="6" style="padding:8px 10px;border:1px solid var(--border-light);background:var(--bg-secondary)">'
+        +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:12px;font-weight:700;color:var(--green)"><i class="ti ti-clock-check" style="font-size:13px"></i> Hiệu lực (Valid):</span>'
+        +'<input type="text" value="'+((_coco.valid||'')).replace(/"/g,'&quot;')+'" oninput="_coco.valid=this.value" placeholder="VD: Báo giá có hiệu lực từ 1/6 - 30/6, hoặc theo lịch tàu" style="font-size:12px;flex:1;min-width:240px"/></div>'
+      +'</td></tr></tfoot>'
+      +'</table></div>'
       +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:8px">Đơn vị: VND/cont. Giá Xơ dừa & Mụn dừa tính theo đóng bãi (SPITC). Cột Đóng kho tính theo phương án đóng kho.</div>'
+    +'</div>'
+    +_cocoRenderSavedList();
+}
+
+// ─────────── LƯU & XEM LẠI CÁC BẢN BÁO GIÁ ───────────
+function _cocoRenderSavedList(){
+  const list=window._cocoSaved||[];
+  let rows='';
+  if(!list.length){
+    rows='<div style="padding:1rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có bản báo giá nào được lưu. Bấm "Lưu bản báo giá" để lưu lại bản hiện tại.</div>';
+  } else {
+    rows='<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
+      +'<th style="padding:6px 10px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Tên / Ghi chú</th>'
+      +'<th style="padding:6px 10px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Hiệu lực</th>'
+      +'<th style="padding:6px 10px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:left">Ngày lưu</th>'
+      +'<th style="padding:6px 10px;font-size:10px;text-transform:uppercase;color:var(--text-secondary);text-align:center">Thao tác</th>'
+      +'</tr></thead><tbody>'
+      +list.map(function(q,i){
+        const d=q.savedAt?new Date(q.savedAt):null;
+        const ds=d?(d.toLocaleDateString('vi-VN')+' '+d.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})):'';
+        return '<tr>'
+          +'<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);font-size:12px;font-weight:600">'+(q.name||'(không tên)').replace(/</g,'&lt;')+'</td>'
+          +'<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary)">'+((q.data&&q.data.valid)||'—').replace(/</g,'&lt;')+'</td>'
+          +'<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary)">'+ds+'</td>'
+          +'<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);text-align:center;white-space:nowrap">'
+            +'<button class="rac" onclick="_cocoLoadSnapshot('+i+')" title="Xem lại / Tải bản này" style="color:var(--blue)"><i class="ti ti-eye"></i></button>'
+            +'<button class="rac red" onclick="_cocoDeleteSnapshot('+i+')" title="Xóa bản báo giá"><i class="ti ti-trash"></i></button>'
+          +'</td>'
+        +'</tr>';
+      }).join('')
+      +'</tbody></table>';
+  }
+  return '<div class="card" style="margin-top:1.25rem">'
+    +'<div style="font-size:13px;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem"><i class="ti ti-history" style="font-size:14px"></i> Các bản báo giá đã lưu</div>'
+    +rows
     +'</div>';
 }
+
+async function _cocoSaveSnapshot(){
+  _cocoCaptureInputs();
+  const name=prompt('Tên / ghi chú cho bản báo giá này (VD: KH ABC - tháng 6):','Báo giá '+new Date().toLocaleDateString('vi-VN'));
+  if(name===null)return; // user cancelled
+  const snap={id:'q_'+Date.now(),name:name||('Báo giá '+new Date().toLocaleDateString('vi-VN')),savedAt:Date.now(),savedBy:(currentUser?currentUser.email:''),data:JSON.parse(JSON.stringify(_coco))};
+  const list=(window._cocoSaved||[]).slice();
+  list.unshift(snap); // mới nhất lên đầu
+  window._cocoSaved=list;
+  setLoading(true,'Đang lưu bản báo giá...');
+  try{
+    await db.collection('_config').doc('cocoquote_saved').set({list:list},{merge:false});
+    toast('Đã lưu bản báo giá: '+snap.name);
+    renderCocoQuote();
+  }catch(e){ toast('Lỗi lưu: '+e.message,'error'); }
+  setLoading(false);
+}
+window._cocoSaveSnapshot=_cocoSaveSnapshot;
+
+function _cocoLoadSnapshot(i){
+  const list=window._cocoSaved||[];
+  const snap=list[i]; if(!snap||!snap.data){toast('Không tìm thấy bản báo giá','error');return;}
+  if(!confirm('Tải lại bản báo giá "'+snap.name+'"? Dữ liệu hiện tại trên các tab sẽ được thay bằng bản này (bản đã lưu không bị mất).'))return;
+  _coco=_cocoNormalize(JSON.parse(JSON.stringify(snap.data)));
+  toast('Đã tải bản báo giá: '+snap.name);
+  renderCocoQuote();
+}
+window._cocoLoadSnapshot=_cocoLoadSnapshot;
+
+async function _cocoDeleteSnapshot(i){
+  const list=(window._cocoSaved||[]).slice();
+  const snap=list[i]; if(!snap)return;
+  if(!confirm('Xóa bản báo giá "'+snap.name+'"? Thao tác không thể hoàn tác.'))return;
+  list.splice(i,1);
+  window._cocoSaved=list;
+  setLoading(true,'Đang xóa...');
+  try{
+    await db.collection('_config').doc('cocoquote_saved').set({list:list},{merge:false});
+    toast('Đã xóa bản báo giá');
+    renderCocoQuote();
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window._cocoDeleteSnapshot=_cocoDeleteSnapshot;
+
+function _cocoLoadSavedList(cb){
+  db.collection('_config').doc('cocoquote_saved').get().then(function(snap){
+    window._cocoSaved=(snap.exists&&snap.data().list)?snap.data().list:[];
+    if(cb)cb();
+  }).catch(function(){ window._cocoSaved=[]; if(cb)cb(); });
+}
+window._cocoLoadSavedList=_cocoLoadSavedList;
 
 function _cocoSetEtd(pod, carrier, val){
   const f=(_coco.freight||[]).find(function(x){return (x.pod||'')===pod&&(x.carrier||'')===carrier;});
@@ -9088,6 +9225,7 @@ function exportCocoExcel(){
   if(!rows.length){toast('Chưa có dữ liệu báo giá','error');return;}
   const aoa=[['POD','Hãng tàu','Xơ dừa','Mụn dừa','Đóng kho','ETD (Lịch tàu)']];
   rows.forEach(function(r){ aoa.push([r.pod,r.carrier,r.fiber,r.pith,r.wh,r.etd||'']); });
+  if(_coco.valid){ aoa.push([]); aoa.push(['Hiệu lực (Valid):',_coco.valid]); }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols']=[{wch:14},{wch:12},{wch:14},{wch:14},{wch:14},{wch:30}];
   const wb=XLSX.utils.book_new();
@@ -9126,7 +9264,8 @@ function exportCocoPDF(){
     +'<th style="border:1px solid #999;padding:6px">Xơ dừa</th><th style="border:1px solid #999;padding:6px">Mụn dừa</th>'
     +'<th style="border:1px solid #999;padding:6px">Đóng kho</th><th style="border:1px solid #999;padding:6px">ETD</th></tr></thead>'
     +'<tbody>'+tb+'</tbody></table>'
-    +'<p style="font-size:11px;color:#888;margin-top:16px">* Giá Xơ dừa & Mụn dừa theo đóng bãi (SPITC). Báo giá tham khảo, có hiệu lực theo lịch tàu.</p>'
+    +(_coco.valid?'<p style="font-size:12px;color:#2E7D32;font-weight:600;margin-top:14px">Hiệu lực (Valid): '+_coco.valid+'</p>':'')
+    +'<p style="font-size:11px;color:#888;margin-top:8px">* Giá Xơ dừa & Mụn dừa theo đóng bãi (SPITC). Báo giá tham khảo, có hiệu lực theo lịch tàu.</p>'
     +'</body></html>';
   const w=window.open('','_blank');
   if(!w){toast('Trình duyệt chặn popup — cho phép popup để xuất PDF','error');return;}
