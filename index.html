@@ -1400,7 +1400,7 @@ function renderDetailPanel(r,tt){
     _ensureSvcInCatalog(svcs);
     bodyHtml=`${ (can('fillPrice')||can('viewCost')) ? '<div style="display:grid;grid-template-columns:22px 130px 95px 80px 62px 90px 48px 85px 190px 42px 26px;gap:5px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Đơn giá</div><div>SL</div><div>Đơn vị</div><div>Thành tiền</div><div>Curr</div><div>NCC</div><div>Mô tả</div><div style="text-align:center">Finish</div><div></div></div>' : '<div style="display:grid;grid-template-columns:22px 1fr 1fr 26px;gap:8px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div></div></div>'}
     <div id="detailSvcGrid">${SVCS.filter(s=>svcs[s.key]!==undefined).map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')||'<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ. Bấm "Thêm dịch vụ" để chọn từ danh mục.</div>'}</div>
-    ${ svcs['stuffing']!==undefined ? _stuffInfoPanel(r) : '' }
+
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
 
@@ -2303,9 +2303,6 @@ async function saveDetailSvc(){
   // không để merge:true của Firestore tự khôi phục. Dùng FieldValue.delete() cho từng key đã bỏ.
   const removedKeys=Object.keys(existing).filter(function(k){return !(k in svcs);});
   const updatePayload={svcs:svcs,updatedAt:Date.now(),updatedBy:currentUser.email};
-  // Lưu thông tin Đóng hàng tại bãi (nếu panel đang hiển thị)
-  const _stuff=(typeof _readStuffInfo==='function')?_readStuffInfo():null;
-  if(_stuff)updatePayload.stuffInfo=_stuff;
   setLoading(true,'Đang lưu...');
   try{
     await fsSet(colName(detailTt),detailId,updatePayload);
@@ -2318,7 +2315,7 @@ async function saveDetailSvc(){
     toast('Đã lưu dịch vụ');
     // Cập nhật cache NGAY (listener Firestore là async) để re-render không bị khôi phục dịch vụ đã xóa
     const ci=cache[detailTt].findIndex(x=>x._id===detailId);
-    if(ci>=0){ cache[detailTt][ci].svcs=svcs; if(_stuff)cache[detailTt][ci].stuffInfo=_stuff; }
+    if(ci>=0){ cache[detailTt][ci].svcs=svcs; }
     const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
     renderDetailPanel(fresh,detailTt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -3204,7 +3201,7 @@ function svcRowHTML(s, sv){
     <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả / Ghi chú..." ${sv.on?'':'disabled'} style="font-size:11px"/>
     <div style="display:flex;justify-content:center" title="Hoàn thành"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer"/></div>
     <div style="display:flex;justify-content:flex-end;gap:3px">
-      ${(s.key==='stuffing')?`<button class="rac" onclick="sendStuffingEmail()" title="Gửi email đăng ký đóng hàng" style="font-size:13px;color:var(--blue)"><i class="ti ti-mail"></i></button>`:''}
+      ${(s.key==='stuffing')?`<button class="rac" onclick="openStuffPopup()" title="Thông tin & email đóng hàng tại bãi" style="font-size:13px;color:var(--blue)"><i class="ti ti-package"></i></button>`:''}
       ${(s.key==='trucking')?`<button class="rac" onclick="sendTruckingEmail()" title="Gửi email Trucking" style="font-size:13px;color:var(--blue)"><i class="ti ti-mail"></i></button>`:''}
       ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" title="Xem Debit Note: ${(sv.dnFile||'').replace(/"/g,'&quot;')}" style="font-size:13px;color:var(--green)"><i class="ti ti-file-check"></i></button>`:`<label class="rac" title="Upload Debit Note cho dịch vụ này" style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><i class="ti ti-upload"></i><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleSvcDnUpload(this,'${s.key}')"/></label>`}
       <button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa dịch vụ" style="font-size:13px"><i class="ti ti-trash"></i></button>
@@ -3329,12 +3326,18 @@ function _encodeEmailHeader(str){
 window._emailOpenMailto=_emailOpenMailto;
 window._emailDownloadEml=_emailDownloadEml;
 
-// ─────────── Panel thông tin Đóng hàng tại bãi (dưới dịch vụ stuffing) ───────────
+// ─────────── POPUP thông tin Đóng hàng tại bãi ───────────
 function _stuffInfo(r){
-  // chuẩn hóa: {dates:[], location:'', contact:'', vehicle:''}
   const si=r.stuffInfo||{};
+  // dates giờ là mảng object {date, vol, typeCont}; hỗ trợ dữ liệu cũ (mảng string)
+  let dates=[];
+  if(Array.isArray(si.dates)&&si.dates.length){
+    dates=si.dates.map(function(d){ return (typeof d==='string')?{date:d,vol:(r.vol||''),typeCont:(r.typeCont||'')}:{date:d.date||'',vol:d.vol||'',typeCont:d.typeCont||''}; });
+  } else {
+    dates=[{date:(r.etd||''),vol:(r.vol||''),typeCont:(r.typeCont||'')}];
+  }
   return {
-    dates: Array.isArray(si.dates)&&si.dates.length?si.dates.slice():[(r.etd||'')],
+    dates: dates,
     location: si.location!==undefined?si.location:(r.icd||r.cyLocation||''),
     contact: si.contact!==undefined&&si.contact!==''?si.contact:'Nguyên - 0909641011',
     vehicle: si.vehicle!==undefined&&si.vehicle!==''?si.vehicle:'Công nhân, Xe nâng, Cẩu bờ',
@@ -3342,40 +3345,53 @@ function _stuffInfo(r){
   };
 }
 
-function _stuffInfoPanel(r){
+function openStuffPopup(){
+  const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
   const si=_stuffInfo(r);
-  const dateRows=si.dates.map(function(d,i){
-    return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px" data-stuffdate-row>'
-      +'<input type="date" value="'+(d||'')+'" data-stuffdate style="font-size:12px;width:160px"/>'
-      +'<button class="rac red" onclick="_stuffDelDate(this)" title="Xóa ngày" style="font-size:13px"><i class="ti ti-x"></i></button>'
-      +'</div>';
-  }).join('');
-  return '<div class="card" style="margin-top:10px;border-left:3px solid var(--blue);background:var(--bg-secondary)">'
-    +'<div style="font-size:12.5px;font-weight:700;color:var(--blue);margin-bottom:8px"><i class="ti ti-package" style="font-size:14px"></i> Thông tin Đóng hàng tại bãi</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'
-      +'<div>'
-        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Ngày đóng hàng</label>'
-        +'<div id="stuffDatesWrap">'+dateRows+'</div>'
-        +'<button class="btn sm" onclick="_stuffAddDate()" style="margin-top:2px"><i class="ti ti-plus"></i> Thêm ngày</button>'
-      +'</div>'
-      +'<div>'
-        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Địa điểm đóng hàng <span style="font-weight:400;color:var(--text-tertiary)">(mặc định từ ICD)</span></label>'
-        +'<input type="text" id="stuffLocation" value="'+(si.location||'').replace(/"/g,'&quot;')+'" placeholder="Địa điểm đóng hàng" style="font-size:12px;width:100%;box-sizing:border-box;margin-bottom:8px"/>'
-        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Người liên hệ</label>'
-        +'<input type="text" id="stuffContact" value="'+(si.contact||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box;margin-bottom:8px"/>'
-        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Phương tiện</label>'
-        +'<input type="text" id="stuffVehicle" value="'+(si.vehicle||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box"/>'
+  const dateRows=si.dates.map(function(d){return _stuffDateRowHtml(d);}).join('');
+  g('stuffOv').innerHTML='<div class="modal" style="max-width:640px;max-height:90vh;overflow-y:auto">'
+    +'<div class="mhdr"><div><div class="mtitle" style="display:flex;align-items:center;gap:8px"><i class="ti ti-package" style="font-size:16px;color:var(--blue)"></i>Thông tin Đóng hàng tại bãi</div>'
+    +'<div class="msub">Điền thông tin rồi bấm "Gửi email đăng ký đóng bãi"</div></div>'
+    +'<button class="x" onclick="closeOv(\'stuffOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px">'
+      +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px">Ngày đóng hàng</label>'
+      +'<div style="display:grid;grid-template-columns:150px 70px 1fr 30px;gap:6px;margin-bottom:4px;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase">'
+        +'<div>Ngày</div><div>Vol</div><div>Type cont</div><div></div></div>'
+      +'<div id="stuffDatesWrap">'+dateRows+'</div>'
+      +'<button class="btn sm" onclick="_stuffAddDate()" style="margin-top:2px"><i class="ti ti-plus"></i> Thêm ngày</button>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">'
+        +'<div><label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Địa điểm đóng hàng <span style="font-weight:400;color:var(--text-tertiary)">(từ ICD)</span></label>'
+          +'<input type="text" id="stuffLocation" value="'+(si.location||'').replace(/"/g,'&quot;')+'" placeholder="Địa điểm đóng hàng" style="font-size:12px;width:100%;box-sizing:border-box"/></div>'
+        +'<div><label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Người liên hệ</label>'
+          +'<input type="text" id="stuffContact" value="'+(si.contact||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box"/></div>'
+        +'<div style="grid-column:1/-1"><label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Phương tiện</label>'
+          +'<input type="text" id="stuffVehicle" value="'+(si.vehicle||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box"/></div>'
       +'</div>'
     +'</div>'
-    +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:8px">Các thông tin này sẽ được dùng để điền vào email "Đăng ký đóng bãi". Bấm Lưu dịch vụ để lưu.</div>'
+    +'<div class="mftr" style="padding:12px 20px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="saveStuffInfo()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+      +'<button class="btn pri" onclick="sendStuffingEmail()"><i class="ti ti-mail"></i> Gửi email đăng ký đóng bãi</button>'
+    +'</div>'
   +'</div>';
+  openOv('stuffOv');
 }
-window._stuffInfoPanel=_stuffInfoPanel;
+window.openStuffPopup=openStuffPopup;
+
+function _stuffDateRowHtml(d){
+  d=d||{};
+  return '<div style="display:grid;grid-template-columns:150px 70px 1fr 30px;gap:6px;margin-bottom:4px;align-items:center" data-stuffdate-row>'
+    +'<input type="date" value="'+(d.date||'')+'" data-stuffdate style="font-size:12px;width:100%;box-sizing:border-box"/>'
+    +'<input type="text" value="'+(d.vol||'').toString().replace(/"/g,'&quot;')+'" data-stuffvol placeholder="Vol" style="font-size:12px;width:100%;box-sizing:border-box;text-align:center"/>'
+    +'<input type="text" value="'+(d.typeCont||'').replace(/"/g,'&quot;')+'" data-stufftype placeholder="Type cont (vd: 40HC)" style="font-size:12px;width:100%;box-sizing:border-box"/>'
+    +'<button class="rac red" onclick="_stuffDelDate(this)" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>'
+    +'</div>';
+}
 
 function _stuffAddDate(){
   const wrap=g('stuffDatesWrap'); if(!wrap)return;
+  const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
   const div=document.createElement('div');
-  div.innerHTML='<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px" data-stuffdate-row><input type="date" data-stuffdate style="font-size:12px;width:160px"/><button class="rac red" onclick="_stuffDelDate(this)" title="Xóa ngày" style="font-size:13px"><i class="ti ti-x"></i></button></div>';
+  div.innerHTML=_stuffDateRowHtml({date:'',vol:(r.vol||''),typeCont:(r.typeCont||'')});
   wrap.appendChild(div.firstChild);
 }
 window._stuffAddDate=_stuffAddDate;
@@ -3385,11 +3401,17 @@ function _stuffDelDate(btn){
 }
 window._stuffDelDate=_stuffDelDate;
 
-// Đọc thông tin stuffing từ DOM (gọi khi lưu dịch vụ)
+// Đọc thông tin stuffing từ popup
 function _readStuffInfo(){
   const wrap=g('stuffDatesWrap');
   if(!wrap)return null;
-  const dates=Array.from(wrap.querySelectorAll('[data-stuffdate]')).map(function(el){return el.value;}).filter(Boolean);
+  const dates=Array.from(wrap.querySelectorAll('[data-stuffdate-row]')).map(function(row){
+    return {
+      date:(row.querySelector('[data-stuffdate]')||{}).value||'',
+      vol:(row.querySelector('[data-stuffvol]')||{}).value||'',
+      typeCont:(row.querySelector('[data-stufftype]')||{}).value||''
+    };
+  }).filter(function(d){return d.date||d.vol||d.typeCont;});
   return {
     dates:dates,
     location:g('stuffLocation')?.value||'',
@@ -3399,6 +3421,22 @@ function _readStuffInfo(){
   };
 }
 window._readStuffInfo=_readStuffInfo;
+
+// Lưu thông tin đóng bãi vào lô (từ popup)
+async function saveStuffInfo(){
+  const r=cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r){toast('Không tìm thấy lô','error');return;}
+  const info=_readStuffInfo(); if(!info)return;
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(detailTt),detailId,{stuffInfo:info,updatedAt:Date.now(),updatedBy:currentUser.email});
+    const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
+    if(ci>=0)cache[detailTt][ci].stuffInfo=info;
+    toast('Đã lưu thông tin đóng bãi');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveStuffInfo=saveStuffInfo;
 
 function sendStuffingEmail(){
   const info=_svcNccEmail('stuffing');
@@ -3410,7 +3448,7 @@ function sendStuffingEmail(){
   // Ưu tiên dữ liệu đang nhập trên panel (nếu mở), nếu không lấy từ dữ liệu đã lưu
   const _domStuff=(typeof _readStuffInfo==='function')?_readStuffInfo():null;
   const si=(_domStuff&&(_domStuff.dates.length||_domStuff.location))?{
-    dates:_domStuff.dates.length?_domStuff.dates:[r.etd||''],
+    dates:_domStuff.dates.length?_domStuff.dates:[{date:(r.etd||''),vol:(r.vol||''),typeCont:(r.typeCont||'')}],
     location:_domStuff.location||r.icd||r.cyLocation||'',
     contact:_domStuff.contact||'Nguyên - 0909641011',
     vehicle:_domStuff.vehicle||'Công nhân, Xe nâng, Cẩu bờ'
@@ -3419,7 +3457,11 @@ function sendStuffingEmail(){
   const subject='Đăng ký đóng bãi: '+(stuffLoc||'').toUpperCase()+' - Booking: '+bkgNos+'- Vol: '+(r.vol||'')+' '+(r.typeCont||'')+' /COCOSEA';
   const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#f2f2f2;font-size:12.5px;width:160px;vertical-align:top';
   const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
-  const stuffDatesStr=(si.dates&&si.dates.length?si.dates:[r.etd||'']).filter(Boolean).map(function(d){return d.replace(/-/g,'/');}).join(', ');
+  const stuffDatesHtml=(si.dates||[]).filter(function(d){return d&&(d.date||d.vol||d.typeCont);}).map(function(d){
+    const dt=(d.date||'').replace(/-/g,'/');
+    const vt=((d.vol||'')+(d.typeCont?(' x '+d.typeCont):'')).trim();
+    return dt+(vt?(': '+vt):'');
+  }).join('<br>');
   const bodyHtml=
     '<div style="font-weight:700;font-size:14px;margin-bottom:8px">ĐĂNG KÝ ĐÓNG BÃI]</div>'+
     '<div style="margin-bottom:4px"><strong>To: ['+(info.nccName).toUpperCase()+']</strong></div>'+
@@ -3432,13 +3474,14 @@ function sendStuffingEmail(){
       '<tr><td style="'+cellL+'">Loại cont</td><td style="'+cellR+'">'+(r.vol||'')+' x '+(r.typeCont||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Hàng hóa</td><td style="'+cellR+'">'+(r.tenHang||'').toUpperCase()+'</td></tr>'+
       '<tr><td style="'+cellL+'">Địa điểm đóng bãi</td><td style="'+cellR+'">'+(stuffLoc||'').toUpperCase()+'</td></tr>'+
-      '<tr><td style="'+cellL+'">Ngày đóng bãi</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+stuffDatesStr+': '+(r.vol||'')+'x'+(r.typeCont||'')+'</span></td></tr>'+
+      '<tr><td style="'+cellL+'">Ngày đóng bãi</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+stuffDatesHtml+'</span></td></tr>'+
       '<tr><td style="'+cellL+'">Phương tiện</td><td style="'+cellR+'">'+(si.vehicle||'Công nhân, Xe nâng, Cẩu bờ')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Người liên hệ</td><td style="'+cellR+'">'+(si.contact||'Nguyên - 0909641011')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Xuất hóa đơn</td><td style="'+cellR+'"> '+co.name+'<br><br>Đ/C: '+co.addr+'<br>MST: '+co.mst+'<br><br>email nhận hóa đơn: '+co.invEmail+'</td></tr>'+
       '<tr><td style="'+cellL+'">Ghi chú</td><td style="'+cellR+'"></td></tr>'+
     '</table>'+
     '<div style="color:#c00;font-style:italic;margin-top:12px">Kính nhờ Quý cảng cập nhật kế hoạch.</div>';
+  closeOv('stuffOv');
   _openEmailModal({title:'Email Đăng ký đóng bãi → '+info.nccName, to:info.email, cc:'cocosea.acc@gmail.com; cocosea.doc@gmail.com', subject:subject, bodyHtml:bodyHtml});
 }
 window.sendStuffingEmail=sendStuffingEmail;
@@ -4604,6 +4647,9 @@ tr:hover td{background:var(--bg-secondary)}
 
 <!-- EMAIL COMPOSE MODAL -->
 <div class="ov" id="emailOv" style="padding:.75rem"></div>
+
+<!-- STUFFING INFO MODAL -->
+<div class="ov" id="stuffOv" style="padding:.75rem"></div>
 
 <!-- DETAIL PANEL -->
 <div id="detailBackdrop" class="detail-backdrop"></div>
