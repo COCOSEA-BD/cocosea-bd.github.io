@@ -1400,6 +1400,7 @@ function renderDetailPanel(r,tt){
     _ensureSvcInCatalog(svcs);
     bodyHtml=`${ (can('fillPrice')||can('viewCost')) ? '<div style="display:grid;grid-template-columns:22px 130px 95px 80px 62px 90px 48px 85px 190px 42px 26px;gap:5px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Đơn giá</div><div>SL</div><div>Đơn vị</div><div>Thành tiền</div><div>Curr</div><div>NCC</div><div>Mô tả</div><div style="text-align:center">Finish</div><div></div></div>' : '<div style="display:grid;grid-template-columns:22px 1fr 1fr 26px;gap:8px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div></div></div>'}
     <div id="detailSvcGrid">${SVCS.filter(s=>svcs[s.key]!==undefined).map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')||'<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ. Bấm "Thêm dịch vụ" để chọn từ danh mục.</div>'}</div>
+    ${ svcs['stuffing']!==undefined ? _stuffInfoPanel(r) : '' }
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
 
@@ -2302,6 +2303,9 @@ async function saveDetailSvc(){
   // không để merge:true của Firestore tự khôi phục. Dùng FieldValue.delete() cho từng key đã bỏ.
   const removedKeys=Object.keys(existing).filter(function(k){return !(k in svcs);});
   const updatePayload={svcs:svcs,updatedAt:Date.now(),updatedBy:currentUser.email};
+  // Lưu thông tin Đóng hàng tại bãi (nếu panel đang hiển thị)
+  const _stuff=(typeof _readStuffInfo==='function')?_readStuffInfo():null;
+  if(_stuff)updatePayload.stuffInfo=_stuff;
   setLoading(true,'Đang lưu...');
   try{
     await fsSet(colName(detailTt),detailId,updatePayload);
@@ -2314,7 +2318,7 @@ async function saveDetailSvc(){
     toast('Đã lưu dịch vụ');
     // Cập nhật cache NGAY (listener Firestore là async) để re-render không bị khôi phục dịch vụ đã xóa
     const ci=cache[detailTt].findIndex(x=>x._id===detailId);
-    if(ci>=0){ cache[detailTt][ci].svcs=svcs; }
+    if(ci>=0){ cache[detailTt][ci].svcs=svcs; if(_stuff)cache[detailTt][ci].stuffInfo=_stuff; }
     const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
     renderDetailPanel(fresh,detailTt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -3325,6 +3329,77 @@ function _encodeEmailHeader(str){
 window._emailOpenMailto=_emailOpenMailto;
 window._emailDownloadEml=_emailDownloadEml;
 
+// ─────────── Panel thông tin Đóng hàng tại bãi (dưới dịch vụ stuffing) ───────────
+function _stuffInfo(r){
+  // chuẩn hóa: {dates:[], location:'', contact:'', vehicle:''}
+  const si=r.stuffInfo||{};
+  return {
+    dates: Array.isArray(si.dates)&&si.dates.length?si.dates.slice():[(r.etd||'')],
+    location: si.location!==undefined?si.location:(r.icd||r.cyLocation||''),
+    contact: si.contact!==undefined&&si.contact!==''?si.contact:'Nguyên - 0909641011',
+    vehicle: si.vehicle!==undefined&&si.vehicle!==''?si.vehicle:'Công nhân, Xe nâng, Cẩu bờ',
+    note: si.note||''
+  };
+}
+
+function _stuffInfoPanel(r){
+  const si=_stuffInfo(r);
+  const dateRows=si.dates.map(function(d,i){
+    return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px" data-stuffdate-row>'
+      +'<input type="date" value="'+(d||'')+'" data-stuffdate style="font-size:12px;width:160px"/>'
+      +'<button class="rac red" onclick="_stuffDelDate(this)" title="Xóa ngày" style="font-size:13px"><i class="ti ti-x"></i></button>'
+      +'</div>';
+  }).join('');
+  return '<div class="card" style="margin-top:10px;border-left:3px solid var(--blue);background:var(--bg-secondary)">'
+    +'<div style="font-size:12.5px;font-weight:700;color:var(--blue);margin-bottom:8px"><i class="ti ti-package" style="font-size:14px"></i> Thông tin Đóng hàng tại bãi</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'
+      +'<div>'
+        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Ngày đóng hàng</label>'
+        +'<div id="stuffDatesWrap">'+dateRows+'</div>'
+        +'<button class="btn sm" onclick="_stuffAddDate()" style="margin-top:2px"><i class="ti ti-plus"></i> Thêm ngày</button>'
+      +'</div>'
+      +'<div>'
+        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Địa điểm đóng hàng <span style="font-weight:400;color:var(--text-tertiary)">(mặc định từ ICD)</span></label>'
+        +'<input type="text" id="stuffLocation" value="'+(si.location||'').replace(/"/g,'&quot;')+'" placeholder="Địa điểm đóng hàng" style="font-size:12px;width:100%;box-sizing:border-box;margin-bottom:8px"/>'
+        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Người liên hệ</label>'
+        +'<input type="text" id="stuffContact" value="'+(si.contact||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box;margin-bottom:8px"/>'
+        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Phương tiện</label>'
+        +'<input type="text" id="stuffVehicle" value="'+(si.vehicle||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box"/>'
+      +'</div>'
+    +'</div>'
+    +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:8px">Các thông tin này sẽ được dùng để điền vào email "Đăng ký đóng bãi". Bấm Lưu dịch vụ để lưu.</div>'
+  +'</div>';
+}
+window._stuffInfoPanel=_stuffInfoPanel;
+
+function _stuffAddDate(){
+  const wrap=g('stuffDatesWrap'); if(!wrap)return;
+  const div=document.createElement('div');
+  div.innerHTML='<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px" data-stuffdate-row><input type="date" data-stuffdate style="font-size:12px;width:160px"/><button class="rac red" onclick="_stuffDelDate(this)" title="Xóa ngày" style="font-size:13px"><i class="ti ti-x"></i></button></div>';
+  wrap.appendChild(div.firstChild);
+}
+window._stuffAddDate=_stuffAddDate;
+
+function _stuffDelDate(btn){
+  const row=btn.closest('[data-stuffdate-row]'); if(row)row.remove();
+}
+window._stuffDelDate=_stuffDelDate;
+
+// Đọc thông tin stuffing từ DOM (gọi khi lưu dịch vụ)
+function _readStuffInfo(){
+  const wrap=g('stuffDatesWrap');
+  if(!wrap)return null;
+  const dates=Array.from(wrap.querySelectorAll('[data-stuffdate]')).map(function(el){return el.value;}).filter(Boolean);
+  return {
+    dates:dates,
+    location:g('stuffLocation')?.value||'',
+    contact:g('stuffContact')?.value||'',
+    vehicle:g('stuffVehicle')?.value||'',
+    note:''
+  };
+}
+window._readStuffInfo=_readStuffInfo;
+
 function sendStuffingEmail(){
   const info=_svcNccEmail('stuffing');
   const r=info.r;
@@ -3332,24 +3407,34 @@ function sendStuffingEmail(){
   if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
   const co=_coInfo();
   const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
-  const subject='Đăng ký đóng bãi: '+(r.cyLocation||r.icd||'').toUpperCase()+' - Booking: '+bkgNos+'- Vol: '+(r.vol||'')+' '+(r.typeCont||'')+' /COCOSEA';
+  // Ưu tiên dữ liệu đang nhập trên panel (nếu mở), nếu không lấy từ dữ liệu đã lưu
+  const _domStuff=(typeof _readStuffInfo==='function')?_readStuffInfo():null;
+  const si=(_domStuff&&(_domStuff.dates.length||_domStuff.location))?{
+    dates:_domStuff.dates.length?_domStuff.dates:[r.etd||''],
+    location:_domStuff.location||r.icd||r.cyLocation||'',
+    contact:_domStuff.contact||'Nguyên - 0909641011',
+    vehicle:_domStuff.vehicle||'Công nhân, Xe nâng, Cẩu bờ'
+  }:_stuffInfo(r);
+  const stuffLoc=si.location||r.icd||r.cyLocation||'';
+  const subject='Đăng ký đóng bãi: '+(stuffLoc||'').toUpperCase()+' - Booking: '+bkgNos+'- Vol: '+(r.vol||'')+' '+(r.typeCont||'')+' /COCOSEA';
   const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#f2f2f2;font-size:12.5px;width:160px;vertical-align:top';
   const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
-  const stuffDate=(_emailContList(r)[0]||{}).date||r.etd||'';
+  const stuffDatesStr=(si.dates&&si.dates.length?si.dates:[r.etd||'']).filter(Boolean).map(function(d){return d.replace(/-/g,'/');}).join(', ');
   const bodyHtml=
     '<div style="font-weight:700;font-size:14px;margin-bottom:8px">ĐĂNG KÝ ĐÓNG BÃI]</div>'+
     '<div style="margin-bottom:4px"><strong>To: ['+(info.nccName).toUpperCase()+']</strong></div>'+
     '<div>Kính gửi: Quý cảng</div>'+
-    '<div style="margin-bottom:10px">Cty COCOSEA đăng ký đóng bãi với chi tiết như sau: (em gửi lại thông tin ạ)</div>'+
+    '<div style="margin-bottom:10px">Cty COCOSEA đăng ký đóng bãi với chi tiết như sau:</div>'+
     '<table style="border-collapse:collapse;width:100%;max-width:680px">'+
       '<tr><td style="'+cellL+'">Shipper</td><td style="'+cellR+'"><strong>COCOSEA</strong></td></tr>'+
       '<tr><td style="'+cellL+'">Booking Number</td><td style="'+cellR+'">'+bkgNos+'</td></tr>'+
       '<tr><td style="'+cellL+'">Hãng tàu</td><td style="'+cellR+'">'+(r.carrier||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Loại cont</td><td style="'+cellR+'">'+(r.vol||'')+' x '+(r.typeCont||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Hàng hóa</td><td style="'+cellR+'">'+(r.tenHang||'').toUpperCase()+'</td></tr>'+
-      '<tr><td style="'+cellL+'">Ngày đóng bãi</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+(stuffDate?stuffDate.replace(/-/g,'/'):'')+': '+(r.vol||'')+'x'+(r.typeCont||'')+'</span></td></tr>'+
-      '<tr><td style="'+cellL+'">Phương tiện</td><td style="'+cellR+'">Xe tải, Công nhân</td></tr>'+
-      '<tr><td style="'+cellL+'">Người liên hệ</td><td style="'+cellR+'"> Phone: 0348363294</td></tr>'+
+      '<tr><td style="'+cellL+'">Địa điểm đóng bãi</td><td style="'+cellR+'">'+(stuffLoc||'').toUpperCase()+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Ngày đóng bãi</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+stuffDatesStr+': '+(r.vol||'')+'x'+(r.typeCont||'')+'</span></td></tr>'+
+      '<tr><td style="'+cellL+'">Phương tiện</td><td style="'+cellR+'">'+(si.vehicle||'Công nhân, Xe nâng, Cẩu bờ')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Người liên hệ</td><td style="'+cellR+'">'+(si.contact||'Nguyên - 0909641011')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Xuất hóa đơn</td><td style="'+cellR+'"> '+co.name+'<br><br>Đ/C: '+co.addr+'<br>MST: '+co.mst+'<br><br>email nhận hóa đơn: '+co.invEmail+'</td></tr>'+
       '<tr><td style="'+cellL+'">Ghi chú</td><td style="'+cellR+'"></td></tr>'+
     '</table>'+
