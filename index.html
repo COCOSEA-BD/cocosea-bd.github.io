@@ -685,6 +685,7 @@ function startListeners(){
   loadBankAccounts();
   loadCargoNames();
   loadServices();
+  if(typeof loadWarehouses==='function')loadWarehouses();
   if(typeof loadCocoQuote==='function'&&can('manageUsers'))loadCocoQuote();
   if(typeof loadContractPartyA==='function'&&can('manageUsers')){loadContractPartyA();loadContracts();}
   loadAcctInfo();
@@ -1351,7 +1352,7 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<th style="'+thBase+'"></th>';
       sectionsHtml+='</tr></thead>';
       sectionsHtml+='<tbody class="contBody_'+bkKey+'">'+bContRows(conts,bkVol,bkNo)+'</tbody></table>';
-      sectionsHtml+='<div style="padding:6px 12px;border-top:1px solid var(--border-light)"><button class="btn sm" data-bk="'+bkNo+'" data-bkkey="'+bkKey+'" onclick="addBkContRow(this)"><i class="ti ti-plus"></i> Thêm cont</button></div>';
+      sectionsHtml+='<div style="padding:6px 12px;border-top:1px solid var(--border-light)"><button class="btn sm" data-bk="'+bkNo+'" data-bkkey="'+bkKey+'" data-bkvol="'+bkVol+'" onclick="addBkContRow(this)"><i class="ti ti-plus"></i> Thêm cont</button></div>';
       sectionsHtml+='</div>';
     });
 
@@ -2194,9 +2195,15 @@ window.bkContRowHtml=bkContRowHtml;
 function addBkContRow(btn){
   const bkNo=btn.dataset.bk;
   const bkKey=btn.dataset.bkkey;
+  const bkVol=parseInt(btn.dataset.bkvol)||0;
   const tbody=document.querySelector('.contBody_'+bkKey);
   if(!tbody){toast('Không tìm thấy bảng cont','error');return;}
   const i=tbody.querySelectorAll('tr').length;
+  // Không cho thêm cont vượt quá Vol của booking
+  if(bkVol>0 && i>=bkVol){
+    toast('Số cont đã đủ theo Vol của booking ('+bkVol+' cont). Không thể thêm.','error');
+    return;
+  }
   const div=document.createElement('tbody');
   div.innerHTML=bkContRowHtml({},i,bkNo);
   tbody.appendChild(div.firstElementChild);
@@ -3202,7 +3209,7 @@ function svcRowHTML(s, sv){
     <div style="display:flex;justify-content:center" title="Hoàn thành"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer"/></div>
     <div style="display:flex;justify-content:flex-end;gap:3px">
       ${(s.key==='stuffing')?`<button class="rac" onclick="openStuffPopup()" title="Thông tin & email đóng hàng tại bãi" style="font-size:13px;color:var(--blue)"><i class="ti ti-package"></i></button>`:''}
-      ${(s.key==='trucking')?`<button class="rac" onclick="sendTruckingEmail()" title="Gửi email Trucking" style="font-size:13px;color:var(--blue)"><i class="ti ti-mail"></i></button>`:''}
+      ${(s.key==='trucking')?`<button class="rac" onclick="openTruckingPopup()" title="Thông tin & email Trucking" style="font-size:13px;color:var(--blue)"><i class="ti ti-truck"></i></button>`:''}
       ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" title="Xem Debit Note: ${(sv.dnFile||'').replace(/"/g,'&quot;')}" style="font-size:13px;color:var(--green)"><i class="ti ti-file-check"></i></button>`:`<label class="rac" title="Upload Debit Note cho dịch vụ này" style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><i class="ti ti-upload"></i><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleSvcDnUpload(this,'${s.key}')"/></label>`}
       <button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa dịch vụ" style="font-size:13px"><i class="ti ti-trash"></i></button>
     </div>
@@ -3486,6 +3493,126 @@ function sendStuffingEmail(){
 }
 window.sendStuffingEmail=sendStuffingEmail;
 
+// ─────────── POPUP thông tin Trucking ───────────
+function _truckInfo(r){
+  const ti=r.truckInfo||{};
+  let dates=[];
+  if(Array.isArray(ti.dates)&&ti.dates.length){
+    dates=ti.dates.map(function(d){ return {date:d.date||'',vol:d.vol||(r.vol||''),typeCont:d.typeCont||(r.typeCont||'')}; });
+  } else {
+    dates=[{date:(r.etd||''),vol:(r.vol||''),typeCont:(r.typeCont||'')}];
+  }
+  return {
+    dates: dates,
+    whName: ti.whName!==undefined?ti.whName:'',
+    whLocation: ti.whLocation!==undefined?ti.whLocation:(r.wh||''),
+    whContact: ti.whContact!==undefined?ti.whContact:''
+  };
+}
+
+function openTruckingPopup(){
+  const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
+  const ti=_truckInfo(r);
+  const dateRows=ti.dates.map(function(d){return _truckDateRowHtml(d);}).join('');
+  const whs=window._warehouses||[];
+  const whOpts='<option value="">— Chọn kho —</option>'+whs.map(function(w){
+    return '<option value="'+(w.name||'').replace(/"/g,'&quot;')+'"'+(ti.whName===w.name?' selected':'')+'>'+(w.name||'')+'</option>';
+  }).join('');
+  g('truckOv').innerHTML='<div class="modal" style="max-width:640px;max-height:90vh;overflow-y:auto">'
+    +'<div class="mhdr"><div><div class="mtitle" style="display:flex;align-items:center;gap:8px"><i class="ti ti-truck" style="font-size:16px;color:var(--blue)"></i>Thông tin Trucking</div>'
+    +'<div class="msub">Điền thông tin rồi bấm "Tạo email Trucking"</div></div>'
+    +'<button class="x" onclick="closeOv(\'truckOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px">'
+      +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px">Thời gian đóng hàng</label>'
+      +'<div style="display:grid;grid-template-columns:150px 70px 1fr 30px;gap:6px;margin-bottom:4px;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase">'
+        +'<div>Ngày</div><div>Vol</div><div>Type cont</div><div></div></div>'
+      +'<div id="truckDatesWrap">'+dateRows+'</div>'
+      +'<button class="btn sm" onclick="_truckAddDate()" style="margin-top:2px"><i class="ti ti-plus"></i> Thêm ngày</button>'
+      +'<div style="margin-top:14px">'
+        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Kho đóng hàng</label>'
+        +'<select id="truckWhSelect" onchange="_truckOnWhChange()" style="font-size:12px;width:100%;margin-bottom:8px">'+whOpts+'</select>'
+        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Định vị kho</label>'
+        +'<input type="text" id="truckWhLocation" value="'+(ti.whLocation||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box;margin-bottom:8px"/>'
+        +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Người liên hệ</label>'
+        +'<input type="text" id="truckWhContact" value="'+(ti.whContact||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box"/>'
+      +'</div>'
+    +'</div>'
+    +'<div class="mftr" style="padding:12px 20px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="saveTruckInfo()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+      +'<button class="btn pri" onclick="sendTruckingEmail()"><i class="ti ti-mail"></i> Tạo email Trucking</button>'
+    +'</div>'
+  +'</div>';
+  openOv('truckOv');
+}
+window.openTruckingPopup=openTruckingPopup;
+
+function _truckDateRowHtml(d){
+  d=d||{};
+  return '<div style="display:grid;grid-template-columns:150px 70px 1fr 30px;gap:6px;margin-bottom:4px;align-items:center" data-truckdate-row>'
+    +'<input type="date" value="'+(d.date||'')+'" data-truckdate style="font-size:12px;width:100%;box-sizing:border-box"/>'
+    +'<input type="text" value="'+(d.vol||'').toString().replace(/"/g,'&quot;')+'" data-truckvol placeholder="Vol" style="font-size:12px;width:100%;box-sizing:border-box;text-align:center"/>'
+    +'<input type="text" value="'+(d.typeCont||'').replace(/"/g,'&quot;')+'" data-trucktype placeholder="Type cont (vd: 40HC)" style="font-size:12px;width:100%;box-sizing:border-box"/>'
+    +'<button class="rac red" onclick="_truckDelDate(this)" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>'
+    +'</div>';
+}
+
+function _truckAddDate(){
+  const wrap=g('truckDatesWrap'); if(!wrap)return;
+  const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
+  const div=document.createElement('div');
+  div.innerHTML=_truckDateRowHtml({date:'',vol:(r.vol||''),typeCont:(r.typeCont||'')});
+  wrap.appendChild(div.firstChild);
+}
+window._truckAddDate=_truckAddDate;
+
+function _truckDelDate(btn){ const row=btn.closest('[data-truckdate-row]'); if(row)row.remove(); }
+window._truckDelDate=_truckDelDate;
+
+// Khi chọn kho từ danh sách → tự fill định vị + người liên hệ
+function _truckOnWhChange(){
+  const name=g('truckWhSelect')?.value||'';
+  const w=(window._warehouses||[]).find(function(x){return x.name===name;});
+  if(w){
+    if(g('truckWhLocation'))g('truckWhLocation').value=w.location||'';
+    if(g('truckWhContact'))g('truckWhContact').value=w.contact||'';
+  }
+}
+window._truckOnWhChange=_truckOnWhChange;
+
+function _readTruckInfo(){
+  const wrap=g('truckDatesWrap');
+  if(!wrap)return null;
+  const dates=Array.from(wrap.querySelectorAll('[data-truckdate-row]')).map(function(row){
+    return {
+      date:(row.querySelector('[data-truckdate]')||{}).value||'',
+      vol:(row.querySelector('[data-truckvol]')||{}).value||'',
+      typeCont:(row.querySelector('[data-trucktype]')||{}).value||''
+    };
+  }).filter(function(d){return d.date||d.vol||d.typeCont;});
+  return {
+    dates:dates,
+    whName:g('truckWhSelect')?.value||'',
+    whLocation:g('truckWhLocation')?.value||'',
+    whContact:g('truckWhContact')?.value||''
+  };
+}
+window._readTruckInfo=_readTruckInfo;
+
+async function saveTruckInfo(){
+  const r=cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r){toast('Không tìm thấy lô','error');return;}
+  const info=_readTruckInfo(); if(!info)return;
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(detailTt),detailId,{truckInfo:info,updatedAt:Date.now(),updatedBy:currentUser.email});
+    const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
+    if(ci>=0)cache[detailTt][ci].truckInfo=info;
+    toast('Đã lưu thông tin Trucking');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveTruckInfo=saveTruckInfo;
+
 function sendTruckingEmail(){
   const info=_svcNccEmail('trucking');
   const r=info.r;
@@ -3493,9 +3620,20 @@ function sendTruckingEmail(){
   if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
   const co=_coInfo();
   const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
+  // Ưu tiên dữ liệu đang nhập trên popup Trucking (nếu mở), nếu không lấy dữ liệu đã lưu
+  const _domTruck=(typeof _readTruckInfo==='function')?_readTruckInfo():null;
+  const ti=(_domTruck&&(_domTruck.dates.length||_domTruck.whLocation||_domTruck.whName))?_domTruck:_truckInfo(r);
+  const whLoc=ti.whLocation||r.wh||'';
+  const whName=ti.whName||r.wh||'';
+  const whContact=ti.whContact||'';
   const subject='Kéo cont - '+(r.carrier||'')+' - '+(r.vol||'')+'x'+(r.typeCont||'')+' - '+bkgNos+' - COCOSEA';
   const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#fff;font-size:12.5px;width:150px;vertical-align:top';
   const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
+  const truckDatesHtml=(ti.dates||[]).filter(function(d){return d&&(d.date||d.vol||d.typeCont);}).map(function(d){
+    const dt=(d.date||'').replace(/-/g,'/');
+    const vt=((d.vol||'')+(d.typeCont?(' x '+d.typeCont):'')).trim();
+    return dt+(vt?(': '+vt):'')+(whLoc?(' – '+whLoc):'');
+  }).join('<br>')||((r.etd?r.etd.replace(/-/g,'/'):'')+' '+(r.vol||'')+'x'+(r.typeCont||'')+' – '+(whLoc||'kho'));
   const bodyHtml=
     '<div style="margin-bottom:4px"><strong>To: ['+(info.nccName).toUpperCase()+']</strong></div>'+
     '<div>Kính gửi Quý công ty,</div>'+
@@ -3505,13 +3643,14 @@ function sendTruckingEmail(){
       '<tr><td style="'+cellL+'">Hãng tàu:</td><td style="'+cellR+'">'+(r.carrier||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Tàu /số chuyến:</td><td style="'+cellR+'">'+(r.vessel||'')+(r.voy?' '+r.voy:'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Loại con-te-nơ:</td><td style="'+cellR+'">'+(r.vol||'')+' x '+(r.typeCont||'')+' ( Hàng '+(r.tenHang||'').toLowerCase()+' )</td></tr>'+
-      '<tr><td style="'+cellL+'">Thời gian đóng hàng:</td><td style="'+cellR+'">'+(r.etd?r.etd.replace(/-/g,'/'):'')+' '+(r.vol||'')+'x'+(r.typeCont||'')+' – '+(r.wh||'kho')+'</td></tr>'+
-      '<tr><td style="'+cellL+'">Định vị kho:</td><td style="'+cellR+'">'+(r.wh||'')+'</td></tr>'+
-      '<tr><td style="'+cellL+'">Kho đóng hàng:</td><td style="'+cellR+'">'+(r.wh||'')+'</td></tr>'+
-      '<tr><td style="'+cellL+'">Người liên hệ:</td><td style="'+cellR+'"></td></tr>'+
+      '<tr><td style="'+cellL+'">Thời gian đóng hàng:</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+truckDatesHtml+'</span></td></tr>'+
+      '<tr><td style="'+cellL+'">Định vị kho:</td><td style="'+cellR+'">'+(whLoc||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Kho đóng hàng:</td><td style="'+cellR+'">'+(whName||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Người liên hệ:</td><td style="'+cellR+'">'+(whContact||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Hạ cảng:</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+(r.pol||'')+'</span></td></tr>'+
       '<tr><td style="'+cellL+'">Ghi chú:</td><td style="'+cellR+'"></td></tr>'+
     '</table>';
+  closeOv('truckOv');
   _openEmailModal({title:'Email Trucking → '+info.nccName, to:info.email, cc:'cocosea.doc@gmail.com; cocosea.acc@gmail.com', subject:subject, bodyHtml:bodyHtml});
 }
 window.sendTruckingEmail=sendTruckingEmail;
@@ -4651,6 +4790,9 @@ tr:hover td{background:var(--bg-secondary)}
 <!-- STUFFING INFO MODAL -->
 <div class="ov" id="stuffOv" style="padding:.75rem"></div>
 
+<!-- TRUCKING INFO MODAL -->
+<div class="ov" id="truckOv" style="padding:.75rem"></div>
+
 <!-- DETAIL PANEL -->
 <div id="detailBackdrop" class="detail-backdrop"></div>
 <div id="detailPanel" class="detail-panel"></div>
@@ -4907,11 +5049,77 @@ function renderSettings(){
 
     +'<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>'
     +_contractPartyASettingsHtml()
+    +_warehouseSettingsHtml()
     +'</div>';
   renderCargoNamesList();
   renderAcctInfoList();
+  renderWarehouseList();
   if(typeof renderSvcCatList==='function')renderSvcCatList();
 }
+
+// ─────────── SETTINGS: Kho đóng hàng ───────────
+function _warehouseSettingsHtml(){
+  return '<div class="table-card" style="padding:1.25rem;margin:1.25rem 0">'
+    +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-building-warehouse" style="font-size:14px"></i>Kho đóng hàng</div>'
+    +'<div style="display:grid;grid-template-columns:1.3fr 1.6fr 1.3fr 32px;gap:8px;margin-bottom:6px;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase"><div>Tên kho</div><div>Định vị</div><div>Người liên hệ</div><div></div></div>'
+    +'<div id="warehouseRows"></div>'
+    +'<button class="btn sm" style="margin-top:6px" onclick="addWarehouseRow()"><i class="ti ti-plus"></i> Thêm kho</button>'
+    +'<div style="margin-top:10px"><button class="btn pri" onclick="saveWarehouses()"><i class="ti ti-check"></i> Lưu kho đóng hàng</button></div>'
+  +'</div>';
+}
+
+function warehouseRowHtml(w,i){
+  w=w||{};
+  return '<div data-wh-row style="display:grid;grid-template-columns:1.3fr 1.6fr 1.3fr 32px;gap:8px;margin-bottom:6px;align-items:start">'
+    +'<input type="text" value="'+(w.name||'').replace(/"/g,'&quot;')+'" placeholder="Tên kho" data-wh-name style="font-size:12px;box-sizing:border-box"/>'
+    +'<input type="text" value="'+(w.location||'').replace(/"/g,'&quot;')+'" placeholder="Định vị (địa chỉ / Google Maps)" data-wh-loc style="font-size:12px;box-sizing:border-box"/>'
+    +'<input type="text" value="'+(w.contact||'').replace(/"/g,'&quot;')+'" placeholder="Người liên hệ - SĐT" data-wh-contact style="font-size:12px;box-sizing:border-box"/>'
+    +'<button class="rac red" onclick="delWarehouseRow(this)" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>'
+  +'</div>';
+}
+
+function renderWarehouseList(){
+  const box=g('warehouseRows'); if(!box)return;
+  const list=window._warehouses||[];
+  box.innerHTML=(list.length?list:[{}]).map(function(w,i){return warehouseRowHtml(w,i);}).join('');
+}
+window.renderWarehouseList=renderWarehouseList;
+
+function addWarehouseRow(){
+  const box=g('warehouseRows'); if(!box)return;
+  const div=document.createElement('div');
+  div.innerHTML=warehouseRowHtml({},box.children.length);
+  box.appendChild(div.firstChild);
+}
+window.addWarehouseRow=addWarehouseRow;
+
+function delWarehouseRow(btn){ const row=btn.closest('[data-wh-row]'); if(row)row.remove(); }
+window.delWarehouseRow=delWarehouseRow;
+
+function loadWarehouses(cb){
+  db.collection('_config').doc('warehouses').get().then(function(snap){
+    window._warehouses=(snap.exists&&Array.isArray(snap.data().list))?snap.data().list:[];
+    if(cb)cb();
+    if(g('warehouseRows'))renderWarehouseList();
+  }).catch(function(){ window._warehouses=[]; if(cb)cb(); });
+}
+window.loadWarehouses=loadWarehouses;
+
+async function saveWarehouses(){
+  const box=g('warehouseRows'); if(!box)return;
+  const list=Array.from(box.querySelectorAll('[data-wh-row]')).map(function(row){
+    return {
+      name:(row.querySelector('[data-wh-name]')||{}).value||'',
+      location:(row.querySelector('[data-wh-loc]')||{}).value||'',
+      contact:(row.querySelector('[data-wh-contact]')||{}).value||''
+    };
+  }).filter(function(w){return w.name||w.location||w.contact;});
+  setLoading(true,'Đang lưu...');
+  try{ await db.collection('_config').doc('warehouses').set({list:list},{merge:false}); window._warehouses=list; toast('Đã lưu kho đóng hàng'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveWarehouses=saveWarehouses;
 
 // ─────────── SETTINGS: Thông tin Bên A (công ty cung cấp dịch vụ) cho Hợp đồng ───────────
 function _contractPartyASettingsHtml(){
