@@ -3308,8 +3308,8 @@ function _openEmailModal(opts){
   const attHtml=atts.length
     ? '<div style="display:flex;align-items:flex-start;gap:10px;padding:.6rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-top:12px">'
       +'<i class="ti ti-paperclip" style="font-size:16px;color:var(--text-secondary);flex-shrink:0;margin-top:2px"></i>'
-      +'<div style="font-size:12px"><div style="font-weight:600;margin-bottom:2px">Đính kèm ('+atts.length+' file)</div>'
-      +atts.map(function(a){return '<div style="color:var(--text-secondary)">'+a.filename+'</div>';}).join('')
+      +'<div style="font-size:12px;flex:1"><div style="font-weight:600;margin-bottom:2px">Đính kèm ('+atts.length+' file) <span style="font-weight:400;color:var(--text-tertiary)">— double-click để xem trước</span></div>'
+      +atts.map(function(a,i){return '<div ondblclick="_previewAttachment('+i+')" title="Double-click để xem trước" style="color:var(--blue);cursor:pointer;text-decoration:underline;text-underline-offset:2px">'+a.filename+'</div>';}).join('')
       +'</div></div>'
     : '<div style="display:flex;align-items:center;gap:10px;padding:.6rem 1rem;background:rgba(245,158,11,.08);border-radius:8px;border:1px solid rgba(245,158,11,.3);margin-top:12px">'
       +'<i class="ti ti-alert-triangle" style="font-size:16px;color:var(--orange);flex-shrink:0"></i>'
@@ -3318,7 +3318,7 @@ function _openEmailModal(opts){
   <div class="modal" style="max-width:780px;max-height:90vh;overflow-y:auto">
     <div class="mhdr">
       <div><div class="mtitle" style="display:flex;align-items:center;gap:8px"><i class="ti ti-mail" style="font-size:16px;color:var(--blue)"></i>${opts.title}</div>
-      <div class="msub">Xem lại nội dung, sau đó bấm "Tạo file .eml" để mở trong Outlook/Mail rồi gửi</div></div>
+      <div class="msub">Xem lại nội dung, sau đó bấm "Send Email" để tạo file gửi qua Outlook/Mail</div></div>
       <button class="x" onclick="closeOv('emailOv')"><i class="ti ti-x"></i></button>
     </div>
     <div class="mbody" style="padding:16px 20px">
@@ -3337,12 +3337,40 @@ function _openEmailModal(opts){
     </div>
     <div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">
       <button class="btn" onclick="closeOv('emailOv')">Hủy</button>
-      <button class="btn" onclick="_emailOpenMailto()"><i class="ti ti-external-link"></i> Mở Email App</button>
-      <button class="btn pri" onclick="_emailDownloadEml()"><i class="ti ti-download"></i> Tạo file .eml</button>
+      <button class="btn pri" onclick="_emailDownloadEml()"><i class="ti ti-send"></i> Send Email</button>
     </div>
   </div>`;
   openOv('emailOv');
 }
+
+// Xem trước file đính kèm (PDF/ảnh) ngay trong popup — double-click vào tên file
+function _previewAttachment(i){
+  const a=(window._emailAttachments||[])[i]; if(!a)return;
+  const m=/^data:([^;,]+)/.exec(a.dataUrl||'');
+  const mime=(m&&m[1])||'';
+  const bi=a.dataUrl.indexOf('base64,');
+  let bodyHtml;
+  if(bi>=0 && (mime==='application/pdf'||mime.startsWith('image/'))){
+    const b64=a.dataUrl.slice(bi+7).replace(/\s/g,'');
+    const byteChars=atob(b64);
+    const byteNums=new Array(byteChars.length);
+    for(let k=0;k<byteChars.length;k++) byteNums[k]=byteChars.charCodeAt(k);
+    const blob=new Blob([new Uint8Array(byteNums)],{type:mime});
+    const blobUrl=URL.createObjectURL(blob);
+    bodyHtml=mime==='application/pdf'
+      ? '<iframe src="'+blobUrl+'" style="width:100%;height:78vh;border:1px solid var(--border-light);border-radius:8px"></iframe>'
+      : '<div style="text-align:center"><img src="'+blobUrl+'" style="max-width:100%;max-height:78vh;border-radius:8px"/></div>';
+  } else {
+    bodyHtml='<div style="padding:2rem;text-align:center;color:var(--text-secondary)">Không thể xem trước loại file này trong trình duyệt. Vui lòng tải về để xem.</div>';
+  }
+  g('attPreviewOv').innerHTML='<div class="modal" style="max-width:880px;max-height:92vh;overflow-y:auto">'
+    +'<div class="mhdr"><div><div class="mtitle" style="display:flex;align-items:center;gap:8px"><i class="ti ti-file" style="font-size:16px;color:var(--blue)"></i>'+a.filename+'</div></div>'
+    +'<button class="x" onclick="closeOv(\'attPreviewOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:12px 16px">'+bodyHtml+'</div>'
+  +'</div>';
+  openOv('attPreviewOv');
+}
+window._previewAttachment=_previewAttachment;
 
 function _emailGetPlainBody(){
   // Convert the preview HTML to plain text for mailto
@@ -3422,7 +3450,7 @@ function _emailDownloadEml(){
   a.download=(subject.replace(/[^a-zA-Z0-9]/g,'_').slice(0,50)||'email')+'.eml';
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   setTimeout(function(){URL.revokeObjectURL(url);},1000);
-  toast(atts.length?('Đã tạo file .eml kèm '+atts.length+' file đính kèm'):'Đã tạo file .eml — mở file để gửi qua Outlook/Mail');
+  toast('Đã tạo email'+(atts.length?(' kèm '+atts.length+' file đính kèm'):'')+' — bấm vào file vừa tải xuống để mở Outlook/Mail và gửi');
 }
 function _encodeEmailHeader(str){
   // UTF-8 subject encoding for non-ASCII
@@ -4911,6 +4939,9 @@ tr:hover td{background:var(--bg-secondary)}
 
 <!-- TRUCKING INFO MODAL -->
 <div class="ov" id="truckOv" style="padding:.75rem"></div>
+
+<!-- ATTACHMENT PREVIEW MODAL -->
+<div class="ov" id="attPreviewOv" style="padding:.75rem"></div>
 
 <!-- DETAIL PANEL -->
 <div id="detailBackdrop" class="detail-backdrop"></div>
