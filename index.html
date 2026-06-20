@@ -2810,7 +2810,7 @@ function openInvoice(id, tt, tempR){
 
     <div class="mftr">
       <button class="btn" onclick="closeOv('invOv')">Đóng</button>
-      <button class="btn blu" onclick="sendEmailDN('${id}','${tt}')"><i class="ti ti-mail"></i> Tạo Email</button>
+      <button class="btn blu" onclick="sendEmailDN('${id}','${tt}')"><i class="ti ti-mail"></i> Send Debit note</button>
       <button class="btn pri" onclick="printDN()"><i class="ti ti-printer"></i> In / PDF</button>
     </div>
   </div>`;
@@ -3248,8 +3248,19 @@ function _coInfo(){
 }
 
 function _openEmailModal(opts){
-  // opts: {title, to, cc, subject, rowsHtml, bodyIntro, kind}
+  // opts: {title, to, cc, subject, bodyHtml, attachments:[{filename,dataUrl}]}
   const co=_coInfo();
+  window._emailAttachments=opts.attachments||[];
+  const atts=window._emailAttachments;
+  const attHtml=atts.length
+    ? '<div style="display:flex;align-items:flex-start;gap:10px;padding:.6rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-top:12px">'
+      +'<i class="ti ti-paperclip" style="font-size:16px;color:var(--text-secondary);flex-shrink:0;margin-top:2px"></i>'
+      +'<div style="font-size:12px"><div style="font-weight:600;margin-bottom:2px">Đính kèm ('+atts.length+' file)</div>'
+      +atts.map(function(a){return '<div style="color:var(--text-secondary)">'+a.filename+'</div>';}).join('')
+      +'</div></div>'
+    : '<div style="display:flex;align-items:center;gap:10px;padding:.6rem 1rem;background:rgba(245,158,11,.08);border-radius:8px;border:1px solid rgba(245,158,11,.3);margin-top:12px">'
+      +'<i class="ti ti-alert-triangle" style="font-size:16px;color:var(--orange);flex-shrink:0"></i>'
+      +'<div style="font-size:12px;color:var(--text-secondary)">Chưa có file đính kèm. Tải Debit Note lên ở tab Dịch vụ (mục NCC tương ứng) để tự động đính kèm khi gửi.</div></div>';
   g('emailOv').innerHTML=`
   <div class="modal" style="max-width:780px;max-height:90vh;overflow-y:auto">
     <div class="mhdr">
@@ -3269,6 +3280,7 @@ function _openEmailModal(opts){
       <div style="border:1px solid var(--border-light);border-radius:8px;padding:14px 16px;background:#fff" id="em_preview">
         ${opts.bodyHtml}
       </div>
+      ${attHtml}
     </div>
     <div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">
       <button class="btn" onclick="closeOv('emailOv')">Hủy</button>
@@ -3303,19 +3315,49 @@ function _emailDownloadEml(){
   const cc=g('em_cc')?.value||'';
   const subject=g('em_subject')?.value||'';
   const htmlBody=g('em_preview')?.innerHTML||'';
-  // Build a .eml file (RFC 822) with HTML body
+  const atts=window._emailAttachments||[];
   const boundary='----=_COCOSEA_'+Date.now();
-  const eml=
-    'X-Unsent: 1\r\n'+
-    'From: COCOSEA <cocosea.bd@gmail.com>\r\n'+
-    'To: '+to+'\r\n'+
-    (cc?'Cc: '+cc+'\r\n':'')+
-    'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
-    'MIME-Version: 1.0\r\n'+
-    'Content-Type: text/html; charset=UTF-8\r\n'+
-    'Content-Transfer-Encoding: 8bit\r\n'+
-    '\r\n'+
-    '<html><body style="font-family:Arial,sans-serif;font-size:13px">'+htmlBody+'</body></html>';
+  const htmlPart='<html><body style="font-family:Arial,sans-serif;font-size:13px">'+htmlBody+'</body></html>';
+  let eml;
+  if(atts.length){
+    // multipart/mixed: HTML body + 1..n file đính kèm (base64)
+    eml='X-Unsent: 1\r\n'+
+      'From: COCOSEA <cocosea.bd@gmail.com>\r\n'+
+      'To: '+to+'\r\n'+
+      (cc?'Cc: '+cc+'\r\n':'')+
+      'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
+      'MIME-Version: 1.0\r\n'+
+      'Content-Type: multipart/mixed; boundary="'+boundary+'"\r\n\r\n'+
+      'This is a multi-part message in MIME format.\r\n\r\n'+
+      '--'+boundary+'\r\n'+
+      'Content-Type: text/html; charset=UTF-8\r\n'+
+      'Content-Transfer-Encoding: 8bit\r\n\r\n'+
+      htmlPart+'\r\n\r\n';
+    atts.forEach(function(a){
+      // dataUrl dạng "data:<mime>;base64,<data>"
+      const m=/^data:([^;]+);base64,(.*)$/s.exec(a.dataUrl||'');
+      const mime=m?m[1]:'application/octet-stream';
+      const b64=m?m[2]:'';
+      // Chia base64 thành dòng 76 ký tự theo chuẩn MIME
+      const wrapped=(b64.match(/.{1,76}/g)||[]).join('\r\n');
+      eml+='--'+boundary+'\r\n'+
+        'Content-Type: '+mime+'; name="'+a.filename+'"\r\n'+
+        'Content-Transfer-Encoding: base64\r\n'+
+        'Content-Disposition: attachment; filename="'+a.filename+'"\r\n\r\n'+
+        wrapped+'\r\n\r\n';
+    });
+    eml+='--'+boundary+'--';
+  } else {
+    eml='X-Unsent: 1\r\n'+
+      'From: COCOSEA <cocosea.bd@gmail.com>\r\n'+
+      'To: '+to+'\r\n'+
+      (cc?'Cc: '+cc+'\r\n':'')+
+      'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
+      'MIME-Version: 1.0\r\n'+
+      'Content-Type: text/html; charset=UTF-8\r\n'+
+      'Content-Transfer-Encoding: 8bit\r\n\r\n'+
+      htmlPart;
+  }
   const blob=new Blob([eml],{type:'message/rfc822'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
@@ -3323,7 +3365,7 @@ function _emailDownloadEml(){
   a.download=(subject.replace(/[^a-zA-Z0-9]/g,'_').slice(0,50)||'email')+'.eml';
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   setTimeout(function(){URL.revokeObjectURL(url);},1000);
-  toast('Đã tạo file .eml — mở file để gửi qua Outlook/Mail');
+  toast(atts.length?('Đã tạo file .eml kèm '+atts.length+' file đính kèm'):'Đã tạo file .eml — mở file để gửi qua Outlook/Mail');
 }
 function _encodeEmailHeader(str){
   // UTF-8 subject encoding for non-ASCII
@@ -4886,75 +4928,77 @@ tr:hover td{background:var(--bg-secondary)}
 <script>
 function sendEmailDN(id, tt){
   const r=cache[tt||currentTab].find(x=>x._id===(id||svcIdx))||{};
-  const cnNm=r.cnee||r.consignee||'';
-  const cp=cache.partners[cnNm]||{};
-  const sp=cache.partners[r.shipper||r.supplier||'']||{};
-  const toEmail=cp.email||'';
+  const svcs=r.svcs||{};
+  // Xác định Booking Party hiện tại (theo tab đang xem trong popup Invoice/DN)
+  const d=window._dnData;
+  const allParties=(d&&d.allParties&&d.allParties.length)?d.allParties:(function(){
+    const ps=[...new Set(Object.keys(svcs).map(function(k){return (svcs[k]&&svcs[k].party||'').trim();}).filter(Boolean))];
+    return ps.length?ps:[''];
+  })();
+  const currentParty=allParties[(d&&d.currentPartyIdx)||0]||'';
+  // Số Debit Note: ưu tiên số đã lưu riêng cho party này, rồi tới số chung của lô, rồi số tự sinh khi mở popup
+  const dnMap=r.dnByParty||{};
+  const dnNo=(dnMap[currentParty]&&dnMap[currentParty].trim())
+    ||(dnMap['(Không party)']&&dnMap['(Không party)'].trim())
+    ||(r.dnNo&&r.dnNo.trim())
+    ||(d&&d.dnNo)
+    ||('DN'+new Date().getFullYear().toString().slice(-2)+String(new Date().getMonth()+1).padStart(2,'0')+Math.floor(Math.random()*900000+100000));
+
+  const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
+  const shipperKey=r.shipper||r.supplier||'';
+  const cneeKey=r.cnee||r.consignee||'';
+  const sp=cache.partners[shipperKey]||{};
+  const cp=cache.partners[cneeKey]||{};
+  const partyPartner=cache.partners[currentParty]||{};
+  const toEmail=partyPartner.email||cp.email||'';
   const ccEmail=sp.email||'';
-  const defSubject='[DEBIT NOTE] '+r.bookingNo+' - '+(r.mblNo||'')+' - '+(r.pol||'')+' → '+(r.pod||'');
-  const defBody='Dear '+(cp.contact||'Sir/Madam')+',\n\n'
-    +'Hope this email finds you well.\n\n'
-    +'Please find enclosed our Debit Note for the below shipment. Kindly review and arrange payment accordingly.\n\n'
-    +'────────────────────────────────\n'
-    +'  Booking No : '+r.bookingNo+'\n'
-    +'  MBL No     : '+(r.mblNo||'—')+'\n'
-    +'  Vessel     : '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'\n'
-    +'  Route      : '+(r.pol||'—')+' → '+(r.pod||'—')+'\n'
-    +'  ETD / ETA  : '+(r.etd||'—')+' / '+(r.eta||'—')+'\n'
-    +'────────────────────────────────\n\n'
-    +'Should you have any questions, please do not hesitate to contact us.\n\n'
-    +'Best regards,\nCOCOSEA CO., LTD\nKeep Going . Keep Growing';
 
-  // Build HTML email preview
-  const invTable=(window._dnData&&g('dnPrintArea'))?g('dnPrintArea').outerHTML:'';
+  const pol=(r.pol||'')+(r.polCountry?(' ; '+r.polCountry):'');
+  const pod=(r.pod||'')+(r.podCountry?(' ; '+r.podCountry):'');
+  const volume=(r.vol||'')+(r.typeCont?(' x '+r.typeCont):'');
+  const vesselVoy=(r.vessel||'')+(r.voy?(' V.'+r.voy):'');
+  const debitDate=new Date().toLocaleDateString('en-GB').split('/').join('-'); // dd-mm-yyyy
 
-  g('emailOv').innerHTML=`
-  <div class="modal" style="max-width:720px">
-    <div class="mhdr">
-      <div><div class="mtitle" style="display:flex;align-items:center;gap:8px"><i class="ti ti-mail" style="font-size:16px;color:var(--blue)"></i>Soạn Email gửi Debit Note</div>
-      <div class="msub">${r.bookingNo} — ${r.shipper||r.supplier||''}</div></div>
-      <button class="rac" onclick="closeOv('emailOv')"><i class="ti ti-x"></i></button>
-    </div>
-    <div style="display:grid;gap:8px;padding:0 0 .5rem">
-      <!-- To / CC -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div><label class="lbl">To (Người nhận)</label>
-          <input type="email" id="emailTo" value="${toEmail}" placeholder="email@customer.com" style="font-size:12.5px"/>
-        </div>
-        <div><label class="lbl">CC</label>
-          <input type="email" id="emailCc" value="${ccEmail}" placeholder="cc@company.com" style="font-size:12.5px"/>
-        </div>
-      </div>
-      <!-- Subject -->
-      <div><label class="lbl">Subject</label>
-        <input type="text" id="emailSubject" value="${defSubject}" style="font-size:12.5px"/>
-      </div>
-      <!-- Body -->
-      <div><label class="lbl" style="display:flex;justify-content:space-between">
-        <span>Nội dung email</span>
-        <span style="font-size:10px;color:var(--text-tertiary);font-weight:400">Plain text — tự điền tên, tàu, tuyến</span>
-      </label>
-      <textarea id="emailBody" rows="10" style="font-family:'Courier New',monospace;font-size:12px;resize:vertical;line-height:1.6">${defBody}</textarea></div>
-      <!-- Attachment notice -->
-      <div style="display:flex;align-items:center;gap:10px;padding:.6rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
-        <i class="ti ti-paperclip" style="font-size:16px;color:var(--text-secondary);flex-shrink:0"></i>
-        <div>
-          <div style="font-size:12px;font-weight:600">Đính kèm: DebitNote_${r.bookingNo}.pdf</div>
-          <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">
-            Bấm <strong>"Mở Mail Client"</strong> → email mở ra → kéo file PDF đính kèm thủ công.
-            Hoặc tải <strong>.eml</strong> → mở bằng Outlook để đính kèm tự động.
-          </div>
-        </div>
-        <button class="btn sm" onclick="printDN()" style="flex-shrink:0;font-size:11px"><i class="ti ti-printer"></i> In PDF trước</button>
-      </div>
-    </div>
-    <div class="mftr" style="gap:8px">
-      <button class="btn" onclick="closeOv('emailOv')">Hủy</button>
-      <button class="btn" onclick="downloadEmlFile('${id||svcIdx}','${tt||currentTab}')"><i class="ti ti-download"></i> Tải .eml</button>
-      <button class="btn pri" onclick="openMailClient()"><i class="ti ti-send"></i> Mở Mail Client</button>
-    </div>
-  </div>`;
-  openOv('emailOv');
+  // Tiêu đề email tự sinh từ thông tin lô hàng
+  const subject='Debit note - BL:'+(r.mblNo||'')+' - Bkg:'+bkgNos+' - - ('+(r.pol||'')+' - '+(r.pod||'')+') - '+dnNo+' - '+shipperKey;
+
+  const cellL='padding:7px 10px;border:1px solid #000;font-weight:700;background:#fff;font-size:12.5px;width:160px;vertical-align:top';
+  const cellR='padding:7px 10px;border:1px solid #000;font-size:12.5px;vertical-align:top';
+  const bodyHtml=
+    '<div style="font-size:19px;font-weight:800;margin-bottom:12px">[Debit Notification]</div>'+
+    '<div style="margin-bottom:4px"><strong>To: ['+(currentParty||shipperKey).toUpperCase()+']</strong></div>'+
+    '<div>Dear Valued Customer,</div>'+
+    '<div style="margin-bottom:10px">Please help to find attached file for debit note of below shipment:</div>'+
+    '<table style="border-collapse:collapse;width:100%;max-width:680px">'+
+      '<tr><td style="'+cellL+'">Booking No:</td><td style="'+cellR+'">'+bkgNos+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Bill No:</td><td style="'+cellR+'">'+(r.mblNo||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Booking Party:</td><td style="'+cellR+'">'+(currentParty||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Shipper:</td><td style="'+cellR+'">'+(sp.fullname||shipperKey)+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Consignee:</td><td style="'+cellR+'">'+(cp.fullname||cneeKey)+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Notify:</td><td style="'+cellR+'"></td></tr>'+
+      '<tr><td style="'+cellL+'">Port of Loading:</td><td style="'+cellR+'">'+pol+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Port of Discharge:</td><td style="'+cellR+'">'+pod+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Volume:</td><td style="'+cellR+'">'+volume+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Vessel/Voyage:</td><td style="'+cellR+'">'+vesselVoy+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Document No:</td><td style="'+cellR+'">'+dnNo+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Debit Date:</td><td style="'+cellR+'">'+debitDate+'</td></tr>'+
+      '<tr><td style="'+cellL+'">For Invoice:</td><td style="'+cellR+'">Just reply all base on this email to request Invoice</td></tr>'+
+      '<tr><td style="'+cellL+'">D/N Remark:</td><td style="'+cellR+'"></td></tr>'+
+    '</table>'+
+    '<div style="margin-top:12px;font-style:italic;color:#c0392b">Please check it carefully and let us know if any amendment.</div>';
+
+  // Đính kèm: lấy (các) file Debit Note đã upload cho dịch vụ thuộc Booking Party này
+  const seen={}; const attachments=[];
+  Object.keys(svcs).forEach(function(key){
+    const sv=svcs[key]; if(!sv||!sv.dnData)return;
+    const svParty=(sv.party||'').trim();
+    if(currentParty && svParty!==currentParty)return;
+    if(seen[sv.dnData])return;
+    seen[sv.dnData]=true;
+    attachments.push({filename:sv.dnFile||('DebitNote_'+(r.bookingNo||'')+'.pdf'),dataUrl:sv.dnData});
+  });
+
+  _openEmailModal({title:'Send Debit note → '+(currentParty||shipperKey),to:toEmail,cc:ccEmail,subject:subject,bodyHtml:bodyHtml,attachments:attachments});
 }
 
 function openMailClient(){
