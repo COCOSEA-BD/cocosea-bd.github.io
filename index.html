@@ -5096,25 +5096,27 @@ function sendEmailDN(id, tt){
       return;
     }
     const pdfFileName='DebitNote_'+(dnNo||r.bookingNo||'').replace(/[^A-Za-z0-9-]/g,'_')+'.pdf';
+    // Tạo 1 bản sao nội dung đặt NGOÀI popup (không bị giới hạn bởi khung cuộn/chiều rộng modal),
+    // gắn cố định chiều rộng chuẩn A4 (~794px @96dpi) để bố cục luôn render đầy đủ & đúng tỉ lệ
+    // trước khi chụp — tránh tình trạng bị "dồn cột"/mất nội dung do chụp sai kích thước khung nhìn.
+    const clone=document.createElement('div');
+    clone.style.cssText='position:fixed;top:0;left:-99999px;width:780px;background:#fff;z-index:-1';
+    clone.innerHTML=area.innerHTML;
+    document.body.appendChild(clone);
     html2pdf().set({
       margin:8,
       filename:pdfFileName,
-      html2canvas:{
-        scale:2,useCORS:true,scrollX:0,scrollY:0,
-        // Chụp đúng TOÀN BỘ chiều cao nội dung (không phụ thuộc vùng đang cuộn/hiển thị trên màn hình)
-        // tránh tình trạng cắt mất phần cuối (vd. Bank Account) khi modal đang bị giới hạn chiều cao.
-        windowWidth:area.scrollWidth||area.offsetWidth,
-        windowHeight:area.scrollHeight||area.offsetHeight,
-        height:area.scrollHeight||area.offsetHeight
-      },
+      html2canvas:{scale:2,useCORS:true,scrollX:0,scrollY:0,width:780},
       jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
       // Tránh cắt giữa dòng/bảng — ưu tiên xuống trang mới thay vì cắt nội dung
       pagebreak:{mode:['css','legacy'],avoid:['tr','.dnNoBreak']}
-    }).from(area).outputPdf('datauristring').then(function(dataUri){
+    }).from(clone).outputPdf('datauristring').then(function(dataUri){
       setLoading(false);
+      document.body.removeChild(clone);
       finish([{filename:pdfFileName,dataUrl:dataUri}].concat(uploadedAttachments));
     }).catch(function(e){
       setLoading(false);
+      if(clone.parentNode)document.body.removeChild(clone);
       toast('Lỗi tạo PDF: '+(e&&e.message||'')+' — gửi email kèm file đã upload (nếu có)','error');
       finish(uploadedAttachments);
     });
