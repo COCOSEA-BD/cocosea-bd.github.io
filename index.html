@@ -1817,6 +1817,35 @@ function doAddSvcToLot(){
 }
 window.doAddSvcToLot=doAddSvcToLot;
 
+// Sinh số DN không trùng với bất kỳ số DN nào đã có trong toàn hệ thống
+function _genDnNoUnique(){
+  const all=[...(cache.xuat||[]),...(cache.nhap||[])];
+  const existing=new Set();
+  all.forEach(function(r){
+    Object.values(r.svcs||{}).forEach(function(sv){if(sv&&sv.dnNo)existing.add(sv.dnNo);});
+    if(r.dnNo)existing.add(r.dnNo);
+    if(r.dnByParty)Object.values(r.dnByParty).forEach(function(v){if(v)existing.add(v);});
+  });
+  let dn,tries=0;
+  do{
+    const now=new Date();
+    dn='DN'+now.getFullYear().toString().slice(-2)+String(now.getMonth()+1).padStart(2,'0')+Math.floor(Math.random()*900000+100000);
+    tries++;
+  }while(existing.has(dn)&&tries<50);
+  return dn;
+}
+window._genDnNoUnique=_genDnNoUnique;
+
+// Bật/tắt nút "Xuất DN" theo việc đã nhập Số DN cho party đó chưa
+function _dnPartyInputChange(input,i){
+  const btn=g('btnXuatDn_'+i);
+  if(!btn)return;
+  const has=!!(input.value||'').trim();
+  btn.disabled=!has;
+  btn.title=has?'':'Nhập hoặc bấm Lưu để tự sinh Số DN trước khi xuất';
+}
+window._dnPartyInputChange=_dnPartyInputChange;
+
 async function saveInvoiceSettings(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
@@ -1832,12 +1861,30 @@ async function saveInvoiceSettings(){
     const customName=g('invname_'+s.key)?.value||'';
     if(customName&&customName!==s.name) svcs[s.key].customName=customName;
   });
+  // Tự sinh Số DN cho các Party chưa có số (ô Số DN đang trống trong bảng "Debit Note theo Party")
+  const dnByParty=Object.assign({},r.dnByParty||{});
+  let dnGenerated=0;
+  document.querySelectorAll('[id^="dnParty_"]').forEach(function(el){
+    const party=el.dataset.party; if(!party)return;
+    if((el.value||'').trim())return; // đã có số, bỏ qua
+    const newDn=_genDnNoUnique();
+    el.value=newDn;
+    dnByParty[party]=newDn;
+    dnGenerated++;
+    // Bật nút Xuất DN tương ứng (id dạng btnXuatDn_<i> cùng index với dnParty_<i>)
+    const idx=el.id.replace('dnParty_','');
+    const btn=g('btnXuatDn_'+idx);
+    if(btn){btn.disabled=false; btn.title='';}
+  });
   setLoading(true,'Đang lưu...');
   try{
-    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
+    const payload={svcs,updatedAt:Date.now(),updatedBy:currentUser.email};
+    if(dnGenerated)payload.dnByParty=dnByParty;
+    await fsSet(colName(detailTt),detailId,payload);
     // Update cache only, do NOT re-render (keeps current view, avoids reloading all prices)
-    const arr=cache[detailTt]||[];const ci=arr.findIndex(x=>x._id===detailId);if(ci>=0)arr[ci].svcs=svcs;
-    toast('Đã lưu');
+    const arr=cache[detailTt]||[];const ci=arr.findIndex(x=>x._id===detailId);
+    if(ci>=0){arr[ci].svcs=svcs; if(dnGenerated)arr[ci].dnByParty=dnByParty;}
+    toast(dnGenerated?('Đã lưu — tự sinh '+dnGenerated+' số DN mới'):'Đã lưu');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -4193,6 +4240,7 @@ function openPartnerModal(name){
     <div class="fi"><label class="lbl">MST</label><input type="text" id="pf_mst" value="${p.mst||''}"/></div>
     <div class="fi full"><label class="lbl">Địa chỉ</label><input type="text" id="pf_addr" value="${p.addr||''}"/></div>
     <div class="fi"><label class="lbl">Email</label><input type="email" id="pf_email" value="${p.email||''}"/></div>
+    <div class="fi"><label class="lbl">Email nhận hóa đơn</label><input type="email" id="pf_invEmail" placeholder="Có thể nhập nhiều, cách nhau bằng dấu ;" value="${p.invEmail||''}"/></div>
     <div class="fi"><label class="lbl">Người liên hệ</label><input type="text" id="pf_contact" value="${p.contact||''}"/></div>
     <div class="fi"><label class="lbl">Điện thoại</label><input type="tel" id="pf_phone" value="${p.phone||''}"/></div>
     ${g('pf_type')?.value==='shipper'||p.type==='shipper'?`
@@ -4263,7 +4311,7 @@ async function savePartner(){
   const enName=g('pf_enName')?.value||'';const enShort=g('pf_enShort')?.value||'';const enAddr=g('pf_enAddr')?.value||'';
   const bankAcc=g('pf_bankAcc')?.value||'';const bankName=g('pf_bankName')?.value||'';
   const acctName=g('pf_acctName')?.value||'';const swift=g('pf_swift')?.value||'';const bankAddr=g('pf_bankAddr')?.value||'';const stamp=g('pf_stamp')?.value||'';
-  const rec={type:g('pf_type').value,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,contact:g('pf_contact').value,phone:g('pf_phone').value,remark,enName,enShort,enAddr,bankAcc,bankName,acctName,swift,bankAddr,stamp,updatedAt:Date.now()};
+  const rec={type:g('pf_type').value,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,invEmail:g('pf_invEmail')?.value||'',contact:g('pf_contact').value,phone:g('pf_phone').value,remark,enName,enShort,enAddr,bankAcc,bankName,acctName,swift,bankAddr,stamp,updatedAt:Date.now()};
   setLoading(true,'Đang lưu...');
   try { await fsSet('partners',sn,rec); toast('Đã lưu đối tác'); closeOv('partnerOv'); }
   catch(e){ toast('Lỗi: '+e.message,'error'); }
@@ -4926,6 +4974,27 @@ tr:hover td{background:var(--bg-secondary)}
 </div>
 
 <script>
+// Tải thư viện tạo PDF từ HTML (lazy-load, chỉ tải khi cần dùng lần đầu)
+function _loadHtml2Pdf(cb){
+  if(window.html2pdf){cb();return;}
+  if(window.__html2pdfLoading){ window.__html2pdfQueue=window.__html2pdfQueue||[]; window.__html2pdfQueue.push(cb); return; }
+  window.__html2pdfLoading=true;
+  const s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+  s.onload=function(){
+    window.__html2pdfLoading=false;
+    cb();
+    (window.__html2pdfQueue||[]).forEach(function(f){f();});
+    window.__html2pdfQueue=[];
+  };
+  s.onerror=function(){
+    window.__html2pdfLoading=false;
+    toast('Không tải được thư viện tạo PDF (kiểm tra kết nối mạng)','error');
+  };
+  document.head.appendChild(s);
+}
+window._loadHtml2Pdf=_loadHtml2Pdf;
+
 function sendEmailDN(id, tt){
   const r=cache[tt||currentTab].find(x=>x._id===(id||svcIdx))||{};
   const svcs=r.svcs||{};
@@ -4987,18 +5056,48 @@ function sendEmailDN(id, tt){
     '</table>'+
     '<div style="margin-top:12px;font-style:italic;color:#c0392b">Please check it carefully and let us know if any amendment.</div>';
 
-  // Đính kèm: lấy (các) file Debit Note đã upload cho dịch vụ thuộc Booking Party này
-  const seen={}; const attachments=[];
+  // Đính kèm: (các) file Debit Note đã upload thủ công cho dịch vụ thuộc Booking Party này
+  const seen={}; const uploadedAttachments=[];
   Object.keys(svcs).forEach(function(key){
     const sv=svcs[key]; if(!sv||!sv.dnData)return;
     const svParty=(sv.party||'').trim();
     if(currentParty && svParty!==currentParty)return;
     if(seen[sv.dnData])return;
     seen[sv.dnData]=true;
-    attachments.push({filename:sv.dnFile||('DebitNote_'+(r.bookingNo||'')+'.pdf'),dataUrl:sv.dnData});
+    uploadedAttachments.push({filename:sv.dnFile||('DebitNote_'+(r.bookingNo||'')+'.pdf'),dataUrl:sv.dnData});
   });
 
-  _openEmailModal({title:'Send Debit note → '+(currentParty||shipperKey),to:toEmail,cc:ccEmail,subject:subject,bodyHtml:bodyHtml,attachments:attachments});
+  function finish(allAttachments){
+    closeOv('invOv'); // đóng popup Invoice/DN trước khi mở popup soạn email
+    _openEmailModal({title:'Send Debit note → '+(currentParty||shipperKey),to:toEmail,cc:ccEmail,subject:subject,bodyHtml:bodyHtml,attachments:allAttachments});
+  }
+
+  // Tự động tạo file PDF Debit Note (dùng đúng nội dung của nút "In / PDF") rồi đính kèm vào email
+  const area=g('dnPrintArea');
+  if(!area){ finish(uploadedAttachments); return; }
+  setLoading(true,'Đang tạo file PDF Debit Note...');
+  _loadHtml2Pdf(function(){
+    if(typeof html2pdf==='undefined'){
+      setLoading(false);
+      toast('Không tạo được PDF tự động — gửi email kèm file đã upload (nếu có)','error');
+      finish(uploadedAttachments);
+      return;
+    }
+    const pdfFileName='DebitNote_'+(dnNo||r.bookingNo||'').replace(/[^A-Za-z0-9-]/g,'_')+'.pdf';
+    html2pdf().set({
+      margin:10,
+      filename:pdfFileName,
+      html2canvas:{scale:2,useCORS:true},
+      jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}
+    }).from(area).outputPdf('datauristring').then(function(dataUri){
+      setLoading(false);
+      finish([{filename:pdfFileName,dataUrl:dataUri}].concat(uploadedAttachments));
+    }).catch(function(e){
+      setLoading(false);
+      toast('Lỗi tạo PDF: '+(e&&e.message||'')+' — gửi email kèm file đã upload (nếu có)','error');
+      finish(uploadedAttachments);
+    });
+  });
 }
 
 function openMailClient(){
@@ -5604,10 +5703,10 @@ function buildDnPartyRows(r,svcs){
     const safeP=p.replace(/'/g,"\\'");
     return '<div style="display:grid;grid-template-columns:1fr 120px 110px 130px 120px;gap:8px;align-items:center;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
       +'<div><div style="font-size:12px;font-weight:700">'+p+'</div><div style="font-size:10.5px;color:var(--text-secondary)">'+info.count+' dịch vụ</div></div>'
-      +'<div><input type="text" id="dnParty_'+i+'" data-party="'+p+'" value="'+dnNo+'" placeholder="Số DN" style="font-size:11.5px;font-weight:700;color:var(--blue)"/></div>'
+      +'<div><input type="text" id="dnParty_'+i+'" data-party="'+p+'" value="'+dnNo+'" placeholder="Số DN" oninput="_dnPartyInputChange(this,'+i+')" style="font-size:11.5px;font-weight:700;color:var(--blue)"/></div>'
       +'<div style="text-align:right;font-size:12px;font-weight:700;color:var(--green)">'+Math.round(info.total).toLocaleString()+' đ</div>'
       +'<div><select id="dnPay_'+i+'" data-party="'+p+'" onchange="savePayStatus()" style="font-size:11px;width:100%;font-weight:600;color:'+(pay==='paid'?'var(--green)':'var(--red)')+'"><option value="unpaid"'+(pay==='unpaid'?' selected':'')+'>Chưa thanh toán</option><option value="paid"'+(pay==='paid'?' selected':'')+'>Đã thanh toán</option></select></div>'
-      +'<div style="text-align:right"><button class="btn red" data-party="'+safeP+'" onclick="exportDebitForParty(this.dataset.party)" style="font-size:11.5px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Xuất DN</button></div>'
+      +'<div style="text-align:right"><button class="btn red" id="btnXuatDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập hoặc bấm Lưu để tự sinh Số DN trước khi xuất"')+' onclick="exportDebitForParty(this.dataset.party)" style="font-size:11.5px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Xuất DN</button></div>'
     +'</div>';
   }).join('')+'</div>';
 }
@@ -8622,7 +8721,7 @@ function openVesselEditor(id){
     vessel:v.vessel||'', voy:v.voy||'', pol:v.pol||'', etd:v.etd||'',
     polCountry:v.polCountry||(typeof _findCountryForPort==='function'?_findCountryForPort(v.pol):''),
     carriers:(v.carriers||[]).slice(),
-    pods:(v.pods&&v.pods.length?v.pods.map(function(p){return {pod:p.pod||'',eta:p.eta||'',country:p.country||(typeof _findCountryForPort==='function'?_findCountryForPort(p.pod):'')};}):[{pod:'',eta:'',country:''}])
+    pods:(v.pods&&v.pods.length?v.pods.map(function(p){return {pod:p.pod||'',eta:p.eta||'',country:p.country||(typeof _findCountryForPort==='function'?_findCountryForPort(p.pod):''),tt:(p.tt!=null?p.tt:'')};}):[{pod:'',eta:'',country:'',tt:''}])
   };
   renderVesselEditor();
   openOv('combineOv');
@@ -8660,6 +8759,16 @@ function openVesselQuick(vesselName, voy){
 }
 window.openVesselQuick=openVesselQuick;
 
+// Tính ETA = ETD + T/T (số ngày vận chuyển)
+function _vesselCalcEta(etdStr,ttDays){
+  if(!etdStr||ttDays==null||ttDays==='')return '';
+  const tt=parseFloat(ttDays); if(isNaN(tt))return '';
+  const d=new Date(etdStr+'T00:00:00'); if(isNaN(d))return '';
+  d.setDate(d.getDate()+tt);
+  return d.toISOString().slice(0,10);
+}
+window._vesselCalcEta=_vesselCalcEta;
+
 function renderVesselEditor(){
   const d=_vesselDraft;
   const carriers=_carrierList();
@@ -8686,7 +8795,8 @@ function renderVesselEditor(){
     return '<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">'
       +'<select class="vesPodCountry" data-i="'+i+'" onchange="_vesselPodCountryChange('+i+')" style="width:130px;flex-shrink:0;font-size:12px;box-sizing:border-box">'+cOpts+'</select>'
       +'<select class="vesPod" data-i="'+i+'" onchange="_vesselSyncPods()" style="flex:1;min-width:0;font-size:12px;box-sizing:border-box">'+pOpts+'</select>'
-      +'<input type="date" class="vesEta" data-i="'+i+'" value="'+(p.eta||'')+'" oninput="_vesselSyncPods()" style="width:140px;flex-shrink:0;font-size:12px;box-sizing:border-box"/>'
+      +'<input type="number" class="vesTt" data-i="'+i+'" value="'+(p.tt!=null?p.tt:'')+'" min="0" placeholder="T/T" title="Transit time (ngày)" oninput="_vesselTtChange('+i+')" style="width:62px;flex-shrink:0;font-size:12px;box-sizing:border-box;text-align:center"/>'
+      +'<input type="date" class="vesEta" data-i="'+i+'" value="'+(p.eta||'')+'" oninput="_vesselSyncPods()" style="width:135px;flex-shrink:0;font-size:12px;box-sizing:border-box"/>'
       +'<button class="rac red" onclick="_vesselDelPod('+i+')" title="Xóa POD"'+(d.pods.length<=1?' style="visibility:hidden"':'')+'><i class="ti ti-x"></i></button>'
       +'</div>';
   }).join('');
@@ -8707,12 +8817,12 @@ function renderVesselEditor(){
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">POL (cảng đi)</label>'
           +'<div style="display:flex;gap:6px"><select id="vesPolCountry" onchange="_vesselPolCountryChange()" style="width:120px;flex-shrink:0;font-size:12px">'+_polCountryOpts+'</select><select id="vesPol" onchange="_vesselDraft.pol=this.value" style="flex:1;min-width:0;font-size:12px">'+_polPortOpts+'</select></div></div>'
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">ETD</label>'
-          +'<input type="date" id="vesEtd" value="'+(d.etd||'')+'" oninput="_vesselDraft.etd=this.value" style="width:100%;font-size:13px"/></div>'
+          +'<input type="date" id="vesEtd" value="'+(d.etd||'')+'" oninput="_vesselDraft.etd=this.value;_vesselRecalcAllEta()" style="width:100%;font-size:13px"/></div>'
       +'</div>'
       +'<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
         +'<label style="font-size:12px;font-weight:600;color:var(--text-secondary)">POD (cảng đến) & ETA — có thể nhiều</label>'
         +'<button class="btn sm" onclick="_vesselAddPod()"><i class="ti ti-plus"></i> Thêm POD</button></div>'
-        +'<div style="display:flex;gap:8px;margin-bottom:4px"><div style="width:130px;flex-shrink:0;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">Quốc gia</div><div style="flex:1;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">POD (cảng đến)</div><div style="width:140px;flex-shrink:0;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">ETA</div><div style="width:32px"></div></div>'+'<div id="vesPodList">'+podRows+'</div></div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:4px"><div style="width:130px;flex-shrink:0;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">Quốc gia</div><div style="flex:1;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">POD (cảng đến)</div><div style="width:62px;flex-shrink:0;font-size:10px;color:var(--text-tertiary);text-transform:uppercase" title="Transit time">T/T</div><div style="width:135px;flex-shrink:0;font-size:10px;color:var(--text-tertiary);text-transform:uppercase">ETA</div><div style="width:32px"></div></div>'+'<div id="vesPodList">'+podRows+'</div></div>'
     +'</div>'
     +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
       +'<button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button>'
@@ -8775,10 +8885,41 @@ function _vesselSyncPods(){
     const i=el.dataset.i;
     const eta=document.querySelector('.vesEta[data-i="'+i+'"]');
     const ctry=document.querySelector('.vesPodCountry[data-i="'+i+'"]');
-    pods.push({pod:el.value,eta:eta?eta.value:'',country:ctry?ctry.value:''});
+    const tt=document.querySelector('.vesTt[data-i="'+i+'"]');
+    pods.push({pod:el.value,eta:eta?eta.value:'',country:ctry?ctry.value:'',tt:tt?tt.value:''});
   });
-  _vesselDraft.pods=pods.length?pods:[{pod:'',eta:'',country:''}];
+  _vesselDraft.pods=pods.length?pods:[{pod:'',eta:'',country:'',tt:''}];
 }
+
+// Khi nhập T/T (số ngày), tự tính lại ETA = ETD + T/T
+function _vesselTtChange(i){
+  _vesselSyncPods();
+  const etd=g('vesEtd')?.value||_vesselDraft.etd||'';
+  const tt=_vesselDraft.pods[i]&&_vesselDraft.pods[i].tt;
+  const eta=_vesselCalcEta(etd,tt);
+  if(eta){
+    _vesselDraft.pods[i].eta=eta;
+    const etaEl=document.querySelector('.vesEta[data-i="'+i+'"]');
+    if(etaEl)etaEl.value=eta;
+  }
+}
+window._vesselTtChange=_vesselTtChange;
+
+// Khi đổi ETD chính, tự tính lại ETA cho mọi POD đã có T/T
+function _vesselRecalcAllEta(){
+  _vesselSyncPods();
+  const etd=g('vesEtd')?.value||_vesselDraft.etd||'';
+  _vesselDraft.pods.forEach(function(p,i){
+    if(p.tt===''||p.tt==null)return;
+    const eta=_vesselCalcEta(etd,p.tt);
+    if(eta){
+      p.eta=eta;
+      const etaEl=document.querySelector('.vesEta[data-i="'+i+'"]');
+      if(etaEl)etaEl.value=eta;
+    }
+  });
+}
+window._vesselRecalcAllEta=_vesselRecalcAllEta;
 window._vesselSyncPods=_vesselSyncPods;
 
 function _vesselPodCountryChange(i){
@@ -8797,7 +8938,7 @@ window._vesselPodCountryChange=_vesselPodCountryChange;
 
 function _vesselAddPod(){
   _vesselSyncPods();
-  _vesselDraft.pods.push({pod:'',eta:'',country:''});
+  _vesselDraft.pods.push({pod:'',eta:'',country:'',tt:''});
   renderVesselEditor();
 }
 window._vesselAddPod=_vesselAddPod;
@@ -8805,7 +8946,7 @@ window._vesselAddPod=_vesselAddPod;
 function _vesselDelPod(i){
   _vesselSyncPods();
   _vesselDraft.pods.splice(i,1);
-  if(!_vesselDraft.pods.length)_vesselDraft.pods=[{pod:'',eta:'',country:''}];
+  if(!_vesselDraft.pods.length)_vesselDraft.pods=[{pod:'',eta:'',country:'',tt:''}];
   renderVesselEditor();
 }
 window._vesselDelPod=_vesselDelPod;
