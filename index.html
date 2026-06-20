@@ -3502,11 +3502,14 @@ function _truckInfo(r){
   } else {
     dates=[{date:(r.etd||''),vol:(r.vol||''),typeCont:(r.typeCont||'')}];
   }
+  const bkgNosDefault=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
   return {
+    bookingNo: ti.bookingNo!==undefined&&ti.bookingNo!==''?ti.bookingNo:bkgNosDefault,
     dates: dates,
     whName: ti.whName!==undefined?ti.whName:'',
     whLocation: ti.whLocation!==undefined?ti.whLocation:(r.wh||''),
-    whContact: ti.whContact!==undefined?ti.whContact:''
+    whContact: ti.whContact!==undefined?ti.whContact:'',
+    note: ti.note||''
   };
 }
 
@@ -3523,6 +3526,8 @@ function openTruckingPopup(){
     +'<div class="msub">Điền thông tin rồi bấm "Tạo email Trucking"</div></div>'
     +'<button class="x" onclick="closeOv(\'truckOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="mbody" style="padding:16px 20px">'
+      +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Số booking</label>'
+      +'<input type="text" id="truckBookingNo" value="'+(ti.bookingNo||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box;margin-bottom:14px"/>'
       +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px">Thời gian đóng hàng</label>'
       +'<div style="display:grid;grid-template-columns:150px 70px 1fr 30px;gap:6px;margin-bottom:4px;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase">'
         +'<div>Ngày</div><div>Vol</div><div>Type cont</div><div></div></div>'
@@ -3536,6 +3541,8 @@ function openTruckingPopup(){
         +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Người liên hệ</label>'
         +'<input type="text" id="truckWhContact" value="'+(ti.whContact||'').replace(/"/g,'&quot;')+'" style="font-size:12px;width:100%;box-sizing:border-box"/>'
       +'</div>'
+      +'<div style="margin-top:14px"><label style="font-size:11px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Ghi chú</label>'
+        +'<textarea id="truckNote" rows="2" style="font-size:12px;width:100%;box-sizing:border-box;resize:vertical">'+(ti.note||'').replace(/</g,'&lt;')+'</textarea></div>'
     +'</div>'
     +'<div class="mftr" style="padding:12px 20px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--border-light)">'
       +'<button class="btn" onclick="saveTruckInfo()"><i class="ti ti-device-floppy"></i> Lưu</button>'
@@ -3590,10 +3597,12 @@ function _readTruckInfo(){
     };
   }).filter(function(d){return d.date||d.vol||d.typeCont;});
   return {
+    bookingNo:g('truckBookingNo')?.value||'',
     dates:dates,
     whName:g('truckWhSelect')?.value||'',
     whLocation:g('truckWhLocation')?.value||'',
-    whContact:g('truckWhContact')?.value||''
+    whContact:g('truckWhContact')?.value||'',
+    note:g('truckNote')?.value||''
   };
 }
 window._readTruckInfo=_readTruckInfo;
@@ -3618,40 +3627,50 @@ function sendTruckingEmail(){
   const r=info.r;
   if(!info.nccName){toast('Chưa chọn NCC cho dịch vụ Trucking','error');return;}
   if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
+  const nccFullName=info.ncc.fullname||info.nccName;
   const co=_coInfo();
-  const bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
+  const bkgNosDefault=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
   // Ưu tiên dữ liệu đang nhập trên popup Trucking (nếu mở), nếu không lấy dữ liệu đã lưu
   const _domTruck=(typeof _readTruckInfo==='function')?_readTruckInfo():null;
-  const ti=(_domTruck&&(_domTruck.dates.length||_domTruck.whLocation||_domTruck.whName))?_domTruck:_truckInfo(r);
+  const ti=(_domTruck&&(_domTruck.dates.length||_domTruck.whLocation||_domTruck.whName||_domTruck.bookingNo||_domTruck.note))?_domTruck:_truckInfo(r);
+  const bkgNos=ti.bookingNo||bkgNosDefault;
   const whLoc=ti.whLocation||r.wh||'';
   const whName=ti.whName||r.wh||'';
   const whContact=ti.whContact||'';
   const subject='Kéo cont - '+(r.carrier||'')+' - '+(r.vol||'')+'x'+(r.typeCont||'')+' - '+bkgNos+' - COCOSEA';
   const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#fff;font-size:12.5px;width:150px;vertical-align:top';
   const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
+  // Thời gian đóng hàng: chỉ ngày + vol x type (không lặp định vị kho ở đây nữa)
   const truckDatesHtml=(ti.dates||[]).filter(function(d){return d&&(d.date||d.vol||d.typeCont);}).map(function(d){
     const dt=(d.date||'').replace(/-/g,'/');
     const vt=((d.vol||'')+(d.typeCont?(' x '+d.typeCont):'')).trim();
-    return dt+(vt?(': '+vt):'')+(whLoc?(' – '+whLoc):'');
-  }).join('<br>')||((r.etd?r.etd.replace(/-/g,'/'):'')+' '+(r.vol||'')+'x'+(r.typeCont||'')+' – '+(whLoc||'kho'));
+    return dt+(vt?(': '+vt):'');
+  }).join('<br>')||((r.etd?r.etd.replace(/-/g,'/'):'')+' '+(r.vol||'')+'x'+(r.typeCont||''));
+  const noteHtml=(ti.note||'').replace(/\n/g,'<br>');
+  const invoiceInfo=
+    '<b>CÔNG TY TNHH COCO SEA</b><br>'+
+    'Đ/C: 991B Tân Kỳ Tân Quý, Phường Bình Hưng Hòa, Thành phố Hồ Chí Minh, Việt Nam<br>'+
+    'MST: 0319570124<br>'+
+    'Email nhận hóa đơn: Cocosea.acc@gmail.com, Cocosea.bd@gmail.com';
   const bodyHtml=
-    '<div style="margin-bottom:4px"><strong>To: ['+(info.nccName).toUpperCase()+']</strong></div>'+
+    '<div style="margin-bottom:4px"><strong>To: ['+(nccFullName).toUpperCase()+']</strong></div>'+
     '<div>Kính gửi Quý công ty,</div>'+
     '<div style="margin-bottom:10px">COCOSEA gửi lệnh kéo con-te-nơ đóng hàng với chi tiết như sau:</div>'+
     '<table style="border-collapse:collapse;width:100%;max-width:680px">'+
       '<tr><td style="'+cellL+'">So Booking:</td><td style="'+cellR+'">'+bkgNos+'</td></tr>'+
       '<tr><td style="'+cellL+'">Hãng tàu:</td><td style="'+cellR+'">'+(r.carrier||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Tàu /số chuyến:</td><td style="'+cellR+'">'+(r.vessel||'')+(r.voy?' '+r.voy:'')+'</td></tr>'+
-      '<tr><td style="'+cellL+'">Loại con-te-nơ:</td><td style="'+cellR+'">'+(r.vol||'')+' x '+(r.typeCont||'')+' ( Hàng '+(r.tenHang||'').toLowerCase()+' )</td></tr>'+
+      '<tr><td style="'+cellL+'">Tên Hàng:</td><td style="'+cellR+'">'+(r.tenHang||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Thời gian đóng hàng:</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+truckDatesHtml+'</span></td></tr>'+
       '<tr><td style="'+cellL+'">Định vị kho:</td><td style="'+cellR+'">'+(whLoc||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Kho đóng hàng:</td><td style="'+cellR+'">'+(whName||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Người liên hệ:</td><td style="'+cellR+'">'+(whContact||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Hạ cảng:</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+(r.pol||'')+'</span></td></tr>'+
-      '<tr><td style="'+cellL+'">Ghi chú:</td><td style="'+cellR+'"></td></tr>'+
+      '<tr><td style="'+cellL+'">Ghi chú:</td><td style="'+cellR+'">'+noteHtml+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Thông tin xuất hóa đơn:</td><td style="'+cellR+'">'+invoiceInfo+'</td></tr>'+
     '</table>';
   closeOv('truckOv');
-  _openEmailModal({title:'Email Trucking → '+info.nccName, to:info.email, cc:'cocosea.doc@gmail.com; cocosea.acc@gmail.com', subject:subject, bodyHtml:bodyHtml});
+  _openEmailModal({title:'Email Trucking → '+nccFullName, to:info.email, cc:'cocosea.doc@gmail.com; cocosea.acc@gmail.com', subject:subject, bodyHtml:bodyHtml});
 }
 window.sendTruckingEmail=sendTruckingEmail;
 
