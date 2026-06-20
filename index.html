@@ -4984,26 +4984,192 @@ tr:hover td{background:var(--bg-secondary)}
 </div>
 
 <script>
-// Tải thư viện tạo PDF từ HTML (lazy-load, chỉ tải khi cần dùng lần đầu)
-function _loadHtml2Pdf(cb){
-  if(window.html2pdf){cb();return;}
-  if(window.__html2pdfLoading){ window.__html2pdfQueue=window.__html2pdfQueue||[]; window.__html2pdfQueue.push(cb); return; }
-  window.__html2pdfLoading=true;
-  const s=document.createElement('script');
-  s.src='https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-  s.onload=function(){
-    window.__html2pdfLoading=false;
-    cb();
-    (window.__html2pdfQueue||[]).forEach(function(f){f();});
-    window.__html2pdfQueue=[];
+// Tải thư viện jsPDF + autoTable (lazy-load, chỉ tải khi cần dùng lần đầu).
+// Dùng jsPDF vẽ PDF trực tiếp từ DỮ LIỆU (không chụp ảnh HTML qua html2canvas) — đáng tin cậy hơn
+// nhiều so với cách "chụp màn hình HTML" vốn rất dễ bị lỗi (trang trắng, sai bố cục, v.v).
+function _loadJsPdf(cb){
+  if(window.jspdf&&window.jspdf.jsPDF&&window.jspdf.jsPDF.API&&window.jspdf.jsPDF.API.autoTable){cb();return;}
+  if(window.__jspdfLoading){ window.__jspdfQueue=window.__jspdfQueue||[]; window.__jspdfQueue.push(cb); return; }
+  window.__jspdfLoading=true;
+  const s1=document.createElement('script');
+  s1.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+  s1.onload=function(){
+    const s2=document.createElement('script');
+    s2.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js';
+    s2.onload=function(){
+      window.__jspdfLoading=false;
+      cb();
+      (window.__jspdfQueue||[]).forEach(function(f){f();});
+      window.__jspdfQueue=[];
+    };
+    s2.onerror=function(){ window.__jspdfLoading=false; toast('Không tải được thư viện autoTable (kiểm tra kết nối mạng)','error'); };
+    document.head.appendChild(s2);
   };
-  s.onerror=function(){
-    window.__html2pdfLoading=false;
-    toast('Không tải được thư viện tạo PDF (kiểm tra kết nối mạng)','error');
-  };
-  document.head.appendChild(s);
+  s1.onerror=function(){ window.__jspdfLoading=false; toast('Không tải được thư viện jsPDF (kiểm tra kết nối mạng)','error'); };
+  document.head.appendChild(s1);
 }
-window._loadHtml2Pdf=_loadHtml2Pdf;
+window._loadJsPdf=_loadJsPdf;
+
+// Vẽ PDF Debit Note trực tiếp bằng jsPDF + autoTable (từ DỮ LIỆU thật, không qua chụp ảnh HTML)
+// rồi trả về qua callback(blob). Tự bao gồm xử lý lỗi.
+function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb){
+  try{
+    const jsPDFNS=window.jspdf;
+    if(!jsPDFNS||!jsPDFNS.jsPDF){ cb(null,'jsPDF chưa sẵn sàng'); return; }
+    const doc=new jsPDFNS.jsPDF({unit:'mm',format:'a4'});
+    const PW=210, ML=14, MR=14, CW=PW-ML-MR;
+    const NAVY=[26,75,140], GREY=[102,102,102], LIGHTBG=[232,240,251];
+    let y=16;
+
+    function hr(yy){ doc.setDrawColor(NAVY[0],NAVY[1],NAVY[2]); doc.setLineWidth(0.7); doc.line(ML,yy,PW-MR,yy); }
+
+    // HEADER
+    doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+    doc.text('COCOSEA CO., LTD',ML,y);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
+    doc.text('Keep Going . Keep Growing',ML,y+5);
+    doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+    doc.text('DEBIT NOTE',PW-MR,y,{align:'right'});
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
+    doc.text('STATEMENT OF CHARGES',PW-MR,y+5,{align:'right'});
+    y+=9; hr(y); y+=7;
+
+    // DN NO / DATE / BOOKING NO
+    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
+    doc.text('DEBIT NO',ML,y); doc.text('DEBIT DATE',ML+62,y); doc.text('BOOKING NO',ML+124,y);
+    y+=5;
+    doc.setFontSize(11); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+    doc.text(dnNo||'-',ML,y); doc.text(debitDate||'-',ML+62,y); doc.text(r.bookingNo||'-',ML+124,y);
+    y+=7;
+
+    function sectionHdr(label){
+      doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]);
+      doc.rect(ML,y,CW,6.5,'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(255,255,255);
+      doc.text(label.toUpperCase(),ML+3,y+4.6);
+      y+=6.5;
+    }
+    function kvTable(rows){
+      doc.autoTable({startY:y,margin:{left:ML,right:MR},theme:'plain',
+        styles:{fontSize:9,cellPadding:{top:1.6,bottom:1.6,left:3,right:3},lineColor:[232,232,224],lineWidth:0.1},
+        columnStyles:{0:{cellWidth:36,fontStyle:'bold',textColor:GREY}},
+        body:rows});
+      y=doc.lastAutoTable.finalY+3;
+    }
+
+    // BILLING TO
+    sectionHdr('Billing To');
+    const billingName=(currentParty&&currentParty!==shipperKey&&window.cache&&cache.partners[currentParty])?(cache.partners[currentParty].fullname||currentParty):(sp.fullname||shipperKey||'-');
+    kvTable([
+      ['Customer',billingName],
+      ['Tax ID',(sp.mst||'-')+'      Language: Vi'],
+      ['Address',sp.addr||'-'],
+    ]);
+
+    // SHIPMENT DETAIL
+    sectionHdr('Shipment Detail');
+    const containers=(r.containers||(r.bookingConts?Object.values(r.bookingConts).flat().map(function(x){return x.cont;}).filter(Boolean):[])||[]);
+    const contStr=Array.isArray(containers)?containers.join(', '):(containers||'');
+    kvTable([
+      ['Shipper',sp.fullname||shipperKey||'-'],
+      ['Consignee',cp.fullname||cneeKey||'-'],
+      ['B/L No',(r.mblNo||'-')+'      Volume: '+(r.vol||'')+(r.typeCont?' x '+r.typeCont:'')],
+      ['Vessel',(r.vessel||'-')+(r.voy?' V.'+r.voy:'')+'      Commodity: '+(r.tenHang||'-')],
+      ['POL',(r.pol||'-')+'      POD: '+(r.pod||'-')],
+      ['So T.Khai',(r.soTkhai||'-')+'      ETD/ETA: '+(r.etd||'-')+' / '+(r.eta||'-')],
+      ...(contStr?[['Container(s)',contStr]]:[])
+    ]);
+
+    // CHARGE DETAIL
+    const roe=parseFloat(g('roeInput')?.value)||26390;
+    const allActiveSvcs=SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;});
+    function svcMatchParty(s){ const p=(svcs[s.key]&&svcs[s.key].party||'').trim(); if(!currentParty)return true; return p===currentParty; }
+    const svcsYes=allActiveSvcs.filter(function(s){return (svcs[s.key].invoice||'Yes')==='Yes'&&svcMatchParty(s);});
+    const svcsNo=allActiveSvcs.filter(function(s){return svcs[s.key].invoice==='No'&&svcMatchParty(s);});
+    const vatGroups={'0%':0,'8%':0,'10%':0};
+    let grandVND=0;
+    function amtOf(s){ const sv=svcs[s.key]; const amt=sv.amount||(sv.price||0)*(sv.qty||1); const cur=sv.cur||'USD'; return cur==='VND'?amt:Math.round(amt*roe); }
+    [...svcsYes,...svcsNo].forEach(function(s){ const sv=svcs[s.key]; const amtVND=amtOf(s); grandVND+=amtVND; const vat=sv.vat||'0%'; if(vatGroups[vat]===undefined)vatGroups[vat]=0; vatGroups[vat]+=amtVND; });
+
+    sectionHdr('Charge Detail');
+    const chargeHead=[['No.','Service Item','Price','Curr','VAT','Qty','Unit','Amount (VND)']];
+    const chargeBody=[];
+    function pushGroup(label,list,startIdx){
+      if(!list.length)return startIdx;
+      chargeBody.push([{content:label,colSpan:8,styles:{fillColor:[44,111,173],textColor:255,fontStyle:'bold',fontSize:8}}]);
+      let sum=0;
+      list.forEach(function(s,i){
+        const sv=svcs[s.key]; const amtVND=amtOf(s); sum+=amtVND;
+        chargeBody.push([
+          String(startIdx+i+1), sv.customName||s.name, (sv.price||0).toLocaleString(), sv.cur||'USD', sv.vat||'0%', String(sv.qty||1), sv.unit||'Unit', amtVND.toLocaleString()
+        ]);
+      });
+      chargeBody.push([{content:'Subtotal (VND):',colSpan:7,styles:{halign:'right',fontStyle:'bold',fillColor:[240,245,252]}},{content:sum.toLocaleString(),styles:{halign:'right',fontStyle:'bold',fillColor:[240,245,252],textColor:NAVY}}]);
+      return startIdx+list.length;
+    }
+    let idx=0;
+    idx=pushGroup('A. PHÍ CÓ HÓA ĐƠN (INVOICE = YES)',svcsYes,idx);
+    idx=pushGroup('B. PHÍ KHÔNG HÓA ĐƠN (INVOICE = NO)',svcsNo,idx);
+    const sub8=vatGroups['8%']||0, sub10=vatGroups['10%']||0;
+    const vatAmt=Math.round(sub8*0.08+sub10*0.10);
+    const grandWithVAT=Math.round(grandVND+vatAmt);
+    if(vatAmt)chargeBody.push([{content:'VAT Amount (VND):',colSpan:7,styles:{halign:'right'}},{content:vatAmt.toLocaleString(),styles:{halign:'right',textColor:[224,112,0]}}]);
+    chargeBody.push([{content:'GRAND TOTAL (VND)',colSpan:7,styles:{halign:'left',fontStyle:'bold',fillColor:NAVY,textColor:255,fontSize:9.5}},{content:grandWithVAT.toLocaleString(),styles:{halign:'right',fontStyle:'bold',fillColor:NAVY,textColor:255,fontSize:9.5}}]);
+
+    doc.autoTable({startY:y,margin:{left:ML,right:MR},head:chargeHead,body:chargeBody,theme:'grid',
+      headStyles:{fillColor:LIGHTBG,textColor:NAVY,fontStyle:'bold',fontSize:7.5},
+      styles:{fontSize:8,cellPadding:2,lineColor:[200,216,240],lineWidth:0.1},
+      columnStyles:{0:{cellWidth:9},2:{halign:'right'},5:{halign:'right'},7:{halign:'right'}}});
+    y=doc.lastAutoTable.finalY+4;
+
+    // NOTICE
+    doc.setFillColor(255,251,234); doc.setDrawColor(240,208,96); doc.setLineWidth(0.2);
+    doc.rect(ML,y,CW,13,'FD');
+    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(133,106,0);
+    doc.text('NOTICE',ML+3,y+4.5);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5);
+    doc.text('• Payment deadline: ATD +7 days or follow your service contract.',ML+3,y+8.3);
+    doc.text('• Invoice will be issued after your confirmation.',ML+3,y+11.6);
+    y+=17;
+
+    // BANK ACCOUNT
+    sectionHdr('Bank Account');
+    const banksData=window._bankAccounts||{company:[],personal:[]};
+    const coAccs=Array.isArray(banksData)?banksData:(banksData.company||[]);
+    const persAccs=Array.isArray(banksData)?[]:(banksData.personal||[]);
+    const bankBody=[];
+    if(coAccs.length){
+      bankBody.push([{content:'TÀI KHOẢN CÔNG TY',colSpan:3,styles:{fillColor:[238,244,251],textColor:NAVY,fontStyle:'bold',fontSize:7.5}}]);
+      coAccs.forEach(function(b){bankBody.push([b.beneficiary||'',b.account||'',b.bank||'']);});
+    }
+    if(persAccs.length){
+      bankBody.push([{content:'TÀI KHOẢN CÁ NHÂN',colSpan:3,styles:{fillColor:[245,245,245],textColor:[85,85,85],fontStyle:'bold',fontSize:7.5}}]);
+      persAccs.forEach(function(b){bankBody.push([b.beneficiary||'',b.account||'',b.bank||'']);});
+    }
+    if(!bankBody.length) bankBody.push(['Chưa cấu hình tài khoản ngân hàng','','']);
+    doc.autoTable({startY:y,margin:{left:ML,right:MR},
+      head:[['Beneficiary','Account Number','Bank']],
+      body:bankBody,theme:'grid',
+      headStyles:{fillColor:LIGHTBG,textColor:NAVY,fontStyle:'bold',fontSize:7.5},
+      styles:{fontSize:8,cellPadding:2,lineColor:[200,216,240],lineWidth:0.1},
+      columnStyles:{1:{fontStyle:'bold'}}});
+    y=doc.lastAutoTable.finalY+4;
+
+    // FOOTER
+    doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]);
+    doc.rect(ML,y,CW,9,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(255,255,255);
+    doc.text('COCOSEA CO., LTD',ML+4,y+6);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8);
+    doc.text('Thank you for shipping with us',PW-MR-4,y+6,{align:'right'});
+
+    const blob=doc.output('blob');
+    cb(blob,null);
+  }catch(e){
+    cb(null,e&&e.message||String(e));
+  }
+}
+window._buildDnPdfBlob=_buildDnPdfBlob;
 
 function sendEmailDN(id, tt){
   const r=cache[tt||currentTab].find(x=>x._id===(id||svcIdx))||{};
@@ -5084,66 +5250,37 @@ function sendEmailDN(id, tt){
     _openEmailModal({title:'Send Debit note → '+(currentParty||shipperKey),to:toEmail,cc:ccEmail,subject:subject,bodyHtml:bodyHtml,attachments:allAttachments});
   }
 
-  // Tự động tạo file PDF Debit Note (dùng đúng nội dung của nút "In / PDF") rồi đính kèm vào email
-  const area=g('dnPrintArea');
-  if(!area){ finish(uploadedAttachments); return; }
+  // Tự động tạo file PDF Debit Note — vẽ trực tiếp từ DỮ LIỆU bằng jsPDF + autoTable
+  // (không còn chụp ảnh HTML qua html2canvas — cách cũ liên tục cho ra file trống dù không báo lỗi).
   setLoading(true,'Đang tạo file PDF Debit Note...');
-  _loadHtml2Pdf(function(){
-    if(typeof html2pdf==='undefined'){
+  _loadJsPdf(function(){
+    if(!window.jspdf||!window.jspdf.jsPDF){
       setLoading(false);
       toast('Không tạo được PDF tự động — gửi email kèm file đã upload (nếu có)','error');
       finish(uploadedAttachments);
       return;
     }
     const pdfFileName='DebitNote_'+(dnNo||r.bookingNo||'').replace(/[^A-Za-z0-9-]/g,'_')+'.pdf';
-    // Tạo 1 bản sao nội dung đặt NGOÀI popup (không bị giới hạn bởi khung cuộn/chiều rộng modal),
-    // gắn cố định chiều rộng chuẩn để bố cục luôn render đầy đủ & đúng tỉ lệ trước khi chụp.
-    // setLoading(true) ở trên đã hiện overlay full-màn-hình (z-index:999) nên không cần ẩn bản sao
-    // bằng z-index âm hay tọa độ off-screen cực lớn (cả 2 cách đó từng khiến canvas bị TRỐNG).
-    const clone=document.createElement('div');
-    clone.style.cssText='position:fixed;top:0;left:0;width:780px;background:#ffffff;z-index:1';
-    clone.innerHTML=area.innerHTML;
-    document.body.appendChild(clone);
-
-    function cleanupAndFail(msg){
+    _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,function(blob,err){
       setLoading(false);
-      if(clone.parentNode)document.body.removeChild(clone);
-      toast(msg,'error');
-      finish(uploadedAttachments);
-    }
-
-    // Đợi trình duyệt layout/paint xong bản sao trước khi chụp (tránh canvas trống do chụp quá sớm)
-    requestAnimationFrame(function(){ requestAnimationFrame(function(){
-      try{
-        // Dùng đúng chuỗi thao tác chuẩn của html2pdf.js: from -> toPdf -> get('pdf') -> output('blob')
-        // (đáng tin cậy hơn outputPdf('datauristring'), vốn từng trả về dữ liệu rỗng/không đúng định dạng)
-        html2pdf().set({
-          margin:8,
-          filename:pdfFileName,
-          html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff',scrollX:0,scrollY:0},
-          jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
-          // Tránh cắt giữa dòng/bảng — ưu tiên xuống trang mới thay vì cắt nội dung
-          pagebreak:{mode:['css','legacy'],avoid:['tr','.dnNoBreak']}
-        }).from(clone).toPdf().get('pdf').then(function(pdfObj){
-          const blob=pdfObj.output('blob');
-          if(!blob||!blob.size){ cleanupAndFail('File PDF tạo ra rỗng — gửi email kèm file đã upload (nếu có)'); return; }
-          const reader=new FileReader();
-          reader.onload=function(){
-            setLoading(false);
-            document.body.removeChild(clone);
-            finish([{filename:pdfFileName,dataUrl:reader.result}].concat(uploadedAttachments));
-          };
-          reader.onerror=function(){ cleanupAndFail('Lỗi đọc file PDF — gửi email kèm file đã upload (nếu có)'); };
-          reader.readAsDataURL(blob);
-        }).catch(function(e){
-          cleanupAndFail('Lỗi tạo PDF: '+(e&&e.message||'')+' — gửi email kèm file đã upload (nếu có)');
-        });
-      }catch(e){
-        cleanupAndFail('Lỗi tạo PDF: '+(e&&e.message||'')+' — gửi email kèm file đã upload (nếu có)');
+      if(!blob||!blob.size){
+        toast('Lỗi tạo PDF'+(err?(': '+err):'')+' — gửi email kèm file đã upload (nếu có)','error');
+        finish(uploadedAttachments);
+        return;
       }
-    });});
+      const reader=new FileReader();
+      reader.onload=function(){
+        finish([{filename:pdfFileName,dataUrl:reader.result}].concat(uploadedAttachments));
+      };
+      reader.onerror=function(){
+        toast('Lỗi đọc file PDF — gửi email kèm file đã upload (nếu có)','error');
+        finish(uploadedAttachments);
+      };
+      reader.readAsDataURL(blob);
+    });
   });
 }
+
 
 function openMailClient(){
   const to=g('emailTo')?.value||'';
