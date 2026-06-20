@@ -5097,32 +5097,51 @@ function sendEmailDN(id, tt){
     }
     const pdfFileName='DebitNote_'+(dnNo||r.bookingNo||'').replace(/[^A-Za-z0-9-]/g,'_')+'.pdf';
     // Tạo 1 bản sao nội dung đặt NGOÀI popup (không bị giới hạn bởi khung cuộn/chiều rộng modal),
-    // gắn cố định chiều rộng chuẩn A4 (~794px @96dpi) để bố cục luôn render đầy đủ & đúng tỉ lệ
-    // trước khi chụp — tránh tình trạng bị "dồn cột"/mất nội dung do chụp sai kích thước khung nhìn.
+    // gắn cố định chiều rộng chuẩn để bố cục luôn render đầy đủ & đúng tỉ lệ trước khi chụp.
+    // setLoading(true) ở trên đã hiện overlay full-màn-hình (z-index:999) nên không cần ẩn bản sao
+    // bằng z-index âm hay tọa độ off-screen cực lớn (cả 2 cách đó từng khiến canvas bị TRỐNG).
     const clone=document.createElement('div');
-    // Lưu ý: html2canvas thường KHÔNG vẽ được nội dung đặt quá xa viewport (vd left:-99999px)
-    // → canvas trống rỗng. Đặt trong phạm vi viewport (top:0;left:0) nhưng ẩn phía sau bằng
-    // z-index âm để không hiển thị cho người dùng, đồng thời vẫn được trình duyệt vẽ (paint) đầy đủ.
-    clone.style.cssText='position:fixed;top:0;left:0;width:780px;background:#fff;z-index:-1000;pointer-events:none';
+    clone.style.cssText='position:fixed;top:0;left:0;width:780px;background:#ffffff;z-index:1';
     clone.innerHTML=area.innerHTML;
     document.body.appendChild(clone);
-    html2pdf().set({
-      margin:8,
-      filename:pdfFileName,
-      html2canvas:{scale:2,useCORS:true,scrollX:0,scrollY:0,width:780},
-      jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
-      // Tránh cắt giữa dòng/bảng — ưu tiên xuống trang mới thay vì cắt nội dung
-      pagebreak:{mode:['css','legacy'],avoid:['tr','.dnNoBreak']}
-    }).from(clone).outputPdf('datauristring').then(function(dataUri){
-      setLoading(false);
-      document.body.removeChild(clone);
-      finish([{filename:pdfFileName,dataUrl:dataUri}].concat(uploadedAttachments));
-    }).catch(function(e){
+
+    function cleanupAndFail(msg){
       setLoading(false);
       if(clone.parentNode)document.body.removeChild(clone);
-      toast('Lỗi tạo PDF: '+(e&&e.message||'')+' — gửi email kèm file đã upload (nếu có)','error');
+      toast(msg,'error');
       finish(uploadedAttachments);
-    });
+    }
+
+    // Đợi trình duyệt layout/paint xong bản sao trước khi chụp (tránh canvas trống do chụp quá sớm)
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){
+      try{
+        // Dùng đúng chuỗi thao tác chuẩn của html2pdf.js: from -> toPdf -> get('pdf') -> output('blob')
+        // (đáng tin cậy hơn outputPdf('datauristring'), vốn từng trả về dữ liệu rỗng/không đúng định dạng)
+        html2pdf().set({
+          margin:8,
+          filename:pdfFileName,
+          html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff',scrollX:0,scrollY:0},
+          jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
+          // Tránh cắt giữa dòng/bảng — ưu tiên xuống trang mới thay vì cắt nội dung
+          pagebreak:{mode:['css','legacy'],avoid:['tr','.dnNoBreak']}
+        }).from(clone).toPdf().get('pdf').then(function(pdfObj){
+          const blob=pdfObj.output('blob');
+          if(!blob||!blob.size){ cleanupAndFail('File PDF tạo ra rỗng — gửi email kèm file đã upload (nếu có)'); return; }
+          const reader=new FileReader();
+          reader.onload=function(){
+            setLoading(false);
+            document.body.removeChild(clone);
+            finish([{filename:pdfFileName,dataUrl:reader.result}].concat(uploadedAttachments));
+          };
+          reader.onerror=function(){ cleanupAndFail('Lỗi đọc file PDF — gửi email kèm file đã upload (nếu có)'); };
+          reader.readAsDataURL(blob);
+        }).catch(function(e){
+          cleanupAndFail('Lỗi tạo PDF: '+(e&&e.message||'')+' — gửi email kèm file đã upload (nếu có)');
+        });
+      }catch(e){
+        cleanupAndFail('Lỗi tạo PDF: '+(e&&e.message||'')+' — gửi email kèm file đã upload (nếu có)');
+      }
+    });});
   });
 }
 
