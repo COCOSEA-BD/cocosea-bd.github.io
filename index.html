@@ -1574,7 +1574,7 @@ function renderDetailPanel(r,tt){
       // Summary table
       const summaryRows='<tr style="background:var(--bg-secondary)">'
         +'<td style="'+tdS+';font-weight:700;font-size:13px">VND</td>'
-        +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700;font-size:13px" id="sumRevCell">'+totalRevVND.toLocaleString()+'</td>'
+        +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700;font-size:13px" id="sumRevCell" data-val="'+totalRevVND+'">'+totalRevVND.toLocaleString()+'</td>'
         +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700;font-size:13px" id="sumCostCell">—</td>'
         +'<td style="'+tdS+';text-align:right;font-weight:800;font-size:15px" id="sumProfitCell">—</td>'
         +'<td style="'+tdS+';text-align:center" id="sumMarginCell"><span style="padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;background:var(--bg-secondary);color:var(--text-secondary)">—</span></td>'
@@ -3381,10 +3381,14 @@ function _emailDownloadEml(){
       'Content-Transfer-Encoding: 8bit\r\n\r\n'+
       htmlPart+'\r\n\r\n';
     atts.forEach(function(a){
-      // dataUrl dạng "data:<mime>;base64,<data>"
-      const m=/^data:([^;]+);base64,(.*)$/s.exec(a.dataUrl||'');
-      const mime=m?m[1]:'application/octet-stream';
-      const b64=m?m[2]:'';
+      // dataUrl thường có dạng "data:<mime>;base64,<data>", nhưng một số thư viện (vd jsPDF)
+      // chèn thêm tham số ở giữa như "data:application/pdf;filename=xxx.pdf;base64,<data>".
+      // Tách an toàn bằng cách tìm đúng vị trí "base64," thay vì regex cứng nhắc.
+      const dataUrl=a.dataUrl||'';
+      const bi=dataUrl.indexOf('base64,');
+      const header=bi>=0?dataUrl.slice(5,bi):''; // bỏ "data:" ở đầu
+      const mime=(header.split(';')[0]||'').trim()||'application/octet-stream';
+      const b64=bi>=0?dataUrl.slice(bi+7).replace(/\s/g,''):'';
       // Chia base64 thành dòng 76 ký tự theo chuẩn MIME
       const wrapped=(b64.match(/.{1,76}/g)||[]).join('\r\n');
       eml+='--'+boundary+'\r\n'+
@@ -5020,7 +5024,9 @@ function sendEmailDN(id, tt){
   const cp=cache.partners[cneeKey]||{};
   const partyPartner=cache.partners[currentParty]||{};
   const toEmail=partyPartner.email||cp.email||'';
-  const ccEmail=sp.email||'';
+  // Luôn CC 2 email nội bộ COCOSEA cho mọi Debit Note
+  const ccFixed='cocosea.bd@gmail.com, cocosea.acc@gmail.com';
+  const ccEmail=sp.email?(sp.email+', '+ccFixed):ccFixed;
 
   const pol=(r.pol||'')+(r.polCountry?(' ; '+r.polCountry):'');
   const pod=(r.pod||'')+(r.podCountry?(' ; '+r.podCountry):'');
@@ -5944,7 +5950,7 @@ function updateCostingTotal(){
   const marginCell=g('sumMarginCell');
   const revCell=g('sumRevCell');
   if(costCell||profitCell){
-    const revVND=revCell?parseInt((revCell.textContent||'0').replace(/[^0-9-]/g,''))||0:0;
+    const revVND=revCell?(parseFloat(revCell.dataset.val)||parseFloat((revCell.textContent||'0').replace(/,/g,''))||0):0;
     const profit=revVND-totalVND;
     const margin=revVND>0?Math.round(profit/revVND*100):0;
     const clr=profit>=0?'var(--green)':'var(--red)';
