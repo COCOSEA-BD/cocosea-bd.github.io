@@ -514,6 +514,7 @@ const XCOLS_LIST=[
   {k:'pol',l:'POL'},
   {k:'pod',l:'POD'},
   {k:'status',l:'Trạng thái'},
+  {k:'vstStatus',l:'Xác nhận VST'},
 ];
 const NCOLS_LIST=[
   {k:'jobNo',l:'Job ID'},
@@ -531,6 +532,7 @@ const NCOLS_LIST=[
   {k:'pol',l:'POL'},
   {k:'pod',l:'POD'},
   {k:'status',l:'Trạng thái'},
+  {k:'vstStatus',l:'Xác nhận VST'},
 ];
 // All columns used in the edit form
 const XCOLS=[
@@ -912,6 +914,7 @@ function renderLot(tt){
       <div class="search-wrap" style="flex:2 1 0;min-width:150px"><i class="ti ti-map-pin"></i><input type="text" id="sfPod_${tt}" placeholder="POD..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
       <select id="sfLock_${tt}" onchange="renderLotTable('${tt}')" style="font-size:12px;flex:0 0 140px;width:140px"><option value="">Tất cả khóa</option><option value="locked">Đã khóa</option><option value="unlocked">Chưa khóa</option></select>
       <span style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap;flex:0 0 auto">Tổng: <strong id="stat-total-${tt}">0</strong> lô</span>
+      <div id="vstWarnBar_${tt}" style="flex:1 1 0;min-width:220px"></div>
     </div>
   </div>
   <div class="toolbar">
@@ -938,6 +941,8 @@ function renderLot(tt){
   <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
   <div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>`;
   renderLotTable(tt);
+  renderVstWarning(tt);
+  _startVstWarnAutoRefresh(tt);
 }
 
 // Sort state per tab
@@ -1064,6 +1069,11 @@ function renderLotTable(tt){
       }
       if(c.k==='vessel'&&r.vessel){
         return`<td><button class="plink" onclick="openVesselQuick(this.dataset.v,this.dataset.voy)" data-v="${(r.vessel||'').replace(/"/g,'&quot;')}" data-voy="${(r.voy||'').replace(/"/g,'&quot;')}" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left" title="Mở Vessel tool để cập nhật nhanh">${r.vessel}</button></td>`;
+      }
+      if(c.k==='vstStatus'){
+        if(!r.vstEnabled) return`<td style="text-align:center;color:var(--text-tertiary)">—</td>`;
+        const confirmed=!!r.vstConfirmed;
+        return`<td style="text-align:center"><button class="bdg ${confirmed?'bdg-g':'bdg-r'}" data-id="${r._id}" data-tt="${tt}" onclick="openVstPopup(this.dataset.id,this.dataset.tt)" style="cursor:pointer;border:none;font-weight:700">${confirmed?'Đã VST':'Chưa VST'}</button></td>`;
       }
       return`<td>${r[c.k]||'—'}</td>`;
     }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
@@ -1252,6 +1262,14 @@ function renderDetailPanel(r,tt){
         <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
       </div>
     </div>`:''}
+    <!-- Xác nhận VST -->
+    <div style="margin-top:.6rem">
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;padding:.55rem .85rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);width:fit-content">
+        <input type="checkbox" id="vstEnabledChk" data-id="${r._id}" data-tt="${tt}" ${r.vstEnabled?'checked':''} onchange="toggleVstEnabled(this.dataset.id,this.dataset.tt,this.checked)" style="width:16px;height:16px;cursor:pointer"/>
+        <span style="font-size:12.5px;font-weight:600">Xác nhận VST <span style="font-weight:400;color:var(--text-secondary)">(bật theo dõi trạng thái Vào sổ tàu cho lô này)</span></span>
+      </label>
+      ${r.vstEnabled?`<div style="margin-top:6px;font-size:12px;display:flex;align-items:center;gap:6px">Trạng thái hiện tại: <span class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" style="font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</span></div>`:''}
+    </div>
     <!-- Status quick buttons -->
     ${can('editLot')&&!r.locked?`<div style="margin-top:.75rem">
       <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Trạng thái lô hàng</div>
@@ -4951,6 +4969,9 @@ tr:hover td{background:var(--bg-secondary)}
 <!-- ATTACHMENT PREVIEW MODAL -->
 <div class="ov" id="attPreviewOv" style="padding:.75rem"></div>
 
+<!-- VST CONFIRM MODAL -->
+<div class="ov" id="vstOv" style="padding:.75rem"></div>
+
 <!-- DETAIL PANEL -->
 <div id="detailBackdrop" class="detail-backdrop"></div>
 <div id="detailPanel" class="detail-panel"></div>
@@ -5858,6 +5879,97 @@ async function quickSetStatus(id, tt, status){
   setLoading(false);
 }
 window.quickSetStatus=quickSetStatus;
+
+// ── Xác nhận VST (Vào sổ tàu) ──
+async function toggleVstEnabled(id, tt, checked){
+  if(!can('editLot')){toast('Không có quyền','error');return;}
+  try{
+    const payload={vstEnabled:checked,updatedAt:Date.now()};
+    if(!checked)payload.vstConfirmed=false; // tắt theo dõi thì reset luôn trạng thái xác nhận
+    await fsSet(colName(tt),id,payload);
+    const idx=cache[tt].findIndex(x=>x._id===id);
+    if(idx>=0){cache[tt][idx].vstEnabled=checked;if(!checked)cache[tt][idx].vstConfirmed=false;}
+    toast(checked?'Đã bật theo dõi VST':'Đã tắt theo dõi VST');
+    const r=cache[tt].find(x=>x._id===id)||{};
+    renderDetailPanel(r,tt);
+    renderLotTable(tt);
+    renderVstWarning(tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+}
+window.toggleVstEnabled=toggleVstEnabled;
+
+function openVstPopup(id, tt){
+  const r=cache[tt].find(x=>x._id===id); if(!r)return;
+  g('vstOv').innerHTML='<div class="modal" style="max-width:420px">'
+    +'<div class="mhdr"><div><div class="mtitle">Xác nhận VST</div>'
+    +'<div class="msub">'+(r.bookingNo||r.jobNo||'—')+' — '+(r.pol||'—')+' → '+(r.pod||'—')+'</div></div>'
+    +'<button class="x" onclick="closeOv(\'vstOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px">'
+      +'<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+        +'<input type="checkbox" id="vstConfirmChk" '+(r.vstConfirmed?'checked':'')+' style="width:18px;height:18px;cursor:pointer"/>'
+        +'<span style="font-size:13px;font-weight:600">Đã VST (Vào sổ tàu)</span>'
+      +'</label>'
+      +'<div style="margin-top:8px;font-size:11.5px;color:var(--text-secondary)">Cut Off CY: <strong>'+(r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00')||'—')+'</strong></div>'
+    +'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="closeOv(\'vstOv\')">Hủy</button>'
+      +'<button class="btn pri" data-id="'+id+'" data-tt="'+tt+'" onclick="saveVstConfirm(this.dataset.id,this.dataset.tt)">Lưu</button>'
+    +'</div>'
+  +'</div>';
+  openOv('vstOv');
+}
+window.openVstPopup=openVstPopup;
+
+async function saveVstConfirm(id, tt){
+  if(!can('editLot')){toast('Không có quyền','error');return;}
+  const checked=g('vstConfirmChk')?.checked||false;
+  try{
+    await fsSet(colName(tt),id,{vstConfirmed:checked,updatedAt:Date.now()});
+    const idx=cache[tt].findIndex(x=>x._id===id);
+    if(idx>=0)cache[tt][idx].vstConfirmed=checked;
+    toast(checked?'Đã xác nhận VST':'Đã bỏ xác nhận VST');
+    closeOv('vstOv');
+    renderLotTable(tt);
+    renderVstWarning(tt);
+    if(detailId===id)renderDetailPanel(cache[tt].find(x=>x._id===id)||{},tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+}
+window.saveVstConfirm=saveVstConfirm;
+
+// Bảng cảnh báo: lô đã bật theo dõi VST, chưa xác nhận, và còn ≤2h tới giờ Cut Off CY (hoặc đã quá giờ)
+function renderVstWarning(tt){
+  const el=g('vstWarnBar_'+tt); if(!el)return;
+  const now=Date.now();
+  const urgent=(cache[tt]||[]).filter(function(r){
+    if(!r.vstEnabled||r.vstConfirmed)return false;
+    const cyStr=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
+    if(!cyStr)return false;
+    const cyTime=new Date(cyStr.replace(' ','T')).getTime();
+    if(isNaN(cyTime))return false;
+    return (cyTime-now)<=2*3600000;
+  }).sort(function(a,b){
+    const ta=new Date((a.cutoffCY||calcDefaultCutoff(a.etd,-2,'11:00')).replace(' ','T')).getTime();
+    const tb=new Date((b.cutoffCY||calcDefaultCutoff(b.etd,-2,'11:00')).replace(' ','T')).getTime();
+    return ta-tb;
+  });
+  if(!urgent.length){el.innerHTML='';return;}
+  el.innerHTML='<div style="padding:.5rem .85rem;background:rgba(220,53,69,.08);border:1px solid rgba(220,53,69,.35);border-radius:8px;font-size:11.5px;color:#A32D2D;display:flex;align-items:flex-start;gap:8px;height:100%;box-sizing:border-box">'
+    +'<i class="ti ti-alert-triangle" style="font-size:15px;flex-shrink:0;margin-top:1px"></i>'
+    +'<div><strong>Cảnh báo VST (trong vòng 2h tới Cut Off CY hoặc đã trễ):</strong> '
+      +urgent.map(function(r){
+        const cyStr=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
+        return '<button data-id="'+r._id+'" data-tt="'+tt+'" onclick="openDetail(this.dataset.id,this.dataset.tt)" style="background:none;border:none;padding:0;margin:0 2px;color:inherit;font-weight:700;text-decoration:underline;cursor:pointer">'+(r.bookingNo||r.jobNo||'—')+'</button>'
+          +'<span style="color:#888">(CY '+cyStr+')</span>';
+      }).join(', ')
+    +'</div></div>';
+}
+window.renderVstWarning=renderVstWarning;
+let _vstWarnInterval=null;
+function _startVstWarnAutoRefresh(tt){
+  if(_vstWarnInterval)clearInterval(_vstWarnInterval);
+  _vstWarnInterval=setInterval(function(){renderVstWarning('xuat');renderVstWarning('nhap');},60000);
+}
+
 function toggleCurrentLotLock(){toggleLotLock(detailId,detailTt);}
 window.toggleCurrentLotLock=toggleCurrentLotLock;
 window.toggleLotLock=toggleLotLock;
