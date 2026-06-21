@@ -97,6 +97,11 @@ window._bankAccounts=[
   {beneficiary:'',account:'',bank:''},
 ];
 
+// Danh mục Thu/Chi mặc định (admin có thể sửa trong module Quản lý thu chi → tab Danh mục)
+const DEFAULT_THU_CATS=['Doanh thu bán hàng - có hóa đơn','Doanh thu bán hàng - không hóa đơn','Thu khác'];
+const DEFAULT_CHI_CATS=['Chi phí vận hành','Mặt bằng','Lương nhân viên','Chi khác'];
+window._thuChiCategories={thu:DEFAULT_THU_CATS.slice(),chi:DEFAULT_CHI_CATS.slice()};
+
 // Load bank accounts from Firestore
 function loadCargoNames(){
   db.collection('_config').doc('cargoNames').get().then(function(snap){
@@ -430,12 +435,12 @@ const TASKS=[
 ];
 const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã Fill giá':'bdg-tl','Đã Costing':'bdg-b','Đã gửi DN':'bdg-purple','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
 const ROLES={
-  admin:{label:'Admin',cls:'role-admin',perms:{addLot:true,editLot:true,deleteLot:true,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:true,managePartners:true,export:true}},
-  operator:{label:'Operator',cls:'role-op',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:true,export:true}},
-  accountant:{label:'Accountant',cls:'role-acc',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,editSvcDesc:false,editCont:false,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:false,export:true}},
-  doc:{label:'Doc',cls:'role-doc',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
-  cus:{label:'Cus',cls:'role-cus',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
-  viewer:{label:'Viewer',cls:'role-view',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,export:false}},
+  admin:{label:'Admin',cls:'role-admin',perms:{addLot:true,editLot:true,deleteLot:true,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:true,managePartners:true,manageFinance:true,export:true}},
+  operator:{label:'Operator',cls:'role-op',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:true,manageFinance:false,export:true}},
+  accountant:{label:'Accountant',cls:'role-acc',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,editSvcDesc:false,editCont:false,fillPrice:true,viewCost:true,viewInvoice:true,manageUsers:false,managePartners:false,manageFinance:true,export:true}},
+  doc:{label:'Doc',cls:'role-doc',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,manageFinance:false,export:false}},
+  cus:{label:'Cus',cls:'role-cus',perms:{addLot:true,editLot:true,deleteLot:false,editSvc:true,editSvcDesc:true,editCont:true,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,manageFinance:false,export:false}},
+  viewer:{label:'Viewer',cls:'role-view',perms:{addLot:false,editLot:false,deleteLot:false,editSvc:false,fillPrice:false,viewCost:false,viewInvoice:false,manageUsers:false,managePartners:false,manageFinance:false,export:false}},
 };
 // Ports grouped by country for cascading selection
 const PORTS_BY_COUNTRY={
@@ -577,7 +582,7 @@ let partnerIdx = null; let partnerIsNew = false; let userEditIdx = null;
 let deadlineDays = 5;
 
 // Local cache (kept in sync via onSnapshot)
-let cache = { xuat: [], nhap: [], partners: {}, users: [], vessels: [] };
+let cache = { xuat: [], nhap: [], partners: {}, users: [], vessels: [], cashTx: [], debts: [] };
 
 // Firestore listeners (unsubscribe functions)
 let listeners = [];
@@ -786,6 +791,34 @@ function startListeners(){
   },function(){});
   listeners.push(uVes);
 
+  // Quản lý thu chi: giao dịch sổ quỹ (realtime)
+  const uCashTx = db.collection('cashTransactions').onSnapshot(snap => {
+    cache.cashTx = snap.docs.map(d=>({_id:d.id,...d.data()}));
+    cache.cashTx.sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.createdAt||0)-(a.createdAt||0));
+    if(currentTab==='thu-chi') renderThuChi();
+  },function(){});
+  listeners.push(uCashTx);
+
+  // Quản lý thu chi: công nợ phải thu / phải trả (realtime)
+  const uDebts = db.collection('debtEntries').onSnapshot(snap => {
+    cache.debts = snap.docs.map(d=>({_id:d.id,...d.data()}));
+    cache.debts.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+    if(currentTab==='thu-chi') renderThuChi();
+  },function(){});
+  listeners.push(uDebts);
+
+  // Quản lý thu chi: danh mục thu/chi (realtime)
+  const uThuChiCat = db.collection('_config').doc('thuChiCategories').onSnapshot(function(snap){
+    if(snap.exists){
+      const d=snap.data();
+      window._thuChiCategories={thu:d.thu||DEFAULT_THU_CATS,chi:d.chi||DEFAULT_CHI_CATS};
+    } else {
+      window._thuChiCategories={thu:DEFAULT_THU_CATS,chi:DEFAULT_CHI_CATS};
+    }
+    if(currentTab==='thu-chi') renderThuChi();
+  },function(){});
+  listeners.push(uThuChiCat);
+
   // Ocean freight rates (realtime)
   db.collection('ocean_rates').onSnapshot(function(snap){
     cache.ocean=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
@@ -884,15 +917,16 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  ['xuat','nhap','deadline','cong-no','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
+  ['xuat','nhap','deadline','cong-no','thu-chi','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
-  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'CRM','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','thu-chi':'Quản lý thu chi','doi-tac':'CRM','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
   g('pageTitle').textContent=titles[t]||t;
   if(t==='xuat'||t==='nhap') renderLot(t);
   if(t==='deadline') renderDeadline();
   if(t==='cong-no') renderDebt();
+  if(t==='thu-chi') renderThuChi();
   if(t==='doi-tac') renderPartners();
   if(t==='vessel') renderVesselTool();
   if(t==='cocoquote') renderCocoQuote();
@@ -4269,6 +4303,523 @@ const CRM_TYPES=['shipper','carrier','fwd','supplier'];
 const CRM_TLABEL={shipper:'Shipper',carrier:'Hãng tàu',fwd:'Forwarder',supplier:'Nhà cung cấp'};
 const CRM_TICON={shipper:'ti-building-factory',carrier:'ti-ship',fwd:'ti-truck',supplier:'ti-package-import'};
 
+
+/* ═══════════════════════════════════════════════════════════════
+   QUẢN LÝ THU CHI — Sổ quỹ / Công nợ / Danh mục / Báo cáo tài chính
+═══════════════════════════════════════════════════════════════ */
+let tcTab='soquy';
+let tcAccFilter='', tcFrom='', tcTo='', tcTypeFilter='';
+let tcVoucherType='thu'; // đang mở popup Phiếu Thu hay Phiếu Chi
+let tcVoucherLot=null;   // lô hàng đã chọn trong popup {tt,lotId,bookingNo,mblNo,jobNo}
+let tcVoucherDebt=null;  // khoản công nợ đã chọn trong popup {id,partner,type}
+
+function _tcAccountList(){
+  const accs=[{id:'cash',label:'Tiền mặt'}];
+  const raw=window._bankAccounts;
+  let company=[],personal=[];
+  if(Array.isArray(raw)){ company=raw; }
+  else if(raw&&typeof raw==='object'){ company=raw.company||[]; personal=raw.personal||[]; }
+  company.forEach(function(b){if(b&&b.account)accs.push({id:'bank:'+b.account,label:(b.beneficiary||b.bank||'TK ngân hàng')+' • '+b.account});});
+  personal.forEach(function(b){if(b&&b.account)accs.push({id:'bank:'+b.account,label:(b.beneficiary||b.bank||'TK ngân hàng')+' • '+b.account});});
+  return accs;
+}
+function _tcAccountLabel(id){
+  const a=_tcAccountList().find(function(x){return x.id===id;});
+  return a?a.label:(id||'—');
+}
+// Số dư hiện tại của 1 tài khoản, theo từng loại tiền tệ — tính từ toàn bộ giao dịch (không phụ thuộc bộ lọc đang xem)
+function _tcBalances(accountId){
+  const bal={VND:0,USD:0};
+  (cache.cashTx||[]).forEach(function(tx){
+    if(tx.account!==accountId)return;
+    const cur=tx.currency||'VND'; if(bal[cur]===undefined)bal[cur]=0;
+    bal[cur]+= tx.type==='thu'?(tx.amount||0):-(tx.amount||0);
+  });
+  return bal;
+}
+function _tcFmtMoney(n,cur){ return (n||0).toLocaleString()+' '+(cur||'VND'); }
+
+function renderThuChi(){
+  const pg=g('page-thu-chi');
+  if(!can('manageFinance')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div style="font-weight:600">Không có quyền truy cập Quản lý thu chi</div></div>';return;}
+  const tabs=[
+    {k:'soquy',label:'Sổ quỹ',icon:'ti-cash-banknote'},
+    {k:'congno',label:'Công nợ',icon:'ti-receipt'},
+    {k:'danhmuc',label:'Danh mục thu/chi',icon:'ti-category'},
+    {k:'baocao',label:'Báo cáo tài chính',icon:'ti-chart-line'},
+  ];
+  pg.innerHTML=`
+  <div style="margin-bottom:1rem">
+    <div style="font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px"><i class="ti ti-wallet" style="color:var(--green)"></i>Quản lý thu chi</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">Sổ quỹ tiền mặt/ngân hàng, công nợ, danh mục và báo cáo tài chính</div>
+  </div>
+  <div style="display:flex;gap:6px;margin-bottom:1.1rem;border-bottom:1px solid var(--border-light)">
+    ${tabs.map(function(t){const active=tcTab===t.k;return '<button onclick="switchTcTab(\''+t.k+'\')" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti '+t.icon+'" style="font-size:15px"></i>'+t.label+'</button>';}).join('')}
+  </div>
+  <div id="tcBody"></div>`;
+  renderTcBody();
+}
+function switchTcTab(t){ tcTab=t; renderThuChi(); }
+window.switchTcTab=switchTcTab;
+
+function renderTcBody(){
+  const body=g('tcBody'); if(!body)return;
+  if(tcTab==='soquy') body.innerHTML=renderTcSoQuy();
+  else if(tcTab==='congno') body.innerHTML=renderTcCongNo();
+  else if(tcTab==='danhmuc') body.innerHTML=renderTcDanhMuc();
+  else if(tcTab==='baocao') body.innerHTML=renderTcBaoCao();
+}
+
+/* ── TAB: Sổ quỹ ── */
+function renderTcSoQuy(){
+  const accs=_tcAccountList();
+  const balCards=accs.map(function(a){
+    const bal=_tcBalances(a.id);
+    const parts=Object.entries(bal).filter(function(e){return e[1]!==0;});
+    return '<div style="flex:1;min-width:180px;padding:.75rem 1rem;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px">'
+      +'<div style="font-size:10.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px;display:flex;align-items:center;gap:5px"><i class="ti ti-'+(a.id==='cash'?'cash':'building-bank')+'" style="font-size:12px"></i>'+a.label+'</div>'
+      +'<div style="font-size:15px;font-weight:700;color:var(--green)">'+(parts.length?parts.map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / '):'0 VND')+'</div>'
+    +'</div>';
+  }).join('');
+
+  const q=(g('tcSearch')?.value||'');
+  let list=(cache.cashTx||[]).slice();
+  if(tcAccFilter) list=list.filter(function(t){return t.account===tcAccFilter;});
+  if(tcTypeFilter) list=list.filter(function(t){return t.type===tcTypeFilter;});
+  if(tcFrom) list=list.filter(function(t){return !t.date||t.date>=tcFrom;});
+  if(tcTo) list=list.filter(function(t){return !t.date||t.date<=tcTo;});
+  if(q) list=list.filter(function(t){const s=(t.description||'')+' '+(t.category||'')+' '+(t.lotRef?(t.lotRef.bookingNo||'')+(t.lotRef.mblNo||'')+(t.lotRef.jobNo||''):'');return s.toLowerCase().includes(q.toLowerCase());});
+
+  return `
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem">${balCards}</div>
+  <div class="toolbar">
+    <div class="search-wrap" style="flex:1;min-width:200px"><i class="ti ti-search"></i><input type="text" id="tcSearch" placeholder="Tìm diễn giải, danh mục, booking..." oninput="renderTcBody()"/></div>
+    <select id="tcAccSel" onchange="tcAccFilter=this.value;renderTcBody()" style="font-size:12px;flex:0 0 200px"><option value="">Tất cả tài khoản</option>${accs.map(function(a){return '<option value="'+a.id+'"'+(tcAccFilter===a.id?' selected':'')+'>'+a.label+'</option>';}).join('')}</select>
+    <select id="tcTypeSel" onchange="tcTypeFilter=this.value;renderTcBody()" style="font-size:12px;flex:0 0 130px"><option value="">Thu &amp; Chi</option><option value="thu"${tcTypeFilter==='thu'?' selected':''}>Chỉ Thu</option><option value="chi"${tcTypeFilter==='chi'?' selected':''}>Chỉ Chi</option></select>
+    <input type="date" id="tcFromSel" value="${tcFrom}" onchange="tcFrom=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
+    <input type="date" id="tcToSel" value="${tcTo}" onchange="tcTo=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
+    <button class="btn pri" style="background:var(--green)" onclick="openTcVoucher('thu')"><i class="ti ti-plus"></i> Phiếu Thu</button>
+    <button class="btn red" onclick="openTcVoucher('chi')"><i class="ti ti-minus"></i> Phiếu Chi</button>
+  </div>
+  <div class="table-card"><div class="table-wrap"><table>
+    <thead><tr>
+      <th>Ngày</th><th>Loại</th><th>Danh mục</th><th>Diễn giải</th><th>Lô hàng</th><th>Tài khoản</th><th style="text-align:right">Số tiền</th><th></th>
+    </tr></thead>
+    <tbody>${list.length?list.map(function(t){
+      const lotStr=t.lotRef?(t.lotRef.bookingNo||t.lotRef.jobNo||t.lotRef.mblNo||''):'';
+      return '<tr>'
+        +'<td>'+(t.date||'—')+'</td>'
+        +'<td><span class="bdg '+(t.type==='thu'?'bdg-g':'bdg-r')+'">'+(t.type==='thu'?'Thu':'Chi')+'</span></td>'
+        +'<td>'+(t.category||'—')+'</td>'
+        +'<td style="max-width:220px;white-space:normal">'+(t.description||'—')+'</td>'
+        +'<td>'+(lotStr?'<span class="bdg bdg-b">'+lotStr+'</span>':'—')+'</td>'
+        +'<td>'+_tcAccountLabel(t.account)+'</td>'
+        +'<td style="text-align:right;font-weight:700;color:'+(t.type==='thu'?'var(--green)':'var(--red)')+'">'+(t.type==='thu'?'+':'-')+_tcFmtMoney(t.amount,t.currency)+'</td>'
+        +'<td><button class="rac red" onclick="delTcTransaction(\''+t._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button></td>'
+      +'</tr>';
+    }).join(''):'<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text-secondary)">Chưa có giao dịch nào khớp bộ lọc</td></tr>'}</tbody>
+  </table></div></div>`;
+}
+async function delTcTransaction(id){
+  if(!confirm('Xóa giao dịch này?'))return;
+  setLoading(true);
+  try{ await fsDel('cashTransactions',id); toast('Đã xóa giao dịch'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.delTcTransaction=delTcTransaction;
+
+/* ── Popup: Phiếu Thu / Phiếu Chi ── */
+function openTcVoucher(type){
+  tcVoucherType=type; tcVoucherLot=null; tcVoucherDebt=null;
+  renderTcVoucher();
+  openOv('tcVoucherOv');
+}
+window.openTcVoucher=openTcVoucher;
+
+function renderTcVoucher(){
+  const isThu=tcVoucherType==='thu';
+  const accs=_tcAccountList();
+  const cats=(window._thuChiCategories||{})[tcVoucherType]||[];
+  const openDebts=(cache.debts||[]).filter(function(d){return d.type===(isThu?'phaiThu':'phaiTra')&&_tcDebtRemaining(d)>0.01;});
+  g('tcVoucherOv').innerHTML=`
+  <div class="modal" style="max-width:520px">
+    <div class="mhdr">
+      <div><div class="mtitle" style="color:${isThu?'var(--green)':'var(--red)'}"><i class="ti ${isThu?'ti-plus':'ti-minus'}" style="font-size:15px;margin-right:6px"></i>${isThu?'Phiếu Thu':'Phiếu Chi'}</div>
+      <div class="msub">${isThu?'Ghi nhận khoản tiền thu vào quỹ':'Ghi nhận khoản tiền chi ra từ quỹ'}</div></div>
+      <button class="rac" onclick="closeOv('tcVoucherOv')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="fg">
+      <div class="fi"><label class="lbl">Ngày</label><input type="date" id="tv_date" value="${new Date().toISOString().slice(0,10)}"/></div>
+      <div class="fi"><label class="lbl">Tài khoản</label><select id="tv_acc">${accs.map(function(a){return '<option value="'+a.id+'">'+a.label+'</option>';}).join('')}</select></div>
+      <div class="fi"><label class="lbl">Số tiền</label><input type="number" id="tv_amount" min="0" placeholder="0"/></div>
+      <div class="fi"><label class="lbl">Đơn vị tiền tệ</label><select id="tv_cur"><option value="VND">VND</option><option value="USD">USD</option></select></div>
+      <div class="fi full"><label class="lbl">Danh mục</label><select id="tv_cat"><option value="">— Chọn danh mục —</option>${cats.map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'">'+c+'</option>';}).join('')}</select></div>
+      <div class="fi full">
+        <label class="lbl">Lô hàng liên quan (tùy chọn — gõ số booking, bill hoặc job ID)</label>
+        <div style="position:relative">
+          <input type="text" id="tv_lotSearch" placeholder="VD: HCMNSA26S06142..." oninput="_tcLotSearch(this.value)" autocomplete="off"/>
+          <div id="tv_lotSuggest" style="position:absolute;top:100%;left:0;right:0;z-index:20;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;margin-top:3px;max-height:200px;overflow-y:auto;display:none;box-shadow:var(--shadow-md)"></div>
+        </div>
+        <div id="tv_lotSelected" style="margin-top:6px"></div>
+      </div>
+      ${openDebts.length?`<div class="fi full">
+        <label class="lbl">Gán vào khoản công nợ (tùy chọn)</label>
+        <select id="tv_debt" onchange="_tcDebtSelChange(this.value)">
+          <option value="">— Không gán —</option>
+          ${openDebts.map(function(d){return '<option value="'+d._id+'">'+(d.partner||'—')+' — còn lại '+_tcFmtMoney(_tcDebtRemaining(d),d.currency)+'</option>';}).join('')}
+        </select>
+      </div>`:''}
+      <div class="fi full"><label class="lbl">Diễn giải</label><textarea id="tv_desc" rows="2" style="font-size:12px;resize:vertical" placeholder="Ghi chú thêm về giao dịch này"></textarea></div>
+    </div>
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('tcVoucherOv')">Hủy</button>
+      <button class="btn pri" style="background:${isThu?'var(--green)':'var(--red)'};border-color:${isThu?'var(--green)':'var(--red)'}" onclick="saveTcVoucher()"><i class="ti ti-check"></i> Lưu ${isThu?'Phiếu Thu':'Phiếu Chi'}</button>
+    </div>
+  </div>`;
+}
+
+function _tcLotSearch(q){
+  const box=g('tv_lotSuggest'); if(!box)return;
+  q=(q||'').trim().toLowerCase();
+  if(!q){box.style.display='none';box.innerHTML='';return;}
+  const all=[...cache.xuat.map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...cache.nhap.map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
+  const matches=all.filter(function(r){
+    return (r.bookingNo||'').toLowerCase().includes(q)||(r.mblNo||'').toLowerCase().includes(q)||(r.jobNo||'').toLowerCase().includes(q);
+  }).slice(0,8);
+  if(!matches.length){box.style.display='block';box.innerHTML='<div style="padding:10px 12px;font-size:12px;color:var(--text-secondary)">Không tìm thấy lô hàng khớp</div>';return;}
+  box.innerHTML=matches.map(function(r,i){
+    return '<div onclick="_tcSelectLot('+i+')" data-idx="'+i+'" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light);font-size:12px" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'none\'">'
+      +'<strong>'+(r.bookingNo||'—')+'</strong> <span style="color:var(--text-secondary)">— '+(r.mblNo||'')+' • Job: '+(r.jobNo||'—')+' • '+(r._tt==='xuat'?'Xuất':'Nhập')+'</span>'
+    +'</div>';
+  }).join('');
+  box.style.display='block';
+  window._tcLotMatches=matches;
+}
+function _tcSelectLot(i){
+  const r=(window._tcLotMatches||[])[i]; if(!r)return;
+  tcVoucherLot={tt:r._tt,lotId:r._id,bookingNo:r.bookingNo||'',mblNo:r.mblNo||'',jobNo:r.jobNo||''};
+  g('tv_lotSearch').value='';
+  g('tv_lotSuggest').style.display='none';
+  g('tv_lotSelected').innerHTML='<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;background:var(--blue-bg);color:var(--blue-text);padding:5px 10px;border-radius:7px;width:fit-content">'
+    +'<i class="ti ti-package" style="font-size:13px"></i><strong>'+(r.bookingNo||r.jobNo)+'</strong>'
+    +'<button onclick="tcVoucherLot=null;g(\'tv_lotSelected\').innerHTML=\'\'" style="background:none;border:none;cursor:pointer;color:inherit;padding:0;margin-left:4px"><i class="ti ti-x" style="font-size:12px"></i></button>'
+  +'</div>';
+}
+window._tcLotSearch=_tcLotSearch;
+window._tcSelectLot=_tcSelectLot;
+
+function _tcDebtSelChange(id){
+  tcVoucherDebt=id?(cache.debts||[]).find(function(d){return d._id===id;}):null;
+}
+window._tcDebtSelChange=_tcDebtSelChange;
+
+async function saveTcVoucher(){
+  const amount=parseFloat(g('tv_amount').value);
+  if(!amount||amount<=0){toast('Nhập số tiền hợp lệ','error');return;}
+  const cat=g('tv_cat').value;
+  if(!cat){toast('Chọn danh mục','error');return;}
+  const rec={
+    type:tcVoucherType, date:g('tv_date').value||new Date().toISOString().slice(0,10),
+    amount, currency:g('tv_cur').value||'VND', account:g('tv_acc').value||'cash',
+    category:cat, description:g('tv_desc').value||'',
+    lotRef:tcVoucherLot||null,
+    debtRef:tcVoucherDebt?{debtId:tcVoucherDebt._id,partner:tcVoucherDebt.partner}:null,
+    createdAt:Date.now(), createdBy:currentUser?.email||''
+  };
+  setLoading(true,'Đang lưu...');
+  try{
+    await db.collection('cashTransactions').add(rec);
+    toast('Đã lưu '+(tcVoucherType==='thu'?'Phiếu Thu':'Phiếu Chi'));
+    closeOv('tcVoucherOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveTcVoucher=saveTcVoucher;
+
+/* ── TAB: Công nợ (Phải thu / Phải trả) ── */
+// Số tiền đã thanh toán cho 1 khoản công nợ = tổng các giao dịch cashTx có debtRef.debtId trỏ tới nó
+function _tcDebtPaid(debt){
+  let paid=0;
+  (cache.cashTx||[]).forEach(function(t){
+    if(t.debtRef&&t.debtRef.debtId===debt._id&&(t.currency||'VND')===(debt.currency||'VND')){
+      paid+=(t.amount||0);
+    }
+  });
+  return paid;
+}
+function _tcDebtRemaining(debt){ return (debt.totalAmount||0)-_tcDebtPaid(debt); }
+window._tcDebtRemaining=_tcDebtRemaining;
+
+function renderTcCongNo(){
+  const ar=(cache.debts||[]).filter(function(d){return d.type==='phaiThu';});
+  const ap=(cache.debts||[]).filter(function(d){return d.type==='phaiTra';});
+  function section(title,list,color,addType){
+    const totalRemain={};
+    list.forEach(function(d){const r=_tcDebtRemaining(d);const cur=d.currency||'VND';totalRemain[cur]=(totalRemain[cur]||0)+r;});
+    const remainStr=Object.entries(totalRemain).filter(function(e){return e[1]>0.01;}).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND';
+    return `<div style="margin-bottom:1.5rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:12.5px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.3px">${title}</span>
+          <span style="font-size:10px;background:var(--bg-secondary);color:var(--text-tertiary);padding:1px 8px;border-radius:20px;border:0.5px solid var(--border-light)">${list.length}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:12px;color:var(--text-secondary)">Còn lại: <strong style="color:${color}">${remainStr}</strong></span>
+          <button class="btn sm" onclick="openTcDebtForm('${addType}')"><i class="ti ti-plus"></i> Thêm khoản ${title.toLowerCase()}</button>
+        </div>
+      </div>
+      <div class="table-card"><div class="table-wrap"><table>
+        <thead><tr><th>Đối tác</th><th>Lô hàng</th><th>Ghi chú</th><th style="text-align:right">Tổng nợ</th><th style="text-align:right">Đã ${addType==='phaiThu'?'thu':'trả'}</th><th style="text-align:right">Còn lại</th><th></th></tr></thead>
+        <tbody>${list.length?list.map(function(d){
+          const paid=_tcDebtPaid(d), remain=_tcDebtRemaining(d);
+          const lotStr=d.lotRef?(d.lotRef.bookingNo||d.lotRef.jobNo||''):'';
+          return '<tr>'
+            +'<td style="font-weight:600">'+(d.partner||'—')+'</td>'
+            +'<td>'+(lotStr?'<span class="bdg bdg-b">'+lotStr+'</span>':'—')+'</td>'
+            +'<td style="max-width:200px;white-space:normal;color:var(--text-secondary);font-size:11.5px">'+(d.note||'—')+'</td>'
+            +'<td style="text-align:right">'+_tcFmtMoney(d.totalAmount,d.currency)+'</td>'
+            +'<td style="text-align:right;color:var(--green)">'+_tcFmtMoney(paid,d.currency)+'</td>'
+            +'<td style="text-align:right;font-weight:700;color:'+(remain>0.01?color:'var(--text-tertiary)')+'">'+_tcFmtMoney(remain,d.currency)+(remain<=0.01?' ✓':'')+'</td>'
+            +'<td><button class="rac red" onclick="delTcDebt(\''+d._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button></td>'
+          +'</tr>';
+        }).join(''):'<tr><td colspan="7" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Chưa có khoản nào</td></tr>'}</tbody>
+      </table></div></div>
+    </div>`;
+  }
+  return section('Phải thu khách hàng',ar,'var(--green)','phaiThu')+section('Phải trả nhà cung cấp',ap,'var(--red)','phaiTra');
+}
+window.openTcDebtForm=openTcDebtForm;
+async function delTcDebt(id){
+  if(!confirm('Xóa khoản công nợ này? (Các giao dịch đã gán vào khoản này sẽ không bị xóa)'))return;
+  setLoading(true);
+  try{ await fsDel('debtEntries',id); toast('Đã xóa'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.delTcDebt=delTcDebt;
+
+/* ── Popup: Thêm khoản công nợ ── */
+let tcDebtFormType='phaiThu', tcDebtFormLot=null;
+function openTcDebtForm(type){
+  tcDebtFormType=type; tcDebtFormLot=null;
+  renderTcDebtForm();
+  openOv('tcDebtOv');
+}
+function renderTcDebtForm(){
+  const isAR=tcDebtFormType==='phaiThu';
+  g('tcDebtOv').innerHTML=`
+  <div class="modal" style="max-width:480px">
+    <div class="mhdr"><div><div class="mtitle">Thêm khoản ${isAR?'phải thu':'phải trả'}</div>
+    <div class="msub">${isAR?'Khoản tiền khách hàng còn nợ công ty':'Khoản tiền công ty còn nợ nhà cung cấp'}</div></div>
+    <button class="rac" onclick="closeOv('tcDebtOv')"><i class="ti ti-x"></i></button></div>
+    <div class="fg">
+      <div class="fi full"><label class="lbl">${isAR?'Khách hàng':'Nhà cung cấp'}</label><input type="text" id="td_partner" placeholder="Tên đối tác" list="td_partnerList"/>
+        <datalist id="td_partnerList">${Object.values(cache.partners).map(function(p){return '<option value="'+p.shortname.replace(/"/g,'&quot;')+'">';}).join('')}</datalist>
+      </div>
+      <div class="fi"><label class="lbl">Tổng số nợ</label><input type="number" id="td_amount" min="0" placeholder="0"/></div>
+      <div class="fi"><label class="lbl">Đơn vị tiền tệ</label><select id="td_cur"><option value="VND">VND</option><option value="USD">USD</option></select></div>
+      <div class="fi full">
+        <label class="lbl">Lô hàng liên quan (tùy chọn)</label>
+        <div style="position:relative">
+          <input type="text" id="td_lotSearch" placeholder="VD: HCMNSA26S06142..." oninput="_tdLotSearch(this.value)" autocomplete="off"/>
+          <div id="td_lotSuggest" style="position:absolute;top:100%;left:0;right:0;z-index:20;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;margin-top:3px;max-height:200px;overflow-y:auto;display:none;box-shadow:var(--shadow-md)"></div>
+        </div>
+        <div id="td_lotSelected" style="margin-top:6px"></div>
+      </div>
+      <div class="fi full"><label class="lbl">Ghi chú</label><textarea id="td_note" rows="2" style="font-size:12px;resize:vertical"></textarea></div>
+    </div>
+    <div class="mftr"><button class="btn" onclick="closeOv('tcDebtOv')">Hủy</button><button class="btn pri" onclick="saveTcDebt()"><i class="ti ti-check"></i> Lưu</button></div>
+  </div>`;
+}
+function _tdLotSearch(q){
+  const box=g('td_lotSuggest'); if(!box)return;
+  q=(q||'').trim().toLowerCase();
+  if(!q){box.style.display='none';box.innerHTML='';return;}
+  const all=[...cache.xuat.map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...cache.nhap.map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
+  const matches=all.filter(function(r){return (r.bookingNo||'').toLowerCase().includes(q)||(r.mblNo||'').toLowerCase().includes(q)||(r.jobNo||'').toLowerCase().includes(q);}).slice(0,8);
+  if(!matches.length){box.style.display='block';box.innerHTML='<div style="padding:10px 12px;font-size:12px;color:var(--text-secondary)">Không tìm thấy lô hàng khớp</div>';return;}
+  box.innerHTML=matches.map(function(r,i){
+    return '<div onclick="_tdSelectLot('+i+')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light);font-size:12px" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'none\'">'
+      +'<strong>'+(r.bookingNo||'—')+'</strong> <span style="color:var(--text-secondary)">— '+(r.mblNo||'')+' • Job: '+(r.jobNo||'—')+'</span>'
+    +'</div>';
+  }).join('');
+  box.style.display='block';
+  window._tdLotMatches=matches;
+}
+function _tdSelectLot(i){
+  const r=(window._tdLotMatches||[])[i]; if(!r)return;
+  tcDebtFormLot={tt:r._tt,lotId:r._id,bookingNo:r.bookingNo||'',mblNo:r.mblNo||'',jobNo:r.jobNo||''};
+  g('td_lotSearch').value=''; g('td_lotSuggest').style.display='none';
+  g('td_lotSelected').innerHTML='<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;background:var(--blue-bg);color:var(--blue-text);padding:5px 10px;border-radius:7px;width:fit-content">'
+    +'<i class="ti ti-package" style="font-size:13px"></i><strong>'+(r.bookingNo||r.jobNo)+'</strong>'
+    +'<button onclick="tcDebtFormLot=null;g(\'td_lotSelected\').innerHTML=\'\'" style="background:none;border:none;cursor:pointer;color:inherit;padding:0;margin-left:4px"><i class="ti ti-x" style="font-size:12px"></i></button>'
+  +'</div>';
+}
+window._tdLotSearch=_tdLotSearch;
+window._tdSelectLot=_tdSelectLot;
+async function saveTcDebt(){
+  const partner=g('td_partner').value.trim();
+  const amount=parseFloat(g('td_amount').value);
+  if(!partner){toast('Nhập tên đối tác','error');return;}
+  if(!amount||amount<=0){toast('Nhập số tiền hợp lệ','error');return;}
+  const rec={type:tcDebtFormType,partner,totalAmount:amount,currency:g('td_cur').value||'VND',
+    lotRef:tcDebtFormLot||null,note:g('td_note').value||'',createdAt:Date.now(),createdBy:currentUser?.email||''};
+  setLoading(true,'Đang lưu...');
+  try{ await db.collection('debtEntries').add(rec); toast('Đã lưu khoản công nợ'); closeOv('tcDebtOv'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveTcDebt=saveTcDebt;
+
+/* ── TAB: Danh mục thu/chi ── */
+function renderTcDanhMuc(){
+  const thu=(window._thuChiCategories||{}).thu||[];
+  const chi=(window._thuChiCategories||{}).chi||[];
+  function colHtml(type,list,color,label){
+    return `<div style="flex:1;min-width:280px">
+      <div style="font-size:12px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.3px;margin-bottom:.6rem;display:flex;align-items:center;gap:6px"><i class="ti ${type==='thu'?'ti-arrow-down-circle':'ti-arrow-up-circle'}"></i>Danh mục ${label}</div>
+      <div id="tcCatList_${type}" style="display:flex;flex-direction:column;gap:6px;margin-bottom:.6rem">
+        ${list.map(function(c,i){return _tcCatRowHtml(type,i,c);}).join('')}
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn sm" onclick="_tcAddCatRow('${type}')"><i class="ti ti-plus"></i> Thêm danh mục</button>
+        <button class="btn sm pri" onclick="saveTcCategories('${type}')"><i class="ti ti-check"></i> Lưu danh mục ${label}</button>
+      </div>
+    </div>`;
+  }
+  return `<div style="display:flex;gap:24px;flex-wrap:wrap">${colHtml('thu',thu,'var(--green)','Thu')}${colHtml('chi',chi,'var(--red)','Chi')}</div>`;
+}
+function _tcCatRowHtml(type,i,val){
+  // Không gắn onchange riêng — mọi thao tác thêm/xóa/lưu đều đọc trực tiếp giá trị hiện có
+  // từ các input trong DOM tại thời điểm thao tác, tránh mất nội dung đang gõ dở chưa lưu.
+  return '<div style="display:flex;gap:6px;align-items:center">'
+    +'<input type="text" value="'+(val||'').replace(/"/g,'&quot;')+'" style="flex:1;font-size:12.5px"/>'
+    +'<button class="rac red" onclick="_tcDelCatRow(\''+type+'\','+i+')"><i class="ti ti-trash"></i></button>'
+  +'</div>';
+}
+function _tcCurrentCatValues(type){
+  const wrap=g('tcCatList_'+type);
+  if(!wrap) return ((window._thuChiCategories||{})[type]||[]).slice();
+  return Array.from(wrap.querySelectorAll('input')).map(function(inp){return inp.value;});
+}
+function _tcRerenderCatCol(type,list){
+  const wrap=g('tcCatList_'+type); if(!wrap)return;
+  wrap.innerHTML=list.map(function(c,i){return _tcCatRowHtml(type,i,c);}).join('');
+}
+function _tcAddCatRow(type){
+  const list=_tcCurrentCatValues(type); list.push('');
+  _tcRerenderCatCol(type,list);
+}
+function _tcDelCatRow(type,i){
+  const list=_tcCurrentCatValues(type); list.splice(i,1);
+  _tcRerenderCatCol(type,list);
+}
+async function saveTcCategories(type){
+  const list=_tcCurrentCatValues(type).map(function(s){return s.trim();}).filter(Boolean);
+  setLoading(true,'Đang lưu danh mục...');
+  try{
+    const other=type==='thu'?'chi':'thu';
+    const payload={}; payload[type]=list; payload[other]=(window._thuChiCategories||{})[other]||(other==='thu'?DEFAULT_THU_CATS:DEFAULT_CHI_CATS);
+    await fsSet('_config','thuChiCategories',payload);
+    toast('Đã lưu danh mục '+(type==='thu'?'Thu':'Chi'));
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._tcAddCatRow=_tcAddCatRow;
+window._tcDelCatRow=_tcDelCatRow;
+window.saveTcCategories=saveTcCategories;
+
+/* ── TAB: Báo cáo tài chính ── */
+let tcRptFrom='', tcRptTo='', tcRptGran='month';
+function renderTcBaoCao(){
+  if(!tcRptFrom||!tcRptTo){
+    const now=new Date();
+    tcRptTo=now.toISOString().slice(0,10);
+    const d=new Date(now); d.setMonth(d.getMonth()-5); d.setDate(1);
+    tcRptFrom=d.toISOString().slice(0,10);
+  }
+  const list=(cache.cashTx||[]).filter(function(t){return (!tcRptFrom||t.date>=tcRptFrom)&&(!tcRptTo||t.date<=tcRptTo);});
+
+  function periodKey(dateStr){
+    if(!dateStr) return '—';
+    if(tcRptGran==='day') return dateStr;
+    if(tcRptGran==='month') return dateStr.slice(0,7);
+    return dateStr.slice(0,4);
+  }
+  const groups={};
+  list.forEach(function(t){
+    const k=periodKey(t.date);
+    if(!groups[k]) groups[k]={thu:{},chi:{}};
+    const cur=t.currency||'VND';
+    const bucket=t.type==='thu'?groups[k].thu:groups[k].chi;
+    bucket[cur]=(bucket[cur]||0)+(t.amount||0);
+  });
+  const periods=Object.keys(groups).sort();
+
+  // Tổng toàn kỳ
+  const grandThu={}, grandChi={};
+  list.forEach(function(t){
+    const cur=t.currency||'VND';
+    if(t.type==='thu') grandThu[cur]=(grandThu[cur]||0)+(t.amount||0);
+    else grandChi[cur]=(grandChi[cur]||0)+(t.amount||0);
+  });
+  function sumStr(obj){ return Object.entries(obj).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND'; }
+  function profitStr(){
+    const curs=new Set([...Object.keys(grandThu),...Object.keys(grandChi)]);
+    return Array.from(curs).map(function(cur){return ((grandThu[cur]||0)-(grandChi[cur]||0)).toLocaleString()+' '+cur;}).join(' / ')||'0 VND';
+  }
+
+  // Top danh mục
+  function topCats(type){
+    const m={};
+    list.filter(function(t){return t.type===type;}).forEach(function(t){
+      const k=(t.category||'(Khác)')+'|'+(t.currency||'VND');
+      m[k]=(m[k]||0)+(t.amount||0);
+    });
+    return Object.entries(m).sort(function(a,b){return b[1]-a[1];}).slice(0,6);
+  }
+
+  return `
+  <div class="toolbar">
+    <input type="date" value="${tcRptFrom}" onchange="tcRptFrom=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
+    <input type="date" value="${tcRptTo}" onchange="tcRptTo=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
+    <select onchange="tcRptGran=this.value;renderTcBody()" style="font-size:12px;flex:0 0 140px">
+      <option value="day"${tcRptGran==='day'?' selected':''}>Theo ngày</option>
+      <option value="month"${tcRptGran==='month'?' selected':''}>Theo tháng</option>
+      <option value="year"${tcRptGran==='year'?' selected':''}>Theo năm</option>
+    </select>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1.25rem">
+    <div style="flex:1;min-width:180px;padding:.85rem 1rem;background:var(--green-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng thu</div><div style="font-size:16px;font-weight:700;color:var(--green-dark)">${sumStr(grandThu)}</div></div>
+    <div style="flex:1;min-width:180px;padding:.85rem 1rem;background:var(--red-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng chi</div><div style="font-size:16px;font-weight:700;color:var(--red-text)">${sumStr(grandChi)}</div></div>
+    <div style="flex:1;min-width:180px;padding:.85rem 1rem;background:var(--blue-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Lãi / Lỗ</div><div style="font-size:16px;font-weight:700;color:var(--blue-text)">${profitStr()}</div></div>
+  </div>
+  <div class="table-card" style="margin-bottom:1.25rem"><div class="table-wrap"><table>
+    <thead><tr><th>Kỳ</th><th style="text-align:right">Thu</th><th style="text-align:right">Chi</th><th style="text-align:right">Lãi/Lỗ</th></tr></thead>
+    <tbody>${periods.length?periods.map(function(k){
+      const gr=groups[k];
+      const curs=new Set([...Object.keys(gr.thu),...Object.keys(gr.chi)]);
+      const profit=Array.from(curs).map(function(cur){return ((gr.thu[cur]||0)-(gr.chi[cur]||0)).toLocaleString()+' '+cur;}).join(' / ')||'0 VND';
+      return '<tr><td style="font-weight:600">'+k+'</td>'
+        +'<td style="text-align:right;color:var(--green)">'+sumStr(gr.thu)+'</td>'
+        +'<td style="text-align:right;color:var(--red)">'+sumStr(gr.chi)+'</td>'
+        +'<td style="text-align:right;font-weight:700">'+profit+'</td></tr>';
+    }).join(''):'<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có dữ liệu trong khoảng thời gian này</td></tr>'}</tbody>
+  </table></div></div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap">
+    <div style="flex:1;min-width:260px">
+      <div style="font-size:11.5px;font-weight:700;color:var(--green);text-transform:uppercase;margin-bottom:.5rem">Top danh mục Thu</div>
+      ${topCats('thu').map(function(e){const parts=e[0].split('|');return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span>'+parts[0]+'</span><strong style="color:var(--green)">'+e[1].toLocaleString()+' '+parts[1]+'</strong></div>';}).join('')||'<div style="color:var(--text-secondary);font-size:12px">Chưa có dữ liệu</div>'}
+    </div>
+    <div style="flex:1;min-width:260px">
+      <div style="font-size:11.5px;font-weight:700;color:var(--red);text-transform:uppercase;margin-bottom:.5rem">Top danh mục Chi</div>
+      ${topCats('chi').map(function(e){const parts=e[0].split('|');return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span>'+parts[0]+'</span><strong style="color:var(--red)">'+e[1].toLocaleString()+' '+parts[1]+'</strong></div>';}).join('')||'<div style="color:var(--text-secondary);font-size:12px">Chưa có dữ liệu</div>'}
+    </div>
+  </div>`;
+}
+
+
 function renderPartners(){
   const pg=g('page-doi-tac');
   if(!can('managePartners')){pg.innerHTML=`<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền truy cập</div></div>`;return;}
@@ -4710,6 +5261,7 @@ function renderUsers(){
     viewInvoice:'Xem & xuất Invoice',
     manageUsers:'Quản lý người dùng',
     managePartners:'Quản lý đối tác',
+    manageFinance:'Quản lý thu chi',
     export:'Xuất Excel',
   };
   const ROLE_KEYS=['operator','accountant','doc','cus','viewer']; // admin is always full - not editable
@@ -5204,6 +5756,7 @@ tr:hover td{background:var(--bg-secondary)}
     <div class="sb-section" style="margin-top:.4rem">Vận hành</div>
     <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-checklist"></i> Tiến độ công việc<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
     <button class="sb-item" id="sb-cong-no" onclick="goTab('cong-no')"><i class="ti ti-chart-bar"></i> Công nợ</button>
+    <button class="sb-item" id="sb-thu-chi" onclick="goTab('thu-chi')"><i class="ti ti-cash"></i> Quản lý thu chi</button>
     <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> CRM</button>
     <button class="sb-item" id="sb-vessel" onclick="goTab('vessel')"><i class="ti ti-ship"></i> Vessel tool</button>
     <button class="sb-item" id="sb-cocoquote" onclick="goTab('cocoquote')"><i class="ti ti-calculator"></i> Coconut tool</button>
@@ -5241,6 +5794,7 @@ tr:hover td{background:var(--bg-secondary)}
       <div id="page-nhap" style="display:none"></div>
       <div id="page-deadline" style="display:none"></div>
       <div id="page-cong-no" style="display:none"></div>
+      <div id="page-thu-chi" style="display:none"></div>
       <div id="page-doi-tac" style="display:none"></div>
       <div id="page-vessel" style="display:none"></div>
       <div id="page-cocoquote" style="display:none"></div>
@@ -5325,6 +5879,12 @@ tr:hover td{background:var(--bg-secondary)}
 </div>
 
 <div class="ov" id="crmDetailOv" style="padding:.75rem"></div>
+
+<!-- THU CHI: PHIEU THU/CHI MODAL -->
+<div class="ov" id="tcVoucherOv" style="padding:.75rem"></div>
+
+<!-- THU CHI: CONG NO ENTRY MODAL -->
+<div class="ov" id="tcDebtOv" style="padding:.75rem"></div>
 
 <div class="ov" id="cneeOv" style="padding:.75rem"></div>
 
