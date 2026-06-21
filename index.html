@@ -758,6 +758,11 @@ function startListeners(){
     snap.docs.forEach(d=>{ cache.partners[d.id]={shortname:d.id,...d.data()}; });
     if(currentTab==='doi-tac') renderPartners();
     if(currentTab==='contract'&&typeof _ctrRefreshPartnerSelect==='function') _ctrRefreshPartnerSelect();
+    // Nếu đang mở panel chi tiết CRM của 1 đối tác, làm mới panel theo dữ liệu mới nhất
+    // (bỏ qua nếu đang gõ dở trong 1 ô input của panel, tránh mất dữ liệu chưa lưu)
+    if(crmDetailKey&&g('crmDetailOv')&&g('crmDetailOv').classList.contains('open')&&cache.partners[crmDetailKey]&&!_isEditingCrmDetail()){
+      renderCrmDetail();
+    }
   });
 
   // Users
@@ -883,7 +888,7 @@ function goTab(t){
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
-  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'Đối tác','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','cong-no':'Tóm tắt công nợ','doi-tac':'CRM','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
   g('pageTitle').textContent=titles[t]||t;
   if(t==='xuat'||t==='nhap') renderLot(t);
   if(t==='deadline') renderDeadline();
@@ -4256,91 +4261,101 @@ function runDebtReport(){
 // OLD function renderDebt kept for compatibility - now points to new one
 // eslint-disable-next-line no-unused-vars
 
+/* ─────────────────────────────────────────────
+   CRM — Quản lý đối tác (Shipper / Hãng tàu / Forwarder / Nhà cung cấp)
+───────────────────────────────────────────── */
+let crmType='shipper', crmDetailKey=null, crmDetailTab='general';
+const CRM_TYPES=['shipper','carrier','fwd','supplier'];
+const CRM_TLABEL={shipper:'Shipper',carrier:'Hãng tàu',fwd:'Forwarder',supplier:'Nhà cung cấp'};
+const CRM_TICON={shipper:'ti-building-factory',carrier:'ti-ship',fwd:'ti-truck',supplier:'ti-package-import'};
+
 function renderPartners(){
   const pg=g('page-doi-tac');
   if(!can('managePartners')){pg.innerHTML=`<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền truy cập</div></div>`;return;}
-  const tLabel={carrier:'Hãng tàu / Carrier',shipper:'Shipper / Nhà XK',fwd:'Forwarder (FWD)',supplier:'Nhà cung cấp / NK'};
-  const tIcon={carrier:'ti-ship',shipper:'ti-building-factory',fwd:'ti-truck',supplier:'ti-package-import'};
-  const allTypes=['carrier','shipper','fwd','supplier'];
   const total=Object.keys(cache.partners).length;
   pg.innerHTML=`
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
     <div>
-      <div style="font-weight:600;font-size:14px">Danh sách đối tác</div>
-      <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${total} đối tác</div>
+      <div style="font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px"><i class="ti ti-address-book" style="color:var(--green)"></i>CRM — Quản lý đối tác</div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${total} đối tác trong hệ thống</div>
     </div>
     <button class="btn pri" onclick="openPartnerModal(null)"><i class="ti ti-plus"></i> Thêm đối tác</button>
   </div>
-  ${allTypes.map(t=>{
-    const list=Object.values(cache.partners).filter(p=>p.type===t).sort((a,b)=>a.shortname.localeCompare(b.shortname));
-    return`<div style="margin-bottom:1.25rem">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:.5rem">
-        <div style="width:26px;height:26px;border-radius:6px;background:var(--bg-secondary);border:0.5px solid var(--border-light);display:flex;align-items:center;justify-content:center"><i class="ti ${tIcon[t]}" style="font-size:13px;color:var(--text-secondary)"></i></div>
-        <span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px">${tLabel[t]}</span>
-        <span style="font-size:10px;color:var(--text-tertiary);background:var(--bg-secondary);padding:1px 7px;border-radius:20px;border:0.5px solid var(--border-light)">${list.length}</span>
-      </div>
-      <div style="border:0.5px solid var(--border-light);border-radius:10px;overflow:hidden;background:var(--bg-primary)">
-        ${list.length?list.map((p,i)=>`
-        <div style="display:grid;grid-template-columns:110px 1fr 140px 140px 32px;gap:0;align-items:stretch;border-bottom:${i<list.length-1?'0.5px solid var(--border-light)':'none'};cursor:pointer" onclick="togglePartnerRow('${p.shortname}')" id="prow_${p.shortname}">
-          <div style="padding:9px 12px;display:flex;align-items:center;gap:7px;border-right:0.5px solid var(--border-light)">
-            <div style="width:28px;height:28px;border-radius:6px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--green);flex-shrink:0">${p.shortname.slice(0,2).toUpperCase()}</div>
-            <span style="font-weight:600;font-size:12.5px;color:var(--green)">${p.shortname}</span>
-          </div>
-          <div style="padding:9px 12px;display:flex;flex-direction:column;justify-content:center;border-right:0.5px solid var(--border-light)">
-            <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.fullname||'—'}</div>
-            <div style="font-size:10.5px;color:var(--text-secondary);margin-top:1px">MST: ${p.mst||'—'}</div>
-          </div>
-          <div style="padding:9px 12px;display:flex;flex-direction:column;justify-content:center;border-right:0.5px solid var(--border-light)">
-            <div style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><i class="ti ti-mail" style="font-size:11px"></i>${p.email||'—'}</div>
-            <div style="font-size:11px;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:4px"><i class="ti ti-phone" style="font-size:11px"></i>${p.phone||'—'}</div>
-          </div>
-          <div style="padding:9px 12px;display:flex;flex-direction:column;justify-content:center;border-right:0.5px solid var(--border-light)">
-            <div style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><i class="ti ti-user" style="font-size:11px"></i>${p.contact||'—'}</div>
-            <div style="font-size:11px;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:4px"><i class="ti ti-map-pin" style="font-size:11px"></i><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">${p.addr||'—'}</span></div>
-            ${p.remark?`<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:2px;font-style:italic">${p.remark}</div>`:''}
-          </div>
-          <div style="display:flex;align-items:center;justify-content:center;padding:0 4px">
-            <i class="ti ti-chevron-right" style="font-size:14px;color:var(--text-tertiary)" id="pchev_${p.shortname}"></i>
-          </div>
-        </div>
-        <div id="pdetail_${p.shortname}" style="display:none;border-bottom:${i<list.length-1?'0.5px solid var(--border-light)':'none'};background:var(--bg-secondary)">
-          <div style="padding:.75rem 1.25rem;display:flex;align-items:center;justify-content:space-between">
-            <div style="font-size:11.5px;color:var(--text-secondary);display:grid;grid-template-columns:1fr 1fr;gap:8px 24px">
-              <div><span style="color:var(--text-tertiary)">Short name:</span> <strong>${p.shortname}</strong></div>
-              <div><span style="color:var(--text-tertiary)">Loại:</span> ${tLabel[t]}</div>
-              <div><span style="color:var(--text-tertiary)">Tên đầy đủ:</span> ${p.fullname||'—'}</div>
-              <div><span style="color:var(--text-tertiary)">MST:</span> ${p.mst||'—'}</div>
-              <div><span style="color:var(--text-tertiary)">Email:</span> ${p.email||'—'}</div>
-              <div><span style="color:var(--text-tertiary)">Điện thoại:</span> ${p.phone||'—'}</div>
-              <div style="grid-column:1/-1"><span style="color:var(--text-tertiary)">Địa chỉ:</span> ${p.addr||'—'}</div>
-            </div>
-            <div style="display:flex;gap:6px;flex-shrink:0;margin-left:1rem">
-              <button class="btn" onclick="event.stopPropagation();openPartnerModal('${p.shortname}')"><i class="ti ti-edit"></i> Sửa</button>
-              ${p.type==='shipper'?`<button class="btn" onclick="event.stopPropagation();openCneeEditor('${p.shortname}')" style="font-size:12px;color:var(--blue);border-color:var(--blue)"><i class="ti ti-users" style="font-size:12px"></i> Cnee</button>`:''}\n              <button class="btn red" onclick="event.stopPropagation();delPartner('${p.shortname}')" style="font-size:12px"><i class="ti ti-trash"></i></button>
-            </div>
-          </div>
-        </div>`).join('')
-        :`<div style="padding:1.25rem;text-align:center;color:var(--text-secondary);font-size:12px"><i class="ti ti-circle-dashed" style="font-size:18px;display:block;margin-bottom:6px"></i>Chưa có ${tLabel[t]}</div>`}
-      </div>
-    </div>`;
-  }).join('')}`;
+  <div style="display:flex;gap:6px;margin-bottom:1rem;border-bottom:1px solid var(--border-light);padding-bottom:0">
+    ${CRM_TYPES.map(function(t){
+      const cnt=Object.values(cache.partners).filter(function(p){return p.type===t;}).length;
+      const active=crmType===t;
+      return '<button onclick="switchCrmType(\''+t+'\')" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit">'
+        +'<i class="ti '+CRM_TICON[t]+'" style="font-size:15px"></i>'+CRM_TLABEL[t]
+        +'<span style="font-size:10px;background:'+(active?'var(--green)':'var(--bg-secondary)')+';color:'+(active?'#fff':'var(--text-tertiary)')+';padding:1px 7px;border-radius:20px;font-weight:700">'+cnt+'</span>'
+      +'</button>';
+    }).join('')}
+  </div>
+  <div id="crmListWrap">
+    <div class="search-wrap" style="max-width:320px;margin-bottom:.75rem"><i class="ti ti-search"></i><input type="text" id="crmSearch" placeholder="Tìm theo tên, email..." oninput="renderCrmList()"/></div>
+    <div id="crmListTable"></div>
+  </div>`;
+  renderCrmList();
 }
 
-function togglePartnerRow(name){
-  const detail=g('pdetail_'+name);
-  const chev=g('pchev_'+name);
-  if(!detail)return;
-  const isOpen=detail.style.display!=='none';
-  // Close all others first
-  document.querySelectorAll('[id^="pdetail_"]').forEach(el=>{el.style.display='none';});
-  document.querySelectorAll('[id^="pchev_"]').forEach(el=>{el.className='ti ti-chevron-right';el.style.fontSize='14px';el.style.color='var(--text-tertiary)';});
-  if(!isOpen){
-    detail.style.display='block';
-    chev.className='ti ti-chevron-down';
-    chev.style.color='var(--green)';
-  }
+function switchCrmType(t){ crmType=t; renderPartners(); }
+window.switchCrmType=switchCrmType;
+
+function renderCrmList(){
+  const tableEl=g('crmListTable'); if(!tableEl)return;
+  const q=(g('crmSearch')?.value||'').toLowerCase();
+  const list=Object.values(cache.partners).filter(function(p){return p.type===crmType;})
+    .filter(function(p){return !q||(p.shortname||'').toLowerCase().includes(q)||(p.fullname||'').toLowerCase().includes(q)||(p.email||'').toLowerCase().includes(q);})
+    .sort(function(a,b){return a.shortname.localeCompare(b.shortname);});
+  tableEl.innerHTML=`
+  <div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden;background:var(--bg-primary)">
+    ${list.length?`<table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:var(--bg-secondary)">
+        <th style="padding:9px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border-light)">Short name</th>
+        <th style="padding:9px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border-light)">Tên công ty / MST</th>
+        <th style="padding:9px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border-light)">Liên hệ</th>
+        <th style="padding:9px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border-light)">Địa chỉ</th>
+        <th style="padding:9px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border-light)"></th>
+      </tr></thead>
+      <tbody>${list.map(function(p,i){
+        const nContacts=(p.contacts||[]).length, nCnees=(p.cnees||[]).length;
+        return `<tr style="border-bottom:${i<list.length-1?'1px solid var(--border-light)':'none'}">
+          <td style="padding:10px 14px">
+            <button onclick="openPartnerView('${p.shortname}')" style="display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer;padding:0;text-align:left;font-family:inherit">
+              <div style="width:30px;height:30px;border-radius:7px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;color:var(--green);flex-shrink:0">${p.shortname.slice(0,2).toUpperCase()}</div>
+              <span style="font-weight:700;font-size:12.5px;color:var(--green);text-decoration:underline;text-underline-offset:2px">${p.shortname}</span>
+            </button>
+          </td>
+          <td style="padding:10px 14px">
+            <div style="font-size:12px;font-weight:500;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.fullname||'—'}</div>
+            <div style="font-size:10.5px;color:var(--text-secondary);margin-top:1px">MST: ${p.mst||'—'}</div>
+          </td>
+          <td style="padding:10px 14px">
+            <div style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px"><i class="ti ti-mail" style="font-size:11px"></i>${p.email||'—'}</div>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:4px"><i class="ti ti-phone" style="font-size:11px"></i>${p.phone||'—'}</div>
+          </td>
+          <td style="padding:10px 14px">
+            <span style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;display:inline-block">${p.addr||'—'}</span>
+          </td>
+          <td style="padding:10px 14px;text-align:center">
+            <div style="display:flex;gap:4px;justify-content:center;align-items:center">
+              ${nContacts?`<span title="${nContacts} người liên hệ" style="font-size:9.5px;background:var(--blue-bg);color:var(--blue-text);padding:2px 6px;border-radius:20px;font-weight:700"><i class="ti ti-users" style="font-size:9px"></i> ${nContacts}</span>`:''}
+              ${nCnees?`<span title="${nCnees} Cnee" style="font-size:9.5px;background:var(--amber-bg);color:var(--amber-text);padding:2px 6px;border-radius:20px;font-weight:700"><i class="ti ti-package" style="font-size:9px"></i> ${nCnees}</span>`:''}
+              <button class="rac red" onclick="delPartner('${p.shortname}')" title="Xóa"><i class="ti ti-trash"></i></button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`:`<div style="padding:2.5rem;text-align:center;color:var(--text-secondary);font-size:12px"><i class="ti ti-circle-dashed" style="font-size:24px;display:block;margin-bottom:8px;color:var(--text-tertiary)"></i>Chưa có ${CRM_TLABEL[crmType]} nào${q?' khớp với tìm kiếm':''}</div>`}
+  </div>`;
 }
-function openPartnerView(name){if(cache.partners[name])openPartnerModal(name);else toast('Chưa có thông tin: '+name,'error');}
+window.renderCrmList=renderCrmList;
+function openPartnerView(name){
+  if(!cache.partners[name]){toast('Chưa có thông tin: '+name,'error');return;}
+  crmDetailKey=name; crmDetailTab='general';
+  renderCrmDetail();
+  openOv('crmDetailOv');
+}
 function openPartnerModal(name){
   partnerIdx=name; partnerIsNew=!name;
   const p=name?cache.partners[name]:{};
@@ -4432,10 +4447,248 @@ async function savePartner(){
 async function delPartner(name){
   if(!confirm('Xóa đối tác '+name+'?'))return;
   setLoading(true);
-  try { await fsDel('partners',name); toast('Đã xóa đối tác'); }
+  try {
+    await fsDel('partners',name);
+    toast('Đã xóa đối tác');
+    if(crmDetailKey===name)closeOv('crmDetailOv');
+  }
   catch(e){ toast('Lỗi: '+e.message,'error'); }
   setLoading(false);
 }
+/* ─── CRM: Trang chi tiết đối tác (3 tab: Thông tin chung / Người liên hệ / Cnee) ─── */
+function _isEditingCrmDetail(){
+  const panel=g('crmDetailOv'); if(!panel)return false;
+  const ae=document.activeElement; if(!ae)return false;
+  if(panel.contains(ae)){
+    const tag=(ae.tagName||'').toLowerCase();
+    if(tag==='input'||tag==='select'||tag==='textarea')return true;
+  }
+  return false;
+}
+function renderCrmDetail(){
+  const p=cache.partners[crmDetailKey]||{};
+  const tabs=[
+    {k:'general',label:'Thông tin chung',icon:'ti-info-circle'},
+    {k:'contacts',label:'Người liên hệ',icon:'ti-users'},
+    {k:'cnee',label:'Cnee',icon:'ti-package'},
+  ];
+  g('crmDetailOv').innerHTML=`
+  <div class="modal" style="max-width:820px;max-height:92vh;overflow-y:auto">
+    <div class="mhdr">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:42px;height:42px;border-radius:9px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:var(--green);flex-shrink:0">${(p.shortname||'??').slice(0,2).toUpperCase()}</div>
+        <div>
+          <div class="mtitle">${p.shortname||crmDetailKey}</div>
+          <div class="msub">${p.fullname||'—'} &nbsp;•&nbsp; <span style="color:var(--green);font-weight:600">${CRM_TLABEL[p.type]||p.type||'—'}</span></div>
+        </div>
+      </div>
+      <button class="rac" onclick="closeOv('crmDetailOv')"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="display:flex;gap:3px;border-bottom:1px solid var(--border-light);margin-bottom:1rem">
+      ${tabs.map(function(t){const active=crmDetailTab===t.k;return '<button onclick="switchCrmDetailTab(\''+t.k+'\')" style="display:flex;align-items:center;gap:6px;padding:8px 14px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:12.5px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti '+t.icon+'" style="font-size:14px"></i>'+t.label+'</button>';}).join('')}
+    </div>
+    <div id="crmDetailBody"></div>
+  </div>`;
+  renderCrmDetailBody();
+}
+function switchCrmDetailTab(tab){ crmDetailTab=tab; renderCrmDetail(); }
+window.switchCrmDetailTab=switchCrmDetailTab;
+
+function renderCrmDetailBody(){
+  const body=g('crmDetailBody'); if(!body)return;
+  const p=cache.partners[crmDetailKey]||{};
+  if(crmDetailTab==='general') body.innerHTML=renderCrmGeneralTab(p);
+  else if(crmDetailTab==='contacts') body.innerHTML=renderCrmContactsTab(p);
+  else if(crmDetailTab==='cnee') body.innerHTML=renderCrmCneeTab(p);
+}
+
+// ── TAB: Thông tin chung (dùng prefix cg_ để không trùng ID với form "Thêm đối tác" pf_) ──
+function renderCrmGeneralTab(p){
+  const isShipper=(p.type==='shipper');
+  return `<div class="fg">
+    <div class="fi"><label class="lbl">Short name (ID)</label><input type="text" id="cg_sn" value="${p.shortname||''}" readonly style="background:var(--bg-secondary);color:var(--text-secondary)"/></div>
+    <div class="fi"><label class="lbl">Loại đối tác</label><select id="cg_type">
+      <option value="shipper"${p.type==='shipper'?' selected':''}>Shipper</option>
+      <option value="carrier"${p.type==='carrier'?' selected':''}>Carrier</option>
+      <option value="fwd"${p.type==='fwd'?' selected':''}>Forwarder</option>
+      <option value="supplier"${p.type==='supplier'?' selected':''}>Nhà cung cấp</option>
+    </select></div>
+    <div class="fi full"><label class="lbl">Tên công ty đầy đủ</label><input type="text" id="cg_fn" value="${(p.fullname||'').replace(/"/g,'&quot;')}"/></div>
+    <div class="fi"><label class="lbl">MST</label><input type="text" id="cg_mst" value="${(p.mst||'').replace(/"/g,'&quot;')}"/></div>
+    <div class="fi full"><label class="lbl">Địa chỉ</label><input type="text" id="cg_addr" value="${(p.addr||'').replace(/"/g,'&quot;')}"/></div>
+    <div class="fi"><label class="lbl">Email</label><input type="email" id="cg_email" value="${(p.email||'').replace(/"/g,'&quot;')}"/></div>
+    <div class="fi"><label class="lbl">Email nhận hóa đơn</label><input type="email" id="cg_invEmail" placeholder="Có thể nhập nhiều, cách nhau bằng dấu ;" value="${(p.invEmail||'').replace(/"/g,'&quot;')}"/></div>
+    <div class="fi"><label class="lbl">Người liên hệ (chính)</label><input type="text" id="cg_contact" value="${(p.contact||'').replace(/"/g,'&quot;')}"/></div>
+    <div class="fi"><label class="lbl">Điện thoại</label><input type="tel" id="cg_phone" value="${(p.phone||'').replace(/"/g,'&quot;')}"/></div>
+    ${isShipper?`
+    <div class="fi full" style="grid-column:1/-1;border-top:1px solid var(--border-light);padding-top:.75rem;margin-top:.25rem">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px;margin-bottom:.5rem">Thông tin Shipper (tiếng Anh)</div>
+    </div>
+    <div class="fi full"><label class="lbl">Tên tiếng Anh (Company)</label><input type="text" id="cg_enName" value="${(p.enName||'').replace(/"/g,'&quot;')}" placeholder="Full English company name"/></div>
+    <div class="fi full"><label class="lbl">Tên tiếng Anh rút gọn (ký tên cuối văn bản)</label><input type="text" id="cg_enShort" value="${(p.enShort||'').replace(/"/g,'&quot;')}" placeholder="VD: LINDA ASIA CO., LTD"/></div>
+    <div class="fi full"><label class="lbl">Địa chỉ tiếng Anh</label><input type="text" id="cg_enAddr" value="${(p.enAddr||'').replace(/"/g,'&quot;')}" placeholder="English address"/></div>
+    <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Thông tin ngân hàng (cho Invoice)</div></div>
+    <div class="fi full"><label class="lbl">ACCOUNT NAME</label><input type="text" id="cg_acctName" value="${(p.acctName||p.enName||'').replace(/"/g,'&quot;')}" placeholder="Beneficiary name"/></div>
+    <div class="fi"><label class="lbl">ACCOUNT NUMBER (USD)</label><input type="text" id="cg_bankAcc" value="${(p.bankAcc||'').replace(/"/g,'&quot;')}" placeholder="USD account number"/></div>
+    <div class="fi"><label class="lbl">SWIFT CODE</label><input type="text" id="cg_swift" value="${(p.swift||'').replace(/"/g,'&quot;')}" placeholder="SGTTVNVX"/></div>
+    <div class="fi full"><label class="lbl">BANK NAME</label><input type="text" id="cg_bankName" value="${(p.bankName||'').replace(/"/g,'&quot;')}" placeholder="Bank name"/></div>
+    <div class="fi full"><label class="lbl">BANK ADDRESS</label><input type="text" id="cg_bankAddr" value="${(p.bankAddr||'').replace(/"/g,'&quot;')}" placeholder="Bank address"/></div>
+    <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Con mộc (chèn vào chứng từ)</div></div>
+    <div class="fi full">
+      <input type="hidden" id="cg_stamp" value="${p.stamp||''}"/>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="cg_stampPreview" style="width:90px;height:90px;border:1px dashed var(--border-light);border-radius:8px;display:flex;align-items:center;justify-content:center;background:var(--bg-secondary);overflow:hidden">${p.stamp?`<img src="${p.stamp}" style="max-width:100%;max-height:100%;object-fit:contain"/>`:'<span style="font-size:10px;color:var(--text-tertiary)">Chưa có</span>'}</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <label class="btn" style="cursor:pointer;font-size:12px"><i class="ti ti-upload"></i> Tải con mộc<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="onCrmStampUpload(this)"/></label>
+          ${p.stamp?'<button class="btn red" style="font-size:12px" onclick="clearCrmStamp()"><i class="ti ti-trash"></i> Xóa mộc</button>':''}
+          <span style="font-size:10px;color:var(--text-tertiary)">PNG nền trong suốt, ≤ 500KB</span>
+        </div>
+      </div>
+    </div>`:''}
+    <div class="fi full"><label class="lbl">Ghi chú / Remark</label><textarea id="cg_remark" rows="2" style="font-size:12px;resize:vertical">${p.remark||''}</textarea></div>
+  </div>
+  <div class="mftr"><button class="btn pri" onclick="saveCrmGeneral()"><i class="ti ti-check"></i> Lưu thông tin chung</button></div>`;
+}
+function onCrmStampUpload(input){
+  const file=input.files[0]; if(!file)return;
+  if(file.size>500*1024){toast('Ảnh quá lớn (>500KB), chọn ảnh nhỏ hơn','error');return;}
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img=new Image();
+    img.onload=function(){
+      const maxW=300; const scale=Math.min(1,maxW/img.width);
+      const cv=document.createElement('canvas');
+      cv.width=Math.round(img.width*scale); cv.height=Math.round(img.height*scale);
+      const ctx=cv.getContext('2d'); ctx.drawImage(img,0,0,cv.width,cv.height);
+      const dataUrl=cv.toDataURL('image/png');
+      g('cg_stamp').value=dataUrl;
+      const prev=g('cg_stampPreview');
+      if(prev)prev.innerHTML='<img src="'+dataUrl+'" style="max-width:100%;max-height:100%;object-fit:contain"/>';
+      toast('Đã tải con mộc');
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function clearCrmStamp(){
+  g('cg_stamp').value='';
+  const prev=g('cg_stampPreview');
+  if(prev)prev.innerHTML='<span style="font-size:10px;color:var(--text-tertiary)">Chưa có</span>';
+}
+window.onCrmStampUpload=onCrmStampUpload;
+window.clearCrmStamp=clearCrmStamp;
+
+async function saveCrmGeneral(){
+  const sn=crmDetailKey;
+  const type=g('cg_type').value;
+  const rec={type,fullname:g('cg_fn').value,mst:g('cg_mst').value,addr:g('cg_addr').value,email:g('cg_email').value,
+    invEmail:g('cg_invEmail')?.value||'',contact:g('cg_contact').value,phone:g('cg_phone').value,
+    remark:g('cg_remark')?.value||'',updatedAt:Date.now()};
+  if(type==='shipper'){
+    rec.enName=g('cg_enName')?.value||''; rec.enShort=g('cg_enShort')?.value||''; rec.enAddr=g('cg_enAddr')?.value||'';
+    rec.bankAcc=g('cg_bankAcc')?.value||''; rec.bankName=g('cg_bankName')?.value||''; rec.acctName=g('cg_acctName')?.value||'';
+    rec.swift=g('cg_swift')?.value||''; rec.bankAddr=g('cg_bankAddr')?.value||''; rec.stamp=g('cg_stamp')?.value||'';
+  }
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet('partners',sn,rec);
+    toast('Đã lưu thông tin: '+sn);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveCrmGeneral=saveCrmGeneral;
+
+// ── TAB: Người liên hệ (contacts[]: name, position, phone, email, note) ──
+let _crmContacts=[], _crmContactEditIdx=-1;
+function renderCrmContactsTab(p){
+  if(crmDetailKey!==_crmContactsLoadedFor){ _crmContacts=JSON.parse(JSON.stringify(p.contacts||[])); _crmContactEditIdx=-1; _crmContactsLoadedFor=crmDetailKey; }
+  let html='<div style="max-height:55vh;overflow-y:auto;margin-bottom:.75rem">';
+  if(_crmContactEditIdx>=0){
+    const c=_crmContacts[_crmContactEditIdx]||{};
+    html+='<div style="border:1px solid var(--blue);border-radius:10px;padding:14px;background:var(--bg-secondary)">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-size:12px;font-weight:700;color:var(--blue)">Người liên hệ #'+(_crmContactEditIdx+1)+'</span>'
+        +'<button class="rac" onclick="closeCrmContactEdit()" title="Quay lại danh sách"><i class="ti ti-arrow-back-up"></i></button></div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+        +'<div><label class="lbl">Họ và tên</label><input type="text" id="cc_name" value="'+(c.name||'').replace(/"/g,'&quot;')+'" placeholder="Nguyễn Văn A"/></div>'
+        +'<div><label class="lbl">Chức vụ</label><input type="text" id="cc_position" value="'+(c.position||'').replace(/"/g,'&quot;')+'" placeholder="Sales Manager"/></div>'
+        +'<div><label class="lbl">Số điện thoại</label><input type="text" id="cc_phone" value="'+(c.phone||'').replace(/"/g,'&quot;')+'" placeholder="09xx xxx xxx"/></div>'
+        +'<div><label class="lbl">Email</label><input type="email" id="cc_email" value="'+(c.email||'').replace(/"/g,'&quot;')+'" placeholder="email@..."/></div>'
+        +'<div style="grid-column:1/-1"><label class="lbl">Ghi chú</label><textarea id="cc_note" rows="2" style="font-size:12px;resize:vertical">'+(c.note||'')+'</textarea></div>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">'
+        +'<button class="btn red" onclick="deleteCrmContactAt('+_crmContactEditIdx+')"><i class="ti ti-trash"></i> Xóa người này</button>'
+        +'<button class="btn pri" onclick="applyCrmContactEdit()"><i class="ti ti-check"></i> Xong</button>'
+      +'</div>'
+    +'</div>';
+  } else if(!_crmContacts.length){
+    html+='<div style="padding:1.5rem;text-align:center;color:var(--text-tertiary);font-size:12px"><i class="ti ti-user-off" style="font-size:22px;display:block;margin-bottom:6px"></i>Chưa có người liên hệ nào. Bấm "Thêm người liên hệ" bên dưới.</div>';
+  } else {
+    html+='<div style="display:flex;flex-direction:column;gap:6px">'+_crmContacts.map(function(c,i){
+      return '<div onclick="openCrmContactEdit('+i+')" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;background:var(--bg-primary)">'
+        +'<div style="min-width:0;display:flex;align-items:center;gap:10px">'
+          +'<div style="width:30px;height:30px;border-radius:50%;background:var(--blue-bg);color:var(--blue-text);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;flex-shrink:0">'+(c.name||'?').slice(0,2).toUpperCase()+'</div>'
+          +'<div><div style="font-size:12.5px;font-weight:700">'+(c.name||'(chưa có tên)')+(c.position?' <span style="font-weight:400;color:var(--text-secondary)">— '+c.position+'</span>':'')+'</div>'
+          +'<div style="font-size:10.5px;color:var(--text-secondary)">'+[c.phone,c.email].filter(Boolean).join(' • ')+'</div></div>'
+        +'</div>'
+        +'<i class="ti ti-chevron-right" style="color:var(--text-tertiary);flex-shrink:0"></i>'
+      +'</div>';
+    }).join('')+'</div>';
+  }
+  html+='</div>';
+  if(_crmContactEditIdx<0){
+    html+='<div style="display:flex;justify-content:space-between;align-items:center">'
+      +'<button class="btn" onclick="addCrmContactAndEdit()"><i class="ti ti-plus"></i> Thêm người liên hệ</button>'
+      +'<button class="btn pri" onclick="saveCrmContacts()"><i class="ti ti-check"></i> Lưu tất cả</button>'
+    +'</div>';
+  }
+  return html;
+}
+let _crmContactsLoadedFor=null;
+function openCrmContactEdit(i){_crmContactEditIdx=i;renderCrmDetailBody();}
+function closeCrmContactEdit(){captureCrmContactEdit();_crmContactEditIdx=-1;renderCrmDetailBody();}
+function captureCrmContactEdit(){
+  if(_crmContactEditIdx<0||!g('cc_name'))return;
+  _crmContacts[_crmContactEditIdx]={name:g('cc_name').value.trim(),position:g('cc_position').value.trim(),phone:g('cc_phone').value.trim(),email:g('cc_email').value.trim(),note:g('cc_note').value.trim()};
+}
+function applyCrmContactEdit(){captureCrmContactEdit();_crmContactEditIdx=-1;renderCrmDetailBody();}
+function addCrmContactAndEdit(){_crmContacts.push({name:'',position:'',phone:'',email:'',note:''});_crmContactEditIdx=_crmContacts.length-1;renderCrmDetailBody();}
+function deleteCrmContactAt(i){if(!confirm('Xóa người liên hệ này?'))return;_crmContacts.splice(i,1);_crmContactEditIdx=-1;renderCrmDetailBody();}
+async function saveCrmContacts(){
+  captureCrmContactEdit();
+  const contacts=_crmContacts.filter(function(c){return (c.name||'').trim();});
+  setLoading(true,'Đang lưu người liên hệ...');
+  try{
+    await fsSet('partners',crmDetailKey,{contacts,updatedAt:Date.now()});
+    toast('Đã lưu '+contacts.length+' người liên hệ');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.openCrmContactEdit=openCrmContactEdit;
+window.closeCrmContactEdit=closeCrmContactEdit;
+window.applyCrmContactEdit=applyCrmContactEdit;
+window.addCrmContactAndEdit=addCrmContactAndEdit;
+window.deleteCrmContactAt=deleteCrmContactAt;
+window.saveCrmContacts=saveCrmContacts;
+
+// ── TAB: Cnee (tận dụng lại hệ thống Cnee editor đã có sẵn — mở qua popup riêng) ──
+function renderCrmCneeTab(p){
+  const cnees=p.cnees||[];
+  let html='<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:.75rem">Danh sách Consignee thường giao dịch với '+(p.shortname||crmDetailKey)+'.</div>';
+  if(!cnees.length){
+    html+='<div style="padding:1.5rem;text-align:center;color:var(--text-tertiary);font-size:12px;border:1px dashed var(--border-light);border-radius:10px"><i class="ti ti-package-off" style="font-size:22px;display:block;margin-bottom:6px"></i>Chưa có Cnee nào.</div>';
+  } else {
+    html+='<div style="display:flex;flex-direction:column;gap:6px">'+cnees.map(function(c){
+      return '<div style="padding:10px 12px;border:1px solid var(--border-light);border-radius:8px;background:var(--bg-primary)">'
+        +'<div style="font-size:12.5px;font-weight:700">'+(c.name||'(chưa có tên)')+'</div>'
+        +(c.addr?'<div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">'+c.addr+'</div>':'')
+        +'<div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">'+[c.pic,c.tel,c.email].filter(Boolean).join(' • ')+'</div>'
+      +'</div>';
+    }).join('')+'</div>';
+  }
+  html+='<div class="mftr"><button class="btn pri" onclick="openCneeEditor(\''+crmDetailKey+'\')"><i class="ti ti-edit"></i> Quản lý Cnee</button></div>';
+  return html;
+}
+
 
 /* ─────────────────────────────────────────────
    USERS (Firestore + Firebase Auth)
@@ -4951,7 +5204,7 @@ tr:hover td{background:var(--bg-secondary)}
     <div class="sb-section" style="margin-top:.4rem">Vận hành</div>
     <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-checklist"></i> Tiến độ công việc<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
     <button class="sb-item" id="sb-cong-no" onclick="goTab('cong-no')"><i class="ti ti-chart-bar"></i> Công nợ</button>
-    <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> Đối tác</button>
+    <button class="sb-item" id="sb-doi-tac" onclick="goTab('doi-tac')"><i class="ti ti-building"></i> CRM</button>
     <button class="sb-item" id="sb-vessel" onclick="goTab('vessel')"><i class="ti ti-ship"></i> Vessel tool</button>
     <button class="sb-item" id="sb-cocoquote" onclick="goTab('cocoquote')"><i class="ti ti-calculator"></i> Coconut tool</button>
     <button class="sb-item" id="sb-contract" onclick="goTab('contract')"><i class="ti ti-file-contract"></i> Contract List</button>
@@ -5070,6 +5323,8 @@ tr:hover td{background:var(--bg-secondary)}
     <div class="mftr"><button class="btn pri" onclick="saveTask()"><i class="ti ti-check"></i> Lưu</button></div>
   </div>
 </div>
+
+<div class="ov" id="crmDetailOv" style="padding:.75rem"></div>
 
 <div class="ov" id="cneeOv" style="padding:.75rem"></div>
 
