@@ -654,8 +654,10 @@ auth.onAuthStateChanged(async (user) => {
     startListeners();
     showApp();
     setLoading(false);
+    _startInactivityTracker();
   } else {
     currentUser = null; currentProfile = null;
+    _stopInactivityTracker();
     stopListeners();
     showLogin();
   }
@@ -675,9 +677,44 @@ async function doLogin(){
 }
 
 async function doLogout(){
+  _stopInactivityTracker();
   stopListeners();
   await auth.signOut();
   toast('Đã đăng xuất');
+}
+
+/* ─────────────────────────────────────────────
+   TỰ ĐỘNG ĐĂNG XUẤT KHI KHÔNG HOẠT ĐỘNG (30 phút)
+───────────────────────────────────────────── */
+const INACTIVITY_LIMIT_MS=30*60*1000; // 30 phút
+let _inactivityTimer=null;
+let _inactivityListenerAttached=false;
+function _resetInactivityTimer(){
+  if(!currentUser)return;
+  if(_inactivityTimer)clearTimeout(_inactivityTimer);
+  _inactivityTimer=setTimeout(_handleInactivityTimeout,INACTIVITY_LIMIT_MS);
+}
+async function _handleInactivityTimeout(){
+  if(!currentUser)return;
+  toast('Phiên làm việc đã hết hạn do không có thao tác trong 30 phút — đang tự động đăng xuất...','error');
+  setTimeout(async function(){
+    if(!currentUser)return;
+    _stopInactivityTracker();
+    stopListeners();
+    try{await auth.signOut();}catch(e){}
+  },2500);
+}
+function _startInactivityTracker(){
+  if(!_inactivityListenerAttached){
+    ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(function(evt){
+      document.addEventListener(evt,_resetInactivityTimer,{passive:true});
+    });
+    _inactivityListenerAttached=true;
+  }
+  _resetInactivityTimer();
+}
+function _stopInactivityTracker(){
+  if(_inactivityTimer){clearTimeout(_inactivityTimer);_inactivityTimer=null;}
 }
 
 /* ─────────────────────────────────────────────
@@ -3318,6 +3355,15 @@ function _coInfo(){
   };
 }
 
+// Chữ ký email của user đang đăng nhập — tự động chèn vào cuối email Trucking/Đóng bãi/Debit Note
+function _emailSignatureHtml(){
+  const sig=(currentProfile&&currentProfile.emailSignature)||'';
+  if(!sig.trim())return '';
+  const esc=sig.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return '<div style="margin-top:18px;padding-top:12px;border-top:1px solid #ddd;font-size:12px;color:#333;white-space:pre-line">'+esc+'</div>';
+}
+window._emailSignatureHtml=_emailSignatureHtml;
+
 function _openEmailModal(opts){
   // opts: {title, to, cc, subject, bodyHtml, attachments:[{filename,dataUrl}]}
   const co=_coInfo();
@@ -3632,7 +3678,8 @@ function sendStuffingEmail(){
       '<tr><td style="'+cellL+'">Xuất hóa đơn</td><td style="'+cellR+'"> '+co.name+'<br><br>Đ/C: '+co.addr+'<br>MST: '+co.mst+'<br><br>email nhận hóa đơn: '+co.invEmail+'</td></tr>'+
       '<tr><td style="'+cellL+'">Ghi chú</td><td style="'+cellR+'"></td></tr>'+
     '</table>'+
-    '<div style="color:#c00;font-style:italic;margin-top:12px">Kính nhờ Quý cảng cập nhật kế hoạch.</div>';
+    '<div style="color:#c00;font-style:italic;margin-top:12px">Kính nhờ Quý cảng cập nhật kế hoạch.</div>'+
+    _emailSignatureHtml();
   closeOv('stuffOv');
   _openEmailModal({title:'Email Đăng ký đóng bãi → '+info.nccName, to:info.email, cc:'cocosea.acc@gmail.com; cocosea.doc@gmail.com', subject:subject, bodyHtml:bodyHtml});
 }
@@ -3813,7 +3860,8 @@ function sendTruckingEmail(){
       '<tr><td style="'+cellL+'">Hạ cảng:</td><td style="'+cellR+'"><span style="background:#fff200;font-weight:700">'+(r.pol||'')+'</span></td></tr>'+
       '<tr><td style="'+cellL+'">Ghi chú:</td><td style="'+cellR+'">'+noteHtml+'</td></tr>'+
       '<tr><td style="'+cellL+'">Thông tin xuất hóa đơn:</td><td style="'+cellR+'">'+invoiceInfo+'</td></tr>'+
-    '</table>';
+    '</table>'+
+    _emailSignatureHtml();
   closeOv('truckOv');
   _openEmailModal({title:'Email Trucking → '+nccFullName, to:info.email, cc:'cocosea.doc@gmail.com; cocosea.acc@gmail.com', subject:subject, bodyHtml:bodyHtml});
 }
@@ -4600,6 +4648,11 @@ function openUserEdit(idx){
     <div class="fi"><label class="lbl">Avatar (2 ký tự)</label><input type="text" id="uf_av" value="${u.avatar||''}" maxlength="2"/></div>
     <div class="fi"><label class="lbl">Vai trò</label><select id="uf_role"><option value="admin"${(u.role||'viewer')==='admin'?' selected':''}>Admin</option><option value="operator"${u.role==='operator'?' selected':''}>Operator</option><option value="accountant"${u.role==='accountant'?' selected':''}>Accountant</option><option value="doc"${u.role==='doc'?' selected':''}>Doc</option><option value="cus"${u.role==='cus'?' selected':''}>Cus</option><option value="viewer"${(u.role||'viewer')==='viewer'?' selected':''}>Viewer</option></select></div>
     ${idx===null?`<div class="fi"><label class="lbl">Mật khẩu ban đầu</label><input type="password" id="uf_pass" placeholder="Tối thiểu 6 ký tự"/></div>`:''}
+    <div class="fi full">
+      <label class="lbl">Chữ ký email</label>
+      <textarea id="uf_sig" rows="4" placeholder="VD:&#10;Trân trọng,&#10;Nguyễn Văn A&#10;COCOSEA CO., LTD | 0909xxxxxx">${u.emailSignature||''}</textarea>
+      <div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">Tự động chèn vào cuối email khi user này gửi email Trucking, Đóng bãi (Stuffing) hoặc Debit Note.</div>
+    </div>
     <div class="fi-note full" style="grid-column:1/-1;font-size:11px;color:var(--text-secondary);padding:.5rem .75rem;background:var(--bg-secondary);border-radius:6px">
       ${idx===null?'Tài khoản Firebase Auth sẽ được tạo tự động. Người dùng có thể đổi mật khẩu sau khi đăng nhập.':'Vai trò và thông tin hồ sơ sẽ được cập nhật. Mật khẩu quản lý qua Firebase Console hoặc chức năng đổi mật khẩu.'}
     </div>`;
@@ -4608,6 +4661,7 @@ function openUserEdit(idx){
 async function saveUser(){
   const name=g('uf_name').value.trim(); const email=g('uf_email').value.trim();
   const role=g('uf_role').value; const av=g('uf_av').value.slice(0,2).toUpperCase()||name.slice(0,2).toUpperCase()||'??';
+  const emailSignature=g('uf_sig')?.value||'';
   if(!email){toast('Nhập email','error');return;}
   if(!name){toast('Nhập họ tên','error');return;}
   setLoading(true,'Đang tạo người dùng...');
@@ -4633,13 +4687,13 @@ async function saveUser(){
       }
       // Step 2: Save profile to Firestore using UID as document ID (most reliable)
       const docId=uid||email.replace(/\./g,'_');
-      await fsSet('users', docId, {uid,email,name,role,avatar:av,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
+      await fsSet('users', docId, {uid,email,name,role,avatar:av,emailSignature,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
       toast('Đã tạo người dùng: '+email+' ('+ROLES[role].label+')');
     } else {
       // Editing existing user
       const u=cache.users[userEditIdx];
       const docId=u._docId||u.uid||u.email.replace(/\./g,'_');
-      await fsSet('users', docId, {email,name,role,avatar:av,updatedAt:Date.now(),updatedBy:currentUser?.email||''});
+      await fsSet('users', docId, {email,name,role,avatar:av,emailSignature,updatedAt:Date.now(),updatedBy:currentUser?.email||''});
       toast('Đã cập nhật: '+name);
     }
     closeOv('userEditOv');
@@ -5340,7 +5394,8 @@ function sendEmailDN(id, tt){
       '<tr><td style="'+cellL+'">For Invoice:</td><td style="'+cellR+'">Just reply all base on this email to request Invoice</td></tr>'+
       '<tr><td style="'+cellL+'">D/N Remark:</td><td style="'+cellR+'"></td></tr>'+
     '</table>'+
-    '<div style="margin-top:12px;font-style:italic;color:#c0392b">Please check it carefully and let us know if any amendment.</div>';
+    '<div style="margin-top:12px;font-style:italic;color:#c0392b">Please check it carefully and let us know if any amendment.</div>'+
+    _emailSignatureHtml();
 
   // Đính kèm: (các) file Debit Note đã upload thủ công cho dịch vụ thuộc Booking Party này
   const seen={}; const uploadedAttachments=[];
