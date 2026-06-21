@@ -1698,14 +1698,15 @@ function renderDetailPanel(r,tt){
         +'</div>'
         +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-bottom:.5rem">'
           +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
-            +'<colgroup><col/><col style="width:16%"/><col style="width:9%"/><col style="width:14%"/><col style="width:17%"/><col style="width:9%"/><col style="width:30px"/></colgroup>'
+            +'<colgroup><col/><col style="width:13%"/><col style="width:7%"/><col style="width:11%"/><col style="width:14%"/><col style="width:7%"/><col style="width:16%"/><col style="width:30px"/></colgroup>'
             +'<thead><tr>'
-            +'<th style="'+thS+'">Chi phí</th><th style="'+thS+';text-align:right">Đơn giá</th><th style="'+thS+';text-align:right">SL</th><th style="'+thS+'">Đơn vị</th><th style="'+thS+';text-align:right">Thành tiền</th><th style="'+thS+'">Curr</th><th style="'+thS+'"></th>'
+            +'<th style="'+thS+'">Chi phí</th><th style="'+thS+';text-align:right">Đơn giá</th><th style="'+thS+';text-align:right">SL</th><th style="'+thS+'">Đơn vị</th><th style="'+thS+';text-align:right">Thành tiền</th><th style="'+thS+'">Curr</th><th style="'+thS+'">Remark</th><th style="'+thS+'"></th>'
           +'</tr></thead>'
-          +'<tbody id="costingBody">'+(autoCostRows||'')+(costInputRows||'<tr><td colspan="7" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>')+'</tbody>'
+          +'<tbody id="costingBody">'+(autoCostRows||'')+(costInputRows||'<tr><td colspan="8" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>')+'</tbody>'
         +'<tfoot><tr style="background:var(--bg-secondary)" id="costingTotalRow">'
           +'<td colspan="4" style="padding:8px 10px;font-size:11.5px;font-weight:600;text-align:right;border-top:2px solid var(--border-light)">Tổng chi phí (VND):</td>'
           +'<td colspan="2" style="padding:8px 10px;font-size:13px;font-weight:700;color:var(--red);text-align:right;border-top:2px solid var(--border-light)" id="costingTotalCell">—</td>'
+          +'<td style="border-top:2px solid var(--border-light)"></td>'
           +'<td style="border-top:2px solid var(--border-light)"></td>'
         +'</tr></tfoot>'
         +'</table></div>'
@@ -4501,6 +4502,7 @@ window.delTcTransaction=delTcTransaction;
 
 /* ── Popup: Phiếu Thu / Phiếu Chi ── */
 function openTcVoucher(type){
+  if(type==='chi'){ openTcChiVoucher(); return; } // Phiếu Chi dùng giao diện mới (2 phần, nhiều dòng)
   tcVoucherType=type; tcVoucherLot=null; tcVoucherDebt=null; tcVoucherPartner='';
   renderTcVoucher();
   openOv('tcVoucherOv');
@@ -4619,7 +4621,7 @@ async function saveTcVoucher(){
 window.saveTcVoucher=saveTcVoucher;
 
 // Tự động thêm 1 dòng chi phí vào tab Costing của lô hàng tương ứng khi tạo Phiếu Chi có gắn lô
-async function _tcSyncChiToCosting(lotRef,amount,currency,category,description,partner){
+async function _tcSyncChiToCosting(lotRef,amount,currency,category,description,partner,remark){
   try{
     const tt=lotRef.tt;
     const colN=colName(tt);
@@ -4630,6 +4632,7 @@ async function _tcSyncChiToCosting(lotRef,amount,currency,category,description,p
     items.push({
       name:(description||category)+(partner?(' — '+partner):''),
       price:amount, qty:1, amt:amount, unit:'Cont', cur:currency||'VND',
+      remark:remark||description||'',
       partnerRef:partner||null, fromCashTx:true, category:category||''
     });
     await db.collection(colN).doc(lotRef.lotId).set({
@@ -4639,6 +4642,177 @@ async function _tcSyncChiToCosting(lotRef,amount,currency,category,description,p
   }catch(e){ console.warn('Không thể đồng bộ chi phí vào Costing:',e); }
 }
 window._tcSyncChiToCosting=_tcSyncChiToCosting;
+
+/* ── PHIẾU CHI (thiết kế mới — 2 phần, nhiều dòng) ──
+   Phần 1: Chi phí gắn với lô hàng (1 lô + nhiều dòng chi phí -> tự đồng bộ vào Costing của lô đó)
+   Phần 2: Chi phí khác (nhiều dòng, không gắn lô) */
+let tcChiLot=null;        // lô hàng đã chọn cho Phần 1 {tt,lotId,bookingNo,mblNo,jobNo}
+let tcChiLotRows=[];      // các dòng chi phí của Phần 1
+let tcChiOthRows=[];      // các dòng chi phí của Phần 2 (Chi phí khác)
+
+function _tcChiBlankRow(){
+  return {partner:'',category:'',date:new Date().toISOString().slice(0,10),account:'cash',amount:'',currency:'VND',remark:''};
+}
+function _gv(id,fallback){ const e=g(id); return e?e.value:fallback; }
+function _tcChiRowCapture(prefix,rows){
+  return rows.map(function(r,i){
+    return {
+      partner:_gv(prefix+'_partner_'+i, r.partner||''),
+      category:_gv(prefix+'_cat_'+i, r.category||''),
+      date:_gv(prefix+'_date_'+i, r.date||''),
+      account:_gv(prefix+'_acc_'+i, r.account||'cash'),
+      amount:_gv(prefix+'_amt_'+i, r.amount||''),
+      currency:_gv(prefix+'_cur_'+i, r.currency||'VND'),
+      remark:_gv(prefix+'_remark_'+i, r.remark||'')
+    };
+  });
+}
+
+function openTcChiVoucher(){
+  tcVoucherType='chi';
+  tcChiLot=null;
+  tcChiLotRows=[_tcChiBlankRow()];
+  tcChiOthRows=[_tcChiBlankRow()];
+  renderTcChiVoucher();
+  openOv('tcVoucherOv');
+}
+window.openTcChiVoucher=openTcChiVoucher;
+
+function _tcChiRowHtml(prefix,i,row,removeFn){
+  const accs=_tcAccountList();
+  const cats=(window._thuChiCategories||{}).chi||[];
+  return '<tr>'
+    +'<td style="padding:5px"><input type="text" id="'+prefix+'_partner_'+i+'" value="'+(row.partner||'').replace(/"/g,'&quot;')+'" placeholder="Đối tác" list="tcChiPartnerList" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:5px"><select id="'+prefix+'_cat_'+i+'" style="font-size:11.5px;width:100%"><option value="">— Chọn —</option>'+cats.map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'"'+(c===row.category?' selected':'')+'>'+c+'</option>';}).join('')+'</select></td>'
+    +'<td style="padding:5px"><input type="date" id="'+prefix+'_date_'+i+'" value="'+(row.date||'')+'" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:5px"><select id="'+prefix+'_acc_'+i+'" style="font-size:11.5px;width:100%">'+accs.map(function(a){return '<option value="'+a.id+'"'+(a.id===row.account?' selected':'')+'>'+a.label+'</option>';}).join('')+'</select></td>'
+    +'<td style="padding:5px"><input type="number" id="'+prefix+'_amt_'+i+'" value="'+(row.amount||'')+'" min="0" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:5px"><select id="'+prefix+'_cur_'+i+'" style="font-size:11.5px;width:68px"><option'+(row.currency==='VND'?' selected':'')+'>VND</option><option'+(row.currency==='USD'?' selected':'')+'>USD</option></select></td>'
+    +'<td style="padding:5px"><input type="text" id="'+prefix+'_remark_'+i+'" value="'+(row.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:5px;text-align:center"><button class="rac red" onclick="'+removeFn+'('+i+')" title="Xóa dòng"><i class="ti ti-trash"></i></button></td>'
+  +'</tr>';
+}
+function _tcChiTableHtml(prefix,rows,removeFn,addFn){
+  return '<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-top:.5rem">'
+    +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
+    +'<colgroup><col style="width:15%"/><col style="width:16%"/><col style="width:12%"/><col style="width:14%"/><col style="width:11%"/><col style="width:8%"/><col/><col style="width:32px"/></colgroup>'
+    +'<thead><tr style="background:var(--bg-secondary)">'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Đối tác</th>'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Tên chi phí</th>'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Ngày</th>'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Tài khoản</th>'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:right;color:var(--text-secondary)">Số tiền</th>'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Tiền tệ</th>'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Remark</th>'
+      +'<th></th>'
+    +'</tr></thead>'
+    +'<tbody id="'+prefix+'Rows">'+rows.map(function(r,i){return _tcChiRowHtml(prefix,i,r,removeFn);}).join('')+'</tbody>'
+    +'</table></div>'
+    +'<button class="btn sm" onclick="'+addFn+'()" style="margin-top:6px"><i class="ti ti-plus"></i> Thêm dòng</button>';
+}
+
+function renderTcChiVoucher(){
+  g('tcVoucherOv').innerHTML=`
+  <div class="modal" style="max-width:920px;max-height:92vh;overflow-y:auto">
+    <div class="mhdr">
+      <div><div class="mtitle" style="color:var(--red)"><i class="ti ti-minus" style="font-size:15px;margin-right:6px"></i>Phiếu Chi</div>
+      <div class="msub">Ghi nhận chi phí — có thể nhập nhiều dòng cho lô hàng và/hoặc chi phí khác cùng lúc</div></div>
+      <button class="rac" onclick="closeOv('tcVoucherOv')"><i class="ti ti-x"></i></button>
+    </div>
+    <datalist id="tcChiPartnerList">${Object.values(cache.partners).map(function(p){return '<option value="'+p.shortname.replace(/"/g,'&quot;')+'">';}).join('')}</datalist>
+
+    <div style="margin-bottom:1.25rem">
+      <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;align-items:center;gap:6px"><i class="ti ti-package"></i>Chi phí gắn với lô hàng</div>
+      <div style="position:relative;max-width:380px">
+        <input type="text" id="tcChiLotSearch" placeholder="Gõ số booking, bill hoặc job ID..." oninput="_tcChiLotSearch(this.value)" autocomplete="off"/>
+        <div id="tcChiLotSuggest" style="position:absolute;top:100%;left:0;right:0;z-index:20;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;margin-top:3px;max-height:200px;overflow-y:auto;display:none;box-shadow:var(--shadow-md)"></div>
+      </div>
+      <div id="tcChiLotSelected" style="margin-top:6px">${tcChiLot?_tcChiLotBadge(tcChiLot):'<span style="font-size:11px;color:var(--text-tertiary)">Chưa chọn lô hàng — các dòng chi phí bên dưới sẽ không lưu được nếu chưa chọn lô</span>'}</div>
+      ${_tcChiTableHtml('tcl',tcChiLotRows,'removeTcChiLotRow','addTcChiLotRow')}
+    </div>
+
+    <div style="margin-bottom:.5rem">
+      <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;align-items:center;gap:6px"><i class="ti ti-receipt-2"></i>Chi phí khác</div>
+      ${_tcChiTableHtml('tco',tcChiOthRows,'removeTcChiOthRow','addTcChiOthRow')}
+    </div>
+
+    <div class="mftr"><button class="btn" onclick="closeOv('tcVoucherOv')">Hủy</button><button class="btn pri" style="background:var(--red);border-color:var(--red)" onclick="saveTcChiVoucher()"><i class="ti ti-check"></i> Lưu Phiếu Chi</button></div>
+  </div>`;
+}
+function _tcChiLotBadge(lot){
+  return '<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;background:var(--blue-bg);color:var(--blue-text);padding:5px 10px;border-radius:7px;width:fit-content">'
+    +'<i class="ti ti-package" style="font-size:13px"></i><strong>'+(lot.bookingNo||lot.jobNo)+'</strong>'
+    +'<button onclick="tcChiLot=null;renderTcChiVoucher()" style="background:none;border:none;cursor:pointer;color:inherit;padding:0;margin-left:4px"><i class="ti ti-x" style="font-size:12px"></i></button>'
+  +'</div>';
+}
+
+function _tcChiLotSearch(q){
+  const box=g('tcChiLotSuggest'); if(!box)return;
+  q=(q||'').trim().toLowerCase();
+  if(!q){box.style.display='none';box.innerHTML='';return;}
+  const all=[...cache.xuat.map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...cache.nhap.map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
+  const matches=all.filter(function(r){
+    return (r.bookingNo||'').toLowerCase().includes(q)||(r.mblNo||'').toLowerCase().includes(q)||(r.jobNo||'').toLowerCase().includes(q);
+  }).slice(0,8);
+  if(!matches.length){box.style.display='block';box.innerHTML='<div style="padding:10px 12px;font-size:12px;color:var(--text-secondary)">Không tìm thấy lô hàng khớp</div>';return;}
+  box.innerHTML=matches.map(function(r,i){
+    return '<div onclick="_tcChiSelectLot('+i+')" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light);font-size:12px" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'none\'">'
+      +'<strong>'+(r.bookingNo||'—')+'</strong> <span style="color:var(--text-secondary)">— '+(r.mblNo||'')+' • Job: '+(r.jobNo||'—')+' • '+(r._tt==='xuat'?'Xuất':'Nhập')+'</span>'
+    +'</div>';
+  }).join('');
+  box.style.display='block';
+  window._tcChiLotMatches=matches;
+}
+function _tcChiSelectLot(i){
+  const r=(window._tcChiLotMatches||[])[i]; if(!r)return;
+  tcChiLot={tt:r._tt,lotId:r._id,bookingNo:r.bookingNo||'',mblNo:r.mblNo||'',jobNo:r.jobNo||''};
+  tcChiLotRows=_tcChiRowCapture('tcl',tcChiLotRows); // giữ lại các dòng đã nhập trước khi vẽ lại
+  g('tcChiLotSearch').value='';
+  renderTcChiVoucher();
+}
+window._tcChiLotSearch=_tcChiLotSearch;
+window._tcChiSelectLot=_tcChiSelectLot;
+
+function addTcChiLotRow(){ tcChiLotRows=_tcChiRowCapture('tcl',tcChiLotRows); tcChiLotRows.push(_tcChiBlankRow()); renderTcChiVoucher(); }
+function removeTcChiLotRow(i){ tcChiLotRows=_tcChiRowCapture('tcl',tcChiLotRows); tcChiLotRows.splice(i,1); if(!tcChiLotRows.length)tcChiLotRows=[_tcChiBlankRow()]; renderTcChiVoucher(); }
+function addTcChiOthRow(){ tcChiOthRows=_tcChiRowCapture('tco',tcChiOthRows); tcChiOthRows.push(_tcChiBlankRow()); renderTcChiVoucher(); }
+function removeTcChiOthRow(i){ tcChiOthRows=_tcChiRowCapture('tco',tcChiOthRows); tcChiOthRows.splice(i,1); if(!tcChiOthRows.length)tcChiOthRows=[_tcChiBlankRow()]; renderTcChiVoucher(); }
+window.addTcChiLotRow=addTcChiLotRow; window.removeTcChiLotRow=removeTcChiLotRow;
+window.addTcChiOthRow=addTcChiOthRow; window.removeTcChiOthRow=removeTcChiOthRow;
+
+async function saveTcChiVoucher(){
+  const lotRowsAll=_tcChiRowCapture('tcl',tcChiLotRows);
+  const othRowsAll=_tcChiRowCapture('tco',tcChiOthRows);
+  const lotRows=lotRowsAll.filter(function(r){return r.category&&parseFloat(r.amount)>0;});
+  const othRows=othRowsAll.filter(function(r){return r.category&&parseFloat(r.amount)>0;});
+  if(!lotRows.length&&!othRows.length){toast('Nhập ít nhất 1 dòng chi phí hợp lệ (chọn Tên chi phí và Số tiền)','error');return;}
+  if(lotRows.length&&!tcChiLot){toast('Chọn lô hàng cho phần "Chi phí gắn với lô hàng"','error');return;}
+  setLoading(true,'Đang lưu Phiếu Chi...');
+  try{
+    for(const row of lotRows){
+      const amount=parseFloat(row.amount);
+      const rec={type:'chi',date:row.date||new Date().toISOString().slice(0,10),amount,currency:row.currency||'VND',
+        account:row.account||'cash',category:row.category,description:row.remark||'',
+        lotRef:tcChiLot,partnerRef:row.partner||null,debtRef:null,
+        createdAt:Date.now(),createdBy:currentUser?.email||''};
+      await db.collection('cashTransactions').add(rec);
+      await _tcSyncChiToCosting(tcChiLot,amount,rec.currency,rec.category,rec.description,row.partner,row.remark);
+    }
+    for(const row of othRows){
+      const amount=parseFloat(row.amount);
+      const rec={type:'chi',date:row.date||new Date().toISOString().slice(0,10),amount,currency:row.currency||'VND',
+        account:row.account||'cash',category:row.category,description:row.remark||'',
+        lotRef:null,partnerRef:row.partner||null,debtRef:null,
+        createdAt:Date.now(),createdBy:currentUser?.email||''};
+      await db.collection('cashTransactions').add(rec);
+    }
+    toast('Đã lưu '+(lotRows.length+othRows.length)+' dòng chi phí');
+    closeOv('tcVoucherOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveTcChiVoucher=saveTcChiVoucher;
+
 
 /* ── TAB: Công nợ (Phải thu / Phải trả) ── */
 // Số tiền đã thanh toán cho 1 khoản công nợ = tổng các giao dịch cashTx có debtRef.debtId trỏ tới nó
@@ -4710,19 +4884,26 @@ function _tcToggleArLegacy(){
 window._tcToggleArLegacy=_tcToggleArLegacy;
 
 // ── Phải trả nhà cung cấp: tự động tổng hợp từ các dòng chi phí (costing.items) có gắn đối tác ──
+// Phải trả NCC — tổng hợp trực tiếp từ tab Dịch vụ của từng lô hàng (svcs[key].svcSupplier + cost),
+// KHÔNG phụ thuộc vào việc đã tạo Phiếu Chi hay chưa — luôn phản ánh đúng dữ liệu hiện có trong app.
 function _tcSupplierBreakdown(){
   const allR=[...cache.xuat.map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...cache.nhap.map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
   const byPartner={};
   allR.forEach(function(r){
-    const items=(r.costing&&r.costing.items)||[];
-    items.forEach(function(it){
-      if(!it.partnerRef)return;
-      const key=it.partnerRef;
-      if(!byPartner[key])byPartner[key]={partner:key,lots:[],total:{}};
-      const cur=it.cur||'VND';
-      const amt=it.amt||(it.price||0)*(it.qty||1)||0;
-      byPartner[key].lots.push({tt:r._tt,lotId:r._id,bookingNo:r.bookingNo||r.jobNo||'',jobNo:r.jobNo||'',name:it.name||'',amt,cur,date:r.etd||''});
-      byPartner[key].total[cur]=(byPartner[key].total[cur]||0)+amt;
+    const svcs=r.svcs||{};
+    Object.keys(svcs).forEach(function(key){
+      const sv=svcs[key];
+      if(!sv||!sv.on||!sv.cost||!sv.svcSupplier)return;
+      const supplierKey=sv.svcSupplier;
+      const svcDef=SVCS.find(function(s){return s.key===key;});
+      const svcName=svcDef?svcDef.name:key;
+      const qty=parseFloat(sv.svcQty)||1;
+      const cur=sv.svcCur||'VND';
+      const amt=(parseFloat(sv.cost)||0)*qty;
+      if(!amt)return;
+      if(!byPartner[supplierKey])byPartner[supplierKey]={partner:supplierKey,lots:[],total:{}};
+      byPartner[supplierKey].lots.push({tt:r._tt,lotId:r._id,bookingNo:r.bookingNo||r.jobNo||'',jobNo:r.jobNo||'',name:svcName,amt,cur,date:r.etd||'',finish:!!sv.finish});
+      byPartner[supplierKey].total[cur]=(byPartner[supplierKey].total[cur]||0)+amt;
     });
   });
   return Object.values(byPartner).sort(function(a,b){return a.partner.localeCompare(b.partner);});
@@ -4739,7 +4920,7 @@ function renderTcApAuto(){
   let html='<div style="margin-bottom:1.5rem">'
     +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:.6rem;cursor:pointer" onclick="_tcToggleApAuto()">'
       +'<i class="ti ti-chevron-'+(tcApAutoOpen?'down':'right')+'" style="font-size:14px;color:var(--text-secondary)"></i>'
-      +'<span style="font-size:12.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px">Phải trả theo nhà cung cấp (tự tổng hợp từ chi phí từng lô)</span>'
+      +'<span style="font-size:12.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px">Phải trả theo nhà cung cấp (tự tổng hợp từ tab Dịch vụ của từng lô hàng)</span>'
       +'<span style="font-size:10px;background:var(--bg-secondary);color:var(--text-tertiary);padding:1px 8px;border-radius:20px;border:0.5px solid var(--border-light)">'+suppliers.length+'</span>'
     +'</div>';
   if(tcApAutoOpen){
@@ -4751,7 +4932,7 @@ function renderTcApAuto(){
           +'<td style="text-align:right;font-weight:700;color:var(--red)">'+totStr+'</td>'
           +'<td style="text-align:center"><button class="btn sm" data-p="'+s.partner.replace(/"/g,'&quot;')+'" onclick="exportSupplierExcel(this.dataset.p)" style="margin-right:4px"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
           +'<button class="btn sm" data-p="'+s.partner.replace(/"/g,'&quot;')+'" onclick="exportSupplierPdf(this.dataset.p)"><i class="ti ti-file-text"></i> PDF</button></td></tr>';
-      }).join(''):'<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Chưa có dữ liệu — chi phí từ Phiếu Chi có gắn lô hàng &amp; đối tác sẽ tự động xuất hiện ở đây</td></tr>')
+      }).join(''):'<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Chưa có dữ liệu — chọn Nhà cung cấp (NCC) ở tab Dịch vụ của lô hàng kèm chi phí sẽ tự động xuất hiện ở đây</td></tr>')
       +'</tbody></table></div></div>';
   }
   html+='</div>';
@@ -4942,92 +5123,127 @@ window.saveTcCategories=saveTcCategories;
 
 /* ── TAB: Báo cáo tài chính ── */
 let tcRptFrom='', tcRptTo='', tcRptGran='month';
+/* Báo cáo tài chính — theo TỪNG LÔ HÀNG (load trực tiếp từ dữ liệu lô hàng có sẵn):
+   Thu  = Tổng Debit Note có hóa đơn + không hóa đơn (giống Công nợ), quy đổi VND theo ROE riêng của từng lô
+   Chi  = Tổng Chi phí đầu vào (tab Costing: cả dòng tự động từ Dịch vụ + dòng nhập tay), quy đổi VND theo ROE riêng của từng lô
+   Chi phí khác (không gắn lô hàng) = tổng các Phiếu Chi không chọn lô hàng -> hiện ở box riêng */
+let tcRptShipper='';
+function _tcAmtVND(sv,r){
+  const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+  if((sv.cur||'USD')==='VND')return amt;
+  return Math.round(amt*(r.roe||26390));
+}
+function _tcLotRevenueVND(r){
+  const svcs=r.svcs||{};
+  let rev=0;
+  Object.values(svcs).forEach(function(sv){
+    if(!sv.on||sv.invoice==='Waived'||sv.invoice==='No')return;
+    rev+=_tcAmtVND(sv,r);
+  });
+  Object.values(svcs).forEach(function(sv){
+    if(!sv.on||sv.invoice!=='No')return;
+    rev+=_tcAmtVND(sv,r);
+  });
+  return rev;
+}
+function _tcLotCostVND(r){
+  const svcs=r.svcs||{};
+  const roe=r.roe||26390;
+  let cost=0;
+  Object.values(svcs).forEach(function(sv){
+    if(!sv.on||!sv.cost)return;
+    const amt=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
+    cost+=(sv.svcCur||sv.cur||'VND')==='VND'?amt:Math.round(amt*roe);
+  });
+  ((r.costing||{}).items||[]).forEach(function(it){
+    const amt=it.amt||(it.price||0)*(it.qty||1)||0;
+    cost+=(it.cur||'VND')==='VND'?amt:Math.round(amt*roe);
+  });
+  return cost;
+}
 function renderTcBaoCao(){
   if(!tcRptFrom||!tcRptTo){
     const now=new Date();
     tcRptTo=now.toISOString().slice(0,10);
-    const d=new Date(now); d.setMonth(d.getMonth()-5); d.setDate(1);
+    const d=new Date(now); d.setMonth(d.getMonth()-2); d.setDate(1);
     tcRptFrom=d.toISOString().slice(0,10);
   }
-  const list=(cache.cashTx||[]).filter(function(t){return (!tcRptFrom||t.date>=tcRptFrom)&&(!tcRptTo||t.date<=tcRptTo);});
-
-  function periodKey(dateStr){
-    if(!dateStr) return '—';
-    if(tcRptGran==='day') return dateStr;
-    if(tcRptGran==='month') return dateStr.slice(0,7);
-    return dateStr.slice(0,4);
-  }
-  const groups={};
-  list.forEach(function(t){
-    const k=periodKey(t.date);
-    if(!groups[k]) groups[k]={thu:{},chi:{}};
-    const cur=t.currency||'VND';
-    const bucket=t.type==='thu'?groups[k].thu:groups[k].chi;
-    bucket[cur]=(bucket[cur]||0)+(t.amount||0);
+  const allR=[...cache.xuat.map(function(r){return Object.assign({},r,{loai:'Xuất'});}),...cache.nhap.map(function(r){return Object.assign({},r,{loai:'Nhập'});})];
+  const shippers=[...new Set(allR.map(function(r){return r.shipper||r.supplier||'';}).filter(Boolean))].sort();
+  const filtered=allR.filter(function(r){
+    const sh=r.shipper||r.supplier||'';
+    return (!tcRptShipper||sh===tcRptShipper)&&(!tcRptFrom||!r.etd||r.etd>=tcRptFrom)&&(!tcRptTo||!r.etd||r.etd<=tcRptTo);
   });
-  const periods=Object.keys(groups).sort();
 
-  // Tổng toàn kỳ
-  const grandThu={}, grandChi={};
-  list.forEach(function(t){
-    const cur=t.currency||'VND';
-    if(t.type==='thu') grandThu[cur]=(grandThu[cur]||0)+(t.amount||0);
-    else grandChi[cur]=(grandChi[cur]||0)+(t.amount||0);
+  const lotRows=filtered.map(function(r){
+    const thu=_tcLotRevenueVND(r);
+    const chi=_tcLotCostVND(r);
+    return {r:r,thu:thu,chi:chi,profit:thu-chi,margin:thu>0?Math.round((thu-chi)/thu*100):0};
+  }).sort(function(a,b){return (b.r.etd||'').localeCompare(a.r.etd||'');});
+
+  const totalThu=lotRows.reduce(function(s,x){return s+x.thu;},0);
+  const totalChiLot=lotRows.reduce(function(s,x){return s+x.chi;},0);
+
+  // Chi phí khác: các Phiếu Chi KHÔNG gắn lô hàng, trong khoảng ETD lọc ở trên (dùng date của giao dịch)
+  const chiKhacList=(cache.cashTx||[]).filter(function(t){
+    return t.type==='chi'&&!t.lotRef&&(!tcRptFrom||!t.date||t.date>=tcRptFrom)&&(!tcRptTo||!t.date||t.date<=tcRptTo);
   });
-  function sumStr(obj){ return Object.entries(obj).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND'; }
-  function profitStr(){
-    const curs=new Set([...Object.keys(grandThu),...Object.keys(grandChi)]);
-    return Array.from(curs).map(function(cur){return ((grandThu[cur]||0)-(grandChi[cur]||0)).toLocaleString()+' '+cur;}).join(' / ')||'0 VND';
-  }
+  const chiKhacByCur={};
+  chiKhacList.forEach(function(t){const cur=t.currency||'VND';chiKhacByCur[cur]=(chiKhacByCur[cur]||0)+(t.amount||0);});
+  const roeDefault=26390;
+  let totalChiKhacVND=0;
+  Object.entries(chiKhacByCur).forEach(function(e){totalChiKhacVND+=e[0]==='VND'?e[1]:Math.round(e[1]*roeDefault);});
 
-  // Top danh mục
-  function topCats(type){
-    const m={};
-    list.filter(function(t){return t.type===type;}).forEach(function(t){
-      const k=(t.category||'(Khác)')+'|'+(t.currency||'VND');
-      m[k]=(m[k]||0)+(t.amount||0);
-    });
-    return Object.entries(m).sort(function(a,b){return b[1]-a[1];}).slice(0,6);
-  }
+  const totalChi=totalChiLot+totalChiKhacVND;
+  const totalProfit=totalThu-totalChi;
 
   return `
   <div class="toolbar">
+    <select id="tcRptShipperSel" onchange="tcRptShipper=this.value;renderTcBody()" style="font-size:12px;flex:0 0 180px"><option value="">Tất cả Shipper/NCC</option>${shippers.map(function(s){return '<option'+(s===tcRptShipper?' selected':'')+'>'+s+'</option>';}).join('')}</select>
+    <label style="font-size:11.5px;color:var(--text-secondary)">ETD từ:</label>
     <input type="date" value="${tcRptFrom}" onchange="tcRptFrom=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
+    <label style="font-size:11.5px;color:var(--text-secondary)">đến:</label>
     <input type="date" value="${tcRptTo}" onchange="tcRptTo=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
-    <select onchange="tcRptGran=this.value;renderTcBody()" style="font-size:12px;flex:0 0 140px">
-      <option value="day"${tcRptGran==='day'?' selected':''}>Theo ngày</option>
-      <option value="month"${tcRptGran==='month'?' selected':''}>Theo tháng</option>
-      <option value="year"${tcRptGran==='year'?' selected':''}>Theo năm</option>
-    </select>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1.25rem">
-    <div style="flex:1;min-width:180px;padding:.85rem 1rem;background:var(--green-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng thu</div><div style="font-size:16px;font-weight:700;color:var(--green-dark)">${sumStr(grandThu)}</div></div>
-    <div style="flex:1;min-width:180px;padding:.85rem 1rem;background:var(--red-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng chi</div><div style="font-size:16px;font-weight:700;color:var(--red-text)">${sumStr(grandChi)}</div></div>
-    <div style="flex:1;min-width:180px;padding:.85rem 1rem;background:var(--blue-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Lãi / Lỗ</div><div style="font-size:16px;font-weight:700;color:var(--blue-text)">${profitStr()}</div></div>
+    <div style="flex:1;min-width:170px;padding:.85rem 1rem;background:var(--green-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Thu (DN có &amp; không hóa đơn)</div><div style="font-size:16px;font-weight:700;color:var(--green-dark)">${totalThu.toLocaleString()} VND</div></div>
+    <div style="flex:1;min-width:170px;padding:.85rem 1rem;background:var(--red-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Chi (Costing + Chi khác)</div><div style="font-size:16px;font-weight:700;color:var(--red-text)">${totalChi.toLocaleString()} VND</div></div>
+    <div style="flex:1;min-width:170px;padding:.85rem 1rem;background:var(--blue-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Lãi / Lỗ</div><div style="font-size:16px;font-weight:700;color:${totalProfit>=0?'var(--green-dark)':'var(--red-text)'}">${totalProfit>=0?'+':''}${totalProfit.toLocaleString()} VND</div></div>
   </div>
+
+  <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem">Báo cáo theo từng lô hàng (${lotRows.length})</div>
   <div class="table-card" style="margin-bottom:1.25rem"><div class="table-wrap"><table>
-    <thead><tr><th>Kỳ</th><th style="text-align:right">Thu</th><th style="text-align:right">Chi</th><th style="text-align:right">Lãi/Lỗ</th></tr></thead>
-    <tbody>${periods.length?periods.map(function(k){
-      const gr=groups[k];
-      const curs=new Set([...Object.keys(gr.thu),...Object.keys(gr.chi)]);
-      const profit=Array.from(curs).map(function(cur){return ((gr.thu[cur]||0)-(gr.chi[cur]||0)).toLocaleString()+' '+cur;}).join(' / ')||'0 VND';
-      return '<tr><td style="font-weight:600">'+k+'</td>'
-        +'<td style="text-align:right;color:var(--green)">'+sumStr(gr.thu)+'</td>'
-        +'<td style="text-align:right;color:var(--red)">'+sumStr(gr.chi)+'</td>'
-        +'<td style="text-align:right;font-weight:700">'+profit+'</td></tr>';
-    }).join(''):'<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có dữ liệu trong khoảng thời gian này</td></tr>'}</tbody>
+    <thead><tr><th>Booking</th><th>Loại</th><th>ETD</th><th>Shipper/NCC</th><th style="text-align:right">Thu (VND)</th><th style="text-align:right">Chi (VND)</th><th style="text-align:right">Lãi/Lỗ</th><th style="text-align:center">Margin</th></tr></thead>
+    <tbody>${lotRows.length?lotRows.map(function(x){
+      const r=x.r;
+      return '<tr>'
+        +'<td style="font-weight:600"><button class="plink" data-id="'+r._id+'" data-tt="'+(r.loai==='Xuất'?'xuat':'nhap')+'" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0" onclick="openDetail(this.dataset.id,this.dataset.tt)">'+(r.bookingNo||r.jobNo||'—')+'</button></td>'
+        +'<td><span class="bdg '+(r.loai==='Xuất'?'bdg-b':'bdg-a')+'">'+r.loai+'</span></td>'
+        +'<td>'+(r.etd||'—')+'</td>'
+        +'<td>'+(r.shipper||r.supplier||'—')+'</td>'
+        +'<td style="text-align:right;color:var(--green)">'+x.thu.toLocaleString()+'</td>'
+        +'<td style="text-align:right;color:var(--red)">'+x.chi.toLocaleString()+'</td>'
+        +'<td style="text-align:right;font-weight:700;color:'+(x.profit>=0?'var(--green)':'var(--red)')+'">'+(x.profit>=0?'+':'')+x.profit.toLocaleString()+'</td>'
+        +'<td style="text-align:center"><span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:'+(x.profit>=0?'var(--green-bg)':'rgba(220,53,69,.1)')+';color:'+(x.profit>=0?'var(--green-dark)':'var(--red-text)')+'">'+x.margin+'%</span></td>'
+      +'</tr>';
+    }).join(''):'<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có lô hàng trong khoảng ETD đã chọn</td></tr>'}</tbody>
   </table></div></div>
-  <div style="display:flex;gap:20px;flex-wrap:wrap">
-    <div style="flex:1;min-width:260px">
-      <div style="font-size:11.5px;font-weight:700;color:var(--green);text-transform:uppercase;margin-bottom:.5rem">Top danh mục Thu</div>
-      ${topCats('thu').map(function(e){const parts=e[0].split('|');return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span>'+parts[0]+'</span><strong style="color:var(--green)">'+e[1].toLocaleString()+' '+parts[1]+'</strong></div>';}).join('')||'<div style="color:var(--text-secondary);font-size:12px">Chưa có dữ liệu</div>'}
+
+  <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem">
+    <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.6rem;display:flex;align-items:center;justify-content:space-between">
+      <span><i class="ti ti-receipt-2"></i> Chi phí khác (không gắn lô hàng)</span>
+      <span style="color:var(--red);font-weight:700">${Object.entries(chiKhacByCur).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND'}</span>
     </div>
-    <div style="flex:1;min-width:260px">
-      <div style="font-size:11.5px;font-weight:700;color:var(--red);text-transform:uppercase;margin-bottom:.5rem">Top danh mục Chi</div>
-      ${topCats('chi').map(function(e){const parts=e[0].split('|');return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span>'+parts[0]+'</span><strong style="color:var(--red)">'+e[1].toLocaleString()+' '+parts[1]+'</strong></div>';}).join('')||'<div style="color:var(--text-secondary);font-size:12px">Chưa có dữ liệu</div>'}
-    </div>
+    ${chiKhacList.length?'<div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Danh mục</th><th>Đối tác</th><th>Remark</th><th style="text-align:right">Số tiền</th></tr></thead><tbody>'
+      +chiKhacList.map(function(t){
+        return '<tr><td>'+(t.date||'—')+'</td><td>'+(t.category||'—')+'</td><td>'+(t.partnerRef?'<span class="bdg bdg-purple">'+t.partnerRef+'</span>':'—')+'</td>'
+          +'<td style="color:var(--text-secondary);font-size:11.5px">'+(t.description||'—')+'</td>'
+          +'<td style="text-align:right;font-weight:700;color:var(--red)">'+_tcFmtMoney(t.amount,t.currency)+'</td></tr>';
+      }).join('')
+    +'</tbody></table></div>':'<div style="text-align:center;padding:1rem;color:var(--text-secondary);font-size:12px">Không có chi phí khác trong khoảng thời gian này</div>'}
   </div>`;
 }
+
 
 
 function renderPartners(){
@@ -5847,8 +6063,8 @@ tr:hover td{background:var(--bg-secondary)}
 .perm-toggle::after{content:'';position:absolute;top:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
 .perm-toggle.on::after{left:19px}.perm-toggle.off::after{left:3px}
 /* DETAIL PANEL */
-.detail-panel{position:fixed;top:0;right:min(-1100px,-98vw);width:min(1100px,98vw);height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:right .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
-.detail-panel.open{right:0}
+.detail-panel{position:fixed;top:0;right:0;transform:translateX(100%);width:clamp(480px,67vw,1600px);max-width:98vw;height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:transform .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
+.detail-panel.open{transform:translateX(0)}
 .dpanel-tabbar{display:flex;align-items:center;gap:2px;background:var(--bg-secondary);border-bottom:1px solid var(--border-light);padding:6px 8px 0;position:sticky;top:0;z-index:10;overflow-x:auto;flex-wrap:nowrap}
 .dpanel-tab{display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-primary);border:1px solid var(--border-light);border-bottom:none;border-radius:8px 8px 0 0;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;color:var(--text-secondary);max-width:200px}
 .dpanel-tab.active{background:var(--bg-primary);color:var(--blue);border-top:2px solid var(--blue);margin-bottom:-1px}
@@ -7334,6 +7550,7 @@ function renderCostingRows(items){
       +'<td style="'+tdS+'"><select id="autounit_'+s.key+'" onchange="autoFillQtyByUnit(this,\''+s.key+'\')" style="font-size:11px;width:80px">'+autoUnitOpts+'</select></td>'
       +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="autoamt_'+s.key+'">'+svcAmt.toLocaleString()+'</td>'
       +'<td style="'+tdS+'"><select id="autocur_'+s.key+'" onchange="updateCostingTotal()" style="font-size:11px;width:65px">'+autoCurOpts+'</select></td>'
+      +'<td style="'+tdS+'"><input type="text" id="autoremark_'+s.key+'" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
       +'<td style="'+tdS+';font-size:10px;color:var(--text-tertiary)"><i class="ti ti-link" title="Từ dịch vụ"></i></td>'
     +'</tr>';
   });
@@ -7348,10 +7565,11 @@ function renderCostingRows(items){
       +'<td style="'+tdS+'"><select id="cunit_'+i+'" onchange="autoFillQtyByUnit(this,\'manual_'+i+'\')" style="font-size:12px;width:80px">'+unitOpts+'</select></td>'
       +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="camt_display_'+i+'">'+calcAmt+'</td>'
       +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:65px">'+curOpts+'</select></td>'
+      +'<td style="'+tdS+'"><input type="text" id="cremark_'+i+'" value="'+(it.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
       +'<td style="'+tdS+';text-align:center"><button class="rac red" onclick="removeCostingItem('+i+')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
     +'</tr>';
   }).join('');
-  body.innerHTML=autoCostRows+(manualRows||'<tr><td colspan="4" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>');
+  body.innerHTML=autoCostRows+(manualRows||'<tr><td colspan="8" style="padding:.75rem;text-align:center;color:var(--text-secondary);font-size:12px">Bấm "+ Thêm chi phí" để nhập</td></tr>');
   updateCostingTotal();
 }
 
@@ -7425,8 +7643,10 @@ async function saveCosting(){
     if(!sv||!sv.on||!sv.cost)return;
     const priceEl=g('autoprice_'+s.key);
     const qtyEl=g('autoqty_'+s.key);
+    const remarkEl=g('autoremark_'+s.key);
     if(priceEl){ sv.cost=parseFloat(priceEl.value)||sv.cost; svcChanged=true; }
     if(qtyEl){ sv.svcQty=parseFloat(qtyEl.value)||sv.svcQty; svcChanged=true; }
+    if(remarkEl){ sv.remark=remarkEl.value||''; svcChanged=true; }
   });
   if(svcChanged){
     try{ await fsSet(colName(detailTt),detailId,{svcs}); }catch(e){}
@@ -7443,7 +7663,10 @@ async function saveCosting(){
       qty,
       amt:price*qty,
       unit:g('cunit_'+i)?.value||it.unit||'Cont',
-      cur:g('ccur_'+i)?.value||it.cur||'USD'
+      cur:g('ccur_'+i)?.value||it.cur||'USD',
+      remark:g('cremark_'+i)?.value||it.remark||'',
+      partnerRef:it.partnerRef||null,
+      fromCashTx:it.fromCashTx||false
     };
   }).filter(function(it){return it.name||it.price;});
   const note=g('costingNote')?.value||'';
