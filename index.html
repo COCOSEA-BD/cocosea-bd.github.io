@@ -4125,18 +4125,22 @@ function runDebtReport(){
       const svcs=r.svcs||{};
       const sh2=r.shipper||r.supplier||'';
       const sp3=cache.partners[sh2]||{};
-      const invSvcs=Object.entries(svcs).filter(function(e){
-        if(!e[1].on||e[1].invoice==='Waived'||e[1].invoice==='No')return false;
-        // Filter by party if filterShipper is active
-        if(filterShipper){
-          const svParty=(e[1].party||'').trim();
-          if(svParty&&svParty!==sh2&&svParty!==(sp3.fullname||'')&&svParty!==(sp3.enName||'')&&svParty!==(sp3.enShort||''))return false;
-        }
-        return true;
-      });
+      function partyOk(sv){
+        if(!filterShipper)return true;
+        const svParty=(sv.party||'').trim();
+        return !svParty||svParty===sh2||svParty===(sp3.fullname||'')||svParty===(sp3.enName||'')||svParty===(sp3.enShort||'');
+      }
+      const invSvcs=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice!=='Waived'&&e[1].invoice!=='No'&&partyOk(e[1]);});
+      const invSvcsNo=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice==='No'&&partyOk(e[1]);});
       const rowTotal={};
       invSvcs.forEach(function(e){const sv=e[1];const cur=sv.cur||'USD';const amt=sv.amount||(sv.price||0)*(sv.qty||1);if(!rowTotal[cur])rowTotal[cur]=0;rowTotal[cur]+=amt;});
+      const rowTotalNo={};
+      invSvcsNo.forEach(function(e){const sv=e[1];const cur=sv.cur||'USD';const amt=sv.amount||(sv.price||0)*(sv.qty||1);if(!rowTotalNo[cur])rowTotalNo[cur]=0;rowTotalNo[cur]+=amt;});
+      const rowTotalAll={};
+      [rowTotal,rowTotalNo].forEach(function(obj){Object.entries(obj).forEach(function(e){if(!rowTotalAll[e[0]])rowTotalAll[e[0]]=0;rowTotalAll[e[0]]+=e[1];});});
       const rowTotalStr=Object.entries(rowTotal).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'—';
+      const rowTotalNoStr=Object.entries(rowTotalNo).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'—';
+      const rowTotalAllStr=Object.entries(rowTotalAll).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'—';
       return '<tr>'
         +'<td style="'+tdS+';font-weight:600"><button class="plink" data-id="'+r._id+'" data-tt="'+(r.loai==='Xuất'?'xuat':'nhap')+'" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-align:left" onclick="openDetail(this.dataset.id,this.dataset.tt,&#39;invoice&#39;)">'+r.bookingNo+'</button></td>'
         +'<td style="'+tdS+'"><span class="bdg '+(r.loai==='Xuất'?'bdg-b':'bdg-a')+'">'+r.loai+'</span></td>'
@@ -4145,6 +4149,8 @@ function runDebtReport(){
         +'<td style="'+tdS+'">'+(r.pol||'—')+' → '+(r.pod||'—')+'</td>'
         +'<td style="'+tdS+'"><span class="bdg '+(SB[r.status]||'bdg-gr')+'">'+r.status+'</span></td>'
         +'<td style="'+tdS+';color:var(--green);font-weight:600">'+rowTotalStr+'</td>'
+        +'<td style="'+tdS+';color:var(--orange);font-weight:600">'+rowTotalNoStr+'</td>'
+        +'<td style="'+tdS+';color:var(--text-primary);font-weight:700">'+rowTotalAllStr+'</td>'
         +(function(){var pm=r.dnPayStatus||{};var vals=Object.values(pm);var paid=vals.length&&vals.every(function(v){return v==='paid';});return '<td style="'+tdS+';font-weight:600;color:'+(paid?'var(--green)':'var(--red)')+'">'+(paid?'Đã TT':'Chưa TT')+'</td>';})()
         +'</tr>';
     }).join('');
@@ -4155,7 +4161,7 @@ function runDebtReport(){
         +'<div style="font-size:12px"><span style="color:var(--text-secondary)">'+data.rows.length+' lô</span> &nbsp;|&nbsp; Tổng: <strong style="color:var(--green)">'+totalStr+'</strong></div>'
       +'</div>'
       +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
-        +'<thead><tr><th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Doanh thu (Invoice)</th><th style="'+thS+'">Trạng thái TT</th></tr></thead>'
+        +'<thead><tr><th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Doanh thu (Invoice)</th><th style="'+thS+'">Doanh thu không hóa đơn</th><th style="'+thS+'">Total</th><th style="'+thS+'">Trạng thái TT</th></tr></thead>'
         +'<tbody>'+rows+'</tbody>'
       +'</table></div>'
     +'</div>';
@@ -11319,8 +11325,54 @@ function exportSOA(){
       +'</tr></tfoot></table>';
   }
 
-  var ctyTable=buildSummaryTable('TT Công ty',function(d){return d.preYes;},function(d){return d.vatYes;},function(d){return d.totalYes;},gCtyPre,gCtyVat,gCtyTot,'#0F6E56');
-  var cnTable=buildSummaryTable('TT Cá nhân',function(d){return d.preNo;},function(d){return d.vatNo;},function(d){return d.totalNo;},gCNPre,gCNVat,gCNTot,'#1f5fa8');
+  // Gộp chung 1 bảng: mỗi lô tách thành 1-2 dòng (Có hóa đơn / Không hóa đơn) nếu lô đó có cả 2 loại phí.
+  function buildMergedTable(){
+    var displayRows=[];
+    lotData.forEach(function(d){
+      if(d.totalYes>0)displayRows.push({d:d,kind:'Có hóa đơn',pre:d.preYes,vat:d.vatYes,tot:d.totalYes,color:'#0F6E56'});
+      if(d.totalNo>0)displayRows.push({d:d,kind:'Không hóa đơn',pre:d.preNo,vat:d.vatNo,tot:d.totalNo,color:'#1f5fa8'});
+    });
+    if(!displayRows.length)return '<div style="font-size:11px;color:#999;padding:8px 0">Không có khoản thanh toán nào</div>';
+    var rows='';
+    displayRows.forEach(function(row,i){
+      var r=row.d.r;
+      var bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||'—'));
+      var podStr=(r.vol?(r.vol+(r.typeCont?'x'+r.typeCont:'')+' đi '):'')+(r.pod||'—');
+      var bg=i%2===0?'#fff':'#f8f8f6';
+      rows+='<tr style="background:'+bg+'">'
+        +'<td style="'+tdStyle+';color:#666;text-align:center">'+(i+1)+'</td>'
+        +'<td style="'+tdStyle+';font-weight:600">'+bkgNos+'</td>'
+        +'<td style="'+tdStyle+'">'+(r.mblNo||'—')+'</td>'
+        +'<td style="'+tdStyle+'">'+((r.etd||'—').replace(/-/g,'/'))+'</td>'
+        +'<td style="'+tdStyle+'">'+podStr+'</td>'
+        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+row.color+'">'+row.kind+'</td>'
+        +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(row.pre)+'</td>'
+        +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(row.vat)+'</td>'
+        +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:'+row.color+'">'+fmt(row.tot)+'</td>'
+        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(row.d.payStatus==='Đã TT'?'#0F6E56':'#A32D2D')+'">'+row.d.payStatus+'</td>'
+      +'</tr>';
+    });
+    return '<table style="border-collapse:collapse;width:100%;margin-bottom:6px"><thead><tr style="background:#0F6E56">'
+      +'<th style="'+thStyle+';text-align:center">#</th>'
+      +'<th style="'+thStyle+';text-align:left">Booking No</th>'
+      +'<th style="'+thStyle+';text-align:left">MBL No</th>'
+      +'<th style="'+thStyle+';text-align:left">ETD</th>'
+      +'<th style="'+thStyle+';text-align:left">POD</th>'
+      +'<th style="'+thStyle+';text-align:center">Loại</th>'
+      +'<th style="'+thStyle+';text-align:right">Trước VAT</th>'
+      +'<th style="'+thStyle+';text-align:right">VAT</th>'
+      +'<th style="'+thStyle+';text-align:right">Tổng</th>'
+      +'<th style="'+thStyle+';text-align:center">TT</th>'
+      +'</tr></thead><tbody>'+rows+'</tbody>'
+      +'<tfoot><tr style="background:#f0efe9;font-weight:700">'
+      +'<td colspan="6" style="'+tdStyle+';text-align:right;font-size:11px">TỔNG CỘNG</td>'
+      +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(gCtyPre+gCNPre)+'</td>'
+      +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(gCtyVat+gCNVat)+'</td>'
+      +'<td style="'+tdStyle+';text-align:right;font-size:13px;color:#0F6E56">'+fmt(gCtyTot+gCNTot)+'</td>'
+      +'<td style="'+tdStyle+'"></td>'
+      +'</tr></tfoot></table>';
+  }
+  var mergedTable=buildMergedTable();
 
   // ===== PAGE 2+: Debit Notes per lot =====
   var dnPages='';
@@ -11394,12 +11446,9 @@ function exportSOA(){
         +'<div style="font-size:11px;color:#666;margin-top:4px">'+lots.length+' lô hàng · ROE: '+roe.toLocaleString()+'</div>'
       +'</div>'
     +'</div>'
-    // TT Công ty section
-    +'<div style="font-size:13px;font-weight:800;color:#0F6E56;margin:14px 0 6px;padding-left:8px;border-left:4px solid #0F6E56">A. THANH TOÁN CÔNG TY (có hóa đơn VAT)</div>'
-    +ctyTable
-    // TT Cá nhân section
-    +'<div style="font-size:13px;font-weight:800;color:#1f5fa8;margin:18px 0 6px;padding-left:8px;border-left:4px solid #1f5fa8">B. THANH TOÁN CÁ NHÂN (không hóa đơn)</div>'
-    +cnTable
+    // Bảng tổng hợp công nợ (gộp chung — không chia bảng A/B nữa)
+    +'<div style="font-size:13px;font-weight:800;color:#0F6E56;margin:14px 0 6px;padding-left:8px;border-left:4px solid #0F6E56">BẢNG TỔNG HỢP CÔNG NỢ</div>'
+    +mergedTable
     // Grand total box
     +'<div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">'
       +'<div style="border:'+bd+';border-radius:6px;padding:10px;text-align:center"><div style="font-size:10px;color:#666;text-transform:uppercase">Tổng TT Công ty</div><div style="font-size:16px;font-weight:800;color:#0F6E56">'+fmt(gCtyTot)+'</div></div>'
