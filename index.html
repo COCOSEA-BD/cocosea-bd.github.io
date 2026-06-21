@@ -4167,20 +4167,30 @@ function runDebtReport(){
     +'</div>';
   });
 
-  // Grand summary
-  const grandTotals={};
+  // Grand summary — 3 box: Có hóa đơn / Không hóa đơn / Tổng cả 2
+  const grandTotals={}, grandTotalsNo={}, grandTotalsAll={};
   filtered.forEach(function(r){
     const svcs=r.svcs||{};
     Object.values(svcs).forEach(function(sv){
-      if(!sv.on||sv.invoice==='Waived'||sv.invoice==='No')return;
+      if(!sv.on||sv.invoice==='Waived')return;
       const cur=sv.cur||'USD';
       const amt=sv.amount||(sv.price||0)*(sv.qty||1);
-      if(!grandTotals[cur])grandTotals[cur]=0;
-      grandTotals[cur]+=amt;
+      const tgt=sv.invoice==='No'?grandTotalsNo:grandTotals;
+      if(!tgt[cur])tgt[cur]=0; tgt[cur]+=amt;
+      if(!grandTotalsAll[cur])grandTotalsAll[cur]=0; grandTotalsAll[cur]+=amt;
     });
   });
-  const grandStr=Object.entries(grandTotals).map(function(e){return '<strong style="color:var(--green)">'+e[1].toLocaleString()+' '+e[0]+'</strong>';}).join(' + ')||'0';
-  html='<div style="padding:.65rem 1rem;background:var(--green-bg);border:1px solid var(--border-light);border-radius:8px;margin-bottom:.75rem;font-size:12.5px;display:flex;gap:1rem;align-items:center"><i class="ti ti-chart-bar" style="color:var(--green)"></i> <span>Tổng hợp kỳ: '+filtered.length+' lô hàng &nbsp;|&nbsp; Tổng doanh thu: '+grandStr+'</span></div>'+html;
+  function _sumStr(obj,color){return Object.entries(obj).map(function(e){return '<strong style="color:'+color+'">'+e[1].toLocaleString()+' '+e[0]+'</strong>';}).join(' + ')||'<strong style="color:'+color+'">0</strong>';}
+  const grandStr=_sumStr(grandTotals,'var(--green)');
+  const grandStrNo=_sumStr(grandTotalsNo,'var(--orange)');
+  const grandStrAll=_sumStr(grandTotalsAll,'var(--blue)');
+  function _sumBox(label,val,bg,bd){return '<div style="flex:1;min-width:200px;padding:.65rem 1rem;background:'+bg+';border:1px solid '+bd+';border-radius:8px"><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">'+label+'</div><div style="font-size:15px">'+val+'</div></div>';}
+  html='<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.5rem"><i class="ti ti-chart-bar"></i> Tổng hợp kỳ: '+filtered.length+' lô hàng</div>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:.75rem">'
+      +_sumBox('Tổng doanh thu có hóa đơn',grandStr,'var(--green-bg)','var(--border-light)')
+      +_sumBox('Tổng doanh thu không hóa đơn',grandStrNo,'rgba(245,158,11,.08)','rgba(245,158,11,.3)')
+      +_sumBox('Tổng cả 2',grandStrAll,'rgba(59,130,246,.08)','rgba(59,130,246,.3)')
+    +'</div>'+html;
 
   g('cnReportResult').innerHTML=html;
 }
@@ -5062,6 +5072,31 @@ function _registerRobotoFont(doc){
   }
 }
 
+// Đọc số tiền VND thành chữ tiếng Việt (dùng chung cho PDF Debit Note jsPDF)
+function _numToWordsVN(n){
+  n=Math.round(n);
+  if(n===0)return'Không đồng';
+  const units=['','một','hai','ba','bốn','năm','sáu','bảy','tám','chín'];
+  const teens=['mười','mười một','mười hai','mười ba','mười bốn','mười lăm','mười sáu','mười bảy','mười tám','mười chín'];
+  function readGroup(g){
+    let s='';
+    const h=Math.floor(g/100),t=Math.floor((g%100)/10),u=g%10;
+    if(h){s+=units[h]+' trăm ';}
+    if(t>1){s+=units[t]+' mươi ';if(u)s+=units[u]+' ';}
+    else if(t===1){s+=(u?teens[u]:teens[0])+' ';}
+    else if(u&&h)s+='lẻ '+units[u]+' ';
+    else if(u)s+=units[u]+' ';
+    return s;
+  }
+  const parts=[];
+  const labels=['','nghìn','triệu','tỷ'];
+  let temp=n,i=0;
+  while(temp>0){parts.unshift({v:temp%1000,l:labels[i]});temp=Math.floor(temp/1000);i++;}
+  let result='';
+  parts.forEach(function(p){if(p.v)result+=readGroup(p.v)+(p.l?' '+p.l+' ':'');});
+  return result.trim().replace(/\s+/g,' ').charAt(0).toUpperCase()+result.trim().slice(1)+' đồng';
+}
+
 // Vẽ PDF Debit Note trực tiếp bằng jsPDF + autoTable (từ DỮ LIỆU thật, không qua chụp ảnh HTML)
 // rồi trả về qua callback(blob). Tự bao gồm xử lý lỗi.
 function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb){
@@ -5173,7 +5208,14 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
       headStyles:{font:'Roboto',fillColor:LIGHTBG,textColor:NAVY,fontStyle:'bold',fontSize:7.5},
       styles:{font:'Roboto',fontSize:8,cellPadding:2,lineColor:[200,216,240],lineWidth:0.1},
       columnStyles:{0:{cellWidth:9},2:{halign:'right'},5:{halign:'right'},7:{halign:'right'}}});
-    y=doc.lastAutoTable.finalY+4;
+    y=doc.lastAutoTable.finalY+1;
+
+    // Bằng chữ
+    doc.setFillColor(240,245,252);
+    doc.rect(ML,y,CW,6,'F');
+    doc.setFont('Roboto','normal'); doc.setFontSize(8); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+    doc.text('Bằng chữ: '+_numToWordsVN(grandWithVAT),PW-MR,y+4,{align:'right'});
+    y+=10;
 
     // NOTICE
     doc.setFillColor(255,251,234); doc.setDrawColor(240,208,96); doc.setLineWidth(0.2);
