@@ -718,18 +718,31 @@ function _applySecuritySettings(){
   }
 }
 
+let _pwPromptOpen=false; // guard tránh mở popup nhiều lần
 function _checkPasswordExpiry(){
   if(!currentUser||!_securitySettings.password||!_securitySettings.password.enabled)return;
+  if(_pwPromptOpen)return; // popup đang mở, không gọi lại
+
+  const lastChange=currentProfile&&currentProfile.lastPasswordChange;
+
+  // Nếu chưa có lastPasswordChange, khởi tạo ngay (không ép đổi mật khẩu lần đầu)
+  if(!lastChange){
+    const now=Date.now();
+    db.collection('profiles').doc(currentUser.uid).set({lastPasswordChange:now},{merge:true}).catch(function(){});
+    if(currentProfile)currentProfile.lastPasswordChange=now;
+    return; // bắt đầu tính từ bây giờ, chưa ép đổi
+  }
+
   const limitMs=(_securitySettings.password.minutes||10080)*60*1000;
-  const lastChange=currentProfile&&currentProfile.lastPasswordChange||0;
   const elapsed=Date.now()-lastChange;
   if(elapsed>limitMs){
-    toast('Mật khẩu đã quá hạn — vui lòng đổi mật khẩu để tiếp tục sử dụng','error');
+    toast('Mật khẩu đã quá hạn — vui lòng đổi mật khẩu để tiếp tục','error');
     openPasswordChangePrompt();
   }
 }
 
 function openPasswordChangePrompt(){
+  _pwPromptOpen=true;
   const ov=g('payStatusOv'); if(!ov)return;
   ov.innerHTML=`
   <div class="modal" style="max-width:360px">
@@ -742,7 +755,7 @@ function openPasswordChangePrompt(){
     </div>
     <div class="mftr">
       <button class="btn pri" onclick="doChangePassword()"><i class="ti ti-check"></i> Đổi mật khẩu</button>
-      <button class="btn" onclick="closeOv('payStatusOv');doLogout()">Đăng xuất</button>
+      <button class="btn" onclick="_pwPromptOpen=false;closeOv('payStatusOv');doLogout()">Đăng xuất</button>
     </div>
   </div>`;
   openOv('payStatusOv');
@@ -761,8 +774,10 @@ async function doChangePassword(){
     const cred=firebase.auth.EmailAuthProvider.credential(currentUser.email,old);
     await currentUser.reauthenticateWithCredential(cred);
     await currentUser.updatePassword(nw);
-    await fsSet('profiles',currentUser.uid,{lastPasswordChange:Date.now()},{merge:true});
-    if(currentProfile)currentProfile.lastPasswordChange=Date.now();
+    const now=Date.now();
+    await db.collection('profiles').doc(currentUser.uid).set({lastPasswordChange:now},{merge:true});
+    if(currentProfile)currentProfile.lastPasswordChange=now;
+    _pwPromptOpen=false;
     closeOv('payStatusOv');
     toast('Đã đổi mật khẩu thành công');
   }catch(e){toast('Lỗi: '+(e.code==='auth/wrong-password'?'Mật khẩu hiện tại không đúng':e.message),'error');}
