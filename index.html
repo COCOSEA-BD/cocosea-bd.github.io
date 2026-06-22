@@ -11529,8 +11529,9 @@ async function saveVessel(){
   // Clean empty PODs
   const pods=d.pods.filter(function(p){return (p.pod||'').trim();});
 
-  // Detect affected lots if ETD/ETA changed (only when editing existing vessel)
+  // Detect affected lots if ETD/ETA/CutOff changed (only when editing existing vessel)
   let affected=[];
+  let cutoffChanged=false;
   if(_vesselEditId){
     const old=(cache.vessels||[]).find(function(x){return x._id===_vesselEditId;})||{};
     const etdChanged=old.etd!==d.etd;
@@ -11538,7 +11539,10 @@ async function saveVessel(){
     const oldEtaMap={}; (old.pods||[]).forEach(function(p){oldEtaMap[(p.pod||'').toLowerCase()]=p.eta;});
     let etaChanged=false;
     Object.keys(etaMap).forEach(function(k){if(oldEtaMap[k]!==etaMap[k])etaChanged=true;});
-    if(etdChanged||etaChanged){
+    const newCY=d.cutoffCY||_vesselCalcDefaultCutoff(d.etd)||'';
+    const newSI=d.cutoffSI||_vesselCalcDefaultCutoff(d.etd)||'';
+    cutoffChanged=(old.cutoffCY||'')!==newCY||(old.cutoffSI||'')!==newSI;
+    if(etdChanged||etaChanged||cutoffChanged){
       affected=_findLotsForVessel(d.vessel,d.voy);
     }
   }
@@ -11563,7 +11567,10 @@ async function saveVessel(){
     toast('Đã lưu tàu');
     // If lots affected by ETD/ETA change, ask to sync
     if(affected.length){
-      _promptSyncLots(d.vessel,d.voy,d.etd,pods,affected);
+      _promptSyncLots(d.vessel,d.voy,d.etd,pods,affected,
+        d.cutoffCY||_vesselCalcDefaultCutoff(d.etd)||'',
+        d.cutoffSI||_vesselCalcDefaultCutoff(d.etd)||'',
+        cutoffChanged);
     }
   }catch(e){setLoading(false);toast('Lỗi: '+e.message,'error');}
 }
@@ -11597,8 +11604,8 @@ function _findLotsForVessel(vessel,voy){
 }
 
 // Prompt user with affected lots before updating ETD/ETA
-function _promptSyncLots(vessel,voy,etd,pods,affected){
-  window._vesselSyncCtx={vessel:vessel,voy:voy,etd:etd,pods:pods,affected:affected};
+function _promptSyncLots(vessel,voy,etd,pods,affected,cutoffCY,cutoffSI,cutoffChanged){
+  window._vesselSyncCtx={vessel:vessel,voy:voy,etd:etd,pods:pods,affected:affected,cutoffCY:cutoffCY||'',cutoffSI:cutoffSI||'',cutoffChanged:!!cutoffChanged};
   const rows=affected.map(function(o){
     const r=o.r;
     const podKey=(r.pod||'').toLowerCase();
@@ -11607,20 +11614,24 @@ function _promptSyncLots(vessel,voy,etd,pods,affected){
     return '<tr>'
       +'<td style="font-size:12px;font-weight:600">'+(r.bookingNo||r.jobNo||'—')+'</td>'
       +'<td style="font-size:11.5px">'+(r.shipper||r.supplier||'—')+'</td>'
-      +'<td style="font-size:11.5px">ETD: '+(r.etd?_vesFmtDate(r.etd):'—')+' → <b style="color:var(--blue)">'+(etd?_vesFmtDate(etd):'—')+'</b></td>'
-      +'<td style="font-size:11.5px">'+(r.pod||'—')+': '+(r.eta?_vesFmtDate(r.eta):'—')+(newEta?' → <b style="color:var(--blue)">'+_vesFmtDate(newEta)+'</b>':'')+'</td>'
-      +'</tr>';
+      +'<td style="font-size:11.5px">ETD: '+(r.etd?_vesFmtDate(r.etd):'—')+(etd&&r.etd!==etd?' → <b style="color:var(--blue)">'+_vesFmtDate(etd)+'</b>':'')+'</td>'
+      +'<td style="font-size:11.5px">'+(r.pod||'—')+': '+(r.eta?_vesFmtDate(r.eta):'—')+(newEta&&newEta!==r.eta?' → <b style="color:var(--blue)">'+_vesFmtDate(newEta)+'</b>':'')+'</td>'
+      +(cutoffChanged?'<td style="font-size:11px;color:var(--blue)">CY: '+(cutoffCY||'—')+'<br>SI: '+(cutoffSI||'—')+'</td>':'')
+    +'</tr>';
   }).join('');
-  g('combineOv').innerHTML='<div class="modal" style="max-width:600px">'
-    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-refresh" style="margin-right:6px"></i>Đồng bộ ETD/ETA cho lô hàng</div>'
+  const cutoffCol=cutoffChanged?'<th style="text-align:left;padding:6px;font-size:10.5px;text-transform:uppercase;color:var(--text-secondary)">Cut Off mới</th>':'';
+  g('combineOv').innerHTML='<div class="modal" style="max-width:650px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-refresh" style="margin-right:6px"></i>Đồng bộ thông tin tàu cho lô hàng</div>'
     +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="mbody" style="padding:16px 20px;max-height:60vh;overflow:auto">'
-      +'<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Tàu <b>'+vessel+(voy?' / '+voy:'')+'</b> có thay đổi ngày. '+affected.length+' lô hàng dùng tàu này sẽ được cập nhật:</div>'
+      +'<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Tàu <b>'+vessel+(voy?' / '+voy:'')+'</b> có thay đổi. <b>'+affected.length+'</b> lô hàng dùng tàu này sẽ được cập nhật:</div>'
+      +(cutoffChanged?'<div style="background:rgba(26,75,140,.07);border:1px solid rgba(26,75,140,.2);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12px"><i class="ti ti-clock" style="color:var(--blue)"></i> <b>Cut Off CY:</b> '+(cutoffCY||'—')+'&nbsp;&nbsp;&nbsp;<b>Cut Off SI:</b> '+(cutoffSI||'—')+'&nbsp; → áp dụng cho tất cả lô trên tàu này</div>':'')
       +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)">'
         +'<th style="text-align:left;padding:6px;font-size:10.5px;text-transform:uppercase;color:var(--text-secondary)">Booking</th>'
         +'<th style="text-align:left;padding:6px;font-size:10.5px;text-transform:uppercase;color:var(--text-secondary)">Khách</th>'
         +'<th style="text-align:left;padding:6px;font-size:10.5px;text-transform:uppercase;color:var(--text-secondary)">ETD</th>'
         +'<th style="text-align:left;padding:6px;font-size:10.5px;text-transform:uppercase;color:var(--text-secondary)">POD / ETA</th>'
+        +cutoffCol
       +'</tr></thead><tbody>'+rows+'</tbody></table>'
     +'</div>'
     +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
@@ -11644,8 +11655,17 @@ async function doSyncLots(){
       const podKey=(r.pod||'').toLowerCase();
       const match=ctx.pods.find(function(p){return (p.pod||'').toLowerCase()===podKey;});
       if(match&&match.eta)upd.eta=match.eta;
+      // Cut Off CY và SI — luôn đồng bộ nếu có thay đổi
+      if(ctx.cutoffChanged){
+        if(ctx.cutoffCY)upd.cutoffCY=ctx.cutoffCY;
+        if(ctx.cutoffSI)upd.cutoffSI=ctx.cutoffSI;
+      }
       if(Object.keys(upd).length){
-        await fsSet(o.tt==='xuat'?'lots_xuat':'lots_nhap', r._id, upd);
+        const colN=o.tt==='xuat'?'lots_xuat':'lots_nhap';
+        await fsSet(colN, r._id, upd);
+        // Cập nhật cache ngay để không cần reload
+        const cr=cache[o.tt]&&cache[o.tt].find(function(x){return x._id===r._id;});
+        if(cr)Object.assign(cr,upd);
       }
     }
     setLoading(false);
