@@ -4994,12 +4994,67 @@ function exportSupplierExcel(partner){
   if(!XLSXlib){toast('Đang tải thư viện Excel, thử lại sau giây lát','error');return;}
   const s=_tcSupplierBreakdown().find(function(x){return x.partner===partner;});
   if(!s){toast('Không có dữ liệu','error');return;}
+
+  // Thông tin công ty
+  const co=window._contractPartyA&&window._contractPartyA.name?window._contractPartyA:_coInfo();
+  const coName=co.name||'CÔNG TY TNHH COCO SEA';
+  const coAddr=co.addr||'991B Tân Kỳ Tân Quý, P.Bình Hưng Hòa, TP.HCM';
+  const coMst=co.mst||'0319570124';
+
+  // Thông tin NCC từ CRM
+  const nccPt=cache.partners&&cache.partners[partner];
+  const nccBanks=(nccPt&&nccPt.vndBanks)||[];
+
   const wb=XLSXlib.utils.book_new();
-  const ws=[['Nhà cung cấp',s.partner],[],['Lô hàng','Loại','Ngày ETD','Nội dung chi phí','Số tiền','Tiền tệ']];
-  s.lots.forEach(function(l){ws.push([l.bookingNo,l.tt==='xuat'?'Xuất':'Nhập',l.date,l.name,l.amt,l.cur]);});
-  ws.push([]); ws.push(['','','','Tổng cộng:']);
-  Object.entries(s.total).forEach(function(e){ws.push(['','','','',e[1],e[0]]);});
-  XLSXlib.utils.book_append_sheet(wb,XLSXlib.utils.aoa_to_sheet(ws),'Phai tra');
+  const rows=[];
+
+  // Header công ty
+  rows.push([coName,'','','','','']);
+  rows.push(['MST: '+coMst,'','','ĐỊA CHỈ: '+coAddr,'','']);
+  rows.push(['','','','','','']);
+  rows.push(['BẢNG ĐỐI SOÁT CÔNG NỢ — PHẢI TRẢ NHÀ CUNG CẤP','','','','','']);
+  rows.push(['Nhà cung cấp: '+partner,'','','Ngày xuất: '+new Date().toLocaleDateString('vi-VN'),'','']);
+
+  // Bank info NCC
+  if(nccBanks.length){
+    rows.push(['Tài khoản NCC:','','','','','']);
+    nccBanks.forEach(function(b){
+      rows.push([b.acctName||b.account,'STK: '+b.account,'NH: '+b.bank,'','','']);
+    });
+  } else if(nccPt&&(nccPt.bankAcc||nccPt.bankName)){
+    rows.push(['TK USD NCC: '+(nccPt.acctName||''),'STK: '+(nccPt.bankAcc||''),'NH: '+(nccPt.bankName||''),'','','']);
+  }
+
+  rows.push(['','','','','','']);
+
+  // Bảng chi tiết
+  rows.push(['STT','Booking / Job','Loại','ETD','Nội dung chi phí','Số tiền','Tiền tệ','Trạng thái TT','Ngày TT']);
+  s.lots.forEach(function(l,i){
+    rows.push([
+      i+1,
+      l.bookingNo||l.jobNo||'',
+      l.tt==='xuat'?'Xuất khẩu':'Nhập khẩu',
+      l.date?fmtDMY(l.date):'',
+      l.name||'',
+      l.amt||0,
+      l.cur||'VND',
+      l.paidStatus==='paid'?'Đã TT':'Chưa TT',
+      l.paidDate?fmtDMY(l.paidDate):''
+    ]);
+  });
+
+  // Tổng cộng
+  rows.push(['','','','','','','','','']);
+  Object.entries(s.total).forEach(function(e){
+    rows.push(['','','','','Tổng cộng ('+e[0]+')',e[1],e[0],'','']);
+  });
+
+  const ws=XLSXlib.utils.aoa_to_sheet(rows);
+
+  // Column widths
+  ws['!cols']=[{wch:5},{wch:18},{wch:12},{wch:12},{wch:30},{wch:16},{wch:8},{wch:12},{wch:12}];
+
+  XLSXlib.utils.book_append_sheet(wb,ws,'Phai tra NCC');
   XLSXlib.writeFile(wb,'PhaiTra_'+partner.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   toast('Đã xuất Excel cho '+partner);
 }
@@ -5009,21 +5064,143 @@ function exportSupplierPdf(partner){
   _loadJsPdf(function(){
     const s=_tcSupplierBreakdown().find(function(x){return x.partner===partner;});
     if(!s){toast('Không có dữ liệu','error');return;}
+
     const jsPDFCtor=window.jspdf.jsPDF;
     const doc=new jsPDFCtor({unit:'pt',format:'a4'});
-    doc.setFontSize(14); doc.text('BÁO CÁO PHẢI TRẢ — '+s.partner,40,40);
-    doc.setFontSize(9); doc.setTextColor(120); doc.text('Ngày xuất: '+new Date().toLocaleDateString('vi-VN'),40,58);
-    const body=s.lots.map(function(l){return [l.bookingNo,l.tt==='xuat'?'Xuất':'Nhập',l.date||'',l.name,l.amt.toLocaleString(),l.cur];});
+    _registerRobotoFont(doc);
+    doc.setFont('Roboto','normal');
+
+    const co=window._contractPartyA&&window._contractPartyA.name?window._contractPartyA:_coInfo();
+    const coName=co.name||'CÔNG TY TNHH COCO SEA';
+    const coAddr=co.addr||'991B Tân Kỳ Tân Quý, P.Bình Hưng Hòa, TP.HCM';
+    const coMst=co.mst||'0319570124';
+    const nccPt=cache.partners&&cache.partners[partner];
+    const nccBanks=(nccPt&&nccPt.vndBanks)||[];
+    const pgW=595.28;
+    const margin=36;
+
+    // ── Header công ty ──────────────────────────────────────────────
+    doc.setFillColor(26,75,140);
+    doc.rect(0,0,pgW,52,'F');
+    doc.setFont('Roboto','bold');
+    doc.setFontSize(13);
+    doc.setTextColor(255,255,255);
+    doc.text(coName,margin,22);
+    doc.setFont('Roboto','normal');
+    doc.setFontSize(8.5);
+    doc.text('MST: '+coMst+'   |   Địa chỉ: '+coAddr,margin,36);
+
+    // ── Tiêu đề ─────────────────────────────────────────────────────
+    let y=72;
+    doc.setFont('Roboto','bold');
+    doc.setFontSize(14);
+    doc.setTextColor(26,75,140);
+    doc.text('BẢNG ĐỐI SOÁT CÔNG NỢ',pgW/2,y,{align:'center'});
+    y+=18;
+    doc.setFont('Roboto','normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(80,80,80);
+    doc.text('Phải trả nhà cung cấp',pgW/2,y,{align:'center'});
+    y+=18;
+
+    // ── Thông tin NCC + ngày ────────────────────────────────────────
+    doc.setFillColor(242,246,254);
+    doc.rect(margin,y,pgW-margin*2,nccBanks.length>0?32+nccBanks.length*14:32,'F');
+    doc.setFont('Roboto','bold');
+    doc.setFontSize(10);
+    doc.setTextColor(0,0,0);
+    y+=14;
+    doc.text('Nhà cung cấp: '+partner,margin+8,y);
+    doc.setFont('Roboto','normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(80,80,80);
+    doc.text('Ngày xuất: '+new Date().toLocaleDateString('vi-VN'),pgW-margin-8,y,{align:'right'});
+    y+=12;
+
+    // NCC bank info
+    if(nccBanks.length){
+      nccBanks.forEach(function(b,i){
+        const info='TK: '+(b.account||'—')+'  |  Ngân hàng: '+(b.bank||'—')+'  |  Tên TK: '+(b.acctName||b.account||'');
+        doc.text(info,margin+8,y+i*14);
+      });
+      y+=nccBanks.length*14+8;
+    } else if(nccPt&&nccPt.bankAcc){
+      doc.text('TK USD: '+nccPt.bankAcc+'  |  '+(nccPt.bankName||''),margin+8,y);
+      y+=18;
+    } else {
+      y+=8;
+    }
+
+    // ── Bảng chi tiết ───────────────────────────────────────────────
+    y+=8;
+    const tableBody=s.lots.map(function(l,i){
+      return [
+        (i+1)+'',
+        (l.bookingNo||l.jobNo||'—'),
+        l.tt==='xuat'?'XK':'NK',
+        l.date?fmtDMY(l.date):'',
+        l.name||'',
+        (l.amt||0).toLocaleString()+' '+l.cur,
+        l.paidStatus==='paid'?'Đã TT':'Chưa TT',
+        l.paidDate?fmtDMY(l.paidDate):''
+      ];
+    });
+
     doc.autoTable({
-      startY:75, head:[['Lô hàng','Loại','ETD','Nội dung','Số tiền','Tiền tệ']], body:body,
-      styles:{fontSize:8.5,cellPadding:5}, headStyles:{fillColor:[26,75,140],textColor:255},
-      columnStyles:{4:{halign:'right'}}
+      startY:y,
+      head:[['#','Booking/Job','Loại','ETD','Nội dung','Số tiền','TT','Ngày TT']],
+      body:tableBody,
+      styles:{font:'Roboto',fontSize:8.5,cellPadding:5},
+      headStyles:{fillColor:[26,75,140],textColor:255,fontStyle:'bold',fontSize:8.5},
+      alternateRowStyles:{fillColor:[248,250,255]},
+      columnStyles:{
+        0:{halign:'center',cellWidth:22},
+        1:{cellWidth:80},
+        2:{halign:'center',cellWidth:28},
+        3:{halign:'center',cellWidth:52},
+        5:{halign:'right',cellWidth:70},
+        6:{halign:'center',cellWidth:40},
+        7:{halign:'center',cellWidth:52}
+      },
+      didDrawCell:function(d){
+        if(d.section==='body'&&d.column.index===6){
+          const paid=d.cell.raw==='Đã TT';
+          doc.setFillColor(paid?220:255,paid?255:220,paid?220:220);
+          doc.rect(d.cell.x,d.cell.y,d.cell.width,d.cell.height,'F');
+          doc.setTextColor(paid?0:180,paid?128:0,paid?0:0);
+          doc.setFont('Roboto','bold');
+          doc.text(d.cell.raw,d.cell.x+d.cell.width/2,d.cell.y+d.cell.height/2+3,{align:'center'});
+          doc.setFont('Roboto','normal');
+          doc.setTextColor(0,0,0);
+        }
+      }
     });
-    let y=(doc.lastAutoTable?doc.lastAutoTable.finalY:90)+20;
-    doc.setFontSize(10); doc.setTextColor(0);
-    Object.entries(s.total).forEach(function(e){
-      doc.text('Tổng cộng ('+e[0]+'): '+e[1].toLocaleString(),40,y); y+=16;
-    });
+
+    let finalY=(doc.lastAutoTable?doc.lastAutoTable.finalY:y+60)+16;
+
+    // ── Tổng cộng ────────────────────────────────────────────────────
+    doc.setFillColor(26,75,140);
+    doc.rect(pgW-margin-200,finalY,200,14,'F');
+    doc.setFont('Roboto','bold');
+    doc.setFontSize(9);
+    doc.setTextColor(255,255,255);
+    let totY=finalY+10;
+    const tots=Object.entries(s.total);
+    if(tots.length===1){
+      doc.text('Tổng cộng: '+tots[0][1].toLocaleString()+' '+tots[0][0],pgW-margin-8,totY,{align:'right'});
+    } else {
+      tots.forEach(function(e,i){
+        doc.text('Tổng ('+e[0]+'): '+e[1].toLocaleString(),pgW-margin-8,totY+i*14,{align:'right'});
+      });
+    }
+
+    // ── Footer ───────────────────────────────────────────────────────
+    const pgH=841.89;
+    doc.setFont('Roboto','normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(150,150,150);
+    doc.text('Tài liệu nội bộ — '+coName+' | Xuất từ COCOFLOW',pgW/2,pgH-18,{align:'center'});
+
     doc.save('PhaiTra_'+partner.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.pdf');
     toast('Đã xuất PDF cho '+partner);
   });
@@ -5191,22 +5368,26 @@ function _apPayBadge(status,date,ctx){
   const paid=status==='paid';
   const dateStr=date?(' · '+fmtDMY(date)):'';
   const label=paid?('Đã TT'+dateStr):'Chưa TT';
+  const bg=paid?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)';
+  const col=paid?'var(--green)':'var(--red)';
+  const bdr=paid?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)';
+  const sty='font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:'+bg+';color:'+col+';border:1px solid '+bdr+';cursor:pointer;white-space:nowrap';
   // ctx có thể là string onclick (legacy) hoặc object context
   if(typeof ctx==='object'){
-    const da=Object.keys(ctx).map(function(k){return 'data-ps-'+k+'="'+String(ctx[k]||'').replace(/"/g,'&quot;')+'"';}).join(' ');
-    return '<button onclick="_openPayPopupFromEl(this)" '+da+' style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:'+(paid?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)')+';color:'+(paid?'var(--green)':'var(--red)')+';border:1px solid '+(paid?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)')+';cursor:pointer;white-space:nowrap" title="Click để cập nhật trạng thái thanh toán">'+label+'</button>';
+    // Dùng 1 attribute JSON duy nhất — tránh lỗi HTML lowercasing camelCase keys
+    const ctxEncoded=JSON.stringify(ctx).replace(/"/g,'&quot;');
+    return '<button onclick="_openPayPopupFromEl(this)" data-pctx="'+ctxEncoded+'" style="'+sty+'" title="Click để cập nhật trạng thái thanh toán">'+label+'</button>';
   }
-  return '<button onclick="'+ctx+'" style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:'+(paid?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)')+';color:'+(paid?'var(--green)':'var(--red)')+';border:1px solid '+(paid?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)')+';cursor:pointer;white-space:nowrap" title="Click để cập nhật trạng thái thanh toán">'+label+'</button>';
+  return '<button onclick="'+ctx+'" style="'+sty+'" title="Click để cập nhật trạng thái thanh toán">'+label+'</button>';
 }
 window._apPayBadge=_apPayBadge;
 
-// Đọc data-attributes từ badge button để mở popup
+// Đọc context JSON từ 1 data attribute duy nhất, tránh lỗi HTML lowercase
 function _openPayPopupFromEl(el){
-  var ctx={};
-  Array.from(el.attributes).forEach(function(a){
-    if(a.name.startsWith('data-ps-'))ctx[a.name.slice(8)]=a.value;
-  });
-  openPayStatusPopup(ctx);
+  const raw=el.dataset.pctx||el.getAttribute('data-pctx');
+  if(!raw){console.error('_openPayPopupFromEl: no data-pctx');return;}
+  try{openPayStatusPopup(JSON.parse(raw));}
+  catch(e){console.error('_openPayPopupFromEl JSON error',e);}
 }
 window._openPayPopupFromEl=_openPayPopupFromEl;
 
@@ -5298,34 +5479,48 @@ async function savePayStatusDetail(){
       toast('Cập nhật trạng thái — bấm "Lưu dịch vụ" để ghi vào hệ thống');
 
     } else if(ctx.type==='ap_cost'){
-      // Costing auto row: save directly to Firestore
+      // Costing rows (auto từ SVC và manual thêm mới)
       const colN=colName(ctx.tt);
       const snap=await db.collection(colN).doc(ctx.lotId).get();
       if(!snap.exists){toast('Không tìm thấy lô','error');setLoading(false);return;}
       const r=snap.data();
-      if(ctx.svcKey.startsWith('cost:')){
-        // Manual costing item - use hidden inputs
+      const cr=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
+
+      if(ctx.svcKey&&ctx.svcKey.startsWith('cost:')){
+        // Manual costing item — lưu thẳng Firestore để đồng bộ AP module
         const itemId=ctx.svcKey.slice(5);
-        const si=g('cstatus_'+ctx.costIdx); if(si)si.value=status;
-        const sd=g('cpaiddate_'+ctx.costIdx); if(sd)sd.value=date;
-        const sb=g('cpaidbank_'+ctx.costIdx); if(sb)sb.value=bank;
-        const cr=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
-        if(cr&&cr.costing){
-          const item=(cr.costing.items||[]).find(function(it){return it.id===itemId;});
-          if(item){item.apPaidStatus=status;item.apPaidDate=date;item.apPaidBank=bank;}
+        const items=JSON.parse(JSON.stringify((r.costing||{}).items||[]));
+        const idx=items.findIndex(function(it){return it.id===itemId||('idx_'+items.indexOf(it))===itemId;});
+        if(idx>=0){
+          items[idx].apPaidStatus=status;
+          items[idx].apPaidDate=date;
+          items[idx].apPaidBank=bank;
         }
-        toast('Bấm "Lưu Costing" để ghi vào hệ thống');
+        await db.collection(colN).doc(ctx.lotId).set({costing:Object.assign({},r.costing||{},{items,updatedAt:Date.now()}),updatedAt:Date.now()},{merge:true});
+        // Update cache
+        if(cr){if(!cr.costing)cr.costing={items:[]};cr.costing.items=items;}
+        // Cập nhật hidden inputs để "Lưu Costing" cũng giữ giá trị mới
+        if(ctx.costIdx!=null){
+          const si=g('cstatus_'+ctx.costIdx); if(si)si.value=status;
+          const sd=g('cpaiddate_'+ctx.costIdx); if(sd)sd.value=date;
+          const sb=g('cpaidbank_'+ctx.costIdx); if(sb)sb.value=bank;
+        }
+        // Re-render badge của dòng này
+        if(detailId===ctx.lotId&&typeof renderCostingRows==='function'){
+          const fresh=cr;
+          if(fresh&&g('costingBody'))renderCostingRows((fresh.costing||{}).items||[]);
+        }
+        toast('Đã lưu trạng thái thanh toán');
       } else {
-        // Auto-cost from svc: save directly
+        // Auto-cost từ SVC — lưu vào svcs[key]
         const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
         if(!svcs[ctx.svcKey])svcs[ctx.svcKey]={};
         svcs[ctx.svcKey].apPaidStatus=status; svcs[ctx.svcKey].apPaidDate=date; svcs[ctx.svcKey].apPaidBank=bank;
         await db.collection(colN).doc(ctx.lotId).set({svcs,updatedAt:Date.now()},{merge:true});
-        const cr=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
         if(cr){cr.svcs=cr.svcs||{};cr.svcs[ctx.svcKey]=Object.assign({},cr.svcs[ctx.svcKey],{apPaidStatus:status,apPaidDate:date,apPaidBank:bank});}
-        // Re-render costing if visible
+        // Re-render costing nếu đang mở
         if(detailId===ctx.lotId&&typeof renderCostingRows==='function'){
-          const fresh=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
+          const fresh=cr;
           if(fresh&&g('costingBody'))renderCostingRows((fresh.costing||{}).items||[]);
         }
         toast('Đã cập nhật trạng thái thanh toán');
@@ -5832,6 +6027,41 @@ async function delPartner(name){
   catch(e){ toast('Lỗi: '+e.message,'error'); }
   setLoading(false);
 }
+// Helpers for CRM partner VND bank accounts (multi-row)
+function _crmVndBankRowsHtml(list){
+  if(!list||!list.length) list=[{acctName:'',account:'',bank:''}];
+  return list.map(function(b,i){
+    return '<div style="display:grid;grid-template-columns:1fr 130px 1fr 28px;gap:6px;margin-bottom:5px;align-items:center">'
+      +'<input type="text" class="cg-vnd-acctname" value="'+(b.acctName||'').replace(/"/g,'&quot;')+'" placeholder="Tên thụ hưởng" style="font-size:12px"/>'
+      +'<input type="text" class="cg-vnd-account" value="'+(b.account||'').replace(/"/g,'&quot;')+'" placeholder="Số tài khoản" style="font-size:12px"/>'
+      +'<input type="text" class="cg-vnd-bank" value="'+(b.bank||'').replace(/"/g,'&quot;')+'" placeholder="Ngân hàng" style="font-size:12px"/>'
+      +'<button class="rac red" onclick="this.parentNode.remove()" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button>'
+    +'</div>';
+  }).join('');
+}
+function _crmReadVndBanks(){
+  const wrap=g('cg_vndBanksWrap'); if(!wrap)return [];
+  const rows=wrap.querySelectorAll('[class*="cg-vnd-acctname"]').length ? (() => {
+    const r=[];
+    const accts=wrap.querySelectorAll('.cg-vnd-acctname');
+    const nums=wrap.querySelectorAll('.cg-vnd-account');
+    const banks=wrap.querySelectorAll('.cg-vnd-bank');
+    for(let i=0;i<accts.length;i++){
+      const acctName=accts[i].value||'', account=nums[i].value||'', bank=banks[i].value||'';
+      if(acctName||account||bank) r.push({acctName,account,bank});
+    }
+    return r;
+  })() : [];
+  return rows;
+}
+function _crmAddVndBank(){
+  const wrap=g('cg_vndBanksWrap'); if(!wrap)return;
+  const div=document.createElement('div');
+  div.innerHTML=_crmVndBankRowsHtml([{acctName:'',account:'',bank:''}]);
+  wrap.appendChild(div.firstChild);
+}
+window._crmAddVndBank=_crmAddVndBank;
+
 /* ─── CRM: Trang chi tiết đối tác (3 tab: Thông tin chung / Người liên hệ / Cnee) ─── */
 function _isEditingCrmDetail(){
   const panel=g('crmDetailOv'); if(!panel)return false;
@@ -5904,8 +6134,12 @@ function renderCrmGeneralTab(p){
     <div class="fi full"><label class="lbl">Tên tiếng Anh (Company)</label><input type="text" id="cg_enName" value="${(p.enName||'').replace(/"/g,'&quot;')}" placeholder="Full English company name"/></div>
     <div class="fi full"><label class="lbl">Tên tiếng Anh rút gọn (ký tên cuối văn bản)</label><input type="text" id="cg_enShort" value="${(p.enShort||'').replace(/"/g,'&quot;')}" placeholder="VD: LINDA ASIA CO., LTD"/></div>
     <div class="fi full"><label class="lbl">Địa chỉ tiếng Anh</label><input type="text" id="cg_enAddr" value="${(p.enAddr||'').replace(/"/g,'&quot;')}" placeholder="English address"/></div>
-    <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Thông tin ngân hàng (cho Invoice)</div></div>
-    <div class="fi full"><label class="lbl">ACCOUNT NAME</label><input type="text" id="cg_acctName" value="${(p.acctName||p.enName||'').replace(/"/g,'&quot;')}" placeholder="Beneficiary name"/></div>
+    <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Thông tin ngân hàng</div></div>
+    <div class="fi full"><label class="lbl">Tên thụ hưởng (Beneficiary)</label><input type="text" id="cg_acctName" value="${(p.acctName||p.enName||'').replace(/"/g,'&quot;')}" placeholder="Tên người/công ty thụ hưởng"/></div>
+    <div class="fi full" style="font-size:10.5px;font-weight:600;color:var(--text-secondary);margin-top:4px">Tài khoản VND (nội địa) — có thể thêm nhiều</div>
+    <div class="fi full" id="cg_vndBanksWrap">${_crmVndBankRowsHtml(p.vndBanks||[])}</div>
+    <div class="fi full"><button class="btn sm" onclick="_crmAddVndBank()"><i class="ti ti-plus"></i> Thêm tài khoản VND</button></div>
+    <div class="fi full" style="font-size:10.5px;font-weight:600;color:var(--text-secondary);margin-top:4px">Tài khoản USD / Quốc tế</div>
     <div class="fi"><label class="lbl">ACCOUNT NUMBER (USD)</label><input type="text" id="cg_bankAcc" value="${(p.bankAcc||'').replace(/"/g,'&quot;')}" placeholder="USD account number"/></div>
     <div class="fi"><label class="lbl">SWIFT CODE</label><input type="text" id="cg_swift" value="${(p.swift||'').replace(/"/g,'&quot;')}" placeholder="SGTTVNVX"/></div>
     <div class="fi full"><label class="lbl">BANK NAME</label><input type="text" id="cg_bankName" value="${(p.bankName||'').replace(/"/g,'&quot;')}" placeholder="Bank name"/></div>
@@ -5965,6 +6199,13 @@ async function saveCrmGeneral(){
     rec.enName=g('cg_enName')?.value||''; rec.enShort=g('cg_enShort')?.value||''; rec.enAddr=g('cg_enAddr')?.value||'';
     rec.bankAcc=g('cg_bankAcc')?.value||''; rec.bankName=g('cg_bankName')?.value||''; rec.acctName=g('cg_acctName')?.value||'';
     rec.swift=g('cg_swift')?.value||''; rec.bankAddr=g('cg_bankAddr')?.value||''; rec.stamp=g('cg_stamp')?.value||'';
+    rec.vndBanks=_crmReadVndBanks();
+  } else {
+    // All partner types: save VND banks + acctName
+    rec.acctName=g('cg_acctName')?.value||'';
+    rec.bankAcc=g('cg_bankAcc')?.value||''; rec.bankName=g('cg_bankName')?.value||'';
+    rec.swift=g('cg_swift')?.value||''; rec.bankAddr=g('cg_bankAddr')?.value||'';
+    rec.vndBanks=_crmReadVndBanks();
   }
   setLoading(true,'Đang lưu...');
   try{
@@ -7232,6 +7473,59 @@ function _stgToggle(key){
 window._stgToggle=_stgToggle;
 
 // ─────────── SETTINGS: Kho đóng hàng ───────────
+function warehouseRowHtml(w,i){
+  w=w||{};
+  return '<div data-wh-row style="display:grid;grid-template-columns:1.3fr 1.6fr 1.3fr 32px;gap:8px;margin-bottom:6px;align-items:start">'
+    +'<input type="text" value="'+(w.name||'').replace(/"/g,'&quot;')+'" placeholder="Tên kho" data-wh-name style="font-size:12px;box-sizing:border-box"/>'
+    +'<input type="text" value="'+(w.location||'').replace(/"/g,'&quot;')+'" placeholder="Định vị (địa chỉ / Google Maps)" data-wh-loc style="font-size:12px;box-sizing:border-box"/>'
+    +'<input type="text" value="'+(w.contact||'').replace(/"/g,'&quot;')+'" placeholder="Người liên hệ - SĐT" data-wh-contact style="font-size:12px;box-sizing:border-box"/>'
+    +'<button class="rac red" onclick="delWarehouseRow(this)" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>'
+  +'</div>';
+}
+
+function renderWarehouseList(){
+  const box=g('warehouseRows'); if(!box)return;
+  const list=window._warehouses||[];
+  box.innerHTML=(list.length?list:[{}]).map(function(w,i){return warehouseRowHtml(w,i);}).join('');
+}
+window.renderWarehouseList=renderWarehouseList;
+
+function addWarehouseRow(){
+  const box=g('warehouseRows'); if(!box)return;
+  const div=document.createElement('div');
+  div.innerHTML=warehouseRowHtml({},box.children.length);
+  box.appendChild(div.firstChild);
+}
+window.addWarehouseRow=addWarehouseRow;
+
+function delWarehouseRow(btn){ const row=btn.closest('[data-wh-row]'); if(row)row.remove(); }
+window.delWarehouseRow=delWarehouseRow;
+
+function loadWarehouses(cb){
+  db.collection('_config').doc('warehouses').get().then(function(snap){
+    window._warehouses=(snap.exists&&Array.isArray(snap.data().list))?snap.data().list:[];
+    if(cb)cb();
+    if(g('warehouseRows'))renderWarehouseList();
+  }).catch(function(){ window._warehouses=[]; if(cb)cb(); });
+}
+window.loadWarehouses=loadWarehouses;
+
+async function saveWarehouses(){
+  const box=g('warehouseRows'); if(!box)return;
+  const list=Array.from(box.querySelectorAll('[data-wh-row]')).map(function(row){
+    return {
+      name:(row.querySelector('[data-wh-name]')||{}).value||'',
+      location:(row.querySelector('[data-wh-loc]')||{}).value||'',
+      contact:(row.querySelector('[data-wh-contact]')||{}).value||''
+    };
+  }).filter(function(w){return w.name||w.location||w.contact;});
+  setLoading(true,'Đang lưu...');
+  try{ await db.collection('_config').doc('warehouses').set({list:list},{merge:false}); window._warehouses=list; toast('Đã lưu kho đóng hàng'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveWarehouses=saveWarehouses;
+
 function _warehouseSettingsHtml(){
   const open=window._settingsOpen&&window._settingsOpen.warehouse;
   return '<div class="table-card" style="margin-bottom:.5rem">'
