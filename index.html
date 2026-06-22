@@ -1643,11 +1643,7 @@ function renderDetailPanel(r,tt){
           +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="camt_display_'+i+'">'+calcAmt+'</td>'
           +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:65px">'+curOpts+'</select></td>'
           +'<td style="'+tdS+'"><input type="text" id="cncc_'+i+'" value="'+(it.partnerRef||'').replace(/"/g,'&quot;')+'" list="costingNccList" placeholder="Chọn NCC..." style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
-          +'<td style="'+tdS+'"><select id="cstatus_'+i+'" style="font-size:11.5px;font-weight:600;color:'+(it.apPaidStatus==='paid'?'var(--green)':'var(--red)')+'" onchange="this.style.color=this.value===\'paid\'?\'var(--green)\':\'var(--red)\'">'
-          +'<option value="unpaid" '+(it.apPaidStatus!=='paid'?'selected':'')+'>Chưa TT</option>'
-          +'<option value="paid" '+(it.apPaidStatus==='paid'?'selected':'')+'>Đã TT</option>'
-          +'</select></td>'
-          +'<td style="'+tdS+'"><input type="text" id="cremark_'+i+'" value="'+(it.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+          +'<td style="'+tdS+'">'      +'<input type="hidden" id="cstatus_'+i+'" value="'+(it.apPaidStatus||'unpaid')+'"/>'      +'<input type="hidden" id="cpaiddate_'+i+'" value="'+(it.apPaidDate||'')+'"/>'      +'<input type="hidden" id="cpaidbank_'+i+'" value="'+(it.apPaidBank||'')+'"/>'      +_apPayBadge(it.apPaidStatus||'unpaid',it.apPaidDate||'',{type:'ap_cost',tt:detailTt,lotId:detailId,svcKey:'cost:'+(it.id||'idx_'+i),costIdx:i,status:it.apPaidStatus||'unpaid',date:it.apPaidDate||'',bank:it.apPaidBank||'',label:it.name||'Chi phí'})      +'</td>'      +'<td style="'+tdS+'"><input type="text" id="cremark_'+i+'" value="'+(it.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
           +'<td style="'+tdS+';text-align:center"><button class="rac red" onclick="removeCostingItem('+i+')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
         +'</tr>';
       }).join('');
@@ -1661,7 +1657,9 @@ function renderDetailPanel(r,tt){
         const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
         const ncc=sv.svcSupplier||'—';
         const paidStatus=sv.apPaidStatus||'unpaid';
-        const paidBadge='<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:5px;background:'+(paidStatus==='paid'?'rgba(40,167,69,.12)':'rgba(220,53,69,.1)')+';color:'+(paidStatus==='paid'?'var(--green)':'var(--red)')+';">'+(paidStatus==='paid'?'Đã TT':'Chưa TT')+'</span>';
+        const paidDate=sv.apPaidDate||'';
+        const paidBank=sv.apPaidBank||'';
+        const paidBadge=_apPayBadge(paidStatus,paidDate,{type:'ap_cost',tt:detailTt,lotId:detailId,svcKey:s.key,status:paidStatus,date:paidDate,bank:paidBank||'',label:s.name});
         return '<tr>'
           +'<td style="'+tdS+';font-size:11.5px"><span style="font-weight:500">'+s.name+'</span> <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
           +'<td style="'+tdS+'"><input type="number" id="autoprice_'+s.key+'" value="'+(sv.cost||0)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
@@ -2454,9 +2452,11 @@ async function saveDetailSvc(){
     const svcCur=showPrice?(g('svcur_'+s.key)?.value||'USD'):(prev.svcCur||'USD');
     const svcSupplier=showPrice?(g('ssup_'+s.key)?.value||''):(prev.svcSupplier||'');
     const apPaidStatus=showPrice?(g('sstatus_'+s.key)?.value||'unpaid'):(prev.apPaidStatus||'unpaid');
+    const apPaidDate=showPrice?(g('spaiddate_'+s.key)?.value||''):(prev.apPaidDate||'');
+    const apPaidBank=showPrice?(g('spaidbank_'+s.key)?.value||''):(prev.apPaidBank||'');
     const apRemark=showPrice?(g('sremark_'+s.key)?.value||''):(prev.apRemark||'');
     const finish=g('sfin_'+s.key)?.checked||false;
-    svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,apPaidStatus,apRemark,finish,
+    svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,apPaidStatus,apPaidDate,apPaidBank,apRemark,finish,
       price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',
       vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0};
     // Giữ lại Debit Note đã upload cho dịch vụ (không có input trong DOM)
@@ -3372,10 +3372,12 @@ function svcRowHTML(s, sv){
     <select id="svcur_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${curOpts}</select>
     <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
     <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả / Ghi chú..." ${sv.on?'':'disabled'} style="font-size:11px"/>
-    <select id="sstatus_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px;font-weight:600;color:${sv.apPaidStatus==='paid'?'var(--green)':'var(--red)'};" onchange="this.style.color=this.value==='paid'?'var(--green)':'var(--red)'">
-      <option value="unpaid" ${sv.apPaidStatus!=='paid'?'selected':''}>Chưa TT</option>
-      <option value="paid" ${sv.apPaidStatus==='paid'?'selected':''}>Đã TT</option>
-    </select>
+    <div style="display:flex;align-items:center">
+      <input type="hidden" id="sstatus_${s.key}" value="${sv.apPaidStatus||'unpaid'}"/>
+      <input type="hidden" id="spaiddate_${s.key}" value="${sv.apPaidDate||''}"/>
+      <input type="hidden" id="spaidbank_${s.key}" value="${sv.apPaidBank||''}"/>
+      <button id="spaidbadge_${s.key}" data-key="${s.key}" onclick="_openSvcPayPopup(this.dataset.key)" style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:${sv.apPaidStatus==='paid'?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)'};color:${sv.apPaidStatus==='paid'?'var(--green)':'var(--red)'};border:1px solid ${sv.apPaidStatus==='paid'?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)'};cursor:pointer;white-space:nowrap" title="Click để cập nhật trạng thái thanh toán">${sv.apPaidStatus==='paid'?('Đã TT'+(sv.apPaidDate?' · '+fmtDMY(sv.apPaidDate):'')):'Chưa TT'}</button>
+    </div>
     <input type="text" id="sremark_${s.key}" value="${(sv.apRemark||'').replace(/"/g,'&quot;')}" placeholder="Ghi chú TT..." ${sv.on?'':'disabled'} style="font-size:11px"/>
     <div style="display:flex;justify-content:center" title="Hoàn thành"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer"/></div>
     <div style="display:flex;justify-content:flex-end;gap:3px">
@@ -4929,7 +4931,7 @@ function _tcSupplierBreakdown(){
         tt:r._tt,lotId:r._id,svcKey:key,bookingNo:r.bookingNo||r.jobNo||'',jobNo:r.jobNo||'',
         name:svcName,amt,cur,date:r.etd||'',finish:!!sv.finish,
         shipper:r.shipper||r.supplier||'',
-        paidStatus:sv.apPaidStatus||'unpaid',remark:sv.apRemark||''
+        paidStatus:sv.apPaidStatus||'unpaid',paidDate:sv.apPaidDate||'',paidBank:sv.apPaidBank||'',remark:sv.apRemark||''
       });
       byPartner[supplierKey].total[cur]=(byPartner[supplierKey].total[cur]||0)+amt;
     });
@@ -4949,7 +4951,7 @@ function _tcSupplierBreakdown(){
         tt:r._tt,lotId:r._id,svcKey:svcKey,bookingNo:r.bookingNo||r.jobNo||'',jobNo:r.jobNo||'',
         name:it.name||'Chi phí nhập tay',amt,cur,date:r.etd||'',finish:false,
         shipper:r.shipper||r.supplier||'',
-        paidStatus:it.apPaidStatus||'unpaid',remark:it.remark||''
+        paidStatus:it.apPaidStatus||'unpaid',paidDate:it.apPaidDate||'',paidBank:it.apPaidBank||'',remark:it.remark||''
       });
       byPartner[supplierKey].total[cur]=(byPartner[supplierKey].total[cur]||0)+amt;
     });
@@ -5083,7 +5085,7 @@ function renderSupplierDetailPopup(){
           +'<td>'+(l.date||'—')+'</td>'
           +'<td>'+l.name+'</td>'
           +'<td style="text-align:right;font-weight:700;color:var(--red)">'+l.amt.toLocaleString()+' '+l.cur+'</td>'
-          +'<td><select data-tt="'+l.tt+'" data-id="'+l.lotId+'" data-key="'+l.svcKey+'" onchange="saveSupplierPayStatus(this)" style="font-size:11.5px;font-weight:600;color:'+(l.paidStatus==='paid'?'var(--green)':'var(--red)')+'"><option value="unpaid"'+(l.paidStatus!=='paid'?' selected':'')+'>Chưa thanh toán</option><option value="paid"'+(l.paidStatus==='paid'?' selected':'')+'>Đã thanh toán</option></select></td>'
+          +'<td>'+_apPayBadge(l.paidStatus,l.paidDate||'',{type:'ap_popup',tt:l.tt,lotId:l.lotId,svcKey:l.svcKey,status:l.paidStatus,date:l.paidDate||'',bank:l.paidBank||'',label:l.name})+'</td>'
           +'<td><input type="text" value="'+(l.remark||'').replace(/"/g,'&quot;')+'" data-tt="'+l.tt+'" data-id="'+l.lotId+'" data-key="'+l.svcKey+'" onchange="saveSupplierRemark(this)" placeholder="Remark" style="font-size:11.5px;width:130px"/></td>'
         +'</tr>';
       }).join(''):'<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có dữ liệu khớp bộ lọc</td></tr>'}</tbody>
@@ -5158,6 +5160,224 @@ async function saveSupplierRemark(inp){
   setLoading(false);
 }
 window.saveSupplierRemark=saveSupplierRemark;
+
+/* ── Payment Status Popup Engine ──────────────────────────────────────────────
+   Dùng chung cho:
+   - AP side (trả NCC): tab Dịch vụ, tab Costing (auto + manual), popup Phải trả NCC
+   - AR side (nhận từ KH): tab Invoice / Debit Note by Party
+   Context types:
+     'ap_svc'    → saves to svcs[key].apPaidStatus/Date/Bank
+     'ap_cost'   → saves to costing.items[itemId].apPaidStatus/Date/Bank  
+     'ar_party'  → saves to dnPayStatus/Date/Bank[party]
+   For ap_svc + ap_cost via DOM hidden inputs (in svcRowHTML / costing rows),
+   the popup also updates the hidden inputs so saveDetailSvc/saveCosting capture them.
+*/
+
+let _psCtx = null;  // current popup context
+
+function _bankAccountOpts(selectedId){
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const co=Array.isArray(banks)?banks:(banks.company||[]);
+  const pers=Array.isArray(banks)?[]:(banks.personal||[]);
+  const all=[
+    ...co.map(function(b){return {id:'co:'+b.account,label:(b.beneficiary||'')+(b.account?' · '+b.account:'')+(b.bank?' ('+b.bank+')':'')};} ),
+    ...pers.map(function(b){return {id:'pers:'+b.account,label:(b.beneficiary||'')+(b.account?' · '+b.account:'')+(b.bank?' ('+b.bank+')':'')};} )
+  ];
+  return '<option value="">— Chọn tài khoản —</option>'+all.map(function(b){return '<option value="'+b.id.replace(/"/g,'&quot;')+'"'+(b.id===selectedId?' selected':'')+'>'+b.label+'</option>';}).join('');
+}
+
+// Badge hiển thị ra ngoài (clickable) — dùng data-attributes tránh escaping phức tạp
+function _apPayBadge(status,date,ctx){
+  const paid=status==='paid';
+  const dateStr=date?(' · '+fmtDMY(date)):'';
+  const label=paid?('Đã TT'+dateStr):'Chưa TT';
+  // ctx có thể là string onclick (legacy) hoặc object context
+  if(typeof ctx==='object'){
+    const da=Object.keys(ctx).map(function(k){return 'data-ps-'+k+'="'+String(ctx[k]||'').replace(/"/g,'&quot;')+'"';}).join(' ');
+    return '<button onclick="_openPayPopupFromEl(this)" '+da+' style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:'+(paid?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)')+';color:'+(paid?'var(--green)':'var(--red)')+';border:1px solid '+(paid?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)')+';cursor:pointer;white-space:nowrap" title="Click để cập nhật trạng thái thanh toán">'+label+'</button>';
+  }
+  return '<button onclick="'+ctx+'" style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:'+(paid?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)')+';color:'+(paid?'var(--green)':'var(--red)')+';border:1px solid '+(paid?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)')+';cursor:pointer;white-space:nowrap" title="Click để cập nhật trạng thái thanh toán">'+label+'</button>';
+}
+window._apPayBadge=_apPayBadge;
+
+// Đọc data-attributes từ badge button để mở popup
+function _openPayPopupFromEl(el){
+  var ctx={};
+  Array.from(el.attributes).forEach(function(a){
+    if(a.name.startsWith('data-ps-'))ctx[a.name.slice(8)]=a.value;
+  });
+  openPayStatusPopup(ctx);
+}
+window._openPayPopupFromEl=_openPayPopupFromEl;
+
+// Mở popup
+function openPayStatusPopup(ctx){
+  _psCtx=Object.assign({},ctx);
+  const isAP=ctx.type!=='ar_party';
+  const bankLabel=isAP?'Tài khoản ngân hàng trừ tiền':'Tài khoản ngân hàng nhận tiền';
+  const paid=ctx.status==='paid';
+  g('payStatusOv').innerHTML=`
+  <div class="modal" style="max-width:380px">
+    <div class="mhdr">
+      <div><div class="mtitle"><i class="ti ti-credit-card" style="font-size:15px;margin-right:6px"></i>Trạng thái thanh toán</div>
+      ${ctx.label?'<div class="msub">'+ctx.label+'</div>':''}</div>
+      <button class="rac" onclick="closeOv('payStatusOv')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="fg" style="gap:12px">
+      <div class="fi full">
+        <label class="lbl">Trạng thái</label>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button id="psBtnUnpaid" onclick="_psSetStatus('unpaid')" class="btn${!paid?' active':''}" style="flex:1;font-weight:700;color:var(--red);${!paid?'background:rgba(220,53,69,.1);border-color:var(--red)':''}">Chưa TT</button>
+          <button id="psBtnPaid"   onclick="_psSetStatus('paid')"   class="btn${paid?' active':''}"  style="flex:1;font-weight:700;color:var(--green);${paid?'background:rgba(40,167,69,.1);border-color:var(--green)':''}">Đã TT</button>
+        </div>
+      </div>
+      <div class="fi full">
+        <label class="lbl">Ngày thanh toán</label>
+        <input type="date" id="psDate" value="${ctx.date||''}"/>
+      </div>
+      <div class="fi full">
+        <label class="lbl">${bankLabel}</label>
+        <select id="psBank">${_bankAccountOpts(ctx.bank||'')}</select>
+      </div>
+    </div>
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('payStatusOv')">Hủy</button>
+      <button class="btn pri" onclick="savePayStatusDetail()"><i class="ti ti-check"></i> Lưu</button>
+    </div>
+  </div>`;
+  openOv('payStatusOv');
+}
+window.openPayStatusPopup=openPayStatusPopup;
+
+// Helper: mở popup TT cho dịch vụ trong tab Dịch vụ (dùng data từ hidden inputs)
+function _openSvcPayPopup(key){
+  const svcDef=SVCS.find(function(s){return s.key===key;})||{};
+  const status=g('sstatus_'+key)?.value||'unpaid';
+  const date=g('spaiddate_'+key)?.value||'';
+  const bank=g('spaidbank_'+key)?.value||'';
+  openPayStatusPopup({type:'ap_svc',key:key,status:status,date:date,bank:bank,label:svcDef.name||key});
+}
+window._openSvcPayPopup=_openSvcPayPopup;
+
+function _psSetStatus(val){
+  _psCtx.status=val;
+  const paid=val==='paid';
+  const u=g('psBtnUnpaid'),p=g('psBtnPaid');
+  if(u){u.style.background=!paid?'rgba(220,53,69,.1)':'';u.style.borderColor=!paid?'var(--red)':'var(--border-light)';}
+  if(p){p.style.background=paid?'rgba(40,167,69,.1)':'';p.style.borderColor=paid?'var(--green)':'var(--border-light)';}
+}
+window._psSetStatus=_psSetStatus;
+
+async function savePayStatusDetail(){
+  const ctx=_psCtx; if(!ctx)return;
+  const status=ctx.status||'unpaid';
+  const date=g('psDate')?.value||'';
+  const bank=g('psBank')?.value||'';
+
+  setLoading(true,'Đang lưu...');
+  try{
+    if(ctx.type==='ap_svc'){
+      // Tab Dịch vụ: update hidden inputs + cache (save happens via saveDetailSvc)
+      const si=g('sstatus_'+ctx.key); if(si)si.value=status;
+      const sd=g('spaiddate_'+ctx.key); if(sd)sd.value=date;
+      const sb=g('spaidbank_'+ctx.key); if(sb)sb.value=bank;
+      // Update badge display directly
+      const bd=g('spaidbadge_'+ctx.key);
+      if(bd){
+        bd.textContent=status==='paid'?('Đã TT'+(date?' · '+fmtDMY(date):'')):'Chưa TT';
+        bd.style.background=status==='paid'?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)';
+        bd.style.color=status==='paid'?'var(--green)':'var(--red)';
+        bd.style.borderColor=status==='paid'?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)';
+      }
+      const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+      if(r&&r.svcs&&r.svcs[ctx.key]){
+        r.svcs[ctx.key].apPaidStatus=status;
+        r.svcs[ctx.key].apPaidDate=date;
+        r.svcs[ctx.key].apPaidBank=bank;
+      }
+      toast('Cập nhật trạng thái — bấm "Lưu dịch vụ" để ghi vào hệ thống');
+
+    } else if(ctx.type==='ap_cost'){
+      // Costing auto row: save directly to Firestore
+      const colN=colName(ctx.tt);
+      const snap=await db.collection(colN).doc(ctx.lotId).get();
+      if(!snap.exists){toast('Không tìm thấy lô','error');setLoading(false);return;}
+      const r=snap.data();
+      if(ctx.svcKey.startsWith('cost:')){
+        // Manual costing item - use hidden inputs
+        const itemId=ctx.svcKey.slice(5);
+        const si=g('cstatus_'+ctx.costIdx); if(si)si.value=status;
+        const sd=g('cpaiddate_'+ctx.costIdx); if(sd)sd.value=date;
+        const sb=g('cpaidbank_'+ctx.costIdx); if(sb)sb.value=bank;
+        const cr=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
+        if(cr&&cr.costing){
+          const item=(cr.costing.items||[]).find(function(it){return it.id===itemId;});
+          if(item){item.apPaidStatus=status;item.apPaidDate=date;item.apPaidBank=bank;}
+        }
+        toast('Bấm "Lưu Costing" để ghi vào hệ thống');
+      } else {
+        // Auto-cost from svc: save directly
+        const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+        if(!svcs[ctx.svcKey])svcs[ctx.svcKey]={};
+        svcs[ctx.svcKey].apPaidStatus=status; svcs[ctx.svcKey].apPaidDate=date; svcs[ctx.svcKey].apPaidBank=bank;
+        await db.collection(colN).doc(ctx.lotId).set({svcs,updatedAt:Date.now()},{merge:true});
+        const cr=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
+        if(cr){cr.svcs=cr.svcs||{};cr.svcs[ctx.svcKey]=Object.assign({},cr.svcs[ctx.svcKey],{apPaidStatus:status,apPaidDate:date,apPaidBank:bank});}
+        // Re-render costing if visible
+        if(detailId===ctx.lotId&&typeof renderCostingRows==='function'){
+          const fresh=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
+          if(fresh&&g('costingBody'))renderCostingRows((fresh.costing||{}).items||[]);
+        }
+        toast('Đã cập nhật trạng thái thanh toán');
+      }
+
+    } else if(ctx.type==='ap_popup'){
+      // AP supplier popup: save directly to Firestore
+      const colN=colName(ctx.tt);
+      const snap=await db.collection(colN).doc(ctx.lotId).get();
+      if(!snap.exists){toast('Không tìm thấy lô','error');setLoading(false);return;}
+      const r=snap.data();
+      const cr=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
+      if(ctx.svcKey.startsWith('cost:')){
+        const itemId=ctx.svcKey.slice(5);
+        const items=JSON.parse(JSON.stringify((r.costing||{}).items||[]));
+        const idx=items.findIndex(function(it){return it.id===itemId||('idx_'+items.indexOf(it))===itemId;});
+        if(idx>=0){items[idx].apPaidStatus=status;items[idx].apPaidDate=date;items[idx].apPaidBank=bank;}
+        await db.collection(colN).doc(ctx.lotId).set({costing:Object.assign({},r.costing||{},{items,updatedAt:Date.now()}),updatedAt:Date.now()},{merge:true});
+        if(cr&&cr.costing)cr.costing.items=items;
+      } else {
+        const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+        if(!svcs[ctx.svcKey])svcs[ctx.svcKey]={};
+        svcs[ctx.svcKey].apPaidStatus=status;svcs[ctx.svcKey].apPaidDate=date;svcs[ctx.svcKey].apPaidBank=bank;
+        await db.collection(colN).doc(ctx.lotId).set({svcs,updatedAt:Date.now()},{merge:true});
+        if(cr){cr.svcs=cr.svcs||{};cr.svcs[ctx.svcKey]=Object.assign({},cr.svcs[ctx.svcKey],{apPaidStatus:status,apPaidDate:date,apPaidBank:bank});}
+      }
+      toast('Đã cập nhật trạng thái thanh toán');
+      renderSupplierDetailPopup();
+
+    } else if(ctx.type==='ar_party'){
+      // Debit Note / Invoice by party
+      const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{};
+      const payMap=JSON.parse(JSON.stringify(r.dnPayStatus||{}));
+      const dateMap=JSON.parse(JSON.stringify(r.dnPayDate||{}));
+      const bankMap=JSON.parse(JSON.stringify(r.dnPayBank||{}));
+      payMap[ctx.party]=status; dateMap[ctx.party]=date; bankMap[ctx.party]=bank;
+      await fsSet(colName(detailTt),detailId,{dnPayStatus:payMap,dnPayDate:dateMap,dnPayBank:bankMap});
+      const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
+      if(ci>=0){cache[detailTt][ci].dnPayStatus=payMap;cache[detailTt][ci].dnPayDate=dateMap;cache[detailTt][ci].dnPayBank=bankMap;}
+      toast('Đã cập nhật trạng thái thanh toán');
+      // Re-render invoice tab
+      if(typeof renderDetailPanel==='function'){
+        const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+        if(fresh){renderDetailPanel(fresh,detailTt);}
+      }
+    }
+    closeOv('payStatusOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.savePayStatusDetail=savePayStatusDetail;
+
 
 
 window.openTcDebtForm=openTcDebtForm;
@@ -6488,6 +6708,7 @@ tr:hover td{background:var(--bg-secondary)}
 <!-- THU CHI: PHIEU THU/CHI MODAL -->
 <div class="ov" id="tcVoucherOv" style="padding:.75rem"></div>
 <div class="ov" id="tcSupplierDetailOv" style="padding:.75rem"></div>
+<div class="ov" id="payStatusOv" style="padding:.75rem"></div>
 
 <!-- THU CHI: CONG NO ENTRY MODAL -->
 <div class="ov" id="tcDebtOv" style="padding:.75rem"></div>
@@ -7536,16 +7757,21 @@ function buildDnPartyRows(r,svcs){
   if(!keys.length)return '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">Chưa có dịch vụ nào có party (chọn party ở tab Fill giá)</div>';
   const dnMap=r.dnByParty||{};
   const payMap=r.dnPayStatus||{};
+  const payDateMap=r.dnPayDate||{};
+  const payBankMap=r.dnPayBank||{};
   return '<div style="display:flex;flex-direction:column;gap:6px">'+keys.map(function(p,i){
     const info=parties[p];
     const dnNo=dnMap[p]||(r.dnNo||'');
     const pay=payMap[p]||'unpaid';
+    const payDate=payDateMap[p]||'';
+    const payBank=payBankMap[p]||'';
     const safeP=p.replace(/'/g,"\\'");
+    const payCtx={type:'ar_party',party:p,status:pay,date:payDate,bank:payBank,label:p+' — Debit Note'};
     return '<div style="display:grid;grid-template-columns:1fr 120px 110px 130px 120px;gap:8px;align-items:center;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
       +'<div><div style="font-size:12px;font-weight:700">'+p+'</div><div style="font-size:10.5px;color:var(--text-secondary)">'+info.count+' dịch vụ</div></div>'
       +'<div><input type="text" id="dnParty_'+i+'" data-party="'+p+'" value="'+dnNo+'" placeholder="Số DN" oninput="_dnPartyInputChange(this,'+i+')" style="font-size:11.5px;font-weight:700;color:var(--blue)"/></div>'
       +'<div style="text-align:right;font-size:12px;font-weight:700;color:var(--green)">'+Math.round(info.total).toLocaleString()+' đ</div>'
-      +'<div><select id="dnPay_'+i+'" data-party="'+p+'" onchange="savePayStatus()" style="font-size:11px;width:100%;font-weight:600;color:'+(pay==='paid'?'var(--green)':'var(--red)')+'"><option value="unpaid"'+(pay==='unpaid'?' selected':'')+'>Chưa thanh toán</option><option value="paid"'+(pay==='paid'?' selected':'')+'>Đã thanh toán</option></select></div>'
+      +'<div>'+_apPayBadge(pay,payDate,payCtx)+'</div>'
       +'<div style="text-align:right"><button class="btn red" id="btnXuatDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập hoặc bấm Lưu để tự sinh Số DN trước khi xuất"')+' onclick="exportDebitForParty(this.dataset.party)" style="font-size:11.5px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Xuất DN</button></div>'
     +'</div>';
   }).join('')+'</div>';
@@ -7712,7 +7938,8 @@ function renderCostingRows(items){
     const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
     const ncc=sv.svcSupplier||'—';
     const paidStatus=sv.apPaidStatus||'unpaid';
-    const paidBadge='<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:5px;background:'+(paidStatus==='paid'?'rgba(40,167,69,.12)':'rgba(220,53,69,.1)')+';color:'+(paidStatus==='paid'?'var(--green)':'var(--red)')+';">'+(paidStatus==='paid'?'Đã TT':'Chưa TT')+'</span>';
+    const paidDate=sv.apPaidDate||'';
+    const paidBadge=_apPayBadge(paidStatus,paidDate,{type:'ap_cost',tt:detailTt,lotId:detailId,svcKey:s.key,status:paidStatus,date:paidDate,bank:sv.apPaidBank||'',label:s.name});
     autoCostRows+='<tr>'
       +'<td style="'+tdS+';font-size:11.5px"><span style="font-weight:500">'+s.name+'</span> <em style="font-size:10px;color:var(--text-tertiary)">(từ dịch vụ)</em></td>'
       +'<td style="'+tdS+'"><input type="number" id="autoprice_'+s.key+'" value="'+(sv.cost||0)+'" min="0" oninput="updateCostingTotal()" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
@@ -7738,11 +7965,7 @@ function renderCostingRows(items){
       +'<td style="'+tdS+';text-align:right;font-weight:600;color:var(--red)" id="camt_display_'+i+'">'+calcAmt+'</td>'
       +'<td style="'+tdS+'"><select id="ccur_'+i+'" onchange="updateCostingTotal()" style="font-size:12px;width:65px">'+curOpts+'</select></td>'
       +'<td style="'+tdS+'"><input type="text" id="cncc_'+i+'" value="'+(it.partnerRef||'').replace(/"/g,'&quot;')+'" list="costingNccList" placeholder="Chọn NCC..." style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
-      +'<td style="'+tdS+'"><select id="cstatus_'+i+'" style="font-size:11.5px;font-weight:600;color:'+(it.apPaidStatus==='paid'?'var(--green)':'var(--red)')+'" onchange="this.style.color=this.value===\'paid\'?\'var(--green)\':\'var(--red)\'">'
-      +'<option value="unpaid" '+(it.apPaidStatus!=='paid'?'selected':'')+'>Chưa TT</option>'
-      +'<option value="paid" '+(it.apPaidStatus==='paid'?'selected':'')+'>Đã TT</option>'
-      +'</select></td>'
-      +'<td style="'+tdS+'"><input type="text" id="cremark_'+i+'" value="'+(it.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
+      +'<td style="'+tdS+'">'      +'<input type="hidden" id="cstatus_'+i+'" value="'+(it.apPaidStatus||'unpaid')+'"/>'      +'<input type="hidden" id="cpaiddate_'+i+'" value="'+(it.apPaidDate||'')+'"/>'      +'<input type="hidden" id="cpaidbank_'+i+'" value="'+(it.apPaidBank||'')+'"/>'      +_apPayBadge(it.apPaidStatus||'unpaid',it.apPaidDate||'',{type:'ap_cost',tt:detailTt,lotId:detailId,svcKey:'cost:'+(it.id||'idx_'+i),costIdx:i,status:it.apPaidStatus||'unpaid',date:it.apPaidDate||'',bank:it.apPaidBank||'',label:it.name||'Chi phí'})      +'</td>'      +'<td style="'+tdS+'"><input type="text" id="cremark_'+i+'" value="'+(it.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:12px;width:100%;box-sizing:border-box"/></td>'
       +'<td style="'+tdS+';text-align:center"><button class="rac red" onclick="removeCostingItem('+i+')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
     +'</tr>';
   }).join('');
@@ -7845,6 +8068,8 @@ async function saveCosting(){
       remark:g('cremark_'+i)?.value||it.remark||'',
       partnerRef:g('cncc_'+i)?.value||it.partnerRef||null,
       apPaidStatus:g('cstatus_'+i)?.value||it.apPaidStatus||'unpaid',
+      apPaidDate:g('cpaiddate_'+i)?.value||it.apPaidDate||'',
+      apPaidBank:g('cpaidbank_'+i)?.value||it.apPaidBank||'',
       fromCashTx:it.fromCashTx||false
     };
   }).filter(function(it){return it.name||it.price;});
