@@ -7467,23 +7467,38 @@ function downloadEmlFile(id, tt){
 async function saveSecuritySettings(){
   if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
   const inOn=g('set_inactivity_on')?.checked||false;
-  const inMin=parseInt(g('set_inactivity_min')?.value)||30;
+  const inMin=Math.max(1,parseInt(g('set_inactivity_min')?.value)||30);
   const pwOn=g('set_pw_on')?.checked||false;
-  const pwMin=parseInt(g('set_pw_min')?.value)||10080;
+  const pwMin=Math.max(1,parseInt(g('set_pw_min')?.value)||10080);
   const closeOn=g('set_close_on')?.checked||false;
+  // Luôn lưu giá trị người dùng nhập, bất kể toggle on/off
   const s={
-    inactivity:{enabled:inOn,minutes:inOn?inMin:30},
-    password:{enabled:pwOn,minutes:pwOn?pwMin:10080},
+    inactivity:{enabled:inOn,minutes:inMin},
+    password:{enabled:pwOn,minutes:pwMin},
     closeLogout:closeOn,
     updatedAt:Date.now(),updatedBy:currentUser.email
   };
+  // Optimistic update trước await để re-render hiển thị đúng
+  _securitySettings=s;
   setLoading(true,'Đang lưu...');
   try{
     await db.collection('_config').doc('securitySettings').set(s);
-    _securitySettings=s;
     _applySecuritySettings();
     toast('Đã lưu cài đặt bảo mật — áp dụng ngay cho tất cả user');
-  }catch(e){toast('Lỗi: '+e.message,'error');}
+    // Re-render lại box để đảm bảo giá trị hiển thị đúng
+    const bodyEl=g('stg_body_security');
+    if(bodyEl){
+      const inLabel=bodyEl.querySelector('#set_inactivity_label');
+      const pwLabel=bodyEl.querySelector('#set_pw_label');
+      const clLabel=bodyEl.querySelector('#set_close_label');
+      if(inLabel)inLabel.textContent=inOn?'Bật':'Tắt';
+      if(pwLabel)pwLabel.textContent=pwOn?'Bật':'Tắt';
+      if(clLabel)clLabel.textContent=closeOn?'Bật':'Tắt';
+    }
+  }catch(e){
+    _securitySettings=Object.assign({},_securitySettings); // keep optimistic
+    toast('Lỗi: '+e.message,'error');
+  }
   setLoading(false);
 }
 window.saveSecuritySettings=saveSecuritySettings;
@@ -7584,7 +7599,7 @@ function renderSettings(){
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Tự động đăng xuất khi không hoạt động</div><div style="font-size:11.5px;color:var(--text-secondary)">Đăng xuất người dùng sau khoảng thời gian nhất định không thao tác</div></div>'
         +'<input type="number" id="set_inactivity_min" value="'+((_securitySettings.inactivity||{}).minutes||30)+'" min="5" max="480" style="width:70px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
         +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
-          +'<input type="checkbox" id="set_inactivity_on" '+((_securitySettings.inactivity||{}).enabled?'checked':'')+' style="width:16px;height:16px"/>'
+          +'<input type="checkbox" id="set_inactivity_on" '+((_securitySettings.inactivity||{}).enabled?'checked':'')+' onchange="this.nextElementSibling.textContent=this.checked?\'Bật\':\'Tắt\'\" style="width:16px;height:16px"/>'
           +'<span id="set_inactivity_label">'+((_securitySettings.inactivity||{}).enabled?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
@@ -7593,7 +7608,7 @@ function renderSettings(){
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Bắt buộc đổi mật khẩu định kỳ</div><div style="font-size:11.5px;color:var(--text-secondary)">Yêu cầu user đổi mật khẩu sau khoảng thời gian kể từ lần đổi cuối</div></div>'
         +'<input type="number" id="set_pw_min" value="'+((_securitySettings.password||{}).minutes||10080)+'" min="60" max="525600" style="width:80px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
         +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
-          +'<input type="checkbox" id="set_pw_on" '+((_securitySettings.password||{}).enabled?'checked':'')+' style="width:16px;height:16px"/>'
+          +'<input type="checkbox" id="set_pw_on" '+((_securitySettings.password||{}).enabled?'checked':'')+' onchange="this.nextElementSibling.textContent=this.checked?\'Bật\':\'Tắt\'\" style="width:16px;height:16px"/>'
           +'<span id="set_pw_label">'+((_securitySettings.password||{}).enabled?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
@@ -7601,7 +7616,7 @@ function renderSettings(){
       +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Đăng xuất khi tắt tab / trình duyệt</div><div style="font-size:11.5px;color:var(--text-secondary)">Yêu cầu đăng nhập lại mỗi khi mở lại ứng dụng</div></div>'
         +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
-          +'<input type="checkbox" id="set_close_on" '+(_securitySettings.closeLogout?'checked':'')+' style="width:16px;height:16px"/>'
+          +'<input type="checkbox" id="set_close_on" '+(_securitySettings.closeLogout?'checked':'')+' onchange="this.nextElementSibling.textContent=this.checked?\'Bật\':\'Tắt\'\" style="width:16px;height:16px"/>'
           +'<span id="set_close_label">'+(_securitySettings.closeLogout?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
