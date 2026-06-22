@@ -1144,7 +1144,7 @@ function renderLotTable(tt){
         </td>`;
       }
       if(c.k==='vessel'&&r.vessel){
-        return`<td><button class="plink" onclick="openVesselQuick(this.dataset.v,this.dataset.voy)" data-v="${(r.vessel||'').replace(/"/g,'&quot;')}" data-voy="${(r.voy||'').replace(/"/g,'&quot;')}" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left" title="Mở Vessel tool để cập nhật nhanh">${r.vessel}</button></td>`;
+        return`<td><button class="plink" onclick="openVesselQuick(this.dataset.v,this.dataset.voy,this.dataset.etd,this.dataset.cy,this.dataset.si)" data-v="${(r.vessel||'').replace(/"/g,'&quot;')}" data-voy="${(r.voy||'').replace(/"/g,'&quot;')}" data-etd="${r.etd||''}" data-cy="${(r.cutoffCY||'').replace(/"/g,'&quot;')}" data-si="${(r.cutoffSI||'').replace(/"/g,'&quot;')}" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left" title="Mở Vessel tool để cập nhật nhanh">${r.vessel}</button></td>`;
       }
       if(c.k==='vstStatus'){
         if(!r.vstEnabled) return`<td style="text-align:center;color:var(--text-tertiary)">—</td>`;
@@ -6919,137 +6919,98 @@ function renderSettings(){
     }).join('');
   }
 
-  pg.innerHTML='<div style="font-weight:600;font-size:14px;margin-bottom:1.25rem">Cài đặt hệ thống</div>'
+  // Collapse state (persists across re-renders)
+  if(!window._settingsOpen) window._settingsOpen={utils:false,cargo:false,svc:true,acct:false,bankCo:false,bankPers:false,bank:true,contract:false,warehouse:false};
 
-    +'<div class="table-card" style="padding:1.25rem;margin-bottom:1.25rem">'
-      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-database" style="font-size:14px"></i>Tiện ích dữ liệu</div>'
-      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Tạo số Job ID cho tất cả lô hàng chưa có (chỉ cần chạy 1 lần)</div>'
-      +'<button class="btn" onclick="migrateJobNos()"><i class="ti ti-wand"></i> Tạo Job ID cho lô hàng cũ</button>'
-      +'<button class="btn" onclick="migrateDnNos()" style="margin-left:8px"><i class="ti ti-file-invoice"></i> Cấp số DN cho lô cũ</button>'
-    +'</div>'
-    +'<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border-light)"/>'
-    +'<div class="table-card" style="padding:1.25rem">'
-      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-package" style="font-size:14px"></i>Danh sách Tên hàng</div>'
-      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Mỗi tên hàng gồm: Tên (VN), Tên tiếng Anh, và Specifications (dùng cho Document Maker)</div>'
-      +'<div id="cargoNamesList"></div>'
-      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
-        +'<button class="btn" onclick="addCargoNameRow()"><i class="ti ti-plus"></i> Thêm tên hàng</button>'
-        +'<button class="btn pri" onclick="saveCargoNames()"><i class="ti ti-check"></i> Lưu danh sách tên hàng</button>'
+  function stgBox(key, icon, title, btnHtml, contentHtml){
+    const open=window._settingsOpen[key];
+    return '<div class="table-card" style="margin-bottom:.5rem">'
+      +'<div onclick="_stgToggle(\''+key+'\')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer;border-radius:10px;" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'">'        +'<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti '+icon+'" style="font-size:15px"></i>'+title+'</div>'        +'<i class="ti ti-chevron-'+(open?'down':'right')+'" id="stg_icon_'+key+'" style="font-size:13px;color:var(--text-tertiary)"></i>'      +'</div>'
+      +'<div id="stg_body_'+key+'" style="display:'+(open?'block':'none')+';padding:0 1.1rem 1rem">'
+        +contentHtml
+        +(btnHtml?'<div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">'+btnHtml+'</div>':'')
       +'</div>'
-    +'</div>'
-    +'<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border-light)"/>'
-    +'<div class="card" style="margin-bottom:1.5rem">'
-      +'<div style="font-size:13px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-list-details" style="font-size:14px"></i>Danh mục dịch vụ</div>'
-      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Mỗi dịch vụ có mã 3 chữ cái (sửa được). Bật "Mặc định" để dịch vụ tự xuất hiện khi tạo lô hàng mới.</div>'
+    +'</div>';
+  }
+
+  pg.innerHTML='<div style="font-weight:700;font-size:15px;margin-bottom:1rem;display:flex;align-items:center;gap:8px"><i class="ti ti-settings" style="font-size:18px"></i>Cài đặt hệ thống</div>'
+
+    +stgBox('utils','ti-database','Tiện ích dữ liệu',
+      '<button class="btn" onclick="migrateJobNos()"><i class="ti ti-wand"></i> Tạo Job ID cho lô hàng cũ</button>'
+      +'<button class="btn" onclick="migrateDnNos()"><i class="ti ti-file-invoice"></i> Cấp số DN cho lô cũ</button>',
+      '<div style="font-size:12px;color:var(--text-secondary)">Tạo số Job ID và Debit Note cho tất cả lô hàng cũ chưa có (chỉ cần chạy 1 lần).</div>'
+    )
+
+    +stgBox('cargo','ti-box','Danh sách Tên hàng',
+      '<button class="btn" onclick="addCargoNameRow()"><i class="ti ti-plus"></i> Thêm tên hàng</button>'
+      +'<button class="btn pri" onclick="saveCargoNames()"><i class="ti ti-check"></i> Lưu danh sách tên hàng</button>',
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Mỗi tên hàng gồm: Tên (VN), Tên tiếng Anh, và Specifications (dùng cho Document Maker).</div>'
+      +'<div id="cargoNamesList"></div>'
+    )
+
+    +stgBox('svc','ti-list-details','Danh mục dịch vụ',
+      '<button class="btn" onclick="addSvcCatRow()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>'
+      +'<button class="btn" onclick="scanOrphanSvcs()"><i class="ti ti-refresh"></i> Quét & đồng bộ lô cũ</button>'
+      +'<button class="btn pri" onclick="saveSvcCatalog()"><i class="ti ti-check"></i> Lưu danh mục dịch vụ</button>',
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Mỗi dịch vụ có mã 3 chữ cái. Bật <b>Mặc định</b> để tự xuất hiện khi tạo lô hàng mới.</div>'
       +'<div style="display:grid;grid-template-columns:90px 1fr 110px 36px;gap:8px;padding:0 2px 4px;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase"><div>Mã</div><div>Tên dịch vụ</div><div style="text-align:center">Mặc định</div><div></div></div>'
       +'<div id="svcCatList"></div>'
-      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
-        +'<button class="btn" onclick="addSvcCatRow()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>'
-        +'<button class="btn" onclick="scanOrphanSvcs()"><i class="ti ti-refresh"></i> Quét & đồng bộ lô cũ</button>'
-        +'<button class="btn pri" onclick="saveSvcCatalog()"><i class="ti ti-check"></i> Lưu danh mục dịch vụ</button>'
-      +'</div>'
-    +'</div>'
-    +'<div class="table-card" style="padding:1.25rem">'
-      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-key" style="font-size:14px"></i>Thông tin tài khoản (lưu thông tin quan trọng)</div>'
-      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Lưu thông tin đăng nhập Ecosys, PQS và ghi chú khác theo từng Shipper</div>'
+    )
+
+    +stgBox('acct','ti-key','Thông tin tài khoản đăng nhập',
+      '<button class="btn" onclick="addAcctInfoRow()"><i class="ti ti-plus"></i> Thêm dòng</button>'
+      +'<button class="btn pri" onclick="saveAcctInfo()"><i class="ti ti-check"></i> Lưu thông tin tài khoản</button>',
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Lưu thông tin đăng nhập Ecosys, PQS và ghi chú khác theo từng Shipper.</div>'
       +'<div id="acctInfoList"></div>'
-      +'<div style="display:flex;gap:8px;margin-top:.75rem">'
-        +'<button class="btn" onclick="addAcctInfoRow()"><i class="ti ti-plus"></i> Thêm dòng</button>'
-        +'<button class="btn pri" onclick="saveAcctInfo()"><i class="ti ti-check"></i> Lưu thông tin tài khoản</button>'
-      +'</div>'
-    +'</div>'
+    )
 
-    +'<div class="table-card" style="padding:1.25rem;margin-bottom:1.25rem">'
-      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-building" style="font-size:14px"></i>Tài khoản Công ty</div>'
+    +stgBox('bank','ti-building-bank','Tài khoản ngân hàng',
+      '<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>',
+      '<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-bottom:.5rem;display:flex;align-items:center;gap:5px"><i class="ti ti-building" style="font-size:13px"></i>Tài khoản Công ty</div>'
       +'<div id="bankRowsCo">'+bankRowsHtml(coBanks,'co')+'</div>'
-      +'<div style="display:flex;gap:8px;margin-top:.5rem">'
-        +'<button class="btn" data-btype="co" onclick="addBankRow(this.dataset.btype)"><i class="ti ti-plus"></i> Thêm TK Cty</button>'
-      +'</div>'
-    +'</div>'
-
-    +'<div class="table-card" style="padding:1.25rem;margin-bottom:1.25rem">'
-      +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-user" style="font-size:14px"></i>Tài khoản Cá nhân</div>'
+      +'<div style="margin-top:.4rem;margin-bottom:1rem"><button class="btn sm" data-btype="co" onclick="addBankRow(this.dataset.btype)"><i class="ti ti-plus"></i> Thêm TK Cty</button></div>'
+      +'<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-bottom:.5rem;display:flex;align-items:center;gap:5px"><i class="ti ti-user" style="font-size:13px"></i>Tài khoản Cá nhân</div>'
       +'<div id="bankRowsPers">'+bankRowsHtml(persBanks,'pers')+'</div>'
-      +'<div style="display:flex;gap:8px;margin-top:.5rem">'
-        +'<button class="btn" data-btype="pers" onclick="addBankRow(this.dataset.btype)"><i class="ti ti-plus"></i> Thêm TK Cá nhân</button>'
-      +'</div>'
-    +'</div>'
+      +'<div style="margin-top:.4rem"><button class="btn sm" data-btype="pers" onclick="addBankRow(this.dataset.btype)"><i class="ti ti-plus"></i> Thêm TK Cá nhân</button></div>'
+    )
 
-    +'<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>'
     +_contractPartyASettingsHtml()
     +_warehouseSettingsHtml()
-    +'</div>';
+  +'</div>';
   renderCargoNamesList();
   renderAcctInfoList();
   renderWarehouseList();
   if(typeof renderSvcCatList==='function')renderSvcCatList();
 }
 
+function _stgToggle(key){
+  if(!window._settingsOpen)window._settingsOpen={};
+  window._settingsOpen[key]=!window._settingsOpen[key];
+  const body=g('stg_body_'+key); const icon=g('stg_icon_'+key);
+  if(body)body.style.display=window._settingsOpen[key]?'block':'none';
+  if(icon)icon.className='ti ti-chevron-'+(window._settingsOpen[key]?'down':'right');
+}
+window._stgToggle=_stgToggle;
+
 // ─────────── SETTINGS: Kho đóng hàng ───────────
 function _warehouseSettingsHtml(){
-  return '<div class="table-card" style="padding:1.25rem;margin:1.25rem 0">'
-    +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-building-warehouse" style="font-size:14px"></i>Kho đóng hàng</div>'
-    +'<div style="display:grid;grid-template-columns:1.3fr 1.6fr 1.3fr 32px;gap:8px;margin-bottom:6px;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase"><div>Tên kho</div><div>Định vị</div><div>Người liên hệ</div><div></div></div>'
-    +'<div id="warehouseRows"></div>'
-    +'<button class="btn sm" style="margin-top:6px" onclick="addWarehouseRow()"><i class="ti ti-plus"></i> Thêm kho</button>'
-    +'<div style="margin-top:10px"><button class="btn pri" onclick="saveWarehouses()"><i class="ti ti-check"></i> Lưu kho đóng hàng</button></div>'
+  const open=window._settingsOpen&&window._settingsOpen.warehouse;
+  return '<div class="table-card" style="margin-bottom:.5rem">'
+    +'<div onclick="_stgToggle(\'warehouse\')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'">'
+      +'<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti ti-building-warehouse" style="font-size:15px"></i>Kho đóng hàng</div>'
+      +'<i class="ti ti-chevron-'+(open?'down':'right')+'" id="stg_icon_warehouse" style="font-size:13px;color:var(--text-tertiary)"></i>'
+    +'</div>'
+    +'<div id="stg_body_warehouse" style="display:'+(open?'block':'none')+';padding:0 1.1rem 1rem">'
+      +'<div style="display:grid;grid-template-columns:1.3fr 1.6fr 1.3fr 32px;gap:8px;margin-bottom:6px;font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase"><div>Tên kho</div><div>Định vị</div><div>Người liên hệ</div><div></div></div>'
+      +'<div id="warehouseRows"></div>'
+      +'<div style="margin-top:.75rem;display:flex;gap:8px">'
+        +'<button class="btn sm" onclick="addWarehouseRow()"><i class="ti ti-plus"></i> Thêm kho</button>'
+        +'<button class="btn pri" onclick="saveWarehouses()"><i class="ti ti-check"></i> Lưu kho đóng hàng</button>'
+      +'</div>'
+    +'</div>'
   +'</div>';
 }
 
-function warehouseRowHtml(w,i){
-  w=w||{};
-  return '<div data-wh-row style="display:grid;grid-template-columns:1.3fr 1.6fr 1.3fr 32px;gap:8px;margin-bottom:6px;align-items:start">'
-    +'<input type="text" value="'+(w.name||'').replace(/"/g,'&quot;')+'" placeholder="Tên kho" data-wh-name style="font-size:12px;box-sizing:border-box"/>'
-    +'<input type="text" value="'+(w.location||'').replace(/"/g,'&quot;')+'" placeholder="Định vị (địa chỉ / Google Maps)" data-wh-loc style="font-size:12px;box-sizing:border-box"/>'
-    +'<input type="text" value="'+(w.contact||'').replace(/"/g,'&quot;')+'" placeholder="Người liên hệ - SĐT" data-wh-contact style="font-size:12px;box-sizing:border-box"/>'
-    +'<button class="rac red" onclick="delWarehouseRow(this)" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>'
-  +'</div>';
-}
-
-function renderWarehouseList(){
-  const box=g('warehouseRows'); if(!box)return;
-  const list=window._warehouses||[];
-  box.innerHTML=(list.length?list:[{}]).map(function(w,i){return warehouseRowHtml(w,i);}).join('');
-}
-window.renderWarehouseList=renderWarehouseList;
-
-function addWarehouseRow(){
-  const box=g('warehouseRows'); if(!box)return;
-  const div=document.createElement('div');
-  div.innerHTML=warehouseRowHtml({},box.children.length);
-  box.appendChild(div.firstChild);
-}
-window.addWarehouseRow=addWarehouseRow;
-
-function delWarehouseRow(btn){ const row=btn.closest('[data-wh-row]'); if(row)row.remove(); }
-window.delWarehouseRow=delWarehouseRow;
-
-function loadWarehouses(cb){
-  db.collection('_config').doc('warehouses').get().then(function(snap){
-    window._warehouses=(snap.exists&&Array.isArray(snap.data().list))?snap.data().list:[];
-    if(cb)cb();
-    if(g('warehouseRows'))renderWarehouseList();
-  }).catch(function(){ window._warehouses=[]; if(cb)cb(); });
-}
-window.loadWarehouses=loadWarehouses;
-
-async function saveWarehouses(){
-  const box=g('warehouseRows'); if(!box)return;
-  const list=Array.from(box.querySelectorAll('[data-wh-row]')).map(function(row){
-    return {
-      name:(row.querySelector('[data-wh-name]')||{}).value||'',
-      location:(row.querySelector('[data-wh-loc]')||{}).value||'',
-      contact:(row.querySelector('[data-wh-contact]')||{}).value||''
-    };
-  }).filter(function(w){return w.name||w.location||w.contact;});
-  setLoading(true,'Đang lưu...');
-  try{ await db.collection('_config').doc('warehouses').set({list:list},{merge:false}); window._warehouses=list; toast('Đã lưu kho đóng hàng'); }
-  catch(e){ toast('Lỗi: '+e.message,'error'); }
-  setLoading(false);
-}
-window.saveWarehouses=saveWarehouses;
-
-// ─────────── SETTINGS: Thông tin Bên A (công ty cung cấp dịch vụ) cho Hợp đồng ───────────
 function _contractPartyASettingsHtml(){
   const a=window._contractPartyA||{};
   function fld(id,label,val,ph,wide){
@@ -7057,18 +7018,22 @@ function _contractPartyASettingsHtml(){
       +'<label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:3px">'+label+'</label>'
       +'<input type="text" id="'+id+'" value="'+(val||'').replace(/"/g,'&quot;')+'" placeholder="'+(ph||'')+'" style="font-size:12px;width:100%;box-sizing:border-box"/></div>';
   }
-  return '<div class="table-card" style="padding:1.25rem;margin:1.25rem 0">'
-    +'<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-file-contract" style="font-size:14px"></i>Hợp đồng DV — Thông tin Bên A (Công ty ta)</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
-      +fld('ctrA_name','Tên giao dịch',a.name||'CÔNG TY TNHH HANA COCO SEA','',true)
-      +fld('ctrA_mst','Mã số thuế',a.mst||'0319570124','')
-      +fld('ctrA_phone','Điện thoại',a.phone||'+84 938 038 713','')
-      +fld('ctrA_addr','Địa chỉ giao dịch',a.addr||'991B Tân Kỳ Tân Quý, Phường Bình Hưng Hòa, Thành phố Hồ Chí Minh, Việt Nam','',true)
-      +fld('ctrA_rep','Đại diện',a.rep||'Bà Nguyễn Thị Cẩm Tiên','')
-      +fld('ctrA_title','Chức vụ',a.title||'Giám Đốc','')
+  const open=window._settingsOpen&&window._settingsOpen.contract;
+  const inner='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
+    +fld('ctrA_name','Tên giao dịch',a.name||'CÔNG TY TNHH HANA COCO SEA','',true)
+    +fld('ctrA_mst','Mã số thuế',a.mst||'0319570124','')
+    +fld('ctrA_phone','Điện thoại',a.phone||'+84 938 038 713','')
+    +fld('ctrA_addr','Địa chỉ giao dịch',a.addr||'991B Tân Kỳ Tân Quý, Phường Bình Hưng Hòa, Thành phố Hồ Chí Minh, Việt Nam','',true)
+    +fld('ctrA_rep','Đại diện',a.rep||'Bà Nguyễn Thị Cẩm Tiên','')
+    +fld('ctrA_title','Chức vụ',a.title||'Giám Đốc','')
     +'</div>'
-    +'<button class="btn pri" onclick="saveContractPartyA()"><i class="ti ti-check"></i> Lưu thông tin Bên A</button>'
-    +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">Tài khoản thụ hưởng của hợp đồng lấy từ mục "Tài khoản Công ty" ở trên.</div>'
+    +'<button class="btn pri" onclick="saveContractPartyA()"><i class="ti ti-check"></i> Lưu thông tin Bên A</button>';
+  return '<div class="table-card" style="margin-bottom:.5rem">'
+    +'<div onclick="_stgToggle(\'contract\')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'">'
+      +'<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti ti-file-contract" style="font-size:15px"></i>Hợp đồng DV — Thông tin Bên A</div>'
+      +'<i class="ti ti-chevron-'+(open?'down':'right')+'" id="stg_icon_contract" style="font-size:13px;color:var(--text-tertiary)"></i>'
+    +'</div>'
+    +'<div id="stg_body_contract" style="display:'+(open?'block':'none')+';padding:0 1.1rem 1rem">'+inner+'</div>'
   +'</div>';
 }
 
@@ -10598,6 +10563,7 @@ function openVesselEditor(id){
   const v=id?((cache.vessels||[]).find(function(x){return x._id===id;})||{}):{};
   _vesselDraft={
     vessel:v.vessel||'', voy:v.voy||'', pol:v.pol||'', etd:v.etd||'',
+    cutoffCY:v.cutoffCY||'', cutoffSI:v.cutoffSI||'',
     polCountry:v.polCountry||(typeof _findCountryForPort==='function'?_findCountryForPort(v.pol):''),
     carriers:(v.carriers||[]).slice(),
     pods:(v.pods&&v.pods.length?v.pods.map(function(p){return {pod:p.pod||'',eta:p.eta||'',country:p.country||(typeof _findCountryForPort==='function'?_findCountryForPort(p.pod):''),tt:(p.tt!=null?p.tt:'')};}):[{pod:'',eta:'',country:'',tt:''}])
@@ -10607,7 +10573,7 @@ function openVesselEditor(id){
 }
 window.openVesselEditor=openVesselEditor;
 
-function openVesselQuick(vesselName, voy){
+function openVesselQuick(vesselName, voy, lotEtd, lotCY, lotSI){
   // Mở nhanh Vessel tool editor cho tàu tương ứng (từ màn hình chính)
   vesselName=(vesselName||'').trim();
   voy=(voy||'').trim();
@@ -10625,13 +10591,22 @@ function openVesselQuick(vesselName, voy){
     // Khớp theo tên tàu bất kỳ voy
     match=(cache.vessels||[]).find(function(x){return (x.vessel||'').trim().toLowerCase()===vN;});
   }
+  // Nếu có lot context, override cutoffs với giá trị của lot (ưu tiên giá trị đã lưu trên lot, fallback sang vessel, fallback sang mặc định ETD-2)
+  const defCY=lotCY||(lotEtd?_vesselCalcDefaultCutoff(lotEtd):'');
+  const defSI=lotSI||(lotEtd?_vesselCalcDefaultCutoff(lotEtd):'');
   if(match){
     openVesselEditor(match._id);
+    // Sau khi openVesselEditor set draft từ vessel record, override cutoffs với lot nếu có
+    if(lotCY){_vesselDraft.cutoffCY=lotCY;}
+    else if(!_vesselDraft.cutoffCY&&defCY){_vesselDraft.cutoffCY=defCY;}
+    if(lotSI){_vesselDraft.cutoffSI=lotSI;}
+    else if(!_vesselDraft.cutoffSI&&defSI){_vesselDraft.cutoffSI=defSI;}
+    renderVesselEditor(); // re-render to show updated cutoffs
   } else {
-    // Chưa có trong Vessel tool → mở editor mới, điền sẵn tên + voy
+    // Chưa có trong Vessel tool → mở editor mới, điền sẵn tên + voy + cutoff của lot
     if(!confirm('Tàu "'+vesselName+'" chưa có trong Vessel tool. Tạo mới?'))return;
     _vesselEditId=null;
-    _vesselDraft={vessel:vesselName, voy:voy, pol:'', etd:'', carriers:[], pods:[{pod:'',eta:''}]};
+    _vesselDraft={vessel:vesselName, voy:voy, pol:'', etd:lotEtd||'', cutoffCY:defCY, cutoffSI:defSI, carriers:[], pods:[{pod:'',eta:''}]};
     renderVesselEditor();
     openOv('combineOv');
   }
@@ -10647,6 +10622,17 @@ function _vesselCalcEta(etdStr,ttDays){
   return d.toISOString().slice(0,10);
 }
 window._vesselCalcEta=_vesselCalcEta;
+
+// Tính Cut Off mặc định: ETD - 2 ngày, 11:00
+function _vesselCalcDefaultCutoff(etdStr){
+  if(!etdStr)return '';
+  try{
+    const d=new Date(etdStr+'T00:00:00');
+    d.setDate(d.getDate()-2);
+    return d.toISOString().slice(0,10)+' 11:00';
+  }catch(e){return '';}
+}
+window._vesselCalcDefaultCutoff=_vesselCalcDefaultCutoff;
 
 function renderVesselEditor(){
   const d=_vesselDraft;
@@ -10698,6 +10684,12 @@ function renderVesselEditor(){
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">ETD</label>'
           +'<input type="date" id="vesEtd" value="'+(d.etd||'')+'" oninput="_vesselDraft.etd=this.value;_vesselRecalcAllEta()" style="width:100%;font-size:13px"/></div>'
       +'</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+        +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px"><i class="ti ti-clock" style="font-size:11px;color:var(--blue)"></i> Cut Off CY</label>'
+          +'<input type="text" id="vesCutoffCY" value="'+(d.cutoffCY||'')+'" placeholder="'+(d.etd?(_vesselCalcDefaultCutoff(d.etd)||'VD: 2026-06-18 11:00'):'VD: 2026-06-18 11:00')+'" oninput="_vesselDraft.cutoffCY=this.value" style="width:100%;font-size:12px"/></div>'
+        +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px"><i class="ti ti-clock" style="font-size:11px;color:var(--blue)"></i> Cut Off SI</label>'
+          +'<input type="text" id="vesCutoffSI" value="'+(d.cutoffSI||'')+'" placeholder="'+(d.etd?(_vesselCalcDefaultCutoff(d.etd)||'VD: 2026-06-18 11:00'):'VD: 2026-06-18 11:00')+'" oninput="_vesselDraft.cutoffSI=this.value" style="width:100%;font-size:12px"/></div>'
+      +'</div>'
       +'<div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
         +'<label style="font-size:12px;font-weight:600;color:var(--text-secondary)">POD (cảng đến) & ETA — có thể nhiều</label>'
         +'<button class="btn sm" onclick="_vesselAddPod()"><i class="ti ti-plus"></i> Thêm POD</button></div>'
@@ -10744,6 +10736,8 @@ function _vesselCaptureBasics(){
   if(g('vesPol'))_vesselDraft.pol=g('vesPol').value;
   if(g('vesPolCountry'))_vesselDraft.polCountry=g('vesPolCountry').value;
   if(g('vesEtd'))_vesselDraft.etd=g('vesEtd').value;
+  if(g('vesCutoffCY'))_vesselDraft.cutoffCY=g('vesCutoffCY').value;
+  if(g('vesCutoffSI'))_vesselDraft.cutoffSI=g('vesCutoffSI').value;
 }
 window._vesselCaptureBasics=_vesselCaptureBasics;
 
@@ -10857,6 +10851,8 @@ async function saveVessel(){
   try{
     const payload={
       vessel:d.vessel.trim(), voy:d.voy.trim(), carriers:d.carriers, pol:(d.pol||'').trim(), polCountry:d.polCountry||'', etd:d.etd||'',
+      cutoffCY:d.cutoffCY||_vesselCalcDefaultCutoff(d.etd)||'',
+      cutoffSI:d.cutoffSI||_vesselCalcDefaultCutoff(d.etd)||'',
       pods:pods, updatedAt:Date.now(), updatedBy:currentUser.email
     };
     if(_vesselEditId){
