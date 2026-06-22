@@ -3886,9 +3886,14 @@ function _truckingTableRowHtml(row,i,bkList,polDefault){
   const sel='font-size:12px;width:100%;box-sizing:border-box;border:1px solid var(--border-light);border-radius:6px;padding:4px 6px;background:var(--bg-primary)';
   const bkSel=bkList.length>1?('<select id="trk_bk_'+i+'" style="'+sel+'">'+_truckingBkOpts(bkList,row.bookingNo)+'</select>'):('<input type="text" id="trk_bk_'+i+'" value="'+(row.bookingNo||bkList[0]||'').replace(/"/g,'&quot;')+'" style="'+inp+'" readonly/>');
   const vnPorts=(typeof PORTS_BY_COUNTRY!=='undefined'&&PORTS_BY_COUNTRY['VN'])||[];
-  const polDefault2=row.fullReturn||polDefault||'';
-  const frOpts=vnPorts.map(function(p){return '<option value="'+p.replace(/"/g,'&quot;')+'"'+(p===polDefault2?' selected':'')+'>'+p+'</option>';}).join('');
-  const frSelect='<select id="trk_fr_'+i+'" style="'+sel+'"><option value="">— Chọn cảng —</option>'+frOpts+'</select>';
+  const polDefault2=row.fullReturn||(row.fullReturn===undefined?polDefault:'')||polDefault||'';
+  // Đảm bảo POL của lô luôn có trong dropdown ngay cả khi không nằm trong danh sách VN
+  let frOpts='<option value="">— Chọn cảng Full Return —</option>';
+  if(polDefault&&!vnPorts.includes(polDefault)){
+    frOpts+='<option value="'+polDefault.replace(/"/g,'&quot;')+'"'+(polDefault===polDefault2?' selected':'')+'>'+polDefault+'</option>';
+  }
+  frOpts+=vnPorts.map(function(p){return '<option value="'+p.replace(/"/g,'&quot;')+'"'+(p===polDefault2?' selected':'')+'>'+p+'</option>';}).join('');
+  const frSelect='<select id="trk_fr_'+i+'" style="'+sel+'">'+frOpts+'</select>';
   const defRoute='từ Vĩnh Long đến Hồ Chí Minh';
   return '<tr data-trk-row>'
     +'<td style="'+td+';text-align:center;font-weight:700;font-size:11px;color:var(--text-tertiary)">'+(i+1)+'</td>'
@@ -4046,11 +4051,13 @@ window.openTruckingPopupWithCtx=openTruckingPopupWithCtx;
 
 function _scyIcdOpts(icdDefault,selected){
   const whs=window._warehouses||[];
-  let opts='<option value="">— Chọn bãi —</option>';
+  let opts='<option value="">— Chọn bãi đóng hàng —</option>';
   if(icdDefault&&!whs.find(function(w){return w.name===icdDefault;})){
-    opts+='<option value="'+icdDefault.replace(/"/g,'&quot;')+'"'+(icdDefault===selected?' selected':'')+'>'+(icdDefault)+'</option>';
+    opts+='<option value="'+icdDefault.replace(/"/g,'&quot;')+'"'+(icdDefault===selected?' selected':'')+'>'+icdDefault+'</option>';
   }
-  opts+=whs.map(function(w){return '<option value="'+(w.name||'').replace(/"/g,'&quot;')+'"'+(w.name===selected?' selected':'')+'>'+(w.name||'')+'</option>';}).join('');
+  opts+=whs.map(function(w){
+    return '<option value="'+(w.name||'').replace(/"/g,'&quot;')+'"'+(w.name===selected?' selected':'')+'>'+(w.name||'')+(w.location?' — '+w.location:'')+'</option>';
+  }).join('');
   return opts;
 }
 
@@ -8612,20 +8619,29 @@ window.calcSvcAmt=calcSvcAmt;
 function buildDnPartyRows(r,svcs){
   const roe=parseFloat(g('invRoeInput')?.value)||r.roe||window._roe||26390;
   const activeSvcs=Object.keys(svcs).filter(function(k){return svcs[k]&&svcs[k].on;});
-  // Group by party
+  // Group by party → split by invoice type (Yes/No)
   const parties={};
   activeSvcs.forEach(function(k){
     const sv=svcs[k];
-    if((sv.invoice||'Yes')==='Waived')return;
+    const invType=(sv.invoice||'Yes');
+    if(invType==='Waived')return;
     const party=(sv.party||'').trim()||'(Không party)';
-    if(!parties[party])parties[party]={total:0,count:0};
+    if(!parties[party])parties[party]={yes:{amt:0,vat8:0,vat10:0,cnt:0},no:{amt:0,cnt:0}};
     const price=parseFloat(sv.price)||0;
     const qty=parseFloat(sv.qty||sv.svcQty)||1;
     const cur=sv.cur||'VND';
     let amt=price*qty;
-    if(cur!=='VND')amt=amt*roe;
-    parties[party].total+=amt;
-    parties[party].count++;
+    if(cur!=='VND')amt=Math.round(amt*roe);
+    const vatRate=parseFloat((sv.vat||'0%').replace('%',''))||0;
+    if(invType==='Yes'){
+      parties[party].yes.amt+=amt;
+      parties[party].yes.cnt++;
+      if(vatRate===8)parties[party].yes.vat8+=amt;
+      else if(vatRate===10)parties[party].yes.vat10+=amt;
+    } else {
+      parties[party].no.amt+=amt;
+      parties[party].no.cnt++;
+    }
   });
   const keys=Object.keys(parties);
   if(!keys.length)return '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">Chưa có dịch vụ nào có party (chọn party ở tab Fill giá)</div>';
@@ -8633,20 +8649,58 @@ function buildDnPartyRows(r,svcs){
   const payMap=r.dnPayStatus||{};
   const payDateMap=r.dnPayDate||{};
   const payBankMap=r.dnPayBank||{};
-  return '<div style="display:flex;flex-direction:column;gap:6px">'+keys.map(function(p,i){
+
+  return '<div style="display:flex;flex-direction:column;gap:8px">'+keys.map(function(p,i){
     const info=parties[p];
+    const vatAmt=Math.round(info.yes.vat8*0.08+info.yes.vat10*0.10);
+    const totalYes=Math.round(info.yes.amt);
+    const totalYesWithVat=totalYes+vatAmt;
+    const totalNo=Math.round(info.no.amt);
+    const grandTotal=totalYesWithVat+totalNo;
     const dnNo=dnMap[p]||(r.dnNo||'');
     const pay=payMap[p]||'unpaid';
     const payDate=payDateMap[p]||'';
     const payBank=payBankMap[p]||'';
     const safeP=p.replace(/'/g,"\\'");
     const payCtx={type:'ar_party',party:p,status:pay,date:payDate,bank:payBank,label:p+' — Debit Note'};
-    return '<div style="display:grid;grid-template-columns:1fr 120px 110px 130px 120px;gap:8px;align-items:center;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
-      +'<div><div style="font-size:12px;font-weight:700">'+p+'</div><div style="font-size:10.5px;color:var(--text-secondary)">'+info.count+' dịch vụ</div></div>'
-      +'<div><input type="text" id="dnParty_'+i+'" data-party="'+p+'" value="'+dnNo+'" placeholder="Số DN" oninput="_dnPartyInputChange(this,'+i+')" style="font-size:11.5px;font-weight:700;color:var(--blue)"/></div>'
-      +'<div style="text-align:right;font-size:12px;font-weight:700;color:var(--green)">'+Math.round(info.total).toLocaleString()+' đ</div>'
-      +'<div>'+_apPayBadge(pay,payDate,payCtx)+'</div>'
-      +'<div style="text-align:right"><button class="btn red" id="btnXuatDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập hoặc bấm Lưu để tự sinh Số DN trước khi xuất"')+' onclick="exportDebitForParty(this.dataset.party)" style="font-size:11.5px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Xuất DN</button></div>'
+
+    const rowStyle='display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:12px';
+    const labelStyle='color:var(--text-secondary);font-size:11.5px';
+    const amtStyle='font-weight:600;color:var(--text-primary)';
+    const vatStyle='font-weight:600;color:#e07000';
+    const totStyle='font-weight:700;color:var(--green)';
+
+    let invoiceSection='';
+    if(info.yes.cnt>0){
+      invoiceSection+='<div style="padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
+        +'<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a4b8c;margin-bottom:5px">🧾 Có hóa đơn ('+info.yes.cnt+' dịch vụ)</div>'
+        +'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tổng trước VAT</span><span style="'+amtStyle+'">'+totalYes.toLocaleString()+' đ</span></div>'
+        +(vatAmt?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tiền VAT</span><span style="'+vatStyle+'">+'+vatAmt.toLocaleString()+' đ</span></div>':'')
+        +'<div style="'+rowStyle+';border-top:1px dashed var(--border-light);margin-top:3px;padding-top:4px"><span style="font-size:12px;font-weight:600">Tổng có VAT</span><span style="'+totStyle+'">'+totalYesWithVat.toLocaleString()+' đ</span></div>'
+      +'</div>';
+    }
+    if(info.no.cnt>0){
+      invoiceSection+='<div style="padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
+        +'<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary);margin-bottom:5px">📋 Không hóa đơn ('+info.no.cnt+' dịch vụ)</div>'
+        +'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tổng</span><span style="'+amtStyle+'">'+totalNo.toLocaleString()+' đ</span></div>'
+      +'</div>';
+    }
+
+    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;overflow:hidden">'
+      // Header party
+      +'<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f0f5ff;border-bottom:1px solid var(--border-light)">'
+        +'<div style="font-size:13px;font-weight:700;color:#1a4b8c;flex:1">'+p+'</div>'
+        +'<div style="font-size:10.5px;font-weight:700;color:var(--green)">Grand: '+grandTotal.toLocaleString()+' đ</div>'
+        +_apPayBadge(pay,payDate,payCtx)
+      +'</div>'
+      // Body
+      +'<div style="padding:8px 12px">'
+        +invoiceSection
+        +'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
+          +'<input type="text" id="dnParty_'+i+'" data-party="'+p+'" value="'+dnNo+'" placeholder="Số DN" oninput="_dnPartyInputChange(this,'+i+')" style="font-size:12px;font-weight:700;color:#1a4b8c;flex:1;border:1px solid var(--border-light);border-radius:6px;padding:5px 8px"/>'
+          +'<button class="btn red" id="btnXuatDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập Số DN trước khi xuất"')+' onclick="exportDebitForParty(this.dataset.party)" style="font-size:12px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Xuất DN</button>'
+        +'</div>'
+      +'</div>'
     +'</div>';
   }).join('')+'</div>';
 }
