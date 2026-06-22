@@ -1031,7 +1031,7 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  ['xuat','nhap','deadline','thu-chi','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings'].forEach(id=>{
+  ['xuat','nhap','deadline','thu-chi','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings','trucking-report','scy-report'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
@@ -1047,6 +1047,8 @@ function goTab(t){
   if(t==='users') renderUsers();
   if(t==='docs') renderDocMaker();
   if(t==='costing-report') renderCostingReport();
+  if(t==='trucking-report') renderTruckingReport();
+  if(t==='scy-report') renderScyReport();
   if(t==='ocean') renderOcean();
   if(t==='quote') renderQuote();
   if(t==='settings') renderSettings();
@@ -1233,7 +1235,7 @@ function renderLotTable(tt){
         // Show all booking numbers comma-separated
         const bkList=(r.bookings&&r.bookings.length)?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean):[r.bookingNo].filter(Boolean);
         const bkDisplay=bkList.length?bkList.join(', '):'—';
-        const mblLine=r.mblNo?`<div style="font-size:10px;color:var(--text-secondary);margin-top:2px;white-space:nowrap"><i class="ti ti-hash" style="font-size:9px"></i> ${r.mblNo}</div>`:'';
+        const mblLine=r.mblNo?`<div style="font-size:12.5px;font-weight:600;color:#1a4b8c;margin-top:2px;white-space:nowrap"><i class="ti ti-hash" style="font-size:10px"></i> ${r.mblNo}</div>`:'';
         return`<td style="max-width:160px;vertical-align:top"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${bkDisplay}</button>${urgDot}${mblLine}</td>`;
       }
       if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
@@ -7363,6 +7365,8 @@ tr:hover td{background:var(--bg-secondary)}
     <button class="sb-item" id="sb-vessel" onclick="goTab('vessel')"><i class="ti ti-ship"></i> Vessel tool</button>
     <button class="sb-item" id="sb-cocoquote" onclick="goTab('cocoquote')"><i class="ti ti-calculator"></i> Coconut tool</button>
     <button class="sb-item" id="sb-contract" onclick="goTab('contract')"><i class="ti ti-file-contract"></i> Contract List</button>
+    <button class="sb-item" id="sb-trucking-report" onclick="goTab('trucking-report')"><i class="ti ti-truck"></i> Trucking Report</button>
+    <button class="sb-item" id="sb-scy-report" onclick="goTab('scy-report')"><i class="ti ti-package"></i> SCY Report</button>
     <div class="sb-section" style="margin-top:.4rem">Hệ thống</div>
     <button class="sb-item" id="sb-users" onclick="goTab('users')"><i class="ti ti-users"></i> User</button>
     <button class="sb-item" id="sb-docs" onclick="goTab('docs')"><i class="ti ti-file-certificate"></i> Document Maker</button>
@@ -7407,6 +7411,8 @@ tr:hover td{background:var(--bg-secondary)}
       <div id="page-ocean" style="display:none"></div>
       <div id="page-quote" style="display:none"></div>
       <div id="page-settings" style="display:none"></div>
+      <div id="page-trucking-report" style="display:none"></div>
+      <div id="page-scy-report" style="display:none"></div>
     </div>
   </div>
 </div>
@@ -10224,7 +10230,174 @@ function filterCostingRows(){
 
 window.setCostingFilter=setCostingFilter;
 window.filterCostingRows=filterCostingRows;
-window.renderCostingReport=renderCostingReport;
+// ─────────── TRUCKING REPORT ───────────
+function renderTruckingReport(){
+  const pg=g('page-trucking-report'); if(!pg)return;
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  // Thu thập tất cả rows trucking từ mọi lô
+  let rows=[];
+  allLots.forEach(function(r){
+    (r.truckings||[]).forEach(function(trk){
+      if(!trk||(!trk.date&&!trk.truckNo&&!trk.contNo))return;
+      rows.push(Object.assign({},trk,{
+        _lotId:r._id, _tt:(r._tt||'xuat'),
+        _bookingNo:r.bookingNo||r.jobNo||'—',
+        _shipper:r.shipper||r.supplier||'—',
+        _etd:r.etd||''
+      }));
+    });
+  });
+  // Sort theo ngày đóng hàng trucking (date)
+  rows.sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+
+  // Filter state
+  const fs=window._truckRptFilter=window._truckRptFilter||{shipper:'',wh:'',dateFrom:'',dateTo:'',status:''};
+
+  // Apply filters
+  let filtered=rows.filter(function(r){
+    if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
+    if(fs.wh&&!(r.wh||'').toLowerCase().includes(fs.wh.toLowerCase()))return false;
+    if(fs.dateFrom&&(r.date||'')<fs.dateFrom)return false;
+    if(fs.dateTo&&(r.date||'')>fs.dateTo)return false;
+    return true;
+  });
+
+  const thS='padding:7px 9px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-light);white-space:nowrap;background:var(--bg-secondary)';
+  const tdS='padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+
+  const bodyRows=filtered.map(function(r,i){
+    const dateDisp=r.date?fmtDMY(r.date):'—';
+    const bg=i%2===0?'':'background:var(--bg-secondary)';
+    return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\'trucking\')">'
+      +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
+      +'<td style="'+tdS+'"><span style="color:#1a4b8c;font-weight:600">'+(r.bookingNo||r._bookingNo||'—')+'</span></td>'
+      +'<td style="'+tdS+'"><span style="font-size:11.5px">'+(r._shipper||'—')+'</span></td>'
+      +'<td style="'+tdS+'"><span style="font-weight:700;color:#1a4b8c">'+dateDisp+'</span></td>'
+      +'<td style="'+tdS+'">'+(r.vol||'1')+'</td>'
+      +'<td style="'+tdS+'">'+(r.typeCont||'—')+'</td>'
+      +'<td style="'+tdS+'">'+(r.wh||'—')+'</td>'
+      +'<td style="'+tdS+'">'+(r.fullReturn||'—')+'</td>'
+      +'<td style="'+tdS+'">'+(r.route||'—')+'</td>'
+      +'<td style="'+tdS+';font-family:monospace;font-size:11.5px">'+(r.contNo||'—')+'</td>'
+      +'<td style="'+tdS+';font-weight:600">'+(r.truckNo||'—')+'</td>'
+    +'</tr>';
+  }).join('');
+
+  pg.innerHTML='<div style="padding:1rem 1.25rem">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">'
+      +'<i class="ti ti-truck" style="font-size:20px;color:#1a4b8c"></i>'
+      +'<h2 style="font-size:16px;font-weight:700;margin:0">Trucking Report</h2>'
+      +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lệnh</span>'
+    +'</div>'
+    // Filters
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
+      +'<input type="text" placeholder="🔍 Shipper/Supplier" value="'+(fs.shipper||'')+'" oninput="window._truckRptFilter.shipper=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:130px"/>'
+      +'<input type="text" placeholder="🏭 Kho đóng hàng" value="'+(fs.wh||'')+'" oninput="window._truckRptFilter.wh=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:130px"/>'
+      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">Ngày:'
+        +'<input type="date" value="'+(fs.dateFrom||'')+'" oninput="window._truckRptFilter.dateFrom=this.value;renderTruckingReport()" style="font-size:12px"/>'
+        +'<span>→</span>'
+        +'<input type="date" value="'+(fs.dateTo||'')+'" oninput="window._truckRptFilter.dateTo=this.value;renderTruckingReport()" style="font-size:12px"/>'
+      +'</div>'
+      +'<button class="btn sm" onclick="window._truckRptFilter={shipper:\'\',wh:\'\',dateFrom:\'\',dateTo:\'\'};renderTruckingReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
+    +'</div>'
+    // Table
+    +'<div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:10px">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:900px">'
+      +'<thead><tr>'
+        +'<th style="'+thS+';width:36px">#</th>'
+        +'<th style="'+thS+'">Booking No</th>'
+        +'<th style="'+thS+'">Shipper</th>'
+        +'<th style="'+thS+'">Ngày đóng</th>'
+        +'<th style="'+thS+';width:40px">Vol</th>'
+        +'<th style="'+thS+'">Type</th>'
+        +'<th style="'+thS+'">Kho đóng</th>'
+        +'<th style="'+thS+'">Full Return</th>'
+        +'<th style="'+thS+'">Route</th>'
+        +'<th style="'+thS+'">Số cont</th>'
+        +'<th style="'+thS+'">Số xe</th>'
+      +'</tr></thead>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="11" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-truck" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu trucking</td></tr>')+'</tbody>'
+    +'</table></div>'
+  +'</div>';
+}
+window.renderTruckingReport=renderTruckingReport;
+
+// ─────────── SCY REPORT ───────────
+function renderScyReport(){
+  const pg=g('page-scy-report'); if(!pg)return;
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=[];
+  allLots.forEach(function(r){
+    (r.scyItems||[]).forEach(function(scy){
+      if(!scy||(!scy.date&&!scy.icd))return;
+      rows.push(Object.assign({},scy,{
+        _lotId:r._id, _tt:(r._tt||'xuat'),
+        _bookingNo:r.bookingNo||r.jobNo||'—',
+        _shipper:r.shipper||r.supplier||'—',
+        _etd:r.etd||''
+      }));
+    });
+  });
+  rows.sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+
+  const fs=window._scyRptFilter=window._scyRptFilter||{shipper:'',icd:'',dateFrom:'',dateTo:''};
+  let filtered=rows.filter(function(r){
+    if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
+    if(fs.icd&&!(r.icd||'').toLowerCase().includes(fs.icd.toLowerCase()))return false;
+    if(fs.dateFrom&&(r.date||'')<fs.dateFrom)return false;
+    if(fs.dateTo&&(r.date||'')>fs.dateTo)return false;
+    return true;
+  });
+
+  const thS='padding:7px 9px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-light);white-space:nowrap;background:var(--bg-secondary)';
+  const tdS='padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+
+  const bodyRows=filtered.map(function(r,i){
+    const dateDisp=r.date?fmtDMY(r.date):'—';
+    const bg=i%2===0?'':'background:var(--bg-secondary)';
+    return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\'scy\')">'
+      +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
+      +'<td style="'+tdS+'"><span style="color:#1a4b8c;font-weight:600">'+(r.bookingNo||r._bookingNo||'—')+'</span></td>'
+      +'<td style="'+tdS+'"><span style="font-size:11.5px">'+(r._shipper||'—')+'</span></td>'
+      +'<td style="'+tdS+'"><span style="font-weight:700;color:#1a4b8c">'+dateDisp+'</span></td>'
+      +'<td style="'+tdS+'">'+(r.vol||'1')+'</td>'
+      +'<td style="'+tdS+'">'+(r.typeCont||'—')+'</td>'
+      +'<td style="'+tdS+';font-weight:600">'+(r.icd||'—')+'</td>'
+    +'</tr>';
+  }).join('');
+
+  pg.innerHTML='<div style="padding:1rem 1.25rem">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">'
+      +'<i class="ti ti-package" style="font-size:20px;color:#1a4b8c"></i>'
+      +'<h2 style="font-size:16px;font-weight:700;margin:0">SCY Report — Đóng hàng tại bãi</h2>'
+      +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lệnh</span>'
+    +'</div>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
+      +'<input type="text" placeholder="🔍 Shipper/Supplier" value="'+(fs.shipper||'')+'" oninput="window._scyRptFilter.shipper=this.value;renderScyReport()" style="font-size:12px;flex:1;min-width:130px"/>'
+      +'<input type="text" placeholder="🏭 Bãi đóng hàng (ICD)" value="'+(fs.icd||'')+'" oninput="window._scyRptFilter.icd=this.value;renderScyReport()" style="font-size:12px;flex:1;min-width:130px"/>'
+      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">Ngày:'
+        +'<input type="date" value="'+(fs.dateFrom||'')+'" oninput="window._scyRptFilter.dateFrom=this.value;renderScyReport()" style="font-size:12px"/>'
+        +'<span>→</span>'
+        +'<input type="date" value="'+(fs.dateTo||'')+'" oninput="window._scyRptFilter.dateTo=this.value;renderScyReport()" style="font-size:12px"/>'
+      +'</div>'
+      +'<button class="btn sm" onclick="window._scyRptFilter={shipper:\'\',icd:\'\',dateFrom:\'\',dateTo:\'\'};renderScyReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
+    +'</div>'
+    +'<div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:10px">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:600px">'
+      +'<thead><tr>'
+        +'<th style="'+thS+';width:36px">#</th>'
+        +'<th style="'+thS+'">Booking No</th>'
+        +'<th style="'+thS+'">Shipper</th>'
+        +'<th style="'+thS+'">Ngày đóng</th>'
+        +'<th style="'+thS+';width:40px">Vol</th>'
+        +'<th style="'+thS+'">Type</th>'
+        +'<th style="'+thS+'">Bãi đóng hàng (ICD)</th>'
+      +'</tr></thead>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-package" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu đóng bãi</td></tr>')+'</tbody>'
+    +'</table></div>'
+  +'</div>';
+}
+window.renderScyReport=renderScyReport;
 window.runCostingReport=runCostingReport;
 window.exportCostingExcel=exportCostingExcel;
 
