@@ -5909,11 +5909,11 @@ window._openPayPopupFromEl=_openPayPopupFromEl;
 // Mở popup
 function openPayStatusPopup(ctx){
   _psCtx=Object.assign({},ctx);
-  const isAP=ctx.type!=='ar_party';
+  const isAP=ctx.type!=='ar_party'&&ctx.type!=='ar_party_inv'&&ctx.type!=='ar_party_noinv';
   const bankLabel=isAP?'Tài khoản ngân hàng trừ tiền':'Tài khoản ngân hàng nhận tiền';
   const paid=ctx.status==='paid';
   g('payStatusOv').innerHTML=`
-  <div class="modal" style="max-width:380px">
+  <div class="modal" style="max-width:400px">
     <div class="mhdr">
       <div><div class="mtitle"><i class="ti ti-credit-card" style="font-size:15px;margin-right:6px"></i>Trạng thái thanh toán</div>
       ${ctx.label?'<div class="msub">'+ctx.label+'</div>':''}</div>
@@ -5926,6 +5926,10 @@ function openPayStatusPopup(ctx){
           <button id="psBtnUnpaid" onclick="_psSetStatus('unpaid')" class="btn${!paid?' active':''}" style="flex:1;font-weight:700;color:var(--red);${!paid?'background:rgba(220,53,69,.1);border-color:var(--red)':''}">Chưa TT</button>
           <button id="psBtnPaid"   onclick="_psSetStatus('paid')"   class="btn${paid?' active':''}"  style="flex:1;font-weight:700;color:var(--green);${paid?'background:rgba(40,167,69,.1);border-color:var(--green)':''}">Đã TT</button>
         </div>
+      </div>
+      <div class="fi full">
+        <label class="lbl">Số tiền thanh toán (VND)</label>
+        <input type="number" id="psAmount" value="${ctx.amount||''}" placeholder="${ctx.suggestAmount?ctx.suggestAmount.toLocaleString()+' đ (gợi ý)':'Nhập số tiền (để trống = đủ số)'}" min="0" style="width:100%;box-sizing:border-box"/>
       </div>
       <div class="fi full">
         <label class="lbl">Ngày thanh toán</label>
@@ -5969,6 +5973,7 @@ async function savePayStatusDetail(){
   const status=ctx.status||'unpaid';
   const date=g('psDate')?.value||'';
   const bank=g('psBank')?.value||'';
+  const amount=parseFloat(g('psAmount')?.value)||0;
 
   setLoading(true,'Đang lưu...');
   try{
@@ -6065,21 +6070,37 @@ async function savePayStatusDetail(){
       toast('Đã cập nhật trạng thái thanh toán');
       renderSupplierDetailPopup();
 
+    } else if(ctx.type==='ar_party_inv'||ctx.type==='ar_party_noinv'){
+      // TT riêng cho phần Có HĐ / Không HĐ
+      const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{};
+      const dnPm=JSON.parse(JSON.stringify(r.dnPayments||{}));
+      if(!dnPm[ctx.party])dnPm[ctx.party]={inv:{},noInv:{}};
+      const section=ctx.type==='ar_party_inv'?'inv':'noInv';
+      dnPm[ctx.party][section]={status:status,date:date,bank:bank,amount:amount};
+      await fsSet(colName(detailTt),detailId,{dnPayments:dnPm});
+      const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
+      if(ci>=0){cache[detailTt][ci].dnPayments=dnPm;}
+      toast('Đã cập nhật trạng thái thanh toán');
+      if(typeof renderDetailPanel==='function'){
+        const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+        if(fresh)renderDetailPanel(fresh,detailTt);
+      }
+
     } else if(ctx.type==='ar_party'){
-      // Debit Note / Invoice by party
+      // Debit Note / Invoice by party (legacy)
       const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{};
       const payMap=JSON.parse(JSON.stringify(r.dnPayStatus||{}));
       const dateMap=JSON.parse(JSON.stringify(r.dnPayDate||{}));
       const bankMap=JSON.parse(JSON.stringify(r.dnPayBank||{}));
-      payMap[ctx.party]=status; dateMap[ctx.party]=date; bankMap[ctx.party]=bank;
-      await fsSet(colName(detailTt),detailId,{dnPayStatus:payMap,dnPayDate:dateMap,dnPayBank:bankMap});
+      const amtMap=JSON.parse(JSON.stringify(r.dnPayAmount||{}));
+      payMap[ctx.party]=status; dateMap[ctx.party]=date; bankMap[ctx.party]=bank; amtMap[ctx.party]=amount;
+      await fsSet(colName(detailTt),detailId,{dnPayStatus:payMap,dnPayDate:dateMap,dnPayBank:bankMap,dnPayAmount:amtMap});
       const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
-      if(ci>=0){cache[detailTt][ci].dnPayStatus=payMap;cache[detailTt][ci].dnPayDate=dateMap;cache[detailTt][ci].dnPayBank=bankMap;}
+      if(ci>=0){cache[detailTt][ci].dnPayStatus=payMap;cache[detailTt][ci].dnPayDate=dateMap;cache[detailTt][ci].dnPayBank=bankMap;cache[detailTt][ci].dnPayAmount=amtMap;}
       toast('Đã cập nhật trạng thái thanh toán');
-      // Re-render invoice tab
       if(typeof renderDetailPanel==='function'){
         const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
-        if(fresh){renderDetailPanel(fresh,detailTt);}
+        if(fresh)renderDetailPanel(fresh,detailTt);
       }
     }
     closeOv('payStatusOv');
@@ -8646,9 +8667,11 @@ function buildDnPartyRows(r,svcs){
   const keys=Object.keys(parties);
   if(!keys.length)return '<div style="font-size:12px;color:var(--text-tertiary);padding:8px">Chưa có dịch vụ nào có party (chọn party ở tab Fill giá)</div>';
   const dnMap=r.dnByParty||{};
-  const payMap=r.dnPayStatus||{};
-  const payDateMap=r.dnPayDate||{};
-  const payBankMap=r.dnPayBank||{};
+  const dnPmMap=r.dnPayments||{};
+  // Legacy fallback: old dnPayStatus[party]
+  const legacyPayMap=r.dnPayStatus||{};
+  const legacyDateMap=r.dnPayDate||{};
+  const legacyBankMap=r.dnPayBank||{};
 
   return '<div style="display:flex;flex-direction:column;gap:8px">'+keys.map(function(p,i){
     const info=parties[p];
@@ -8658,11 +8681,12 @@ function buildDnPartyRows(r,svcs){
     const totalNo=Math.round(info.no.amt);
     const grandTotal=totalYesWithVat+totalNo;
     const dnNo=dnMap[p]||(r.dnNo||'');
-    const pay=payMap[p]||'unpaid';
-    const payDate=payDateMap[p]||'';
-    const payBank=payBankMap[p]||'';
     const safeP=p.replace(/'/g,"\\'");
-    const payCtx={type:'ar_party',party:p,status:pay,date:payDate,bank:payBank,label:p+' — Debit Note'};
+
+    // Payment data per section (từ dnPayments mới, fallback về dnPayStatus cũ cho Có HĐ)
+    const pmData=dnPmMap[p]||{};
+    const invPm=pmData.inv||{status:legacyPayMap[p]||'unpaid',date:legacyDateMap[p]||'',bank:legacyBankMap[p]||'',amount:0};
+    const noInvPm=pmData.noInv||{status:'unpaid',date:'',bank:'',amount:0};
 
     const rowStyle='display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:12px';
     const labelStyle='color:var(--text-secondary);font-size:11.5px';
@@ -8672,28 +8696,35 @@ function buildDnPartyRows(r,svcs){
 
     let invoiceSection='';
     if(info.yes.cnt>0){
+      const invCtx={type:'ar_party_inv',party:p,status:invPm.status||'unpaid',date:invPm.date||'',bank:invPm.bank||'',amount:invPm.amount||0,label:p+' — Có hóa đơn',suggestAmount:totalYesWithVat};
       invoiceSection+='<div style="padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
-        +'<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a4b8c;margin-bottom:5px">🧾 Có hóa đơn ('+info.yes.cnt+' dịch vụ)</div>'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+          +'<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a4b8c">🧾 Có hóa đơn ('+info.yes.cnt+' dịch vụ)</span>'
+          +_apPayBadge(invPm.status||'unpaid',invPm.date||'',invCtx)
+        +'</div>'
         +'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tổng trước VAT</span><span style="'+amtStyle+'">'+totalYes.toLocaleString()+' đ</span></div>'
         +(vatAmt?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tiền VAT</span><span style="'+vatStyle+'">+'+vatAmt.toLocaleString()+' đ</span></div>':'')
+        +(invPm.amount?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Đã thanh toán</span><span style="font-weight:600;color:var(--green)">'+Math.round(invPm.amount).toLocaleString()+' đ</span></div>':'')
         +'<div style="'+rowStyle+';border-top:1px dashed var(--border-light);margin-top:3px;padding-top:4px"><span style="font-size:12px;font-weight:600">Tổng có VAT</span><span style="'+totStyle+'">'+totalYesWithVat.toLocaleString()+' đ</span></div>'
       +'</div>';
     }
     if(info.no.cnt>0){
+      const noInvCtx={type:'ar_party_noinv',party:p,status:noInvPm.status||'unpaid',date:noInvPm.date||'',bank:noInvPm.bank||'',amount:noInvPm.amount||0,label:p+' — Không hóa đơn',suggestAmount:totalNo};
       invoiceSection+='<div style="padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
-        +'<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary);margin-bottom:5px">📋 Không hóa đơn ('+info.no.cnt+' dịch vụ)</div>'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+          +'<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary)">📋 Không hóa đơn ('+info.no.cnt+' dịch vụ)</span>'
+          +_apPayBadge(noInvPm.status||'unpaid',noInvPm.date||'',noInvCtx)
+        +'</div>'
+        +(noInvPm.amount?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Đã thanh toán</span><span style="font-weight:600;color:var(--green)">'+Math.round(noInvPm.amount).toLocaleString()+' đ</span></div>':'')
         +'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tổng</span><span style="'+amtStyle+'">'+totalNo.toLocaleString()+' đ</span></div>'
       +'</div>';
     }
 
     return '<div style="background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;overflow:hidden">'
-      // Header party
       +'<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f0f5ff;border-bottom:1px solid var(--border-light)">'
         +'<div style="font-size:13px;font-weight:700;color:#1a4b8c;flex:1">'+p+'</div>'
         +'<div style="font-size:10.5px;font-weight:700;color:var(--green)">Grand: '+grandTotal.toLocaleString()+' đ</div>'
-        +_apPayBadge(pay,payDate,payCtx)
       +'</div>'
-      // Body
       +'<div style="padding:8px 12px">'
         +invoiceSection
         +'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
