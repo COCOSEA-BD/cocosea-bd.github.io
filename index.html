@@ -653,7 +653,7 @@ auth.onAuthStateChanged(async (user) => {
     startListeners();
     showApp();
     setLoading(false);
-    _startInactivityTracker();
+    _loadSecuritySettings(function(){_applySecuritySettings();});
   } else {
     currentUser = null; currentProfile = null;
     _stopInactivityTracker();
@@ -677,25 +677,128 @@ async function doLogin(){
 
 async function doLogout(){
   _stopInactivityTracker();
+  if(_pwCheckTimer){clearInterval(_pwCheckTimer);_pwCheckTimer=null;}
   stopListeners();
   await auth.signOut();
   toast('Đã đăng xuất');
 }
 
 /* ─────────────────────────────────────────────
-   TỰ ĐỘNG ĐĂNG XUẤT KHI KHÔNG HOẠT ĐỘNG (30 phút)
+   TỰ ĐỘNG ĐĂNG XUẤT — CẤU HÌNH TOÀN CỤC
 ───────────────────────────────────────────── */
-const INACTIVITY_LIMIT_MS=30*60*1000; // 30 phút
 let _inactivityTimer=null;
 let _inactivityListenerAttached=false;
+let _pwCheckTimer=null;
+let _securitySettings={inactivity:{enabled:false,minutes:30},password:{enabled:false,minutes:10080}}; // defaults
+
+// Load security settings từ Firestore (gọi khi user login)
+function _loadSecuritySettings(cb){
+  db.collection('_config').doc('securitySettings').get()
+    .then(function(snap){
+      if(snap.exists)_securitySettings=Object.assign({},_securitySettings,snap.data());
+      if(cb)cb();
+      _applySecuritySettings();
+    })
+    .catch(function(){if(cb)cb();});
+}
+
+// Áp dụng cài đặt bảo mật (gọi sau khi load hoặc save)
+function _applySecuritySettings(){
+  _stopInactivityTracker();
+  if(_pwCheckTimer){clearInterval(_pwCheckTimer);_pwCheckTimer=null;}
+
+  // Inactivity auto-logout
+  if(_securitySettings.inactivity&&_securitySettings.inactivity.enabled&&currentUser){
+    _startInactivityTracker(_securitySettings.inactivity.minutes*60*1000);
+  }
+  // Password expiry check
+  if(_securitySettings.password&&_securitySettings.password.enabled&&currentUser){
+    _checkPasswordExpiry();
+    _pwCheckTimer=setInterval(_checkPasswordExpiry,5*60*1000);
+  }
+}
+
+function _checkPasswordExpiry(){
+  if(!currentUser||!_securitySettings.password||!_securitySettings.password.enabled)return;
+  const limitMs=(_securitySettings.password.minutes||10080)*60*1000;
+  const lastChange=currentProfile&&currentProfile.lastPasswordChange||0;
+  const elapsed=Date.now()-lastChange;
+  if(elapsed>limitMs){
+    toast('Mật khẩu đã quá hạn — vui lòng đổi mật khẩu để tiếp tục sử dụng','error');
+    openPasswordChangePrompt();
+  }
+}
+
+function openPasswordChangePrompt(){
+  const ov=g('payStatusOv'); if(!ov)return;
+  ov.innerHTML=`
+  <div class="modal" style="max-width:360px">
+    <div class="mhdr"><div class="mtitle"><i class="ti ti-lock" style="font-size:15px;margin-right:6px"></i>Đổi mật khẩu bắt buộc</div></div>
+    <div class="fg" style="gap:10px">
+      <div class="fi full"><div style="font-size:12px;color:var(--text-secondary)">Mật khẩu đã hết hạn theo chính sách bảo mật. Vui lòng đổi mật khẩu mới để tiếp tục.</div></div>
+      <div class="fi full"><label class="lbl">Mật khẩu hiện tại</label><input type="password" id="pwOld" placeholder="Mật khẩu hiện tại"/></div>
+      <div class="fi full"><label class="lbl">Mật khẩu mới</label><input type="password" id="pwNew" placeholder="Ít nhất 8 ký tự"/></div>
+      <div class="fi full"><label class="lbl">Xác nhận mật khẩu mới</label><input type="password" id="pwNew2" placeholder="Nhập lại"/></div>
+    </div>
+    <div class="mftr">
+      <button class="btn pri" onclick="doChangePassword()"><i class="ti ti-check"></i> Đổi mật khẩu</button>
+      <button class="btn" onclick="closeOv('payStatusOv');doLogout()">Đăng xuất</button>
+    </div>
+  </div>`;
+  openOv('payStatusOv');
+}
+window.openPasswordChangePrompt=openPasswordChangePrompt;
+
+async function doChangePassword(){
+  const old=g('pwOld')?.value||'';
+  const nw=g('pwNew')?.value||'';
+  const nw2=g('pwNew2')?.value||'';
+  if(!old||!nw||!nw2){toast('Vui lòng điền đầy đủ','error');return;}
+  if(nw.length<8){toast('Mật khẩu mới cần ít nhất 8 ký tự','error');return;}
+  if(nw!==nw2){toast('Xác nhận mật khẩu không khớp','error');return;}
+  setLoading(true,'Đang đổi mật khẩu...');
+  try{
+    const cred=firebase.auth.EmailAuthProvider.credential(currentUser.email,old);
+    await currentUser.reauthenticateWithCredential(cred);
+    await currentUser.updatePassword(nw);
+    await fsSet('profiles',currentUser.uid,{lastPasswordChange:Date.now()},{merge:true});
+    if(currentProfile)currentProfile.lastPasswordChange=Date.now();
+    closeOv('payStatusOv');
+    toast('Đã đổi mật khẩu thành công');
+  }catch(e){toast('Lỗi: '+(e.code==='auth/wrong-password'?'Mật khẩu hiện tại không đúng':e.message),'error');}
+  setLoading(false);
+}
+window.doChangePassword=doChangePassword;
+
+// Tự động đăng xuất khi đóng tab/trình duyệt
+window.addEventListener('beforeunload',function(){
+  if(currentUser&&_securitySettings&&_securitySettings.closeLogout){
+    // Set flag in sessionStorage — if reopened, force re-login
+    try{sessionStorage.setItem('_forceRelogin','1');}catch(e){}
+  }
+});
+// Kiểm tra flag khi load lại trang
+(function(){
+  try{
+    if(sessionStorage.getItem('_forceRelogin')){
+      sessionStorage.removeItem('_forceRelogin');
+      window.addEventListener('load',function(){
+        if(auth&&auth.currentUser)auth.signOut();
+      });
+    }
+  }catch(e){}
+})();
+
 function _resetInactivityTimer(){
-  if(!currentUser)return;
+  if(!currentUser||!_securitySettings.inactivity||!_securitySettings.inactivity.enabled)return;
+  const ms=(_securitySettings.inactivity.minutes||30)*60*1000;
   if(_inactivityTimer)clearTimeout(_inactivityTimer);
-  _inactivityTimer=setTimeout(_handleInactivityTimeout,INACTIVITY_LIMIT_MS);
+  _inactivityTimer=setTimeout(_handleInactivityTimeout,ms);
 }
 async function _handleInactivityTimeout(){
   if(!currentUser)return;
-  toast('Phiên làm việc đã hết hạn do không có thao tác trong 30 phút — đang tự động đăng xuất...','error');
+  const min=(_securitySettings.inactivity.minutes||30);
+  toast('Phiên làm việc đã hết hạn do không có thao tác trong '+min+' phút — đang tự động đăng xuất...','error');
   setTimeout(async function(){
     if(!currentUser)return;
     _stopInactivityTracker();
@@ -703,14 +806,15 @@ async function _handleInactivityTimeout(){
     try{await auth.signOut();}catch(e){}
   },2500);
 }
-function _startInactivityTracker(){
+function _startInactivityTracker(limitMs){
   if(!_inactivityListenerAttached){
     ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(function(evt){
       document.addEventListener(evt,_resetInactivityTimer,{passive:true});
     });
     _inactivityListenerAttached=true;
   }
-  _resetInactivityTimer();
+  if(_inactivityTimer)clearTimeout(_inactivityTimer);
+  _inactivityTimer=setTimeout(_handleInactivityTimeout,limitMs||30*60*1000);
 }
 function _stopInactivityTracker(){
   if(_inactivityTimer){clearTimeout(_inactivityTimer);_inactivityTimer=null;}
@@ -7360,6 +7464,30 @@ function downloadEmlFile(id, tt){
   toast('Đã tải file .eml — mở bằng Outlook/Thunderbird để gửi.');
 }
 
+async function saveSecuritySettings(){
+  if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
+  const inOn=g('set_inactivity_on')?.checked||false;
+  const inMin=parseInt(g('set_inactivity_min')?.value)||30;
+  const pwOn=g('set_pw_on')?.checked||false;
+  const pwMin=parseInt(g('set_pw_min')?.value)||10080;
+  const closeOn=g('set_close_on')?.checked||false;
+  const s={
+    inactivity:{enabled:inOn,minutes:inOn?inMin:30},
+    password:{enabled:pwOn,minutes:pwOn?pwMin:10080},
+    closeLogout:closeOn,
+    updatedAt:Date.now(),updatedBy:currentUser.email
+  };
+  setLoading(true,'Đang lưu...');
+  try{
+    await db.collection('_config').doc('securitySettings').set(s);
+    _securitySettings=s;
+    _applySecuritySettings();
+    toast('Đã lưu cài đặt bảo mật — áp dụng ngay cho tất cả user');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveSecuritySettings=saveSecuritySettings;
+
 function renderSettings(){
   const pg=g('page-settings');
   _svcCatDraft=null;
@@ -7391,6 +7519,7 @@ function renderSettings(){
   if(window._settingsOpen.acct===undefined) window._settingsOpen.acct=false;
   if(window._settingsOpen.contract===undefined) window._settingsOpen.contract=false;
   if(window._settingsOpen.warehouse===undefined) window._settingsOpen.warehouse=false;
+  if(window._settingsOpen.security===undefined) window._settingsOpen.security=true;
   // Danh mục dịch vụ luôn mở khi vào Cài đặt (không để mất)
   window._settingsOpen.svc=true;
 
@@ -7446,7 +7575,38 @@ function renderSettings(){
       +'<div style="margin-top:.4rem"><button class="btn sm" data-btype="pers" onclick="addBankRow(this.dataset.btype)"><i class="ti ti-plus"></i> Thêm TK Cá nhân</button></div>'
     )
 
-    +_contractPartyASettingsHtml()
+    +stgBox('security','ti-shield-lock','Bảo mật & Phiên làm việc',
+      '<button class="btn pri" onclick="saveSecuritySettings()"><i class="ti ti-check"></i> Lưu cài đặt bảo mật</button>',
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Áp dụng cho <b>tất cả user</b>. Chỉ Admin được thay đổi.</div>'
+      +'<div style="display:flex;flex-direction:column;gap:12px">'
+      // Inactivity
+      +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+        +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Tự động đăng xuất khi không hoạt động</div><div style="font-size:11.5px;color:var(--text-secondary)">Đăng xuất người dùng sau khoảng thời gian nhất định không thao tác</div></div>'
+        +'<input type="number" id="set_inactivity_min" value="'+((_securitySettings.inactivity||{}).minutes||30)+'" min="5" max="480" style="width:70px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
+        +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
+          +'<input type="checkbox" id="set_inactivity_on" '+((_securitySettings.inactivity||{}).enabled?'checked':'')+' style="width:16px;height:16px"/>'
+          +'<span id="set_inactivity_label">'+((_securitySettings.inactivity||{}).enabled?'Bật':'Tắt')+'</span>'
+        +'</label>'
+      +'</div>'
+      // Password expiry
+      +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+        +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Bắt buộc đổi mật khẩu định kỳ</div><div style="font-size:11.5px;color:var(--text-secondary)">Yêu cầu user đổi mật khẩu sau khoảng thời gian kể từ lần đổi cuối</div></div>'
+        +'<input type="number" id="set_pw_min" value="'+((_securitySettings.password||{}).minutes||10080)+'" min="60" max="525600" style="width:80px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
+        +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
+          +'<input type="checkbox" id="set_pw_on" '+((_securitySettings.password||{}).enabled?'checked':'')+' style="width:16px;height:16px"/>'
+          +'<span id="set_pw_label">'+((_securitySettings.password||{}).enabled?'Bật':'Tắt')+'</span>'
+        +'</label>'
+      +'</div>'
+      // Close-browser logout
+      +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+        +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Đăng xuất khi tắt tab / trình duyệt</div><div style="font-size:11.5px;color:var(--text-secondary)">Yêu cầu đăng nhập lại mỗi khi mở lại ứng dụng</div></div>'
+        +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
+          +'<input type="checkbox" id="set_close_on" '+(_securitySettings.closeLogout?'checked':'')+' style="width:16px;height:16px"/>'
+          +'<span id="set_close_label">'+(_securitySettings.closeLogout?'Bật':'Tắt')+'</span>'
+        +'</label>'
+      +'</div>'
+      +'</div>'
+    )
     +_warehouseSettingsHtml()
   +'</div>';
   renderCargoNamesList();
@@ -7467,8 +7627,7 @@ function _stgToggle(key){
     if(key==='svc'&&typeof renderSvcCatList==='function')renderSvcCatList();
     if(key==='cargo'&&typeof renderCargoNamesList==='function')renderCargoNamesList();
     if(key==='acct'&&typeof renderAcctInfoList==='function')renderAcctInfoList();
-    if(key==='warehouse'&&typeof renderWarehouseList==='function')renderWarehouseList();
-  }
+    if(key==='warehouse'&&typeof renderWarehouseList==='function')renderWarehouseList();  }
 }
 window._stgToggle=_stgToggle;
 
@@ -10572,13 +10731,13 @@ function _dmDocNos(d,showInv){
     +'</table></td></tr></table>';
 }
 function _dmParties(d, showCnee){
+  // showCnee param no longer adds Cnee row here (moved to signature table)
   return '<table class="nb" style="width:100%;margin-bottom:6px">'
     +'<tr><td class="lbl" style="width:130px">SELLER</td><td style="width:14px">:</td><td class="b">'+d.sName+'</td></tr>'
     +'<tr><td class="lbl">ADDRESS</td><td>:</td><td>'+d.sAddr+(d.sTel?'<br>Tel: '+d.sTel:'')+(d.sEmail?'<br>Email: '+d.sEmail:'')+'</td></tr>'
     +'<tr><td style="height:8px"></td></tr>'
     +'<tr><td class="lbl">BUYER</td><td>:</td><td class="b">'+d.cnee+'</td></tr>'
     +'<tr><td class="lbl">ADDRESS</td><td>:</td><td>'+d.cneeAddr+(d.cneeUsci?'<br>USCI : '+d.cneeUsci:'')+(d.cneePic?'<br>PIC : '+d.cneePic+(d.cneeTel?'   - TEL : '+d.cneeTel:''):'')+(d.cneeEmail?'<br>E-mail: '+d.cneeEmail:'')+'</td></tr>'
-    +((showCnee&&d.cneeName)?'<tr><td class="lbl">CNEE</td><td>:</td><td class="b">'+d.cneeName+'</td></tr>':'')
     +'</table>';
 }
 function _dmShipInfo(d){
@@ -10691,7 +10850,7 @@ function _dmContract(d){
     +'<p>1) Original Bill of Loading in 3 original (or copy, in case original B/L Surrendered).</p><p>2) Commercial Invoice and Packing List in 3 original;</p><p>3) Certificate of Origin (Form E) the original page only;</p><p>4) Phytosanitary Certificate (1 Original and 1 Copy);</p>'
     +'<p class="b" style="margin-top:4px">4. Shipment : within '+_dmEndOfMonth(d.contractDate||d.invoiceDate||d.date||d.dateRaw)+'</p>'
     +'</div>'
-    +'<table class="nb" style="width:100%;margin-top:24px"><tr><td class="c b" style="width:50%">FOR THE BUYER</td><td class="c b">FOR THE SELLER</td></tr><tr><td style="height:120px"></td><td class="c" style="vertical-align:top"><div class="b">'+(d.sShort||d.sName)+'</div>'+(d.sStamp?'<img src="'+d.sStamp+'" style="max-width:170px;max-height:120px;object-fit:contain"/>':'')+'</td></tr></table>'
+    +'<table class="nb" style="width:100%;margin-top:24px"><tr><td class="c b" style="width:50%">FOR THE BUYER</td><td class="c b">FOR THE SELLER</td></tr><tr><td class="c" style="height:120px;vertical-align:top;padding-top:8px"><div class="b">'+(d.cnee||'')+'</div></td><td class="c" style="vertical-align:top"><div class="b">'+(d.sShort||d.sName)+'</div>'+(d.sStamp?'<img src="'+d.sStamp+'" style="max-width:170px;max-height:120px;object-fit:contain"/>':'')+'</td></tr></table>'
     +'</body></html>';
 }
 
