@@ -544,6 +544,7 @@ const XCOLS=[
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
   {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
+  {k:'_transshipBlock',l:'Cảng chuyển tải',type:'transshipBlock'},
   {k:'pod',l:'POD',type:'port'},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
@@ -559,6 +560,7 @@ const NCOLS=[
   {k:'etd',l:'ETD',type:'date'},{k:'eta',l:'ETA',type:'date'},
   {k:'cutoffCY',l:'Cut Off CY',type:'cutoffField'},{k:'cutoffSI',l:'Cut Off SI',type:'cutoffField'},
   {k:'pol',l:'POL',type:'port'},{k:'icd',l:'ICD',type:'icd'},
+  {k:'_transshipBlock',l:'Cảng chuyển tải',type:'transshipBlock'},
   {k:'pod',l:'POD',type:'port'},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
@@ -1223,7 +1225,7 @@ function renderLotTable(tt){
     return dir*(av<bv?-1:av>bv?1:0);
   });
   const today=new Date();today.setHours(0,0,0,0);
-  g('th_'+tt).innerHTML='<tr>'+cols.map(c=>`<th>${c.l}</th>`).join('')+'<th style="text-align:center">Thao tác</th></tr>';
+  g('th_'+tt).innerHTML='<tr style="background:#1a4b8c">'+cols.map(c=>`<th style="color:#e8f0fe;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`).join('')+'<th style="color:#e8f0fe;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
   if(!rows.length){g('tb_'+tt).innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;return;}
   g('tb_'+tt).innerHTML=rows.map(r=>{
     const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
@@ -1240,7 +1242,7 @@ function renderLotTable(tt){
       }
       if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
       if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${tc}</span>`:'—'}</td>`;}
-      if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')">${sn}</button></td>`;}
+      if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')" style="font-weight:700;color:#1a4b8c">${sn}</button></td>`;}
       if(c.k==='tenHang') return`<td style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r[c.k]||''}">${r[c.k]||'—'}</td>`;
       if(c.k==='jobNo'){const jc=r.locked?'var(--green)':'var(--red)';return`<td><button class="plink" style="font-weight:700;color:${jc};font-size:11.5px;white-space:nowrap" data-id="${r._id}" data-tt="${tt}" onclick="openDetail(this.dataset.id,this.dataset.tt)" title="${r.locked?'Đã khóa':'Chưa khóa'}">${r.jobNo||'—'}</button></td>`;}
       if(c.k==='etd'){
@@ -2827,8 +2829,35 @@ function openLot(id, tt){
     if(c.compact && !SPECIAL_COMPACT.includes(c.type) && c.k!=='tenHang' && c.k!=='consignee'){
       return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:150px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
     }
-    if(c.type==='cnee'){
+    if(c.type==='transshipBlock'){
+      const ts=r.transships||[];
+      const tsRowHtml=function(p,i){
+        const tsCountry=p.country||'';
+        const tsPorts=(tsCountry&&PORTS_BY_COUNTRY[tsCountry])?PORTS_BY_COUNTRY[tsCountry]:PORTS;
+        const cOptsRow='<option value="">— Quốc gia —</option>'+PORT_COUNTRIES.map(function(cn){return '<option'+(cn===tsCountry?' selected':'')+'>'+cn+'</option>';}).join('');
+        const pOptsRow='<option value="">— Chọn cảng —</option>'+tsPorts.map(function(pt){return '<option'+(pt===p.port?' selected':'')+'>'+pt+'</option>';}).join('');
+        return '<div style="display:flex;gap:5px;margin-bottom:5px;align-items:center" data-ts-lot-row>'
+          +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px">'+cOptsRow+'</select>'
+          +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="port" style="flex:1.5;font-size:12px">'+pOptsRow+'</select>'
+          +'<input type="number" data-ts-lot-i="'+i+'" data-ts-lot-k="tt" value="'+(p.tt!=null?p.tt:'')+'" min="0" placeholder="T/T" title="Transit time ngày" style="width:50px;font-size:12px;text-align:center"/>'
+          +'<input type="date" data-ts-lot-i="'+i+'" data-ts-lot-k="eta" value="'+(p.eta||'')+'" style="width:130px;font-size:12px"/>'
+          +'<button class="rac red" onclick="lotTsDelRow('+i+')" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>'
+        +'</div>';
+      }
+      const rowsHtml=ts.map(function(p,i){return tsRowHtml(p,i);}).join('');
+      const hdRow=ts.length?'<div style="display:flex;gap:5px;margin-bottom:3px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase"><div style="flex:1">Quốc gia</div><div style="flex:1.5">Cảng chuyển tải</div><div style="width:50px;text-align:center">T/T</div><div style="width:130px">ETA</div><div style="width:32px"></div></div>':'';
+      const emptyMsg=ts.length?'':'<div style="font-size:12px;color:var(--text-tertiary);padding:4px 0">Tàu direct (không chuyển tải)</div>';
+      return '<div class="fi full" style="grid-column:1/-1">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+          +'<label class="lbl" style="color:#e07000;font-weight:700"><i class="ti ti-transfer" style="font-size:12px"></i> Cảng chuyển tải <span style="font-weight:400;color:var(--text-tertiary)">(optional)</span></label>'
+          +'<button class="btn sm" onclick="lotTsAddRow()" style="font-size:11.5px"><i class="ti ti-plus"></i> Thêm cảng</button>'
+        +'</div>'
+        +hdRow
+        +'<div id="lotTransshipList">'+rowsHtml+emptyMsg+'</div>'
+      +'</div>';
+    }
       // Cnee dropdown from selected shipper's cnees
+    if(c.type==='cnee'){
       const shKey=r.shipper||r.supplier||'';
       const sp2=cache.partners[shKey]||{};
       const cnees=sp2.cnees||[];
@@ -2862,6 +2891,55 @@ function openLot(id, tt){
   if(id){const _cn=g('f_cnee');if(_cn&&r.cnee){if(typeof refreshCneeOptions==='function')refreshCneeOptions();_cn.value=r.cnee;}}
 }
 
+function lotTsAddRow(){
+  const list=g('lotTransshipList'); if(!list)return;
+  const existing=list.querySelectorAll('[data-ts-lot-row]').length;
+  // Clear "tàu direct" text if present
+  list.querySelectorAll('div:not([data-ts-lot-row])').forEach(function(d){if(d.textContent.includes('direct'))d.remove();});
+  const div=document.createElement('div');
+  div.setAttribute('data-ts-lot-row','');
+  div.innerHTML=`<select data-ts-lot-i="${existing}" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px"><option value="">— Quốc gia —</option>${PORT_COUNTRIES.map(cn=>`<option>${cn}</option>`).join('')}</select><select data-ts-lot-i="${existing}" data-ts-lot-k="port" style="flex:1.5;font-size:12px"><option value="">— Chọn cảng —</option></select><input type="number" data-ts-lot-i="${existing}" data-ts-lot-k="tt" placeholder="T/T" style="width:50px;font-size:12px;text-align:center"/><input type="date" data-ts-lot-i="${existing}" data-ts-lot-k="eta" style="width:130px;font-size:12px"/><button class="rac red" onclick="this.parentNode.remove()" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>`;
+  div.style.cssText='display:flex;gap:5px;margin-bottom:5px;align-items:center';
+  list.appendChild(div);
+}
+window.lotTsAddRow=lotTsAddRow;
+
+function lotTsCountryChange(sel){
+  const i=sel.dataset.tsLotI;
+  const country=sel.value;
+  const ports=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:PORTS;
+  const portSel=sel.parentNode.querySelector('[data-ts-lot-k="port"]');
+  if(portSel)portSel.innerHTML='<option value="">— Chọn cảng —</option>'+ports.map(function(p){return '<option>'+p+'</option>';}).join('');
+}
+window.lotTsCountryChange=lotTsCountryChange;
+
+function lotTsDelRow(idx){
+  const list=g('lotTransshipList'); if(!list)return;
+  const rows=list.querySelectorAll('[data-ts-lot-row]');
+  if(rows[idx])rows[idx].remove();
+  if(!list.querySelectorAll('[data-ts-lot-row]').length){
+    const p=document.createElement('div');
+    p.textContent='Tàu direct (không chuyển tải)';
+    p.style.cssText='font-size:12px;color:var(--text-tertiary);padding:4px 0';
+    list.appendChild(p);
+  }
+}
+window.lotTsDelRow=lotTsDelRow;
+
+function readTransshipsFromForm(){
+  const list=g('lotTransshipList'); if(!list)return [];
+  const rows=list.querySelectorAll('[data-ts-lot-row]');
+  const result=[];
+  rows.forEach(function(row){
+    const country=(row.querySelector('[data-ts-lot-k="country"]')||{}).value||'';
+    const port=(row.querySelector('[data-ts-lot-k="port"]')||{}).value||'';
+    const tt=(row.querySelector('[data-ts-lot-k="tt"]')||{}).value||'';
+    const eta=(row.querySelector('[data-ts-lot-k="eta"]')||{}).value||'';
+    if(port)result.push({country:country,port:port,tt:tt,eta:eta});
+  });
+  return result;
+}
+window.readTransshipsFromForm=readTransshipsFromForm;
 function toggleTenHangCustom(sel){
   const customEl=g('f_tenHang_custom');
   if(customEl) customEl.style.display=sel.value==='__custom__'?'block':'none';
@@ -3008,6 +3086,10 @@ async function saveLot(){
   // MBL No lives inside the booking block (f_mblNo), read it explicitly
   const mblEl=g('f_mblNo');
   if(mblEl) rec.mblNo=mblEl.value||'';
+  // Transshipment ports
+  const tsForm=readTransshipsFromForm();
+  if(tsForm.length)rec.transships=tsForm;
+  else if(rec.transships===undefined)rec.transships=[];
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
   if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; if(!rec.jobNo) rec.jobNo=getNextJobNo(rec.loaiHang||'XK - Xuất khẩu'); }
   const docId=lotIdx||genId();
