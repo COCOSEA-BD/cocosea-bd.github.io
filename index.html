@@ -1225,7 +1225,7 @@ function renderLotTable(tt){
     return dir*(av<bv?-1:av>bv?1:0);
   });
   const today=new Date();today.setHours(0,0,0,0);
-  g('th_'+tt).innerHTML='<tr style="background:#1a4b8c">'+cols.map(c=>`<th style="color:#e8f0fe;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`).join('')+'<th style="color:#e8f0fe;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
+  g('th_'+tt).innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>`<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
   if(!rows.length){g('tb_'+tt).innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;return;}
   g('tb_'+tt).innerHTML=rows.map(r=>{
     const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
@@ -2977,10 +2977,18 @@ function updatePortOptions(portKey, countryKey){
 function bookingRowHtml(b, i, contTypes){
   const opts=contTypes||['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
   const typeOpts=opts.map(t=>`<option${t===(b.typeCont||'40HC')?' selected':''}>${t}</option>`).join('');
-  return `<div class="bk-row" data-bki="${i}" style="display:grid;grid-template-columns:1fr 70px 130px 30px;gap:6px;align-items:end;margin-bottom:5px">
+  const hasTruck=b.hasTruck===true||b.hasTruck==='true';
+  return `<div class="bk-row" data-bki="${i}" style="display:grid;grid-template-columns:1fr 70px 130px 90px 30px;gap:6px;align-items:end;margin-bottom:5px">
     <div><label class="lbl" style="font-size:9.5px">Booking No</label><input type="text" class="bk-no" value="${(b.bookingNo||'').replace(/"/g,'&quot;')}" placeholder="Booking No" style="font-size:12px"/></div>
     <div><label class="lbl" style="font-size:9.5px">Vol</label><input type="number" class="bk-vol" value="${b.vol||''}" min="1" placeholder="1" oninput="updateTotalVol()" style="font-size:12px;text-align:right"/></div>
     <div><label class="lbl" style="font-size:9.5px">Type Cont</label><select class="bk-type" style="font-size:12px">${typeOpts}</select></div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+      <label class="lbl" style="font-size:9.5px">Trucking</label>
+      <label style="display:flex;align-items:center;justify-content:center;height:32px;cursor:pointer;gap:5px">
+        <input type="checkbox" class="bk-truck" ${hasTruck?'checked':''} style="width:16px;height:16px;accent-color:#1a4b8c;cursor:pointer"/>
+        <span style="font-size:10.5px;font-weight:600;color:${hasTruck?'#1a4b8c':'var(--text-tertiary)'}">${hasTruck?'Có':'Không'}</span>
+      </label>
+    </div>
     <button type="button" onclick="removeBookingRow(${i})" class="rac red" style="font-size:12px;margin-bottom:3px" title="Xóa booking này"><i class="ti ti-trash"></i></button>
   </div>`;
 }
@@ -3031,7 +3039,8 @@ function readBookingsFromForm(){
     return {
       bookingNo:row.querySelector('.bk-no')?.value.trim()||'',
       vol:row.querySelector('.bk-vol')?.value||'',
-      typeCont:row.querySelector('.bk-type')?.value||'40HC'
+      typeCont:row.querySelector('.bk-type')?.value||'40HC',
+      hasTruck:row.querySelector('.bk-truck')?.checked||false
     };
   }).filter(b=>b.bookingNo||b.vol);
 }
@@ -3086,8 +3095,28 @@ async function saveLot(){
   // MBL No lives inside the booking block (f_mblNo), read it explicitly
   const mblEl=g('f_mblNo');
   if(mblEl) rec.mblNo=mblEl.value||'';
-  // Transshipment ports
-  const tsForm=readTransshipsFromForm();
+  // Auto-generate trucking rows từ bookings có hasTruck=true
+  const booksWithTruck=(rec.bookings||[]).filter(function(b){return b.hasTruck;});
+  if(booksWithTruck.length){
+    const existingTruckings=existing&&existing.truckings?existing.truckings:[];
+    // Giữ lại các trucking rows đã có, chỉ thêm rows cho booking mới tick
+    const newTruckings=[...existingTruckings];
+    booksWithTruck.forEach(function(bk){
+      const bkNo=bk.bookingNo||'';
+      const vol=parseInt(bk.vol)||1;
+      const existingForBk=newTruckings.filter(function(t){return t.bookingNo===bkNo;}).length;
+      // Chỉ tạo thêm nếu số rows hiện tại < vol của booking
+      for(let i=existingForBk;i<vol;i++){
+        newTruckings.push({
+          id:'ci_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+          bookingNo:bkNo, vol:1, typeCont:bk.typeCont||'40HC',
+          wh:'', fullReturn:rec.pol||'', route:'từ Vĩnh Long đến Hồ Chí Minh',
+          ncc:'', date:'', contNo:'', truckNo:''
+        });
+      }
+    });
+    rec.truckings=newTruckings;
+  }
   if(tsForm.length)rec.transships=tsForm;
   else if(rec.transships===undefined)rec.transships=[];
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
@@ -4090,10 +4119,32 @@ async function saveTruckings(){
   if(!rows){toast('Tab Trucking chưa mở','error');return;}
   setLoading(true,'Đang lưu...');
   try{
-    await fsSet(colName(detailTt),detailId,{truckings:rows,updatedAt:Date.now(),updatedBy:currentUser.email});
+    // Sync contNo về bookingConts (Cont/Seal tab)
+    const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{};
+    const bookingConts=JSON.parse(JSON.stringify(r.bookingConts||{}));
+    // Group rows by bookingNo
+    const byBk={};
+    rows.forEach(function(t){
+      if(!t.bookingNo)return;
+      const bkKey=t.bookingNo.replace(/[^a-zA-Z0-9]/g,'_');
+      if(!byBk[bkKey])byBk[bkKey]=[];
+      byBk[bkKey].push(t);
+    });
+    // Cập nhật contNo trong bookingConts từ trucking rows
+    Object.keys(byBk).forEach(function(bkKey){
+      if(!bookingConts[bkKey])bookingConts[bkKey]={containers:[]};
+      const bkConts=bookingConts[bkKey].containers||[];
+      byBk[bkKey].forEach(function(t,i){
+        if(!bkConts[i])bkConts[i]={};
+        if(t.contNo)bkConts[i].no=t.contNo; // Link contNo sang Cont/Seal
+      });
+      bookingConts[bkKey].containers=bkConts;
+    });
+    const payload={truckings:rows,bookingConts:bookingConts,updatedAt:Date.now(),updatedBy:currentUser.email};
+    await fsSet(colName(detailTt),detailId,payload);
     const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
-    if(ci>=0)cache[detailTt][ci].truckings=rows;
-    toast('Đã lưu '+rows.length+' dòng Trucking');
+    if(ci>=0){cache[detailTt][ci].truckings=rows; cache[detailTt][ci].bookingConts=bookingConts;}
+    toast('Đã lưu '+rows.length+' dòng Trucking — Cont/Seal đã đồng bộ');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
