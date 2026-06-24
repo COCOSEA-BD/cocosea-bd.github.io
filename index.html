@@ -4958,7 +4958,12 @@ function runDebtReport(){
         +'<td style="'+tdS+';color:var(--green);font-weight:600">'+rowTotalVND.toLocaleString()+' VND</td>'
         +'<td style="'+tdS+';color:var(--orange);font-weight:600">'+rowTotalNoVND.toLocaleString()+' VND</td>'
         +'<td style="'+tdS+';color:var(--text-primary);font-weight:700">'+rowTotalAllVND.toLocaleString()+' VND</td>'
-        +(function(){var pm=r.dnPayStatus||{};var vals=Object.values(pm);var paid=vals.length&&vals.every(function(v){return v==='paid';});return '<td style="'+tdS+';font-weight:600;color:'+(paid?'var(--green)':'var(--red)')+'">'+(paid?'Đã TT':'Chưa TT')+'</td>';})()
+        +(function(){var dnPm=r.dnPayments||{},legPm=r.dnPayStatus||{};
+          var hasAny=false,allPaid=false;
+          if(Object.keys(dnPm).length){hasAny=true;allPaid=Object.values(dnPm).every(function(p){return (!p.inv||!p.inv.status||p.inv.status==='paid')&&(!p.noInv||!p.noInv.status||p.noInv.status==='paid');});}
+          else if(Object.keys(legPm).length){hasAny=true;allPaid=Object.values(legPm).every(function(v){return v==='paid';});}
+          return '<td style="'+tdS+';font-weight:600;color:'+(allPaid?'var(--green)':'var(--red)')+'">'+(hasAny?(allPaid?'Đã TT':'Chưa TT'):'—')+'</td>';}
+        )()
         +'</tr>';
     }).join('');
 
@@ -6242,6 +6247,16 @@ async function savePayStatusDetail(){
       await fsSet(colName(detailTt),detailId,{dnPayments:dnPm});
       const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
       if(ci>=0){cache[detailTt][ci].dnPayments=dnPm;}
+      // Đồng bộ dnPayStatus (legacy) để báo cáo công nợ đọc được
+      const legacySync={};
+      Object.keys(dnPm).forEach(function(party){
+        const p=dnPm[party]||{};
+        const invOk=!p.inv||!p.inv.status||p.inv.status==='paid';
+        const noInvOk=!p.noInv||!p.noInv.status||p.noInv.status==='paid';
+        legacySync[party]=(invOk&&noInvOk)?'paid':'unpaid';
+      });
+      await fsSet(colName(detailTt),detailId,{dnPayStatus:legacySync});
+      if(ci>=0)cache[detailTt][ci].dnPayStatus=legacySync;
       toast('Đã cập nhật trạng thái thanh toán');
       if(typeof renderDetailPanel==='function'){
         const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
@@ -8222,6 +8237,7 @@ function renderSettings(){
       +'</div>'
       +'</div>'
     )
+    +_contractPartyASettingsHtml()
     +_warehouseSettingsHtml()
   +'</div>';
   renderCargoNamesList();
@@ -10230,11 +10246,15 @@ function runCostingReport(){
     // Duyệt qua MỌI dịch vụ lưu trên lô (kể cả dịch vụ custom không nằm trong SVCS),
     // để không bỏ sót party nào (vd: Linda + Marble cùng 1 lô).
     let totalRevVND=0;
+    let totalRevWithVatVND=0;
     Object.keys(svcs).forEach(function(k){
       const sv=svcs[k];
       if(!sv||!sv.on||sv.invoice==='Waived')return;
       const amt=sv.amount||(sv.price||0)*(sv.qty||1);
-      totalRevVND+=cvVND(amt, sv.cur||'USD'); // CHƯA VAT
+      const amtVnd=cvVND(amt, sv.cur||'USD');
+      totalRevVND+=amtVnd; // CHƯA VAT
+      const vatRate=parseFloat((sv.vat||'0%').replace('%',''))||0;
+      totalRevWithVatVND+=Math.round(amtVnd*(1+vatRate/100));
     });
 
     // Cost: from svc.cost (auto rows) + manual costing items — duyệt MỌI dịch vụ của lô
@@ -10268,6 +10288,7 @@ function runCostingReport(){
       +'<td style="'+tdS+';color:var(--blue);font-weight:600">'+(r.etd||'—')+'</td>'
       +'<td style="'+tdS+'">'+(r.shipper||r.supplier||'—')+'</td>'
       +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700">'+(totalRevVND?totalRevVND.toLocaleString():'—')+'</td>'
+      +'<td style="'+tdS+';text-align:right;color:#e07000;font-weight:700">'+(totalRevWithVatVND?totalRevWithVatVND.toLocaleString():'—')+'</td>'
       +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700">'+(totalCostVND?totalCostVND.toLocaleString():'—')+'</td>'
       +'<td style="'+tdS+';text-align:right;font-weight:800;color:'+clr+'">'+(totalRevVND||totalCostVND?(profitVND>=0?'+':'')+profitVND.toLocaleString()+' <em style="font-size:10px">('+pct+'%)</em>':'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td style="'+tdS+';text-align:center">'
@@ -10311,6 +10332,7 @@ function runCostingReport(){
         +'<th style="'+thS+'">ETD</th>'
         +'<th style="'+thS+'">Shipper</th>'
         +'<th style="'+thS+';text-align:right;color:var(--green)">Doanh thu (VND)</th>'
+        +'<th style="'+thS+';text-align:right;color:#e07000">Doanh thu có VAT</th>'
         +'<th style="'+thS+';text-align:right;color:var(--red)">Chi phí (VND)</th>'
         +'<th style="'+thS+';text-align:right">Lợi nhuận (VND)</th>'
         +'<th style="'+thS+'">Trạng thái</th>'
