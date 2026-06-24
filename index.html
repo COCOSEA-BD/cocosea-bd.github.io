@@ -4045,6 +4045,7 @@ function _truckingTableRowHtml(row,i,bkList,polDefault){
     +'<td style="'+td+'"><input type="text" id="trk_cont_'+i+'" value="'+(row.contNo||'').replace(/"/g,'&quot;')+'" placeholder="ABCU1234567" style="'+inp+'"/></td>'
     +'<td style="'+td+'"><input type="text" id="trk_truck_'+i+'" value="'+(row.truckNo||'').replace(/"/g,'&quot;')+'" placeholder="51A-12345" style="'+inp+'"/></td>'
     +'<td style="'+td+';white-space:nowrap;text-align:center">'
+      +'<button class="rac" onclick="showTruckingEport('+i+')" title="Khai Eport" style="color:#e07000;font-size:13px"><i class="ti ti-file-export"></i></button>'
       +'<button class="rac" onclick="_truckingEmailRow('+i+')" title="Tạo email Trucking" style="color:#1a4b8c;font-size:14px"><i class="ti ti-mail"></i></button>'
       +'<button class="rac red" onclick="_truckingDelRow('+i+')" title="Xóa dòng" style="font-size:14px"><i class="ti ti-trash"></i></button>'
     +'</td>'
@@ -4990,14 +4991,27 @@ function runDebtReport(){
     });
   });
   const grandAllVND=grandVND+grandNoVND;
-  function _sumBox(label,val,color,bg,bd){return '<div style="flex:1;min-width:200px;padding:.65rem 1rem;background:'+bg+';border:1px solid '+bd+';border-radius:8px"><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">'+label+'</div><div style="font-size:15px"><strong style="color:'+color+'">'+val.toLocaleString()+' VND</strong></div></div>';}
+  // Tổng đã thanh toán và còn lại
+  let grandPaidVND=0;
+  filtered.forEach(function(r){
+    const dnPm=r.dnPayments||{};
+    Object.values(dnPm).forEach(function(p){
+      grandPaidVND+=((p.inv&&p.inv.amount)||0)+((p.noInv&&p.noInv.amount)||0);
+    });
+    if(!Object.keys(dnPm).length&&r.dnPayAmount){
+      Object.values(r.dnPayAmount||{}).forEach(function(a){grandPaidVND+=(a||0);});
+    }
+  });
+  const grandRemainVND=Math.max(0,grandAllVND-grandPaidVND);
+  function _sumBox(label,val,color,bg,bd){return '<div style="flex:1;min-width:180px;padding:.65rem 1rem;background:'+bg+';border:1px solid '+bd+';border-radius:8px"><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">'+label+'</div><div style="font-size:14px"><strong style="color:'+color+'">'+val.toLocaleString()+' VND</strong></div></div>';}
   html='<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.5rem"><i class="ti ti-chart-bar"></i> Tổng hợp kỳ: '+filtered.length+' lô hàng</div>'
-    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:.75rem">'
-      +_sumBox('Tổng doanh thu có hóa đơn',grandVND,'var(--green)','var(--green-bg)','var(--border-light)')
-      +_sumBox('Tổng doanh thu không hóa đơn',grandNoVND,'var(--orange)','rgba(245,158,11,.08)','rgba(245,158,11,.3)')
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.75rem">'
+      +_sumBox('Doanh thu có HĐ',grandVND,'var(--green)','var(--green-bg)','var(--border-light)')
+      +_sumBox('Doanh thu không HĐ',grandNoVND,'var(--orange)','rgba(245,158,11,.08)','rgba(245,158,11,.3)')
       +_sumBox('Tổng cả 2',grandAllVND,'var(--blue)','rgba(59,130,246,.08)','rgba(59,130,246,.3)')
+      +(grandPaidVND?_sumBox('Đã thanh toán',grandPaidVND,'var(--green)','rgba(40,167,69,.07)','rgba(40,167,69,.2)'):'')
+      +(grandPaidVND?_sumBox('Còn phải thu',grandRemainVND,'var(--red)','rgba(220,53,69,.06)','rgba(220,53,69,.2)'):'')
     +'</div>'+html;
-
   g('cnReportResult').innerHTML=html;
 }
 
@@ -8876,9 +8890,10 @@ function buildDnPartyRows(r,svcs){
     const vatStyle='font-weight:600;color:#e07000';
     const totStyle='font-weight:700;color:var(--green)';
 
-    let invoiceSection='';
     if(info.yes.cnt>0){
       const invCtx={type:'ar_party_inv',party:p,status:invPm.status||'unpaid',date:invPm.date||'',bank:invPm.bank||'',amount:invPm.amount||0,label:p+' — Có hóa đơn',suggestAmount:totalYesWithVat};
+      const invPaid=invPm.amount||0;
+      const invRemain=totalYesWithVat-invPaid;
       invoiceSection+='<div style="padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
         +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
           +'<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a4b8c">🧾 Có hóa đơn ('+info.yes.cnt+' dịch vụ)</span>'
@@ -8886,19 +8901,23 @@ function buildDnPartyRows(r,svcs){
         +'</div>'
         +'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tổng trước VAT</span><span style="'+amtStyle+'">'+totalYes.toLocaleString()+' đ</span></div>'
         +(vatAmt?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tiền VAT</span><span style="'+vatStyle+'">+'+vatAmt.toLocaleString()+' đ</span></div>':'')
-        +(invPm.amount?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Đã thanh toán</span><span style="font-weight:600;color:var(--green)">'+Math.round(invPm.amount).toLocaleString()+' đ</span></div>':'')
-        +'<div style="'+rowStyle+';border-top:1px dashed var(--border-light);margin-top:3px;padding-top:4px"><span style="font-size:12px;font-weight:600">Tổng có VAT</span><span style="'+totStyle+'">'+totalYesWithVat.toLocaleString()+' đ</span></div>'
+        +'<div style="'+rowStyle+';border-top:1px dashed var(--border-light);margin-top:3px;padding-top:4px"><span style="font-size:12px;font-weight:600">Tổng có VAT (Debit Note)</span><span style="'+totStyle+'">'+totalYesWithVat.toLocaleString()+' đ</span></div>'
+        +(invPaid?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Đã thanh toán</span><span style="font-weight:700;color:var(--green)">'+Math.round(invPaid).toLocaleString()+' đ</span></div>':'')
+        +(invPaid&&invRemain!==0?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">'+(invRemain>0?'Còn lại (chưa TT)':'Thừa')+'</span><span style="font-weight:700;color:'+(invRemain>0?'var(--red)':'#e07000')+';">'+(invRemain>0?invRemain.toLocaleString():(-invRemain).toLocaleString())+' đ</span></div>':'')
       +'</div>';
     }
     if(info.no.cnt>0){
       const noInvCtx={type:'ar_party_noinv',party:p,status:noInvPm.status||'unpaid',date:noInvPm.date||'',bank:noInvPm.bank||'',amount:noInvPm.amount||0,label:p+' — Không hóa đơn',suggestAmount:totalNo};
+      const noInvPaid=noInvPm.amount||0;
+      const noInvRemain=totalNo-noInvPaid;
       invoiceSection+='<div style="padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
         +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
           +'<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary)">📋 Không hóa đơn ('+info.no.cnt+' dịch vụ)</span>'
           +_apPayBadge(noInvPm.status||'unpaid',noInvPm.date||'',noInvCtx)
         +'</div>'
-        +(noInvPm.amount?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Đã thanh toán</span><span style="font-weight:600;color:var(--green)">'+Math.round(noInvPm.amount).toLocaleString()+' đ</span></div>':'')
         +'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Tổng</span><span style="'+amtStyle+'">'+totalNo.toLocaleString()+' đ</span></div>'
+        +(noInvPaid?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Đã thanh toán</span><span style="font-weight:700;color:var(--green)">'+Math.round(noInvPaid).toLocaleString()+' đ</span></div>':'')
+        +(noInvPaid&&noInvRemain!==0?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">'+(noInvRemain>0?'Còn lại':'Thừa')+'</span><span style="font-weight:700;color:'+(noInvRemain>0?'var(--red)':'#e07000')+';">'+(noInvRemain>0?noInvRemain.toLocaleString():(-noInvRemain).toLocaleString())+' đ</span></div>':'')
       +'</div>';
     }
 
@@ -10964,9 +10983,9 @@ function getBookingInfo(r,bkNo){
   const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
   const isFirst=bookings[0]&&bookings[0].bookingNo===bkNo;
   return {
-    soTkhai:tk.soTkhai||(isFirst?r.soTkhai:'')||'',
-    maChiCuc:tk.maChiCuc||(isFirst?r.maChiCuc:'')||'',
-    phanLuong:tk.phanLuong||(isFirst?r.phanLuong:'')||''
+    soTkhai:tk.sotk||(isFirst?r.soTkhai:'')||'',
+    maChiCuc:tk.macc||(isFirst?r.maChiCuc:'')||'',
+    phanLuong:tk.pl||(isFirst?r.phanLuong:'')||''
   };
 }
 window.getBookingInfo=getBookingInfo;
@@ -11026,9 +11045,40 @@ function showFumiReport(bkNo){
 }
 window.showFumiReport=showFumiReport;
 
+// Khai Eport từ Tab Trucking — tờ khai lấy từ bookingConts, hạ cảng = fullReturn
+function showTruckingEport(trkIdx){
+  const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
+  const trk=(r.truckings||[])[trkIdx];
+  if(!trk){toast('Không tìm thấy dữ liệu trucking','error');return;}
+  const bkNo=trk.bookingNo||r.bookingNo||'';
+  const bkInfo=getBookingInfo(r,bkNo);
+  const containers=getBookingContainers(r,bkNo);
+  // Chỉ lấy cont tương ứng với index của dòng trucking trong booking
+  const bkRows=(r.truckings||[]).filter(function(t){return t.bookingNo===bkNo;});
+  const myIdx=bkRows.indexOf(trk);
+  const myContList=myIdx>=0&&containers[myIdx]?[containers[myIdx]]:containers;
+  const contLines=myContList.map(function(c){
+    return (c.no||'—')+' / '+(c.seal||'—')+' / '+(c.gw?c.gw.toLocaleString()+'.00':'—');
+  }).join('\n');
+  const text='Thông tin khai eport / Vô sổ tàu :\n'
+    +'------------------------\n'
+    +'Booking: '+bkNo+'\n'
+    +'Tên tàu: '+(r.vessel||'—')+(r.voy?' V.'+(r.voy):'')+'\\n'
+    +'Hạ cảng: '+(trk.fullReturn||r.icd||r.pol||'—')+'\n'
+    +'Giờ cắt máng: '+(r.cutoffCY||'—')+'\n'
+    +'----\n'
+    +'Mst: '+(function(){const sp=cache.partners&&cache.partners[r.shipper||r.supplier||''];return sp?sp.mst||'—':'—';})()+'\\n'
+    +'Số tờ khai: '+(bkInfo.soTkhai||'—')+'\n'
+    +'Mã chi cục: '+(bkInfo.maChiCuc||'—')+'\n'
+    +'Phân luồng: '+(bkInfo.phanLuong||'—')+'\n'
+    +'Cont/ Seal / Grossweight:\n'
+    +contLines;
+  showEportModal('Khai Eport Trucking — '+(bkNo||''), text);
+}
+window.showTruckingEport=showTruckingEport;
+
 function showEportModal(title, text){
   g('eportOv').innerHTML=`
-  <div class="modal" style="max-width:600px">
     <div class="mhdr"><div class="mtitle">${title}</div><button class="rac" onclick="closeOv('eportOv')"><i class="ti ti-x"></i></button></div>
     <div style="margin-bottom:.75rem">
       <textarea id="eportText" rows="14" style="font-family:'Courier New',monospace;font-size:12.5px;line-height:1.7;resize:vertical;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:8px;padding:.75rem 1rem;color:var(--text-primary)">${text}</textarea>
