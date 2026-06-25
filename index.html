@@ -851,11 +851,16 @@ function startListeners(){
   if(typeof loadTcOpeningBalances==='function')loadTcOpeningBalances();
   stopListeners();
 
+  // Debounce cho lot list render — tránh render nhiều lần khi Firestore gửi nhiều changes liên tiếp
+  let _xRenderTimer=null, _nRenderTimer=null;
   // Lô hàng xuất
   const u1 = db.collection('lots_xuat').onSnapshot(snap => {
     cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
     cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(currentTab==='xuat') renderLotTable('xuat');
+    if(currentTab==='xuat'){
+      clearTimeout(_xRenderTimer);
+      _xRenderTimer=setTimeout(function(){renderLotTable('xuat');},80);
+    }
     if(detailId&&detailTt==='xuat'&&g('detailPanel').classList.contains('open')){
       const fresh=cache.xuat.find(x=>x._id===detailId);
       if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'xuat');
@@ -866,7 +871,10 @@ function startListeners(){
   const u2 = db.collection('lots_nhap').onSnapshot(snap => {
     cache.nhap = snap.docs.map(d=>({_id:d.id,...d.data()}));
     cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(currentTab==='nhap') renderLotTable('nhap');
+    if(currentTab==='nhap'){
+      clearTimeout(_nRenderTimer);
+      _nRenderTimer=setTimeout(function(){renderLotTable('nhap');},80);
+    }
     if(detailId&&detailTt==='nhap'&&g('detailPanel').classList.contains('open')){
       const fresh=cache.nhap.find(x=>x._id===detailId);
       if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'nhap');
@@ -1227,7 +1235,9 @@ function renderLotTable(tt){
   const today=new Date();today.setHours(0,0,0,0);
   g('th_'+tt).innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>`<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
   if(!rows.length){g('tb_'+tt).innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;return;}
-  g('tb_'+tt).innerHTML=rows.map(r=>{
+  // Render từng phần để không block UI
+  const CHUNK=40;
+  const html=rows.map(r=>{
     const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
     const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
     const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
@@ -1284,6 +1294,9 @@ function renderLotTable(tt){
       <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa" ${can('deleteLot')&&!r.locked?'':'disabled'}><i class="ti ti-trash"></i></button>
     </div></td></tr>`;
   }).join('');
+  // requestAnimationFrame để không block UI khi render nhiều row
+  const tbody=g('tb_'+tt);
+  if(tbody)requestAnimationFrame(function(){tbody.innerHTML=html;});
 }
 
 /* ─── DETAIL PANEL: click Booking No → slide-in panel with tabs ─── */
@@ -3746,7 +3759,9 @@ function svcRowHTML(s, sv){
       <button class="rac red" onclick="removeSvc('${s.key}')" style="font-size:13px"><i class="ti ti-trash"></i></button>
     </div>
   </div>`;
-}{ /* live toggle - state saved on Lưu dịch vụ */ }
+}
+
+function onSvcFinishToggle(){ /* live toggle - state saved on Lưu dịch vụ */ }
 
 function _svcNccEmail(svcKey){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
@@ -5154,13 +5169,18 @@ window.switchTcTab=switchTcTab;
 
 function renderTcBody(){
   const body=g('tcBody'); if(!body)return;
-  if(tcTab==='soquy') body.innerHTML=renderTcSoQuy();
-  else if(tcTab==='congno'){
-    body.innerHTML=renderTcCongNo();
-    if(tcArLegacyOpen) renderDebt('tcArLegacyWrap'); // giữ lại báo cáo đang mở sau khi re-render do dữ liệu realtime thay đổi
+  try{
+    if(tcTab==='soquy') body.innerHTML=renderTcSoQuy();
+    else if(tcTab==='congno'){
+      body.innerHTML=renderTcCongNo();
+      if(tcArLegacyOpen) renderDebt('tcArLegacyWrap');
+    }
+    else if(tcTab==='danhmuc') body.innerHTML=renderTcDanhMuc();
+    else if(tcTab==='baocao') body.innerHTML=renderTcBaoCao();
+  }catch(e){
+    console.error('[renderTcBody]',e);
+    body.innerHTML='<div style="padding:2rem;text-align:center;color:var(--red)"><i class="ti ti-alert-circle" style="font-size:32px;display:block;margin-bottom:.5rem"></i><b>Lỗi hiển thị: '+e.message+'</b></div>';
   }
-  else if(tcTab==='danhmuc') body.innerHTML=renderTcDanhMuc();
-  else if(tcTab==='baocao') body.innerHTML=renderTcBaoCao();
 }
 
 /* ── TAB: Sổ quỹ ── */
