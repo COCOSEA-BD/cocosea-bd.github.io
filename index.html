@@ -1730,28 +1730,32 @@ function renderDetailPanel(r,tt){
         const revQty=sv.qty||sv.svcQty||parseInt(r.vol)||1;
         const revUnit=sv.unit||sv.svcUnit||'Cont';
         const amt=(sv.price||0)*revQty;
-        revenueRows.push({name:sv.customName||s.name,price:sv.price||0,qty:revQty,unit:revUnit,cur,amt});
+        const vatRate=parseFloat((sv.vat||'0%').replace('%',''))||0;
+        const vatAmt=Math.round(amt*vatRate/100);
+        revenueRows.push({name:sv.customName||s.name,price:sv.price||0,qty:revQty,unit:revUnit,cur,amt,vatAmt,amtWithVat:amt+vatAmt});
         if(!revByCur[cur])revByCur[cur]=0;
-        revByCur[cur]+=amt;
+        revByCur[cur]+=amt+vatAmt; // Doanh thu đã bao gồm VAT
       });
       // ROE from _dnData or default
       const costingROE=(window._dnData&&parseFloat(g('roeInput')?.value))||26390;
 
       // Chi phí từ svc.cost (đầu vào từ tab Dịch vụ) + manual costing
       const costByCur={};
-      // Auto-import from svc cost
+      // Auto-import from svc cost (including VAT)
       SVCS.forEach(function(s){
         const sv=svcs[s.key];
         if(!sv||!sv.on||!sv.cost)return;
-        const cur=sv.cur||'USD';
+        const cur=sv.svcCur||sv.cur||'USD';
+        const base=(sv.cost||0)*(sv.svcQty||1);
+        const vatAmt=sv.svcVatAmt||0;
         if(!costByCur[cur])costByCur[cur]=0;
-        costByCur[cur]+=sv.cost;
+        costByCur[cur]+=base+vatAmt; // Chi phí đã bao gồm VAT
       });
-      // Manual costing items
+      // Manual costing items (including vatAmt)
       items.forEach(function(it){
         const cur=it.cur||'USD';
         if(!costByCur[cur])costByCur[cur]=0;
-        costByCur[cur]+=(it.amt||0);
+        costByCur[cur]+=(it.price||it.amt||0)*(it.qty||1)+(it.vatAmt||0); // Đã bao gồm VAT
       });
 
       // Convert everything to VND for single summary
@@ -1764,6 +1768,7 @@ function renderDetailPanel(r,tt){
       let totalRevVND=0,totalCostVND=0;
       Object.entries(revByCur).forEach(function(e){totalRevVND+=toVND(e[1],e[0]);});
       Object.entries(costByCur).forEach(function(e){totalCostVND+=toVND(e[1],e[0]);});
+      // Profit = Doanh thu (đã VAT) - Chi phí (đã VAT)
       const totalProfitVND=totalRevVND-totalCostVND;
       const marginPct=totalRevVND>0?Math.round(totalProfitVND/totalRevVND*100):0;
       // Keep allCurs for per-section totals display
@@ -10369,12 +10374,12 @@ function runCostingReport(){
       totalCostVND+=cvVND(amtWithVat, it.cur||'VND');
     });
 
-    const profitVND=totalRevVND-totalCostVND;
-    const pct=totalRevVND>0?Math.round(profitVND/totalRevVND*100):0;
+    const profitVND=totalRevWithVatVND-totalCostVND; // Doanh thu (có VAT) - Chi phí (có VAT)
+    const pct=totalRevWithVatVND>0?Math.round(profitVND/totalRevWithVatVND*100):0;
     const clr=profitVND>=0?'var(--green)':'var(--red)';
 
     // Accumulate grand
-    grandRev['VND']=(grandRev['VND']||0)+totalRevVND;
+    grandRev['VND']=(grandRev['VND']||0)+totalRevWithVatVND;
     grandCost['VND']=(grandCost['VND']||0)+totalCostVND;
 
     const hasCostData=costItems.length>0||SVCS.some(s=>svcs[s.key]?.on&&svcs[s.key]?.cost);
@@ -10386,8 +10391,8 @@ function runCostingReport(){
       +'<td style="'+tdS+';font-size:11px;white-space:nowrap">'+(r.mblNo||'—')+'</td>'
       +'<td style="'+tdS+';color:var(--blue);font-weight:600">'+(r.etd||'—')+'</td>'
       +'<td style="'+tdS+'">'+(r.shipper||r.supplier||'—')+'</td>'
-      +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700">'+(totalRevVND?totalRevVND.toLocaleString():'—')+'</td>'
-      +'<td style="'+tdS+';text-align:right;color:#e07000;font-weight:700">'+(totalRevWithVatVND?totalRevWithVatVND.toLocaleString():'—')+'</td>'
+      +'<td style="'+tdS+';text-align:right;color:var(--green);font-weight:700">'+(totalRevWithVatVND?totalRevWithVatVND.toLocaleString():'—')+'</td>'
+      +'<td style="'+tdS+';text-align:right;color:#888;font-size:11px">'+(totalRevVND&&totalRevVND!==totalRevWithVatVND?totalRevVND.toLocaleString():'')+'</td>'
       +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700">'+(totalCostVND?totalCostVND.toLocaleString():'—')+'</td>'
       +'<td style="'+tdS+';text-align:right;font-weight:800;color:'+clr+'">'+(totalRevVND||totalCostVND?(profitVND>=0?'+':'')+profitVND.toLocaleString()+' <em style="font-size:10px">('+pct+'%)</em>':'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td style="'+tdS+';text-align:center">'
@@ -10400,8 +10405,8 @@ function runCostingReport(){
   }).join('');
 
   // Grand summary cards
-  const grandRevVND=grandRev['VND']||0;
-  const grandCostVND=grandCost['VND']||0;
+  const grandRevVND=grandRev['VND']||0; // Tổng doanh thu đã bao gồm VAT
+  const grandCostVND=grandCost['VND']||0; // Tổng chi phí đã bao gồm VAT
   const grandProfitVND=grandRevVND-grandCostVND;
   const grandPct=grandRevVND>0?Math.round(grandProfitVND/grandRevVND*100):0;
   const gclr=grandProfitVND>=0?'var(--green)':'var(--red)';
@@ -10410,7 +10415,7 @@ function runCostingReport(){
     '<div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:.85rem 1.25rem;min-width:220px">'
       +'<div style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:.5rem">TỔNG HỢP (VND)</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11.5px;margin-bottom:.5rem">'
-        +'<div style="color:var(--green)">Doanh thu (Debit, chưa VAT)</div><div style="font-weight:700;color:var(--green);text-align:right">'+grandRevVND.toLocaleString()+'</div>'
+        +'<div style="color:var(--green)">Doanh thu (Debit Note, có VAT)</div><div style="font-weight:700;color:var(--green);text-align:right">'+grandRevVND.toLocaleString()+'</div>'
         +'<div style="color:var(--red)">Chi phí</div><div style="font-weight:700;color:var(--red);text-align:right">'+grandCostVND.toLocaleString()+'</div>'
       +'</div>'
       +'<div style="border-top:1px solid var(--border-light);padding-top:.4rem;display:flex;justify-content:space-between;align-items:center">'
@@ -10430,8 +10435,8 @@ function runCostingReport(){
         +'<th style="'+thS+'">MBL No</th>'
         +'<th style="'+thS+'">ETD</th>'
         +'<th style="'+thS+'">Shipper</th>'
-        +'<th style="'+thS+';text-align:right;color:var(--green)">Doanh thu (VND)</th>'
-        +'<th style="'+thS+';text-align:right;color:#e07000">Doanh thu có VAT</th>'
+        +'<th style="'+thS+';text-align:right;color:var(--green)">Doanh thu (có VAT)</th>'
+        +'<th style="'+thS+';text-align:right;color:#888;font-size:9px">Chưa VAT</th>'
         +'<th style="'+thS+';text-align:right;color:var(--red)">Chi phí (VND)</th>'
         +'<th style="'+thS+';text-align:right">Lợi nhuận (VND)</th>'
         +'<th style="'+thS+'">Trạng thái</th>'
