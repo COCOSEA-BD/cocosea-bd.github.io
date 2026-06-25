@@ -11054,43 +11054,70 @@ function showTruckingEport(trkIdx){
   const bkNo=trk.bookingNo||r.bookingNo||'';
   const bkInfo=getBookingInfo(r,bkNo);
   const containers=getBookingContainers(r,bkNo);
-  // Chỉ lấy cont tương ứng với index của dòng trucking trong booking
   const bkRows=(r.truckings||[]).filter(function(t){return t.bookingNo===bkNo;});
   const myIdx=bkRows.indexOf(trk);
   const myContList=myIdx>=0&&containers[myIdx]?[containers[myIdx]]:containers;
+  const sp=cache.partners&&cache.partners[r.shipper||r.supplier||'']||{};
   const contLines=myContList.map(function(c){
     return (c.no||'—')+' / '+(c.seal||'—')+' / '+(c.gw?c.gw.toLocaleString()+'.00':'—');
   }).join('\n');
-  const text='Thông tin khai eport / Vô sổ tàu :\n'
-    +'------------------------\n'
-    +'Booking: '+bkNo+'\n'
-    +'Tên tàu: '+(r.vessel||'—')+(r.voy?' V.'+(r.voy):'')+'\\n'
-    +'Hạ cảng: '+(trk.fullReturn||r.icd||r.pol||'—')+'\n'
-    +'Giờ cắt máng: '+(r.cutoffCY||'—')+'\n'
-    +'----\n'
-    +'Mst: '+(function(){const sp=cache.partners&&cache.partners[r.shipper||r.supplier||''];return sp?sp.mst||'—':'—';})()+'\\n'
-    +'Số tờ khai: '+(bkInfo.soTkhai||'—')+'\n'
-    +'Mã chi cục: '+(bkInfo.maChiCuc||'—')+'\n'
-    +'Phân luồng: '+(bkInfo.phanLuong||'—')+'\n'
-    +'Cont/ Seal / Grossweight:\n'
-    +contLines;
-  showEportModal('Khai Eport Trucking — '+(bkNo||''), text);
+  const lines=[
+    'Thông tin khai eport / Vô sổ tàu :',
+    '------------------------',
+    'Booking: '+bkNo,
+    'Tên tàu: '+(r.vessel||'—')+(r.voy?' V.'+r.voy:''),
+    'Hạ cảng: '+(trk.fullReturn||r.icd||r.pol||'—'),
+    'Giờ cắt máng: '+(r.cutoffCY||'—'),
+    '----',
+    'Mst: '+(sp.mst||'—'),
+    'Số tờ khai: '+(bkInfo.soTkhai||'—'),
+    'Mã chi cục: '+(bkInfo.maChiCuc||'—'),
+    'Phân luồng: '+(bkInfo.phanLuong||'—'),
+    'Cont/ Seal / Grossweight:',
+    contLines
+  ];
+  showEportModal('Khai Eport Trucking — '+(bkNo||''), lines.join('\n'));
 }
 window.showTruckingEport=showTruckingEport;
 
 function showEportModal(title, text){
   g('eportOv').innerHTML=`
-    <div class="mhdr"><div class="mtitle">${title}</div><button class="rac" onclick="closeOv('eportOv')"><i class="ti ti-x"></i></button></div>
-    <div style="margin-bottom:.75rem">
-      <textarea id="eportText" rows="14" style="font-family:'Courier New',monospace;font-size:12.5px;line-height:1.7;resize:vertical;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:8px;padding:.75rem 1rem;color:var(--text-primary)">${text}</textarea>
+  <div class="modal" style="max-width:640px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+    <div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-file-export" style="font-size:18px;color:#e8f0fe"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">${title}</div>
+      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>
     </div>
-    <div class="mftr">
-      <button class="btn" onclick="closeOv('eportOv')">Đóng</button>
-      <button class="btn" onclick="navigator.clipboard.writeText(g('eportText').value).then(function(){toast('Đã copy!')})"><i class="ti ti-copy"></i> Copy</button>
+    <div style="padding:14px 18px;background:var(--bg-secondary)">
+      <textarea id="eportText" rows="16" readonly style="font-family:'Courier New',monospace;font-size:12.5px;line-height:1.75;resize:vertical;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:.85rem 1rem;color:var(--text-primary);width:100%;box-sizing:border-box;outline:none">${text}</textarea>
+    </div>
+    <div style="background:#f0f5ff;border-top:1px solid var(--border-light);padding:10px 18px;display:flex;gap:8px;justify-content:flex-end;align-items:center">
+      <span id="eportCopied" style="font-size:12px;color:var(--green);font-weight:600;opacity:0;transition:opacity .3s;margin-right:auto">✓ Đã copy!</span>
+      <button class="btn" onclick="closeOv('eportOv')" style="font-size:12.5px"><i class="ti ti-x"></i> Đóng</button>
+      <button class="btn pri" onclick="_eportCopy()" style="font-size:12.5px;background:#1a4b8c;border-color:#1a4b8c;padding:6px 14px"><i class="ti ti-copy"></i> Copy</button>
     </div>
   </div>`;
   openOv('eportOv');
 }
+window.showEportModal=showEportModal;
+
+function _eportCopy(){
+  const el=g('eportText');
+  if(!el)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(el.value).then(function(){
+      const lbl=g('eportCopied');
+      if(lbl){lbl.style.opacity='1';setTimeout(function(){lbl.style.opacity='0';},2000);}
+    }).catch(function(){_eportFallbackCopy(el);});
+  } else {
+    _eportFallbackCopy(el);
+  }
+}
+function _eportFallbackCopy(el){
+  el.select();el.setSelectionRange(0,99999);
+  try{document.execCommand('copy');toast('Đã copy!');}catch(e){toast('Copy thủ công: Ctrl+A, Ctrl+C','error');}
+}
+window._eportCopy=_eportCopy;
 
 
 function exportContSealExcel(bkNo){
