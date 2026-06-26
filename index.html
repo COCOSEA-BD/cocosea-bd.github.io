@@ -1728,7 +1728,7 @@ function renderDetailPanel(r,tt){
         if(_revSeenKeys.has(s.key))return; // bỏ qua duplicate
         _revSeenKeys.add(s.key);
         const sv=svcs[s.key];
-        if(!sv||!sv.on||sv.invoice==='Waived')return;
+        if(!sv||!sv.on||(sv.invoice||'Yes')!=='Yes')return; // Chỉ lấy dịch vụ có Invoice=Yes
         const cur=sv.cur||'VND';
         const revQty=sv.qty||sv.svcQty||parseInt(r.vol)||1;
         const revUnit=sv.unit||sv.svcUnit||'Cont';
@@ -14777,10 +14777,31 @@ function exportSOA(){
       if(isYes){preYes+=amtVND;vatYes+=vatAmt;} else {preNo+=amtVND;vatNo+=vatAmt;}
       lineItems.push({name:sv.customName||s.name,qty:sv.qty||1,unit:sv.unit||'',price:sv.price||0,cur:sv.cur||'USD',amtVND:amtVND,vatPct:vatPct,vatAmt:vatAmt,total:amtVND+vatAmt,type:isYes?'cty':'cn'});
     });
-    var psMap=r.dnPayStatus||{};var psVals=Object.values(psMap);
-    var payStatus=(psVals.length&&psVals.every(function(v){return v==='paid';}))?'Đã TT':'Chưa TT';
+    // Payment status: đọc từ dnPayments (new) hoặc dnPayStatus (legacy)
+    var paidAmountTotal=0;
+    var paidCount=0;var unpaidCount=0;
+    var dnPmts=r.dnPayments||{};
+    Object.values(dnPmts).forEach(function(p){
+      if(p&&p.inv){
+        if(p.inv.status==='paid'){paidCount++;paidAmountTotal+=parseFloat(p.inv.amount)||0;}
+        else unpaidCount++;
+      }
+      if(p&&p.noInv){
+        if(p.noInv.status==='paid'){paidCount++;paidAmountTotal+=parseFloat(p.noInv.amount)||0;}
+        else unpaidCount++;
+      }
+    });
+    // Fallback to legacy dnPayStatus
+    if(!Object.keys(dnPmts).length){
+      var psMap=r.dnPayStatus||{};
+      Object.values(psMap).forEach(function(v){v==='paid'?paidCount++:unpaidCount++;});
+    }
+    var payStatus=unpaidCount===0&&paidCount>0?'Đã TT':paidCount>0?'Một phần':'Chưa TT';
+    var payStatusDisplay=paidAmountTotal>0
+      ?('Đã TT '+(Math.round(paidAmountTotal)).toLocaleString()+' đ'+(unpaidCount>0?' (một phần)':''))
+      :(unpaidCount>0?'Chưa TT':'—');
     var dnMap=r.dnByParty||{};var dnNo=Object.values(dnMap).find(function(x){return x;})||r.dnNo||'—';
-    return {r:r,preYes:preYes,vatYes:vatYes,totalYes:preYes+vatYes,preNo:preNo,vatNo:vatNo,totalNo:preNo+vatNo,lineItems:lineItems,payStatus:payStatus,dnNo:dnNo};
+    return {r:r,preYes:preYes,vatYes:vatYes,totalYes:preYes+vatYes,preNo:preNo,vatNo:vatNo,totalNo:preNo+vatNo,lineItems:lineItems,payStatus:payStatus,payStatusDisplay:payStatusDisplay,paidAmountTotal:paidAmountTotal};
   });
 
   // ===== PAGE 1: Two summary tables (TT Công ty + TT Cá nhân) =====
@@ -14807,7 +14828,7 @@ function exportSOA(){
         +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(pickPre(d))+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(pickVat(d))+'</td>'
         +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:'+color+'">'+fmt(pickTot(d))+'</td>'
-        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(d.payStatus==='Đã TT'?'#0F6E56':'#A32D2D')+'">'+d.payStatus+'</td>'
+        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(d.payStatus==='Đã TT'?'#0F6E56':d.payStatus==='Một phần'?'#b45309':'#A32D2D')+'">'+d.payStatusDisplay+'</td>'
       +'</tr>';
     });
     return '<table style="border-collapse:collapse;width:100%;margin-bottom:6px"><thead><tr style="background:'+color+'">'
@@ -14821,13 +14842,7 @@ function exportSOA(){
       +'<th style="'+thStyle+';text-align:right">Tổng</th>'
       +'<th style="'+thStyle+';text-align:center">TT</th>'
       +'</tr></thead><tbody>'+rows+'</tbody>'
-      +'<tfoot><tr style="background:#f0efe9;font-weight:700">'
-      +'<td colspan="5" style="'+tdStyle+';text-align:right;font-size:11px">TỔNG '+title.toUpperCase()+'</td>'
-      +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(gPre)+'</td>'
-      +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(gVat)+'</td>'
-      +'<td style="'+tdStyle+';text-align:right;font-size:13px;color:'+color+'">'+fmt(gTot)+'</td>'
-      +'<td style="'+tdStyle+'"></td>'
-      +'</tr></tfoot></table>';
+      +'<tfoot>'      +'<tr style="background:#f0efe9;font-weight:700">'      +'<td colspan="5" style="'+tdStyle+';text-align:right;font-size:11px">TỔNG '+title.toUpperCase()+'</td>'      +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(gPre)+'</td>'      +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(gVat)+'</td>'      +'<td style="'+tdStyle+';text-align:right;font-size:13px;color:'+color+'">'+fmt(gTot)+'</td>'      +'<td style="'+tdStyle+'"></td>'      +'</tr>'      +(function(){        var gPaid=0;visibleLots.forEach(function(d){gPaid+=d.paidAmountTotal||0;});        var gRem=Math.max(0,gTot-gPaid);        if(!gPaid)return '';        return '<tr style="background:#f0fff8">'          +'<td colspan="7" style="'+tdStyle+';text-align:right;font-size:11px;color:#0F6E56;font-weight:600">Đã thanh toán</td>'          +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:#0F6E56">'+fmt(gPaid)+'</td>'          +'<td style="'+tdStyle+'"></td></tr>'          +(gRem>0?'<tr style="background:#fff8f0">'            +'<td colspan="7" style="'+tdStyle+';text-align:right;font-size:11px;color:#b45309;font-weight:600">Còn lại</td>'            +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:#b45309">'+fmt(gRem)+'</td>'            +'<td style="'+tdStyle+'"></td></tr>':'');      })()      +'</tfoot></table>';
   }
 
   // Gộp chung 1 bảng: mỗi lô tách thành 1-2 dòng (Có hóa đơn / Không hóa đơn) nếu lô đó có cả 2 loại phí.
@@ -14854,7 +14869,7 @@ function exportSOA(){
         +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(row.pre)+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(row.vat)+'</td>'
         +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:'+row.color+'">'+fmt(row.tot)+'</td>'
-        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(row.d.payStatus==='Đã TT'?'#0F6E56':'#A32D2D')+'">'+row.d.payStatus+'</td>'
+        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(row.d.payStatus==='Đã TT'?'#0F6E56':row.d.payStatus==='Một phần'?'#b45309':'#A32D2D')+'">'+row.d.payStatusDisplay+'</td>'
       +'</tr>';
     });
     return '<table style="border-collapse:collapse;width:100%;margin-bottom:6px"><thead><tr style="background:#0F6E56">'
