@@ -513,8 +513,7 @@ const XCOLS_LIST=[
   {k:'etd',l:'ETD / POL'},
   {k:'eta',l:'ETA / POD'},
   {k:'carrier',l:'Carrier',partner:true},
-  {k:'vessel',l:'Vessel'},
-  {k:'voy',l:'Voy'},
+  {k:'vessel',l:'Vessel / Voy'},
   {k:'status',l:'Trạng thái'},
   {k:'vstStatus',l:'Xác nhận VST'},
 ];
@@ -528,8 +527,7 @@ const NCOLS_LIST=[
   {k:'etd',l:'ETD / POL'},
   {k:'eta',l:'ETA / POD'},
   {k:'carrier',l:'Carrier',partner:true},
-  {k:'vessel',l:'Vessel'},
-  {k:'voy',l:'Voy'},
+  {k:'vessel',l:'Vessel / Voy'},
   {k:'status',l:'Trạng thái'},
   {k:'vstStatus',l:'Xác nhận VST'},
 ];
@@ -1256,10 +1254,13 @@ function renderLotTable(tt){
 
   // ── Build HTML string (nhanh); DOM write là bottleneck chính
   function buildRowHtml(r){
-    const etdDate=r.etd?new Date(r.etd):null;
+    const etdDate=r.etd?new Date(r.etd+'T00:00:00'):null;
     if(etdDate)etdDate.setHours(0,0,0,0);
     const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
     const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
+    // Định dạng ngày: 27-Jun-2026
+    const _MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    function fd(s){if(!s)return'—';const d=new Date(s+'T00:00:00');return d.getDate()+'-'+_MO[d.getMonth()]+'-'+d.getFullYear();}
     return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`
       +cols.map(c=>{
         if(c.k==='bookingNo'){
@@ -1276,34 +1277,36 @@ function renderLotTable(tt){
           const confirmed=r.vstConfirmed;
           return`<td style="text-align:center"><button class="bdg ${confirmed?'bdg-g':'bdg-r'}" onclick="openVstPopup('${r._id}','${tt}')" style="cursor:pointer;border:none;font-weight:700">${confirmed?'Đã VST':'Chưa VST'}</button></td>`;
         }
-        // ── Vessel: click để mở Vessel Tool editor
+        // ── Vessel / Voy: click để mở Vessel Tool
         if(c.k==='vessel'){
           if(!r.vessel) return`<td>—</td>`;
-          return`<td style="white-space:nowrap"><button onclick="_openVesselFromLot('${(r.vessel||'').replace(/'/g,"\\'")}','${(r.voy||'').replace(/'/g,"\\'")}','${(r.cutoffCY||'').replace(/'/g,"\\'")}','${(r.cutoffSI||'').replace(/'/g,"\\'")}','${r.etd||''}')" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left;font-weight:600" title="Mở Vessel Tool để xem/sửa">${r.vessel}</button>${r.voy?`<div style="font-size:11px;color:var(--text-secondary)">V.${r.voy}</div>`:''}</td>`;
+          return`<td style="white-space:nowrap"><button onclick="_openVesselFromLot('${(r.vessel||'').replace(/'/g,"\\'")}','${(r.voy||'').replace(/'/g,"\\'")}','${r.etd||''}')" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left;font-weight:600" title="Mở Vessel Tool">${r.vessel}</button>${r.voy?`<div style="font-size:11px;color:var(--text-secondary)">V.${r.voy}</div>`:''}</td>`;
         }
-        // ── ETD / POL column
-        if(c.k==='etd') return`<td style="white-space:nowrap">
-          ${r.etd?`<div style="font-weight:600;color:${isUrgent?'#E24B4A':'var(--blue)'}">${r.etd}</div>`:'<div>—</div>'}
-          ${r.pol?`<div style="font-size:11px;color:var(--text-secondary)">${r.pol}</div>`:''}
-          ${r.cutoffCY?`<div style="font-size:10.5px;color:#b45309">CY: ${r.cutoffCY}</div>`:''}
-        </td>`;
-        // ── ETA / POD column
-        if(c.k==='eta') return`<td style="white-space:nowrap">
-          ${r.eta?`<div style="font-weight:600">${r.eta}</div>`:'<div>—</div>'}
-          ${r.pod?`<div style="font-size:11px;color:var(--text-secondary)">${r.pod}</div>`:''}
-        </td>`;
-        // ── Partner columns (shipper, supplier, carrier): lookup abbreviation
+        // ── ETD / POL
+        if(c.k==='etd') return`<td style="white-space:nowrap">`
+          +`<div style="font-weight:600;color:${isUrgent?'#E24B4A':'var(--blue)'}">${fd(r.etd)}</div>`
+          +(r.pol?`<div style="font-size:11px;color:var(--text-secondary)">${r.pol}</div>`:'')
+          +(r.cutoffCY?`<div style="font-size:10.5px;color:#b45309">CY: ${r.cutoffCY}</div>`:'')
+          +`</td>`;
+        // ── ETA / POD
+        if(c.k==='eta') return`<td style="white-space:nowrap">`
+          +`<div style="font-weight:600">${fd(r.eta)}</div>`
+          +(r.pod?`<div style="font-size:12.5px;font-weight:700;color:#1a4b8c">${r.pod}</div>`:'')
+          +`</td>`;
+        // ── Partner: Shipper/Carrier — bold navy
         if(c.partner){
           const val=r[c.k]||'';
           if(!val) return`<td>—</td>`;
           const pt=cache.partners&&cache.partners[val];
           const sn=pt&&(pt.shortname||pt.name||'');
-          return`<td style="max-width:150px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500" title="${val}">${sn||val}</div></td>`;
+          return`<td style="max-width:150px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:#1a4b8c" title="${val}">${sn||val}</div></td>`;
         }
-        if(c.k==='etd') return`<td style="white-space:nowrap">${r[c.k]?`<span style="font-weight:600;color:${isUrgent?'#E24B4A':'inherit'}">${r[c.k]}</span>`:'—'}</td>`;
         return`<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r[c.k]||'—'}</td>`;
       }).join('')
-      +`<td style="white-space:nowrap;text-align:center"><button class="btn sm" onclick="openDetail('${r._id}','${tt}')"><i class="ti ti-eye"></i></button></td></tr>`;
+      +`<td style="white-space:nowrap;text-align:center">`
+        +`<button class="btn sm" onclick="openDetail('${r._id}','${tt}')" title="Xem"><i class="ti ti-eye"></i></button>`
+        +(can('deleteLot')?` <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa lô"><i class="ti ti-trash"></i></button>`:'')
+      +`</td></tr>`;
   }
 
   // ── Progressive render: 60 rows ngay, phần còn lại khi user bấm "Xem thêm"
