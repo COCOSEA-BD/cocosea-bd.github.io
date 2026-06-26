@@ -1722,20 +1722,22 @@ function renderDetailPanel(r,tt){
       const svcs=r.svcs||{};
       const revenueRows=[];
       const revByCur={};
-      const _revSeenKeys=new Set(); // Tránh lặp service
-      // Revenue: Yes + No (not Waived)
-      SVCS.forEach(function(s){
-        if(_revSeenKeys.has(s.key))return; // bỏ qua duplicate
-        _revSeenKeys.add(s.key);
-        const sv=svcs[s.key];
-        if(!sv||!sv.on||(sv.invoice||'Yes')!=='Yes')return; // Chỉ lấy dịch vụ có Invoice=Yes
+      const _revSeenKeys=new Set();
+      // Revenue: Yes + No (không lấy Waived) — iterate trực tiếp từ svcs của lô, không qua SVCS catalog
+      Object.entries(svcs).forEach(function(e){
+        const svcKey=e[0]; const sv=e[1];
+        if(!sv||!sv.on||sv.invoice==='Waived')return;
+        if(_revSeenKeys.has(svcKey))return;
+        _revSeenKeys.add(svcKey);
+        const svcInfo=SVCS.find(function(s){return s.key===svcKey;})||{};
+        const name=sv.customName||sv._name||svcInfo.name||svcKey;
         const cur=sv.cur||'VND';
         const revQty=sv.qty||sv.svcQty||parseInt(r.vol)||1;
         const revUnit=sv.unit||sv.svcUnit||'Cont';
         const amt=(sv.price||0)*revQty;
         const vatRate=parseFloat((sv.vat||'0%').replace('%',''))||0;
         const vatAmt=Math.round(amt*vatRate/100);
-        revenueRows.push({svKey:s.key,name:sv.customName||s.name,price:sv.price||0,qty:revQty,unit:revUnit,cur,amt,vatAmt,amtWithVat:amt+vatAmt,vat:sv.vat||'0%'});
+        revenueRows.push({svKey:svcKey,name:name,price:sv.price||0,qty:revQty,unit:revUnit,cur,amt,vatAmt,amtWithVat:amt+vatAmt,vat:sv.vat||'0%'});
         if(!revByCur[cur])revByCur[cur]=0;
         revByCur[cur]+=amt+vatAmt; // Doanh thu đã bao gồm VAT
       });
@@ -14777,31 +14779,27 @@ function exportSOA(){
       if(isYes){preYes+=amtVND;vatYes+=vatAmt;} else {preNo+=amtVND;vatNo+=vatAmt;}
       lineItems.push({name:sv.customName||s.name,qty:sv.qty||1,unit:sv.unit||'',price:sv.price||0,cur:sv.cur||'USD',amtVND:amtVND,vatPct:vatPct,vatAmt:vatAmt,total:amtVND+vatAmt,type:isYes?'cty':'cn'});
     });
-    // Payment status: đọc từ dnPayments (new) hoặc dnPayStatus (legacy)
-    var paidAmountTotal=0;
-    var paidCount=0;var unpaidCount=0;
+    // Payment: tách riêng inv (có HĐ) và noInv (không HĐ)
     var dnPmts=r.dnPayments||{};
+    var invPaid=0,noInvPaid=0,invUnpaid=0,noInvUnpaid=0;
     Object.values(dnPmts).forEach(function(p){
-      if(p&&p.inv){
-        if(p.inv.status==='paid'){paidCount++;paidAmountTotal+=parseFloat(p.inv.amount)||0;}
-        else unpaidCount++;
-      }
-      if(p&&p.noInv){
-        if(p.noInv.status==='paid'){paidCount++;paidAmountTotal+=parseFloat(p.noInv.amount)||0;}
-        else unpaidCount++;
-      }
+      if(p&&p.inv){if(p.inv.status==='paid'){invPaid+=parseFloat(p.inv.amount)||0;}else{invUnpaid++;}}
+      if(p&&p.noInv){if(p.noInv.status==='paid'){noInvPaid+=parseFloat(p.noInv.amount)||0;}else{noInvUnpaid++;}}
     });
-    // Fallback to legacy dnPayStatus
+    // Fallback legacy dnPayStatus
     if(!Object.keys(dnPmts).length){
       var psMap=r.dnPayStatus||{};
-      Object.values(psMap).forEach(function(v){v==='paid'?paidCount++:unpaidCount++;});
+      Object.values(psMap).forEach(function(v){v==='paid'?invPaid++:invUnpaid++;});
     }
-    var payStatus=unpaidCount===0&&paidCount>0?'Đã TT':paidCount>0?'Một phần':'Chưa TT';
-    var payStatusDisplay=paidAmountTotal>0
-      ?('Đã TT '+(Math.round(paidAmountTotal)).toLocaleString()+' đ'+(unpaidCount>0?' (một phần)':''))
-      :(unpaidCount>0?'Chưa TT':'—');
+    function _fmtPay(paid,unpaid,total){
+      if(paid>0&&unpaid===0)return {status:'paid',display:'Đã TT'+(paid>1000?' '+Math.round(paid).toLocaleString()+' đ':''),paid:paid};
+      if(paid>0&&unpaid>0)return {status:'partial',display:'Đã TT '+Math.round(paid).toLocaleString()+' đ',paid:paid};
+      return {status:'unpaid',display:'Chưa TT',paid:0};
+    }
+    var invPs=_fmtPay(invPaid,invUnpaid,preYes+vatYes);
+    var noInvPs=_fmtPay(noInvPaid,noInvUnpaid,preNo+vatNo);
     var dnMap=r.dnByParty||{};var dnNo=Object.values(dnMap).find(function(x){return x;})||r.dnNo||'—';
-    return {r:r,preYes:preYes,vatYes:vatYes,totalYes:preYes+vatYes,preNo:preNo,vatNo:vatNo,totalNo:preNo+vatNo,lineItems:lineItems,payStatus:payStatus,payStatusDisplay:payStatusDisplay,paidAmountTotal:paidAmountTotal};
+    return {r:r,preYes:preYes,vatYes:vatYes,totalYes:preYes+vatYes,preNo:preNo,vatNo:vatNo,totalNo:preNo+vatNo,lineItems:lineItems,invPs:invPs,noInvPs:noInvPs};
   });
 
   // ===== PAGE 1: Two summary tables (TT Công ty + TT Cá nhân) =====
@@ -14811,26 +14809,30 @@ function exportSOA(){
   var thStyle='padding:7px 9px;color:#fff;font-size:10px;border:1px solid #0a5240';
   var tdStyle='padding:6px 9px;border:'+bd+';font-size:11px';
 
-  function buildSummaryTable(title, pickPre, pickVat, pickTot, gPre, gVat, gTot, color){
+  function buildSummaryTable(title, pickPre, pickVat, pickTot, gPre, gVat, gTot, color, pickPs, pickPaid){
     var rows='';
     var visibleLots=lotData.filter(function(d){return pickTot(d)>0;});
     if(visibleLots.length===0)return '<div style="font-size:11px;color:#999;padding:8px 0">Không có khoản '+title+'</div>';
     visibleLots.forEach(function(d,i){
       var r=d.r;
-      var bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||'—'));
+      var bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||r.jobNo||'—'));
       var bg=i%2===0?'#fff':'#f8f8f6';
+      var ps=pickPs(d);
+      var psColor=ps.status==='paid'?'#0F6E56':ps.status==='partial'?'#b45309':'#A32D2D';
       rows+='<tr style="background:'+bg+'">'
         +'<td style="'+tdStyle+';color:#666;text-align:center">'+(i+1)+'</td>'
         +'<td style="'+tdStyle+';font-weight:600">'+bkgNos+'</td>'
         +'<td style="'+tdStyle+'">'+(r.mblNo||'—')+'</td>'
-        +'<td style="'+tdStyle+'">'+((r.etd||'—').replace(/-/g,'/'))+'</td>'
+        +'<td style="'+tdStyle+'">'+(r.etd||'—').replace(/-/g,'/')+'</td>'
         +'<td style="'+tdStyle+'">'+(r.pod||'—')+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(pickPre(d))+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(pickVat(d))+'</td>'
         +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:'+color+'">'+fmt(pickTot(d))+'</td>'
-        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(d.payStatus==='Đã TT'?'#0F6E56':d.payStatus==='Một phần'?'#b45309':'#A32D2D')+'">'+d.payStatusDisplay+'</td>'
+        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+psColor+'">'+ps.display+'</td>'
       +'</tr>';
     });
+    var gPaidTotal=0;visibleLots.forEach(function(d){gPaidTotal+=pickPaid(d);});
+    var gRem=Math.max(0,gTot-gPaidTotal);
     return '<table style="border-collapse:collapse;width:100%;margin-bottom:6px"><thead><tr style="background:'+color+'">'
       +'<th style="'+thStyle+';text-align:center">#</th>'
       +'<th style="'+thStyle+';text-align:left">Booking No</th>'
@@ -14842,8 +14844,32 @@ function exportSOA(){
       +'<th style="'+thStyle+';text-align:right">Tổng</th>'
       +'<th style="'+thStyle+';text-align:center">TT</th>'
       +'</tr></thead><tbody>'+rows+'</tbody>'
-      +'<tfoot>'      +'<tr style="background:#f0efe9;font-weight:700">'      +'<td colspan="5" style="'+tdStyle+';text-align:right;font-size:11px">TỔNG '+title.toUpperCase()+'</td>'      +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(gPre)+'</td>'      +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(gVat)+'</td>'      +'<td style="'+tdStyle+';text-align:right;font-size:13px;color:'+color+'">'+fmt(gTot)+'</td>'      +'<td style="'+tdStyle+'"></td>'      +'</tr>'      +(function(){        var gPaid=0;visibleLots.forEach(function(d){gPaid+=d.paidAmountTotal||0;});        var gRem=Math.max(0,gTot-gPaid);        if(!gPaid)return '';        return '<tr style="background:#f0fff8">'          +'<td colspan="7" style="'+tdStyle+';text-align:right;font-size:11px;color:#0F6E56;font-weight:600">Đã thanh toán</td>'          +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:#0F6E56">'+fmt(gPaid)+'</td>'          +'<td style="'+tdStyle+'"></td></tr>'          +(gRem>0?'<tr style="background:#fff8f0">'            +'<td colspan="7" style="'+tdStyle+';text-align:right;font-size:11px;color:#b45309;font-weight:600">Còn lại</td>'            +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:#b45309">'+fmt(gRem)+'</td>'            +'<td style="'+tdStyle+'"></td></tr>':'');      })()      +'</tfoot></table>';
+      +'<tfoot>'
+      +'<tr style="background:#f0efe9;font-weight:700">'
+      +'<td colspan="5" style="'+tdStyle+';text-align:right;font-size:11px">TỔNG '+title.toUpperCase()+'</td>'
+      +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(gPre)+'</td>'
+      +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(gVat)+'</td>'
+      +'<td style="'+tdStyle+';text-align:right;font-size:13px;color:'+color+'">'+fmt(gTot)+'</td>'
+      +'<td style="'+tdStyle+'"></td>'
+      +'</tr>'
+      +(gPaidTotal>0?'<tr style="background:#f0fff8">'
+        +'<td colspan="7" style="'+tdStyle+';text-align:right;font-size:11px;color:#0F6E56;font-weight:600">Đã thanh toán</td>'
+        +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:#0F6E56">'+fmt(gPaidTotal)+'</td>'
+        +'<td style="'+tdStyle+'"></td></tr>':'')
+      +(gRem>0?'<tr style="background:#fff8f0">'
+        +'<td colspan="7" style="'+tdStyle+';text-align:right;font-size:11px;color:#b45309;font-weight:600">Còn lại</td>'
+        +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:#b45309">'+fmt(gRem)+'</td>'
+        +'<td style="'+tdStyle+'"></td></tr>':'')
+      +'</tfoot></table>';
   }
+
+  var tblCty=buildSummaryTable('TT Công ty',function(d){return d.preYes;},function(d){return d.vatYes;},function(d){return d.totalYes;},gCtyPre,gCtyVat,gCtyTot,'#0F6E56',function(d){return d.invPs;},function(d){return d.invPs.paid;});
+  var tblCN=buildSummaryTable('TT Cá nhân',function(d){return d.preNo;},function(d){return d.vatNo;},function(d){return d.totalNo;},gCNPre,gCNVat,gCNTot,'#1a4b8c',function(d){return d.noInvPs;},function(d){return d.noInvPs.paid;});
+  var gCtyPaid=0,gCNPaid=0;
+  lotData.forEach(function(d){gCtyPaid+=d.invPs.paid;gCNPaid+=d.noInvPs.paid;});
+  var gCtyRem=Math.max(0,gCtyTot-gCtyPaid);
+  var gCNRem=Math.max(0,gCNTot-gCNPaid);
+  var grandRem=gCtyRem+gCNRem;
 
   // Gộp chung 1 bảng: mỗi lô tách thành 1-2 dòng (Có hóa đơn / Không hóa đơn) nếu lô đó có cả 2 loại phí.
   function buildMergedTable(){
@@ -14869,7 +14895,7 @@ function exportSOA(){
         +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(row.pre)+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(row.vat)+'</td>'
         +'<td style="'+tdStyle+';text-align:right;font-weight:700;color:'+row.color+'">'+fmt(row.tot)+'</td>'
-        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(row.d.payStatus==='Đã TT'?'#0F6E56':row.d.payStatus==='Một phần'?'#b45309':'#A32D2D')+'">'+row.d.payStatusDisplay+'</td>'
+        +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(row.kind==='Có hóa đơn'?(row.d.invPs.status==='paid'?'#0F6E56':row.d.invPs.status==='partial'?'#b45309':'#A32D2D'):(row.d.noInvPs.status==='paid'?'#0F6E56':row.d.noInvPs.status==='partial'?'#b45309':'#A32D2D'))+'">'+( row.kind==='Có hóa đơn'?row.d.invPs.display:row.d.noInvPs.display)+'</td>'
       +'</tr>';
     });
     return '<table style="border-collapse:collapse;width:100%;margin-bottom:6px"><thead><tr style="background:#0F6E56">'
@@ -14890,7 +14916,12 @@ function exportSOA(){
       +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(gCtyVat+gCNVat)+'</td>'
       +'<td style="'+tdStyle+';text-align:right;font-size:13px;color:#0F6E56">'+fmt(gCtyTot+gCNTot)+'</td>'
       +'<td style="'+tdStyle+'"></td>'
-      +'</tr></tfoot></table>';
+      +'</tr>'
+      +(grandRem>0?'<tr style="background:#fff3e0">'
+        +'<td colspan="8" style="'+tdStyle+';text-align:right;font-size:11px;color:#b45309;font-weight:700">Tổng cộng cần thanh toán</td>'
+        +'<td style="'+tdStyle+';text-align:right;font-size:13px;font-weight:800;color:#b45309">'+fmt(grandRem)+'</td>'
+        +'<td style="'+tdStyle+'"></td></tr>':'')
+      +'</tfoot></table>';
   }
   var mergedTable=buildMergedTable();
 
