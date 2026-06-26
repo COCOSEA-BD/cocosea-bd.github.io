@@ -1739,7 +1739,16 @@ function renderDetailPanel(r,tt){
         const vatAmt=Math.round(amt*vatRate/100);
         revenueRows.push({svKey:svcKey,name:name,price:sv.price||0,qty:revQty,unit:revUnit,cur,amt,vatAmt,amtWithVat:amt+vatAmt,vat:sv.vat||'0%'});
         if(!revByCur[cur])revByCur[cur]=0;
-        revByCur[cur]+=amt+vatAmt; // Doanh thu đã bao gồm VAT
+        revByCur[cur]+=amt; // pre-VAT cho profit
+      });
+      // Tổng revenue table: tính theo từng cột
+      let totalRevAmtVND=0, totalRevVatAmtVND=0, totalRevTotalVND=0;
+      revenueRows.forEach(function(row){
+        const roe2=costingROE;
+        function cv(x){return (row.cur==='VND')?Math.round(x):Math.round(x*roe2);}
+        totalRevAmtVND+=cv(row.amt||0);
+        totalRevVatAmtVND+=cv(row.vatAmt||0);
+        totalRevTotalVND+=cv(row.amtWithVat||row.amt||0);
       });
       // ROE from _dnData or default
       const costingROE=(window._dnData&&parseFloat(g('roeInput')?.value))||26390;
@@ -1770,11 +1779,21 @@ function renderDetailPanel(r,tt){
         if(cur==='USD')return Math.round(amt*roe);
         return Math.round(amt*roe); // approx
       }
-      let totalRevVND=0,totalCostVND=0;
+      let totalRevVND=0,totalCostVND=0,totalCostPreVatVND=0;
       Object.entries(revByCur).forEach(function(e){totalRevVND+=toVND(e[1],e[0]);});
       Object.entries(costByCur).forEach(function(e){totalCostVND+=toVND(e[1],e[0]);});
-      // Profit = Doanh thu (đã VAT) - Chi phí (đã VAT)
-      const totalProfitVND=totalRevVND-totalCostVND;
+      // Chi phí trước VAT (cho profit)
+      SVCS.forEach(function(s){
+        const sv=svcs[s.key];if(!sv||!sv.on||!sv.cost)return;
+        const base=(sv.cost||0)*(sv.svcQty||1);
+        totalCostPreVatVND+=(sv.svcCur||sv.cur||'VND')==='VND'?base:Math.round(base*costingROE);
+      });
+      (r.costing&&r.costing.items||[]).forEach(function(it){
+        const base=(it.price||it.amt||0)*(it.qty||1);
+        totalCostPreVatVND+=(it.cur||'VND')==='VND'?base:Math.round(base*costingROE);
+      });
+      // Lợi nhuận = Doanh thu (trước VAT) - Chi phí (trước VAT)
+      const totalProfitVND=totalRevVND-totalCostPreVatVND;
       const marginPct=totalRevVND>0?Math.round(totalProfitVND/totalRevVND*100):0;
       // Keep allCurs for per-section totals display
       const allCurs=['VND'];
@@ -1888,8 +1907,11 @@ function renderDetailPanel(r,tt){
             +'</tr></thead>'
           +'<tbody>'+(revRows||'<tr><td colspan="10" style="padding:1rem;text-align:center;color:var(--text-secondary)">Chưa có dịch vụ nào được bật trong tab Fill giá</td></tr>')+'</tbody>'
         +'<tfoot><tr style="background:var(--bg-secondary)">'
-          +'<td colspan="6" style="padding:6px 10px;font-size:11.5px;font-weight:600;text-align:right;border-top:2px solid var(--border-light)">Tổng doanh thu (VND):</td>'
-          +'<td style="padding:6px 10px;font-size:13px;font-weight:700;color:var(--green);text-align:right;border-top:2px solid var(--border-light)">'+totalRevVND.toLocaleString()+'</td>'
+          +'<td colspan="6" style="padding:6px 10px;font-size:11px;font-weight:600;text-align:right;border-top:2px solid var(--border-light)">Tổng (VND):</td>'
+          +'<td style="padding:6px 10px;font-size:12px;font-weight:700;color:var(--blue);text-align:right;border-top:2px solid var(--border-light)">'+totalRevAmtVND.toLocaleString()+'</td>'
+          +'<td style="border-top:2px solid var(--border-light)"></td>'
+          +'<td style="padding:6px 10px;font-size:12px;font-weight:700;color:#e07000;text-align:right;border-top:2px solid var(--border-light)">'+(totalRevVatAmtVND>0?totalRevVatAmtVND.toLocaleString():'—')+'</td>'
+          +'<td style="padding:6px 10px;font-size:13px;font-weight:800;color:var(--green);text-align:right;border-top:2px solid var(--border-light)">'+totalRevTotalVND.toLocaleString()+'</td>'
         +'</tr></tfoot>'
         +'</table></div>'
 
@@ -10397,8 +10419,20 @@ function runCostingReport(){
       totalCostVND+=cvVND(amtWithVat, it.cur||'VND');
     });
 
-    const profitVND=totalRevWithVatVND-totalCostVND; // Doanh thu (có VAT) - Chi phí (có VAT)
-    const pct=totalRevWithVatVND>0?Math.round(profitVND/totalRevWithVatVND*100):0;
+    // Chi phí trước VAT
+    let totalCostPreVatVND=0;
+    Object.keys(svcs).forEach(function(k){
+      const sv=svcs[k];
+      if(!sv||!sv.on||!sv.cost)return;
+      const costAmt=(sv.cost||0)*(sv.svcQty||1);
+      totalCostPreVatVND+=cvVND(costAmt, sv.svcCur||sv.cur||'VND');
+    });
+    costItems.forEach(it=>{
+      const amt=it.price?it.price*(it.qty||1):(it.amt||0);
+      totalCostPreVatVND+=cvVND(amt, it.cur||'VND');
+    });
+    const profitVND=totalRevVND-totalCostPreVatVND; // Doanh thu trước VAT - Chi phí trước VAT
+    const pct=totalRevVND>0?Math.round(profitVND/totalRevVND*100):0;
     const clr=profitVND>=0?'var(--green)':'var(--red)';
 
     // Accumulate grand
