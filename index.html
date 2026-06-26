@@ -8353,7 +8353,29 @@ function renderSettings(){
   renderAcctInfoList();
   renderWarehouseList();
   if(typeof renderSvcCatList==='function')renderSvcCatList();
-}
+  // Inject Backup & Restore section
+  const pgS=g('page-settings');
+  if(pgS){
+    pgS.insertAdjacentHTML('beforeend',`
+    <div style="margin-top:1.5rem;background:var(--bg-primary);border-radius:12px;border:1.5px solid #1a4b8c30;padding:1.25rem 1.5rem">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <i class="ti ti-database-export" style="font-size:20px;color:#1a4b8c"></i>
+        <div style="font-weight:700;font-size:14px;color:#1a4b8c">Backup & Restore dữ liệu</div>
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1rem">Xuất toàn bộ dữ liệu (lô hàng, đối tác, tàu, thu chi, giá cước...) ra file JSON. Có thể khôi phục khi cần hoặc chuyển sang môi trường khác.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn pri" onclick="backupAllData()" style="background:#1a4b8c;border-color:#1a4b8c">
+          <i class="ti ti-download"></i> Backup ngay
+        </button>
+        <label class="btn" style="cursor:pointer">
+          <i class="ti ti-upload"></i> Restore từ file...
+          <input type="file" accept=".json" style="display:none" onchange="restoreAllData(this)"/>
+        </label>
+      </div>
+      <div id="backupStatus" style="margin-top:.75rem;font-size:12px;min-height:20px"></div>
+    </div>`);
+  }
+} // end renderSettings
 
 function _stgToggle(key){
   if(!window._settingsOpen)window._settingsOpen={};
@@ -8673,6 +8695,118 @@ window.renderSettings=renderSettings;
 window.updatePortOptions=updatePortOptions;
 window.calcDefaultCutoff=calcDefaultCutoff;
 window.updateEtdCutoffs=updateEtdCutoffs;
+
+// ═══════════════════════════════════════════════════════
+//  BACKUP & RESTORE — toàn bộ dữ liệu Firestore
+// ═══════════════════════════════════════════════════════
+const BACKUP_COLLECTIONS=[
+  {name:'lots_xuat',   label:'Lô hàng xuất'},
+  {name:'lots_nhap',   label:'Lô hàng nhập'},
+  {name:'vessels',     label:'Tàu'},
+  {name:'partners',    label:'Đối tác CRM'},
+  {name:'cashTransactions', label:'Thu chi'},
+  {name:'ocean_rates', label:'Bảng giá cước'},
+  {name:'quotes',      label:'Báo giá'},
+  {name:'debtEntries', label:'Công nợ'},
+  {name:'_config',     label:'Cấu hình'},
+  {name:'users',       label:'Người dùng'},
+];
+
+async function backupAllData(){
+  const btn=document.querySelector('[onclick="backupAllData()"]');
+  const statusEl=g('backupStatus');
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader ti-spin"></i> Đang sao lưu...';}
+  if(statusEl)statusEl.innerHTML='<span style="color:var(--blue)">Đang đọc dữ liệu từ Firestore...</span>';
+  try{
+    const backup={version:2,createdAt:new Date().toISOString(),appName:'COCOSEA',collections:{}};
+    let totalDocs=0;
+    for(const col of BACKUP_COLLECTIONS){
+      try{
+        if(statusEl)statusEl.innerHTML=`<span style="color:var(--blue)">Đang backup: ${col.label}...</span>`;
+        const snap=await db.collection(col.name).get();
+        backup.collections[col.name]=snap.docs.map(d=>({_id:d.id,...d.data()}));
+        totalDocs+=snap.docs.length;
+      }catch(e){
+        backup.collections[col.name]=[];
+        console.warn('Backup skip:',col.name,e.message);
+      }
+    }
+    // Download file
+    const json=JSON.stringify(backup,null,2);
+    const ts=new Date().toISOString().slice(0,19).replace(/:/g,'-').replace('T','_');
+    const filename=`COCOSEA_backup_${ts}.json`;
+    const blob=new Blob([json],{type:'application/json;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=filename;a.click();
+    URL.revokeObjectURL(url);
+    if(statusEl)statusEl.innerHTML=`<span style="color:var(--green)">✓ Backup thành công! ${totalDocs} documents — file: <strong>${filename}</strong></span>`;
+    toast('Backup hoàn tất: '+totalDocs+' documents');
+  }catch(e){
+    if(statusEl)statusEl.innerHTML=`<span style="color:var(--red)">✗ Lỗi backup: ${e.message}</span>`;
+    toast('Lỗi backup: '+e.message,'error');
+  }finally{
+    if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-download"></i> Backup ngay';}
+  }
+}
+window.backupAllData=backupAllData;
+
+async function restoreAllData(input){
+  const file=input.files&&input.files[0];
+  if(!file)return;
+  input.value='';
+  const reader=new FileReader();
+  reader.onload=async function(e){
+    try{
+      const backup=JSON.parse(e.target.result);
+      if(!backup.collections||backup.version<1){toast('File backup không hợp lệ','error');return;}
+      // Confirm dialog
+      const colList=Object.keys(backup.collections);
+      const totalDocs=colList.reduce(function(s,k){return s+(backup.collections[k]||[]).length;},0);
+      const ok=confirm(
+        `⚠️ RESTORE DỮ LIỆU\n\n`+
+        `File: ${file.name}\n`+
+        `Ngày tạo: ${backup.createdAt||'?'}\n`+
+        `Collections: ${colList.join(', ')}\n`+
+        `Tổng: ${totalDocs} documents\n\n`+
+        `CẢNH BÁO: Thao tác này sẽ GHI ĐÈ tất cả dữ liệu hiện tại!\n\n`+
+        `Bấm OK để tiếp tục hoặc Cancel để hủy.`
+      );
+      if(!ok)return;
+      const statusEl=g('backupStatus');
+      if(statusEl)statusEl.innerHTML='<span style="color:var(--blue)">Đang khôi phục dữ liệu...</span>';
+      let restored=0;let errors=0;
+      for(const colName of colList){
+        const docs=backup.collections[colName]||[];
+        if(!docs.length)continue;
+        if(statusEl)statusEl.innerHTML=`<span style="color:var(--blue)">Đang restore: ${colName} (${docs.length} docs)...</span>`;
+        // Batch write (Firestore max 500 per batch)
+        const BATCH_SIZE=400;
+        for(let start=0;start<docs.length;start+=BATCH_SIZE){
+          const batch=db.batch();
+          const chunk=docs.slice(start,start+BATCH_SIZE);
+          chunk.forEach(function(doc){
+            const {_id,...data}=doc;
+            if(!_id)return;
+            const ref=db.collection(colName).doc(_id);
+            batch.set(ref,data);
+          });
+          try{await batch.commit();restored+=chunk.length;}
+          catch(batchErr){errors+=chunk.length;console.error('Restore batch error',colName,batchErr);}
+        }
+      }
+      if(statusEl)statusEl.innerHTML=`<span style="color:var(--green)">✓ Restore hoàn tất! ${restored} documents đã khôi phục${errors>0?' ('+errors+' lỗi)':''}</span>`;
+      toast(`Restore xong: ${restored} documents`);
+      // Reload data
+      setTimeout(function(){window.location.reload();},2000);
+    }catch(err){
+      toast('Lỗi đọc file backup: '+err.message,'error');
+      console.error(err);
+    }
+  };
+  reader.readAsText(file,'utf-8');
+}
+window.restoreAllData=restoreAllData;
 window.resetAllFilters=resetAllFilters;
 window.setQuickFilter=setQuickFilter;
 window.toggleSort=toggleSort;
