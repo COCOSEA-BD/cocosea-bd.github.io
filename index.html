@@ -1842,7 +1842,7 @@ function renderDetailPanel(r,tt){
         const sv=svcs[s.key];
         const svcAmt=(sv.cost||0)*(sv.svcQty||1);
         const autoCurOpts=CURRENCIES.map(function(c){return'<option'+(c===(sv.svcCur||sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
-        const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
+        const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.svcUnit||sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
         const ncc=sv.svcSupplier||'—';
         const paidStatus=sv.apPaidStatus||'unpaid';
         const paidDate=sv.apPaidDate||'';
@@ -9169,7 +9169,7 @@ function renderCostingRows(items){
     const vatAmtAuto=sv.svcVatAmt||0;
     const totalAuto=svcAmt+vatAmtAuto;
     const autoCurOpts=CURRENCIES.map(function(c){return'<option'+(c===(sv.svcCur||sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
-    const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
+    const autoUnitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice'].map(function(u){return'<option'+(u===(sv.svcUnit||sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
     const ncc=sv.svcSupplier||'—';
     const paidStatus=sv.apPaidStatus||'unpaid';
     const paidDate=sv.apPaidDate||'';
@@ -12282,27 +12282,50 @@ function renderVesselTool(){
       return true;
     });
   }
+  // Sort by ETD asc
+  vessels.sort(function(a,b){return (a.etd||'')>(b.etd||'')?1:-1;});
+  // Group by vessel name
+  const grouped={};
+  const vesselOrder=[];
+  vessels.forEach(function(v){
+    const name=(v.vessel||'').toUpperCase();
+    if(!grouped[name]){grouped[name]=[];vesselOrder.push(name);}
+    grouped[name].push(v);
+  });
+  const tdS2='padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
   let rows='';
   if(!vessels.length){
-    rows='<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:2rem">'+(q?'Không tìm thấy tàu phù hợp':'Chưa có tàu nào. Bấm "Thêm tàu" để tạo mới.')+'</td></tr>';
+    rows='<tr><td colspan="10" style="text-align:center;color:var(--text-tertiary);padding:2rem">'+(q?'Không tìm thấy tàu phù hợp':'Chưa có tàu nào. Bấm "Thêm tàu"')+'</td></tr>';
   } else {
-    rows=vessels.map(function(v){
-      const carriers=(v.carriers||[]).map(function(cn){return '<span class="bdg bdg-b" style="margin:1px 2px;font-size:10px">'+cn+'</span>';}).join('')||'—';
-      const pods=(v.pods||[]).map(function(p){
-        return '<div style="font-size:11.5px;white-space:nowrap"><b>'+(p.pod||'—')+'</b>'+(p.eta?' <span style="color:var(--text-secondary)">ETA: '+_vesFmtDate(p.eta)+'</span>':'')+'</div>';
-      }).join('')||'—';
-      return '<tr>'
-        +'<td style="font-weight:600;font-size:12.5px">'+(v.vessel||'—')+'</td>'
-        +'<td style="font-size:12.5px">'+(v.voy||'—')+'</td>'
-        +'<td>'+carriers+'</td>'
-        +'<td style="font-size:11.5px;white-space:nowrap"><b>'+(v.pol||'—')+'</b>'+(v.etd?'<div style="color:var(--text-secondary)">ETD: '+_vesFmtDate(v.etd)+'</div>':'')+'</td>'
-        +'<td>'+pods+'</td>'
-        +'<td style="white-space:nowrap;text-align:right">'
-          +'<button class="btn sm" onclick="openVesselEditor(\''+v._id+'\')"><i class="ti ti-edit"></i></button> '
-          +'<button class="rac red" onclick="deleteVessel(\''+v._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>'
-        +'</td>'
-      +'</tr>';
-    }).join('');
+    var _ri=0;
+    vesselOrder.forEach(function(vesName){
+      const vList=grouped[vesName];
+      vList.forEach(function(v,vi){
+        const carrierStr=(v.carriers||[]).join(', ')||'—';
+        const transStr=(v.transships&&v.transships.length)?v.transships.map(function(t){return (t.port||t.country||'');}).join(' → '):'—';
+        const podStr=(v.pods||[]).map(function(p){return (p.pod||'—');}).join(', ')||'—';
+        const etaStr=(v.pods||[]).map(function(p){return p.eta||'';}).filter(Boolean).join(', ')||'—';
+        const bg=_ri%2===0?'var(--bg-primary)':'var(--bg-secondary)';
+        const topBorder=vi===0&&_ri>0?'border-top:2px solid var(--blue);':'' ;
+        rows+='<tr style="background:'+bg+';'+topBorder+'">'
+          +'<td style="'+tdS2+';font-weight:700;color:#1a4b8c;white-space:nowrap">'+(v.vessel||'—')+'</td>'
+          +'<td style="'+tdS2+';font-weight:600">'+(v.voy||'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px">'+carrierStr+'</td>'
+          +'<td style="'+tdS2+';white-space:nowrap">'+(v.pol||'—')+'</td>'
+          +'<td style="'+tdS2+';font-weight:600;color:var(--blue);white-space:nowrap">'+(v.etd?v.etd.replace(/-/g,'/'):'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:#b45309;white-space:nowrap">'+(v.cutoffCY||'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:#b45309;white-space:nowrap">'+(v.cutoffSI||'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:var(--text-secondary)">'+transStr+'</td>'
+          +'<td style="'+tdS2+';font-size:11px">'+podStr+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:var(--text-secondary)">'+etaStr+'</td>'
+          +'<td style="'+tdS2+';text-align:right;white-space:nowrap">'
+            +'<button class="btn sm" onclick="openVesselEditor(\''+v._id+'\')" style="margin-right:4px"><i class="ti ti-edit"></i></button>'
+            +'<button class="rac red" onclick="deleteVessel(\''+v._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>'
+          +'</td>'
+        +'</tr>';
+        _ri++;
+      });
+    });
   }
   pg.innerHTML=`
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:10px">
@@ -12329,13 +12352,18 @@ function renderVesselTool(){
   </div>
   <div class="table-card" style="padding:0;overflow:auto">
     <table style="width:100%;border-collapse:collapse">
-      <thead><tr style="background:var(--bg-secondary)">
-        <th style="text-align:left;padding:10px;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary)">Vessel</th>
-        <th style="text-align:left;padding:10px;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary)">Voy</th>
-        <th style="text-align:left;padding:10px;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary)">Carrier</th>
-        <th style="text-align:left;padding:10px;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary)">POL / ETD</th>
-        <th style="text-align:left;padding:10px;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary)">POD / ETA</th>
-        <th style="text-align:right;padding:10px;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary)"></th>
+      <thead><tr style="background:#1a4b8c">
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:#e8f0fe;white-space:nowrap">Vessel</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#e8f0fe;white-space:nowrap">Voy</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#e8f0fe;white-space:nowrap">Carrier</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#e8f0fe;white-space:nowrap">POL</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#e8f0fe;white-space:nowrap">ETD</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#fcd97a;white-space:nowrap">Cut Off CY</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#fcd97a;white-space:nowrap">Cut Off SI</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#e8f0fe;white-space:nowrap">Transshipment</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#e8f0fe;white-space:nowrap">POD</th>
+        <th style="text-align:left;padding:9px 10px;font-size:10.5px;color:#e8f0fe;white-space:nowrap">ETA</th>
+        <th style="text-align:right;padding:9px 10px;font-size:10.5px;color:#e8f0fe"></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -12629,6 +12657,12 @@ window._vesselTtChange=_vesselTtChange;
 function _vesselRecalcAllEta(){
   _vesselSyncPods();
   const etd=g('vesEtd')?.value||_vesselDraft.etd||'';
+  // Auto-fill CY/SI cutoff nếu chưa nhập
+  if(etd){
+    const defCutoff=_vesselCalcDefaultCutoff(etd);
+    const cyCel=g('vesCutoffCY'); if(cyCel&&!cyCel.value){cyCel.value=defCutoff;_vesselDraft.cutoffCY=defCutoff;}
+    const siCel=g('vesCutoffSI'); if(siCel&&!siCel.value){siCel.value=defCutoff;_vesselDraft.cutoffSI=defCutoff;}
+  }
   _vesselDraft.pods.forEach(function(p,i){
     if(p.tt===''||p.tt==null)return;
     const eta=_vesselCalcEta(etd,p.tt);
