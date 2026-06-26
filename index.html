@@ -2051,7 +2051,7 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:.75rem">
         <span style="font-size:13px;font-weight:700;color:#1a4b8c;display:flex;align-items:center;gap:6px"><i class="ti ti-truck" style="font-size:15px"></i>Trucking</span>
         <div style="flex:1"></div>
-        <button class="btn" onclick="showTruckingEportAll()"><i class="ti ti-file-export"></i> Khai Eport Tổng</button>
+        <button class="btn" onclick="showTruckingEportAll()"><i class="ti ti-file-export"></i> Khai Eport</button>
         <button class="btn" onclick="saveTruckings()"><i class="ti ti-device-floppy"></i> Lưu</button>
         <button class="btn pri" onclick="addTruckingRow()"><i class="ti ti-plus"></i> Thêm cont</button>
       </div>
@@ -2429,6 +2429,33 @@ async function saveContSealAll(){
       phanLuong:(firstTkhai[0]||{}).pl||'',
       updatedAt:Date.now(),updatedBy:currentUser.email
     });
+
+    // ── Đồng bộ số cont vào Tab Trucking (booking nào có hasTruck=true)
+    const currentTruckings=r.truckings||[];
+    if(currentTruckings.length){
+      const updatedTruckings=currentTruckings.map(function(trk){
+        // Booking number: dùng của trucking row; nếu rỗng fallback về booking chính của lô
+        const bkNo=((trk.bookingNo||'').trim())||((r.bookingNo||'').trim());
+        const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+        const bkData=bookingConts[bkKey];
+        if(!bkData||!bkData.containers||!bkData.containers.length)return trk;
+        // Tìm tất cả trucking row cho cùng booking (normalize giống nhau)
+        const trksForBk=currentTruckings.filter(function(t){
+          return (((t.bookingNo||'').trim())||(r.bookingNo||'')).trim()===bkNo;
+        });
+        const truckIdx=trksForBk.indexOf(trk);
+        if(truckIdx<0)return trk;
+        const cont=bkData.containers[truckIdx];
+        if(!cont||!cont.no)return trk;
+        return Object.assign({},trk,{contNo:cont.no.trim().toUpperCase()});
+      });
+      // Chỉ save nếu có thay đổi
+      const changed=updatedTruckings.some(function(t,i){return t.contNo!==(currentTruckings[i]||{}).contNo;});
+      if(changed){
+        await db.collection(colName(detailTt)).doc(detailId).update({truckings:updatedTruckings,updatedAt:Date.now()});
+      }
+    }
+
     toast('Đã lưu tất cả Cont/Seal');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
@@ -11341,7 +11368,7 @@ function showTruckingEportAll(){
     if(!bkMap[bk])bkMap[bk]={trk:trk,rows:[]};
     bkMap[bk].rows.push(trk);
   });
-  const allLines=['Thông tin khai eport / Vô sổ tàu (TỔNG)','------------------------'];
+  const allLines=['Thông tin khai eport / Vô sổ tàu','------------------------'];
   allLines.push('Tên tàu: '+(r.vessel||'—')+(r.voy?' V.'+r.voy:''));
   allLines.push('Giờ cắt máng: '+(r.cutoffCY||'—'));
   allLines.push('Mst: '+(sp.mst||'—'));
@@ -11360,12 +11387,12 @@ function showTruckingEportAll(){
       const contNo=trk.contNo||cont.no||'—';
       const seal=cont.seal||'—';
       const gw=cont.gw?cont.gw.toLocaleString()+'.00':'—';
-      const truckStr=trk.truckNo?' (xe: '+trk.truckNo+')':'';
+      const truckStr=''; // Bỏ số xe theo yêu cầu
       allLines.push(contNo+' / '+seal+' / '+gw+truckStr);
     });
     allLines.push('');
   });
-  showEportModal('Khai Eport Tổng — '+(r.bookingNo||r.jobNo||''), allLines.join('\n'));
+  showEportModal('Khai Eport — '+(r.bookingNo||r.jobNo||''), allLines.join('\n'));
 }
 window.showTruckingEportAll=showTruckingEportAll;
 
