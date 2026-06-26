@@ -859,7 +859,7 @@ function startListeners(){
     cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
     if(currentTab==='xuat'){
       clearTimeout(_xRenderTimer);
-      _xRenderTimer=setTimeout(function(){renderLotTable('xuat');},80);
+      _xRenderTimer=setTimeout(function(){renderLotTable('xuat');},50);
     }
     if(detailId&&detailTt==='xuat'&&g('detailPanel').classList.contains('open')){
       const fresh=cache.xuat.find(x=>x._id===detailId);
@@ -873,7 +873,7 @@ function startListeners(){
     cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
     if(currentTab==='nhap'){
       clearTimeout(_nRenderTimer);
-      _nRenderTimer=setTimeout(function(){renderLotTable('nhap');},80);
+      _nRenderTimer=setTimeout(function(){renderLotTable('nhap');},50);
     }
     if(detailId&&detailTt==='nhap'&&g('detailPanel').classList.contains('open')){
       const fresh=cache.nhap.find(x=>x._id===detailId);
@@ -1206,6 +1206,7 @@ function clearEtdFilter(tt){
 
 function renderLotTable(tt){
   const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
+  // ── Đọc TẤT CẢ filter values TRƯỚC filter loop (không đọc DOM trong loop)
   const q=(g('srch_'+tt)?.value||'').toLowerCase();
   const fs=g('fst_'+tt)?.value||'';
   const etdFrom=g('etdFrom_'+tt)?.value||'';
@@ -1213,91 +1214,94 @@ function renderLotTable(tt){
   const sfShipper=(g('sfShipper_'+tt)?.value||'').toLowerCase().trim();
   const sfCarrier=(g('sfCarrier_'+tt)?.value||'').toLowerCase().trim();
   const sfLock=g('sfLock_'+tt)?.value||'';
+  const sfPod=(g('sfPod_'+tt)?.value||'').toLowerCase().trim();
 
-  const rows=cache[tt].filter(r=>{
-    // Search across all scalar fields AND every booking number (multi-booking lots)
-    const allBkNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo||'';}):[r.bookingNo||'']).join(' ').toLowerCase();
-    const matchQ=!q||allBkNos.includes(q)||Object.values(r).some(v=>(v!=null&&typeof v!=='object')&&(v+'').toLowerCase().includes(q));
-    const matchS=!fs||r.status===fs;
-    const matchEtdFrom=!etdFrom||!r.etd||(r.etd>=etdFrom);
-    const matchEtdTo=!etdTo||!r.etd||(r.etd<=etdTo);
-    const matchShipper=!sfShipper||(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper);
-    const sfPod=(g('sfPod_'+tt)?.value||'').toLowerCase().trim();
-    const matchCarrier=!sfCarrier||(r.carrier||'').toLowerCase().includes(sfCarrier);
-    const matchPod=!sfPod||(r.pod||'').toLowerCase().includes(sfPod);
-    const matchLock=!sfLock||(sfLock==='locked'&&r.locked)||(sfLock==='unlocked'&&!r.locked);
-    return matchQ&&matchS&&matchEtdFrom&&matchEtdTo&&matchShipper&&matchCarrier&&matchPod&&matchLock;
+  const today=new Date();today.setHours(0,0,0,0);
+  const deadlineDays=parseInt(localStorage.getItem('deadlineDays')||'3');
+
+  // ── Filter tối ưu: short-circuit sớm, không dùng Object.values() cho search
+  const rows=(cache[tt]||[]).filter(r=>{
+    if(fs&&r.status!==fs)return false;
+    if(etdFrom&&r.etd&&r.etd<etdFrom)return false;
+    if(etdTo&&r.etd&&r.etd>etdTo)return false;
+    if(sfShipper&&!(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper))return false;
+    if(sfCarrier&&!(r.carrier||'').toLowerCase().includes(sfCarrier))return false;
+    if(sfPod&&!(r.pod||'').toLowerCase().includes(sfPod))return false;
+    if(sfLock==='locked'&&!r.locked)return false;
+    if(sfLock==='unlocked'&&r.locked)return false;
+    if(q){
+      const allBkNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return(b.bookingNo||'').toLowerCase();}):[(r.bookingNo||'').toLowerCase()]);
+      if(allBkNos.some(b=>b.includes(q)))return true;
+      // Tìm trong các field chính (thay vì Object.values toàn bộ lot)
+      const hay=((r.bookingNo||'')+' '+(r.jobNo||'')+' '+(r.mblNo||'')+' '+(r.shipper||r.supplier||'')+' '+(r.pod||'')+' '+(r.carrier||'')+' '+(r.status||'')).toLowerCase();
+      return hay.includes(q);
+    }
+    return true;
   }).sort(function(a,b){
     const dir=(sortState[tt]||{dir:1}).dir;
     const av=a.etd||''; const bv=b.etd||'';
     return dir*(av<bv?-1:av>bv?1:0);
   });
-  const today=new Date();today.setHours(0,0,0,0);
-  g('th_'+tt).innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>`<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
-  if(!rows.length){g('tb_'+tt).innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;return;}
-  // Render từng phần để không block UI
-  const CHUNK=40;
-  const html=rows.map(r=>{
-    const etdDate=r.etd?new Date(r.etd):null;etdDate&&etdDate.setHours(0,0,0,0);
+
+  const thEl=g('th_'+tt);
+  const tbody=g('tb_'+tt);
+  if(!thEl||!tbody)return;
+
+  thEl.innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>`<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
+
+  if(!rows.length){
+    tbody.innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;
+    return;
+  }
+
+  // ── Build HTML string (nhanh); DOM write là bottleneck chính
+  function buildRowHtml(r){
+    const etdDate=r.etd?new Date(r.etd):null;
+    if(etdDate)etdDate.setHours(0,0,0,0);
     const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
     const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
-    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`+cols.map(c=>{
-      if(c.k==='bookingNo'){
-        const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
-        // Show all booking numbers comma-separated
-        const bkList=(r.bookings&&r.bookings.length)?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean):[r.bookingNo].filter(Boolean);
-        const bkDisplay=bkList.length?bkList.join(', '):'—';
-        const mblLine=r.mblNo?`<div style="font-size:12.5px;font-weight:600;color:#1a4b8c;margin-top:2px;white-space:nowrap"><i class="ti ti-hash" style="font-size:10px"></i> ${r.mblNo}</div>`:'';
-        return`<td style="max-width:160px;vertical-align:top"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${bkDisplay}</button>${urgDot}${mblLine}</td>`;
-      }
-      if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
-      if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${tc}</span>`:'—'}</td>`;}
-      if(c.partner){const sn=r[c.k]||'—';return`<td><button class="plink" onclick="openPartnerView('${sn}')" style="font-weight:700;color:#1a4b8c">${sn}</button></td>`;}
-      if(c.k==='tenHang') return`<td style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${r[c.k]||''}">${r[c.k]||'—'}</td>`;
-      if(c.k==='jobNo'){const jc=r.locked?'var(--green)':'var(--red)';return`<td><button class="plink" style="font-weight:700;color:${jc};font-size:11.5px;white-space:nowrap" data-id="${r._id}" data-tt="${tt}" onclick="openDetail(this.dataset.id,this.dataset.tt)" title="${r.locked?'Đã khóa':'Chưa khóa'}">${r.jobNo||'—'}</button></td>`;}
-      if(c.k==='etd'){
-        const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
-        const polLine=r.pol?`<div style="font-size:10px;color:var(--text-secondary);margin-top:2px;white-space:nowrap"><i class="ti ti-ship" style="font-size:9px"></i> ${r.pol}</div>`:'';
-        // ETD màu: đỏ nếu còn ≤3 ngày (kể cả hôm nay), xanh nếu còn >3 ngày, xám nếu đã qua
-        const etdColor=!r.etd?'var(--text-secondary)':etdDiff<0?'var(--text-tertiary)':etdDiff<=3?'var(--red)':'#1a4b8c';
-        return`<td class="td-etd" style="vertical-align:top">
-          <div style="font-weight:700;color:${etdColor}">${r.etd?fmtDMY(r.etd):'—'}</div>
-          ${cy?`<div style="font-size:10px;color:rgba(26,75,140,.65);margin-top:2px;white-space:nowrap"><i class="ti ti-clock" style="font-size:9px"></i> CY ${cy}</div>`:''}
-          ${polLine}
-        </td>`;
-      }
-      if(c.k==='eta'){
-        const podLine=r.pod?`<div style="font-size:12px;font-weight:600;color:#1a4b8c;margin-top:2px;white-space:nowrap"><i class="ti ti-anchor" style="font-size:9px;color:#1a4b8c"></i> ${r.pod}</div>`:'';
-        return`<td style="vertical-align:top"><div style="color:var(--text-secondary)">${r.eta?fmtDMY(r.eta):'—'}</div>${podLine}</td>`;
-      }
-      if(c.type==='cutoff'){
-        const cy=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
-        const si=r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00');
-        return`<td style="font-size:11px;white-space:nowrap;line-height:1.7">
-          <div><span style="color:var(--text-tertiary);font-size:9.5px">CY</span> <span style="font-weight:500">${cy||'—'}</span></div>
-          <div><span style="color:var(--text-tertiary);font-size:9.5px">SI</span> <span style="font-weight:500">${si||'—'}</span></div>
-        </td>`;
-      }
-      if(c.k==='vessel'&&r.vessel){
-        return`<td><button class="plink" onclick="openVesselQuick(this.dataset.v,this.dataset.voy,this.dataset.etd,this.dataset.cy,this.dataset.si)" data-v="${(r.vessel||'').replace(/"/g,'&quot;')}" data-voy="${(r.voy||'').replace(/"/g,'&quot;')}" data-etd="${r.etd||''}" data-cy="${(r.cutoffCY||'').replace(/"/g,'&quot;')}" data-si="${(r.cutoffSI||'').replace(/"/g,'&quot;')}" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left" title="Mở Vessel tool để cập nhật nhanh">${r.vessel}</button></td>`;
-      }
-      if(c.k==='vstStatus'){
-        if(!r.vstEnabled) return`<td style="text-align:center;color:var(--text-tertiary)">—</td>`;
-        const confirmed=!!r.vstConfirmed;
-        return`<td style="text-align:center"><button class="bdg ${confirmed?'bdg-g':'bdg-r'}" data-id="${r._id}" data-tt="${tt}" onclick="openVstPopup(this.dataset.id,this.dataset.tt)" style="cursor:pointer;border:none;font-weight:700">${confirmed?'Đã VST':'Chưa VST'}</button></td>`;
-      }
-      return`<td>${r[c.k]||'—'}</td>`;
-    }).join('')+`<td style="text-align:center"><div style="display:flex;gap:2px;justify-content:center">
-      ${r.locked?'<span title="Lô hàng đã khóa" style="padding:4px;color:var(--red)"><i class="ti ti-lock" style="font-size:14px"></i></span>':''}
-       <button class="rac grn" data-id="${r._id}" data-tt="${tt}" onclick="openDetail(this.dataset.id,this.dataset.tt)" title="Xem chi tiết" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-eye"></i></button>
-       ${can('addLot')?`<button class="rac" data-id="${r._id}" data-tt="${tt}" onclick="openCombineFrom(this.dataset.id,this.dataset.tt)" title="Combine" style="color:var(--blue)"><i class="ti ti-link"></i></button>`:''}
-      <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa" ${can('deleteLot')&&!r.locked?'':'disabled'}><i class="ti ti-trash"></i></button>
-    </div></td></tr>`;
-  }).join('');
-  // requestAnimationFrame để không block UI khi render nhiều row
-  const tbody=g('tb_'+tt);
-  if(tbody)requestAnimationFrame(function(){tbody.innerHTML=html;});
+    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`
+      +cols.map(c=>{
+        if(c.k==='bookingNo'){
+          const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
+          const bkList=(r.bookings&&r.bookings.length)?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean):[r.bookingNo].filter(Boolean);
+          const bkDisplay=bkList.length?bkList.join(', '):'—';
+          const mblLine=r.mblNo?`<div style="font-size:12.5px;font-weight:600;color:#1a4b8c;margin-top:2px;white-space:nowrap"><i class="ti ti-hash" style="font-size:10px"></i> ${r.mblNo}</div>`:'';
+          return`<td style="max-width:160px;vertical-align:top"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${bkDisplay}</button>${urgDot}${mblLine}</td>`;
+        }
+        if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
+        if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;background:${isRf?'rgba(66,153,225,.12)':'rgba(72,187,120,.1)'};color:${isRf?'#2b6cb0':'#276749'}">${tc}</span>`:'—'}</td>`;}
+        if(c.k==='etd') return`<td style="white-space:nowrap">${r[c.k]?`<span style="font-weight:600;color:${isUrgent?'#E24B4A':'inherit'}">${r[c.k]}</span>`:'—'}</td>`;
+        return`<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r[c.k]||'—'}</td>`;
+      }).join('')
+      +`<td style="white-space:nowrap;text-align:center"><button class="btn sm" onclick="openDetail('${r._id}','${tt}')"><i class="ti ti-eye"></i></button></td></tr>`;
+  }
+
+  // ── Progressive render: 60 rows ngay, phần còn lại khi user bấm "Xem thêm"
+  const PAGE=60;
+  const firstBatch=rows.slice(0,PAGE);
+  const rest=rows.slice(PAGE);
+  _lotRestRows[tt]={rows:rest,tt,cols,buildRowHtml};
+
+  let html=firstBatch.map(buildRowHtml).join('');
+  if(rest.length){
+    html+=`<tr id="loadMoreRow_${tt}"><td colspan="${cols.length+1}" style="text-align:center;padding:12px;background:var(--bg-secondary)"><button class="btn" onclick="_loadMoreLots('${tt}')" style="font-size:12px"><i class="ti ti-chevron-down"></i> Xem thêm ${rest.length} lô hàng...</button></td></tr>`;
+  }
+  requestAnimationFrame(function(){tbody.innerHTML=html;});
 }
+
+const _lotRestRows={};
+function _loadMoreLots(tt){
+  const s=_lotRestRows[tt]; if(!s||!s.rows.length)return;
+  const tbody=g('tb_'+tt); if(!tbody)return;
+  const moreRow=document.getElementById('loadMoreRow_'+tt);
+  if(moreRow)moreRow.remove();
+  const html=s.rows.map(s.buildRowHtml).join('');
+  _lotRestRows[tt]={rows:[],tt,cols:s.cols,buildRowHtml:s.buildRowHtml};
+  requestAnimationFrame(function(){tbody.insertAdjacentHTML('beforeend',html);});
+}
+window._loadMoreLots=_loadMoreLots;
+
 
 /* ─── DETAIL PANEL: click Booking No → slide-in panel with tabs ─── */
 let detailId=null, detailTt=null, detailTab='info';
