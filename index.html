@@ -2061,8 +2061,13 @@ function renderDetailPanel(r,tt){
         const truckRoute2=truckRows2.length&&truckRows2[0].route?truckRows2[0].route:'từ Vĩnh Long đến Hồ Chí Minh';
         const rows=allOn.filter(function(s){return (svcs[s.key]?.invoice||'Yes')!=='Waived';}).map(function(s){
           const sv=svcs[s.key]||{};
-          const vatOpts=['0%','8%','10%'].map(function(v){return '<option'+(v===(sv.vat||'0%')?' selected':'')+'>'+v+'</option>';}).join('');
-          const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===(sv.invoice||'Yes')?' selected':'')+'>'+v+'</option>';}).join('');
+          const isFreight2=(s.key==='freight');
+          const invType=sv.invoice||'Yes';
+          // Smart VAT default: freight=0%, invoice=No=0%, invoice=Yes=8%
+          const smartVat=isFreight2?'0%':(invType==='No'?'0%':'8%');
+          const vatValue=sv.vat||smartVat;
+          const vatOpts=['0%','8%','10%'].map(function(v){return '<option'+(v===vatValue?' selected':'')+'>'+v+'</option>';}).join('');
+          const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===invType?' selected':'')+'>'+v+'</option>';}).join('');
           const amt=sv.amount||(sv.price||0)*(sv.qty||1);
           const amtVnd2=(sv.cur&&sv.cur!=='VND')?Math.round(amt*roe2):Math.round(amt);
           const vatRate2=parseFloat((sv.vat||'0%').replace('%',''))||0;
@@ -2084,7 +2089,7 @@ function renderDetailPanel(r,tt){
             +'<td style="'+tdS+'"><select id="invvat_'+s.key+'" style="font-size:11.5px;width:60px">'+vatOpts+'</select></td>'
             +'<td style="'+tdS+';text-align:right;font-size:11px;color:#e07000;font-weight:600">'+(vatAmtVnd2>0?vatAmtVnd2.toLocaleString()+' đ':'—')+'</td>'
             +'<td style="'+tdS+';text-align:right;font-weight:700;color:var(--red)">'+(amtVnd2>0?(amtVnd2+vatAmtVnd2).toLocaleString()+' đ':'—')+'</td>'
-            +'<td style="'+tdS+'"><select id="invinv_'+s.key+'" style="font-size:11.5px;width:65px" onchange="refreshInvPreview()">'+invOpts+'</select></td>'
+            +'<td style="'+tdS+'"><select id="invinv_'+s.key+'" style="font-size:11.5px;width:65px" onchange="_autoInvVat(\''+s.key+'\',this.value);refreshInvPreview()">'+invOpts+'</select></td>'
             +'<td style="'+tdS+';font-size:11px;color:var(--blue);font-weight:600">'+(sv.party||'—')+'</td>'
             +'</tr>';
         }).join('');
@@ -2451,6 +2456,16 @@ async function saveInvoiceSettings(){
 function refreshInvPreview(){
   // Just visual feedback - actual save on button click
 }
+
+// Tự động set VAT khi đổi Invoice type
+function _autoInvVat(svcKey, invType){
+  const vatEl=g('invvat_'+svcKey); if(!vatEl)return;
+  const isFreight=(svcKey==='freight');
+  if(isFreight){ vatEl.value='0%'; return; }
+  if(invType==='No'||invType==='Waived'){ vatEl.value='0%'; }
+  else if(invType==='Yes'&&vatEl.value==='0%'){ vatEl.value='8%'; } // chỉ set nếu đang là 0% (chưa chỉnh tay)
+}
+window._autoInvVat=_autoInvVat;
 
 function openDebitNotePopup(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
@@ -3948,7 +3963,7 @@ function svcRowHTML(s, sv){
     const cd=(sx.code||sx.key).toUpperCase().slice(0,8);
     return`<option value="${cd}">${cd} — ${sx.name}</option>`;
   }).join('');
-  const codeCell=`<span style="position:relative;display:block"><datalist id="${dlId}">${datalistOpts}</datalist><input type="text" id="scode_${s.key}" value="${curCode}" list="${dlId}" maxlength="10" title="Mã dịch vụ — gõ code để tìm nhanh" style="font-size:11px;font-weight:700;color:var(--blue);background:rgba(26,75,140,.07);border:1px solid rgba(26,75,140,.2);border-radius:4px;padding:2px 4px;width:100%;cursor:pointer;text-align:center;box-sizing:border-box;transition:width .15s" onfocus="this.style.width='150px'" onblur="this.style.width='100%';switchSvcCodeByCode('${s.key}',this.value)" onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault()}"/></span>`;
+  const codeCell=`<span style="position:relative;display:block"><datalist id="${dlId}">${datalistOpts}</datalist><input type="text" id="scode_${s.key}" value="${curCode}" list="${dlId}" maxlength="10" title="Mã dịch vụ — gõ code để tìm nhanh" style="font-size:11px;font-weight:700;color:var(--blue);background:rgba(26,75,140,.07);border:1px solid rgba(26,75,140,.2);border-radius:4px;padding:2px 4px;width:100%;cursor:pointer;text-align:center;box-sizing:border-box;transition:width .15s" onfocus="this.dataset.prev=this.value;this.value='';this.style.width='160px'" onblur="var v=this.value.trim();if(!v){this.value=this.dataset.prev||'';this.style.width='100%';}else{this.style.width='100%';switchSvcCodeByCode('${s.key}',v)}" onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault()}"/></span>`;
   if(!showPrice){
     return`<div style="display:grid;grid-template-columns:22px 58px 1fr 1fr 26px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
       <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
