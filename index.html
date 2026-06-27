@@ -852,7 +852,26 @@ function startListeners(){
   // Debounce cho lot list render — tránh render nhiều lần khi Firestore gửi nhiều changes liên tiếp
   let _xRenderTimer=null, _nRenderTimer=null;
   // Lô hàng xuất
-  const u1 = db.collection('lots_xuat').onSnapshot(snap => {
+  // ── 2-Phase Loading: Phase 1 nhanh (ETD window) → Phase 2 đầy đủ (background)
+  const _today=new Date();
+  const _p1From=new Date(_today.getTime()-2*86400000).toISOString().slice(0,10);
+  const _p1To=new Date(_today.getTime()+20*86400000).toISOString().slice(0,10);
+  const _phase2Ready={xuat:false,nhap:false};
+
+  // PHASE 1 — lots_xuat: chỉ load lô có ETD trong cửa sổ -2/+20 ngày
+  db.collection('lots_xuat').where('etd','>=',_p1From).where('etd','<=',_p1To)
+    .get().then(function(snap){
+      if(_phase2Ready.xuat)return; // Phase 2 đã xong, bỏ qua Phase 1
+      if(snap.empty)return;
+      cache.xuat=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+      cache.xuat.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
+      if(currentTab==='xuat'){clearTimeout(_xRenderTimer);_xRenderTimer=setTimeout(function(){renderLotTable('xuat');},0);}
+      updateSidebar();
+    }).catch(function(){});
+
+  // PHASE 2 — lots_xuat: toàn bộ lô hàng (onSnapshot real-time)
+  db.collection('lots_xuat').onSnapshot(snap => {
+    _phase2Ready.xuat=true;
     cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
     cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
     if(currentTab==='xuat'){
@@ -866,7 +885,20 @@ function startListeners(){
     updateSidebar();
   });
 
-  const u2 = db.collection('lots_nhap').onSnapshot(snap => {
+  // PHASE 1 — lots_nhap
+  db.collection('lots_nhap').where('etd','>=',_p1From).where('etd','<=',_p1To)
+    .get().then(function(snap){
+      if(_phase2Ready.nhap)return;
+      if(snap.empty)return;
+      cache.nhap=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+      cache.nhap.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
+      if(currentTab==='nhap'){clearTimeout(_nRenderTimer);_nRenderTimer=setTimeout(function(){renderLotTable('nhap');},0);}
+      updateSidebar();
+    }).catch(function(){});
+
+  // PHASE 2 — lots_nhap
+  db.collection('lots_nhap').onSnapshot(snap => {
+    _phase2Ready.nhap=true;
     cache.nhap = snap.docs.map(d=>({_id:d.id,...d.data()}));
     cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
     if(currentTab==='nhap'){
@@ -1316,8 +1348,12 @@ function renderLotTable(tt){
   _lotRestRows[tt]={rows:rest,tt,cols,buildRowHtml};
 
   let html=firstBatch.map(buildRowHtml).join('');
+  // Banner "Đang tải thêm" nếu Phase 2 chưa xong và số lô = Phase 1 filtered
+  const phase2Loading=(typeof _phase2Ready!=='undefined')&&!_phase2Ready[tt];
   if(rest.length){
     html+=`<tr id="loadMoreRow_${tt}"><td colspan="${cols.length+1}" style="text-align:center;padding:12px;background:var(--bg-secondary)"><button class="btn" onclick="_loadMoreLots('${tt}')" style="font-size:12px"><i class="ti ti-chevron-down"></i> Xem thêm ${rest.length} lô hàng...</button></td></tr>`;
+  } else if(phase2Loading){
+    html+=`<tr><td colspan="${cols.length+1}" style="text-align:center;padding:10px;font-size:11.5px;color:var(--text-secondary)"><i class="ti ti-loader ti-spin"></i> Đang tải thêm lô hàng...</td></tr>`;
   }
   requestAnimationFrame(function(){tbody.innerHTML=html;});
 }
