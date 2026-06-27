@@ -2597,6 +2597,13 @@ async function saveContSealAll(){
   setLoading(true,'Đang lưu...');
   try{
     // Do NOT change booking vol — vol is set in the lot form, cont count is independent.
+    // Xóa stale keys trong bookingConts (Firestore merge:true giữ lại keys cũ gây trùng lặp cont)
+    const _staleKeys=Object.keys(r.bookingConts||{}).filter(function(k){return !bookingConts[k];});
+    if(_staleKeys.length){
+      const _cleanupUpdate={};
+      _staleKeys.forEach(function(k){_cleanupUpdate['bookingConts.'+k]=firebase.firestore.FieldValue.delete();});
+      await db.collection(colName(detailTt)).doc(detailId).update(_cleanupUpdate);
+    }
     await fsSet(colName(detailTt),detailId,{
       bookingConts,
       containers:allConts,
@@ -12022,7 +12029,15 @@ function dmPickLot(id,tt,targetBkArg){
   } else if(r.bookingConts&&Object.keys(r.bookingConts).length){
     // No specific target = whole lot: aggregate ALL bookings' containers
     let allC=[];
-    Object.keys(r.bookingConts).forEach(function(k){(r.bookingConts[k].containers||[]).forEach(function(c){if(c.no)allC.push(c);});});
+    // Aggregate ONLY từ bookings trong r.bookings (tránh stale keys từ Firestore merge)
+    const _bkArr=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+    _bkArr.forEach(function(bk){
+      const bkKey=(bk.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+      const bkData=r.bookingConts[bkKey];
+      if(bkData&&bkData.containers){bkData.containers.forEach(function(c){if(c.no)allC.push(c);});}
+    });
+    // Fallback: nếu không có trong bookingConts thì lấy từ r.containers
+    if(!allC.length&&r.containers){r.containers.forEach(function(c){if(c.no)allC.push(c);});}
     if(allC.length)_dmLot.containers=allC;
   }
   _dmLot._targetBooking=targetBk;
