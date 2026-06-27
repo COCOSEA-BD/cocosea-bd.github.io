@@ -12029,15 +12029,21 @@ function dmPickLot(id,tt,targetBkArg){
   } else if(r.bookingConts&&Object.keys(r.bookingConts).length){
     // No specific target = whole lot: aggregate ALL bookings' containers
     let allC=[];
-    // Aggregate ONLY từ bookings trong r.bookings (tránh stale keys từ Firestore merge)
-    const _bkArr=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
-    _bkArr.forEach(function(bk){
-      const bkKey=(bk.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
-      const bkData=r.bookingConts[bkKey];
-      if(bkData&&bkData.containers){bkData.containers.forEach(function(c){if(c.no)allC.push(c);});}
-    });
-    // Fallback: nếu không có trong bookingConts thì lấy từ r.containers
-    if(!allC.length&&r.containers){r.containers.forEach(function(c){if(c.no)allC.push(c);});}
+    // Tổng: ưu tiên r.containers (aggregate chính xác từ saveContSealAll, flat array luôn được REPLACE)
+    if(r.containers&&r.containers.length){
+      r.containers.forEach(function(c){if(c.no)allC.push(c);});
+    } else {
+      // Fallback nếu r.containers trống: aggregate từ bookingConts theo r.bookings (tránh stale keys)
+      const _bkArr=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+      _bkArr.forEach(function(bk){
+        const bkKey=(bk.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+        const bkData=r.bookingConts[bkKey];
+        if(bkData&&bkData.containers){bkData.containers.forEach(function(c){if(c.no)allC.push(c);});}
+      });
+    }
+    // Deduplicate theo cont number (phòng trường hợp bookingConts có stale data trùng)
+    const _seenNo=new Set();
+    allC=allC.filter(function(c){if(_seenNo.has(c.no))return false;_seenNo.add(c.no);return true;});
     if(allC.length)_dmLot.containers=allC;
   }
   _dmLot._targetBooking=targetBk;
