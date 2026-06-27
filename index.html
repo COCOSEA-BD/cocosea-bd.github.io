@@ -1234,6 +1234,11 @@ function clearEtdFilter(tt){
   renderLotTable(tt);
 }
 
+// ── Module-level: tháng + fd() memoized (không tái tạo mỗi row)
+const _MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const _fdCache={};
+function fd(s){if(!s)return'—';return _fdCache[s]||(_fdCache[s]=(function(){const d=new Date(s+'T00:00:00');return d.getDate()+'-'+_MO[d.getMonth()]+'-'+d.getFullYear();})());}
+
 function renderLotTable(tt){
   const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
   // ── Đọc TẤT CẢ filter values TRƯỚC filter loop (không đọc DOM trong loop)
@@ -1250,6 +1255,7 @@ function renderLotTable(tt){
   const deadlineDays=parseInt(localStorage.getItem('deadlineDays')||'3');
 
   // ── Filter tối ưu: short-circuit sớm, không dùng Object.values() cho search
+  const sortDir=(sortState[tt]||{dir:1}).dir;
   const rows=(cache[tt]||[]).filter(r=>{
     if(fs&&r.status!==fs)return false;
     if(etdFrom&&r.etd&&r.etd<etdFrom)return false;
@@ -1268,9 +1274,8 @@ function renderLotTable(tt){
     }
     return true;
   }).sort(function(a,b){
-    const dir=(sortState[tt]||{dir:1}).dir;
     const av=a.etd||''; const bv=b.etd||'';
-    return dir*(av<bv?-1:av>bv?1:0);
+    return sortDir*(av<bv?-1:av>bv?1:0);
   });
 
   const thEl=g('th_'+tt);
@@ -1284,15 +1289,16 @@ function renderLotTable(tt){
     return;
   }
 
+  // ── Hoist constants — không tính lại mỗi row
+  const canDelete=can('deleteLot');
+  const partnersRef=cache.partners||{};
+  // Urgency: so sánh string thay vì new Date() mỗi row
+  const todayStr=today.toISOString().slice(0,10);
+  const urgDeadline=new Date(today.getTime()+deadlineDays*86400000).toISOString().slice(0,10);
+
   // ── Build HTML string (nhanh); DOM write là bottleneck chính
   function buildRowHtml(r){
-    const etdDate=r.etd?new Date(r.etd+'T00:00:00'):null;
-    if(etdDate)etdDate.setHours(0,0,0,0);
-    const etdDiff=etdDate?Math.ceil((etdDate-today)/86400000):99;
-    const isUrgent=etdDiff>=0&&etdDiff<=deadlineDays;
-    // Định dạng ngày: 27-Jun-2026
-    const _MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    function fd(s){if(!s)return'—';const d=new Date(s+'T00:00:00');return d.getDate()+'-'+_MO[d.getMonth()]+'-'+d.getFullYear();}
+    const isUrgent=!!(r.etd&&r.etd>=todayStr&&r.etd<=urgDeadline);
     return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`
       +cols.map(c=>{
         if(c.k==='bookingNo'){
@@ -1329,7 +1335,7 @@ function renderLotTable(tt){
         if(c.partner){
           const val=r[c.k]||'';
           if(!val) return`<td>—</td>`;
-          const pt=cache.partners&&cache.partners[val];
+          const pt=partnersRef[val];
           const sn=pt&&(pt.shortname||pt.name||'');
           return`<td style="max-width:150px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:#1a4b8c" title="${val}">${sn||val}</div></td>`;
         }
@@ -1337,25 +1343,35 @@ function renderLotTable(tt){
       }).join('')
       +`<td style="white-space:nowrap;text-align:center">`
         +`<button class="btn sm" onclick="openDetail('${r._id}','${tt}')" title="Xem"><i class="ti ti-eye"></i></button>`
-        +(can('deleteLot')?` <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa lô"><i class="ti ti-trash"></i></button>`:'')
+        +(canDelete?` <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa lô"><i class="ti ti-trash"></i></button>`:'')
       +`</td></tr>`;
   }
 
-  // ── Progressive render: 60 rows ngay, phần còn lại khi user bấm "Xem thêm"
-  const PAGE=60;
-  const firstBatch=rows.slice(0,PAGE);
+  // ── Progressive 3-chunk render: user thấy nội dung ngay trong ~16ms
+  const C1=15, C2=25; // chunk sizes
+  const batch1=rows.slice(0,C1);
+  const batch2=rows.slice(C1,C1+C2);
+  const batch3=rows.slice(C1+C2,PAGE);
   const rest=rows.slice(PAGE);
   _lotRestRows[tt]={rows:rest,tt,cols,buildRowHtml};
 
-  let html=firstBatch.map(buildRowHtml).join('');
-  // Banner "Đang tải thêm" nếu Phase 2 chưa xong và số lô = Phase 1 filtered
   const phase2Loading=(typeof _phase2Ready!=='undefined')&&!_phase2Ready[tt];
-  if(rest.length){
-    html+=`<tr id="loadMoreRow_${tt}"><td colspan="${cols.length+1}" style="text-align:center;padding:12px;background:var(--bg-secondary)"><button class="btn" onclick="_loadMoreLots('${tt}')" style="font-size:12px"><i class="ti ti-chevron-down"></i> Xem thêm ${rest.length} lô hàng...</button></td></tr>`;
-  } else if(phase2Loading){
-    html+=`<tr><td colspan="${cols.length+1}" style="text-align:center;padding:10px;font-size:11.5px;color:var(--text-secondary)"><i class="ti ti-loader ti-spin"></i> Đang tải thêm lô hàng...</td></tr>`;
-  }
-  requestAnimationFrame(function(){tbody.innerHTML=html;});
+  const loadMoreHtml=rest.length
+    ?`<tr id="loadMoreRow_${tt}"><td colspan="${cols.length+1}" style="text-align:center;padding:12px;background:var(--bg-secondary)"><button class="btn" onclick="_loadMoreLots('${tt}')" style="font-size:12px"><i class="ti ti-chevron-down"></i> Xem thêm ${rest.length} lô hàng...</button></td></tr>`
+    :(phase2Loading?`<tr id="loadMoreRow_${tt}"><td colspan="${cols.length+1}" style="text-align:center;padding:10px;font-size:11.5px;color:var(--text-secondary)"><i class="ti ti-loader ti-spin"></i> Đang tải thêm lô hàng...</td></tr>`:'');
+
+  // Chunk 1: ghi ngay (user thấy 15 row đầu trong ~0ms)
+  tbody.innerHTML=batch1.map(buildRowHtml).join('');
+
+  // Chunk 2: sau paint đầu tiên
+  requestAnimationFrame(function(){
+    if(batch2.length) tbody.insertAdjacentHTML('beforeend',batch2.map(buildRowHtml).join(''));
+    // Chunk 3: sau paint thứ hai
+    requestAnimationFrame(function(){
+      if(batch3.length) tbody.insertAdjacentHTML('beforeend',batch3.map(buildRowHtml).join(''));
+      if(loadMoreHtml) tbody.insertAdjacentHTML('beforeend',loadMoreHtml);
+    });
+  });
 }
 
 const _lotRestRows={};
