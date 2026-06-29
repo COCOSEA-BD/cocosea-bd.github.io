@@ -434,128 +434,6 @@ const TASKS=[
   {key:'send',label:'Gửi Debit Note cho khách hàng'},
 ];
 const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã Fill giá':'bdg-tl','Đã Costing':'bdg-b','Đã gửi DN':'bdg-purple','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
-// ── Xuat Lot Tab System ────────────────────────────────────────
-let _xPanelEl=null; // redirect renderDetailPanel target for xuat tabs
-let _xuatLotTabs=[]; // [{id,tt,label,dpTab}]
-let _xuatCurTab='home'; // 'home' or lot _id
-
-function _xuatRenderTabBar(){
-  const wrap=g('xuat-tabbar-wrap'); if(!wrap)return;
-  wrap.style.cssText='position:sticky;top:0;z-index:50;display:flex;align-items:flex-end;padding:0 12px;gap:0;min-height:44px;background:#f1f3f5;border-bottom:2px solid #ced4da;box-shadow:0 2px 8px rgba(0,0,0,.08);';
-  wrap.innerHTML='';
-  const BS='display:inline-flex;align-items:center;gap:7px;padding:0 16px;height:38px;max-width:200px;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;cursor:pointer;user-select:none;border-radius:8px 8px 0 0;border:1px solid transparent;border-bottom:none;margin-bottom:-2px;flex-shrink:0;';
-  function makeTab(label,icon,isActive,mainColor,onClick,onClose){
-    const d=document.createElement('div');
-    d.style.cssText=BS+(isActive
-      ?'background:#fff;border-color:#ced4da;border-bottom-color:#fff;color:'+mainColor+';font-weight:700;box-shadow:0 -3px 0 '+mainColor+' inset;'
-      :'background:#e9ecef;color:#6c757d;border-color:#dee2e6;border-bottom-color:#e9ecef;margin-right:2px;');
-    d.style.cursor='pointer';
-    d.addEventListener('click',onClick);
-    d.addEventListener('mouseover',function(){if(!this._act&&!isActive)this.style.background='#dee2e6';});
-    d.addEventListener('mouseout',function(){if(!this._act&&!isActive)this.style.background=isActive?'#fff':'#e9ecef';});
-    const ic=document.createElement('i');
-    ic.className='ti '+icon;
-    ic.style.cssText='font-size:13px;flex-shrink:0;pointer-events:none';
-    d.appendChild(ic);
-    const sp=document.createElement('span');
-    sp.style.cssText='overflow:hidden;text-overflow:ellipsis;flex:1;pointer-events:none';
-    sp.textContent=label;
-    d.appendChild(sp);
-    if(onClose){
-      const x=document.createElement('span');
-      x.textContent='\u2715';
-      x.title='Đóng tab';
-      x.style.cssText='display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;font-size:11px;margin-left:4px;flex-shrink:0;opacity:.5;cursor:pointer;transition:all .15s;';
-      x.addEventListener('click',function(e){e.stopPropagation();onClose();});
-      x.addEventListener('mouseover',function(){this.style.opacity='1';this.style.background='rgba(0,0,0,.15)';});
-      x.addEventListener('mouseout',function(){this.style.opacity='.5';this.style.background='transparent';});
-      d.appendChild(x);
-    }
-    return d;
-  }
-  // Home tab
-  const isHome=_xuatCurTab==='home';
-  wrap.appendChild(makeTab('Shipment List','ti-list',isHome,'#1a4b8c',function(){xuatSwitchTab('home');},null));
-  // Lot tabs
-  _xuatLotTabs.forEach(function(lt){
-    const isAct=_xuatCurTab===lt.id;
-    wrap.appendChild(makeTab(lt.label,'ti-file',isAct,'#2563eb',
-      function(){xuatSwitchTab(lt.id);},
-      function(){xuatCloseTab(lt.id,null);}
-    ));
-  });
-}
-function xuatOpenLotTab(id,tt,startTab){
-  const r=(cache[tt]||[]).find(x=>x._id===id)||{};
-  const label=r.jobNo||r.bookingNo||id;
-  const existing=_xuatLotTabs.find(x=>x.id===id);
-  if(!existing) _xuatLotTabs.push({id,tt,label,dpTab:startTab||'info'});
-  else if(startTab){ existing.dpTab=startTab; }
-  xuatSwitchTab(id);
-}
-
-function xuatSwitchTab(id){
-  _xuatCurTab=id;
-  _xuatRenderTabBar();
-  const listV=g('xuat-list-view');
-  const lotV=g('xuat-lot-view');
-  if(!listV||!lotV) return; // layout not initialized yet
-
-  if(id==='home'){
-    document.body.classList.remove('xuat-lotmode');
-    lotV.classList.remove('active');
-    listV.style.display='';
-    // Ensure detailPanel stays closed
-    g('detailPanel').classList.remove('open');
-    g('detailBackdrop').classList.remove('open');
-    renderLotTable('xuat');
-  } else {
-    const lt=_xuatLotTabs.find(x=>x.id===id); if(!lt){xuatSwitchTab('home');return;}
-    document.body.classList.add('xuat-lotmode');
-    listV.style.display='none';
-    lotV.classList.add('active');
-    // Ensure detailPanel stays closed (not used for xuat)
-    g('detailPanel').classList.remove('open');
-    g('detailBackdrop').classList.remove('open');
-    // Render lot detail inline into xuat-lot-view (no slide animation!)
-    detailId=lt.id; detailTt=lt.tt; detailTab=lt.dpTab||'info';
-    const r=(cache[lt.tt]||[]).find(x=>x._id===lt.id)||{};
-    _xPanelEl=lotV;
-    renderDetailPanel(r,lt.tt);
-    _xPanelEl=null;
-  }
-}
-
-function xuatCloseTab(id,event){
-  if(event){event.stopPropagation();}
-  const tabIdx=_xuatLotTabs.findIndex(x=>x.id===id);
-  _xuatLotTabs=_xuatLotTabs.filter(x=>x.id!==id);
-  _openTabs=_openTabs.filter(x=>x.id!==id);
-  if(_xuatCurTab===id){
-    if(_xuatLotTabs.length){
-      const ni=Math.max(0,tabIdx-1);
-      xuatSwitchTab(_xuatLotTabs[ni]?_xuatLotTabs[ni].id:'home');
-    } else { xuatSwitchTab('home'); }
-  } else { _xuatRenderTabBar(); }
-}
-
-// Ctrl+Left / Ctrl+Right: chuyển nhanh giữa các tab xuat
-document.addEventListener('keydown',function(e){
-  if(!e.ctrlKey)return;
-  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;
-  if(!document.body.classList.contains('xuat-tabmode'))return;
-  e.preventDefault();
-  const allIds=['home',..._xuatLotTabs.map(x=>x.id)];
-  const cur=allIds.indexOf(_xuatCurTab);
-  if(e.key==='ArrowRight') xuatSwitchTab(allIds[(cur+1)%allIds.length]);
-  else xuatSwitchTab(allIds[(cur-1+allIds.length)%allIds.length]);
-});
-
-window.xuatOpenLotTab=xuatOpenLotTab;
-window.xuatSwitchTab=xuatSwitchTab;
-window.xuatCloseTab=xuatCloseTab;
-// ────────────────────────────────────────────────────────────────
-
 // ── App Update Checker: poll HEAD mỗi 5 phút, hiện banner nếu có version mới
 (function(){
   var _sig=null;
@@ -1224,39 +1102,11 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
-  // ── Xuat tab bar: show/hide + body class
-  const _xtWrap=g('xuat-tabbar-wrap');
-  if(t==='xuat'){
-    document.body.classList.add('xuat-tabmode');
-    // Initialize page-xuat two-section layout (once)
-    const _xPg=g('page-xuat');
-    if(!g('xuat-list-view')){
-      _xPg.innerHTML='';
-      const _lv=document.createElement('div'); _lv.id='xuat-list-view'; _xPg.appendChild(_lv);
-      const _dv=document.createElement('div'); _dv.id='xuat-lot-view';  _xPg.appendChild(_dv);
-    }
-    // Tabbar goes INSIDE page-xuat as first child (sticky)
-    if(_xtWrap&&_xtWrap.parentElement!==_xPg){_xPg.insertBefore(_xtWrap,_xPg.firstChild);_xtWrap.style.display='flex';}
-    else if(_xtWrap){_xtWrap.style.display='flex';}
-    _xuatRenderTabBar();
-    // Restore active tab
-    if(_xuatCurTab!=='home') xuatSwitchTab(_xuatCurTab);
-    else { renderLot('xuat'); renderLotTable('xuat'); }
-  } else {
-    document.body.classList.remove('xuat-tabmode','xuat-lotmode');
-    if(_xtWrap){_xtWrap.style.display='none';
-      // Move tabbar back to its placeholder when leaving xuat
-      const _ph=g('xuat-tabbar-placeholder');
-      if(_ph)_ph.appendChild(_xtWrap);
-    }
-    g('detailPanel').classList.remove('open');
-    g('detailBackdrop').classList.remove('open');
-  }
   ['xuat','nhap','deadline','thu-chi','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings','trucking-report','scy-report'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
-  const titles={'xuat':'Shipment List','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','thu-chi':'Quản lý thu chi','doi-tac':'CRM','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
+  const titles={'xuat':'Xuất khẩu','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','thu-chi':'Quản lý thu chi','doi-tac':'CRM','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
   g('pageTitle').textContent=titles[t]||t;
   if(t==='xuat'||t==='nhap') renderLot(t);
   if(t==='deadline') renderDeadline();
@@ -1317,7 +1167,7 @@ function renderLot(tt){
   const done=rows.filter(r=>r.status==='Đã giao'||r.status==='Đã nhận').length;
   const transit=rows.filter(r=>r.status==='Đang vận chuyển').length;
   const tasksDone=rows.filter(r=>r.tasks&&TASKS.every(t=>r.tasks[t.key])).length;
-  const pg=g(tt==='xuat'&&g('xuat-list-view')?'xuat-list-view':'page-'+tt);
+  const pg=g('page-'+tt);
   pg.innerHTML=`
   <div class="stats-grid">
     <div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;padding:.4rem 0;width:100%">
@@ -1588,11 +1438,6 @@ let _openTabs=[]; // {key, type:'lot'|'docmaker', id, tt, label, tab}
 let _activeTabKey=null;
 
 function openDetail(id, tt, startTab){
-  // ── Xuat tab mode: mở lô trong tab thay vì slide-in panel
-  if(tt==='xuat' && document.body.classList.contains('xuat-tabmode')){
-    xuatOpenLotTab(id, tt, startTab);
-    return;
-  }
   const r=cache[tt].find(x=>x._id===id)||{};
   const key='lot_'+id;
   let t=_openTabs.find(x=>x.key===key);
@@ -1614,7 +1459,7 @@ function openDocMakerTab(id, tt, targetBk){
   if(!t){t={key,type:'docmaker',label:'Document Maker',id:id||null,tt:tt||null,bk:targetBk||null};_openTabs.push(t);}
   else if(id&&tt){t.id=id;t.tt=tt;t.bk=targetBk||null;} // remember last lot + booking
   _activeTabKey=key;
-  g('detailPanel').innerHTML='<div class="dpanel-tabbar" id="dpanelTabbar"></div><div style="display:flex;justify-content:flex-end;padding:6px 12px 0"><button class="rac" onclick="closeDetail()" title="Đóng" style="font-size:18px"><i class="ti ti-x"></i></button></div><div id="dmPanelHost" style="padding:0 1rem 1rem"></div>';
+  g('detailPanel').innerHTML='<div class="dpanel-tabbar" id="dpanelTabbar"></div><div id="dmPanelHost" style="padding:1rem"></div>';
   renderDpanelTabs();
   _dmHost=g('dmPanelHost');
   renderDocMaker();
@@ -1684,11 +1529,6 @@ function switchDetailTab(tab){
   const at=_openTabs&&_openTabs.find(x=>x.key===_activeTabKey);
   if(at)at.tab=tab;
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
-  // xuat-lotmode: store tab choice in _xuatLotTabs for persistence
-  if(document.body.classList.contains('xuat-lotmode')){
-    const _lt=_xuatLotTabs&&_xuatLotTabs.find(x=>x.id===_xuatCurTab);
-    if(_lt)_lt.dpTab=tab;
-  }
   renderDetailPanel(r,detailTt);
 }
 
@@ -2436,14 +2276,14 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
       +'</div>'+docRows;
   }
 
-  (_xPanelEl||(document.body.classList.contains('xuat-lotmode')&&g('xuat-lot-view'))||g('detailPanel')).innerHTML=`
+  g('detailPanel').innerHTML=`
   <div class="dpanel-tabbar" id="dpanelTabbar"></div>
   <div class="detail-hdr">
     <div>
       <div style="font-size:15px;font-weight:600">${r.bookingNo||'—'} ${statusBadge} ${r.jobNo?`<span style="font-size:10px;padding:2px 8px;border-radius:20px;background:var(--bg-secondary);color:var(--blue);font-weight:700;border:1px solid var(--border-light)">${r.jobNo}</span>`:''}</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${r.shipper||r.supplier||''} ${r.pol&&r.pod?'| '+r.pol+' → '+r.pod:''}</div>
     </div>
-    <button class="rac" onclick="closeTab(_activeTabKey)" style="font-size:18px;flex-shrink:0;padding:6px;border-radius:6px;border:1px solid var(--border-light)" title="Đóng bảng (hoặc nhấn vùng tối)"><i class="ti ti-x"></i></button>
+    <button class="rac" onclick="closeTab(_activeTabKey)" style="font-size:18px;flex-shrink:0" title="Đóng thẻ này"><i class="ti ti-x"></i></button>
   </div>
   <div class="dtabs">${tabsHtml}</div>
   <div class="detail-body">${bodyHtml}</div>`;
@@ -2456,8 +2296,7 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
   // LOCK BANNER: show a read-only notice when lot is locked (no disabling of elements)
   if(r.locked){
     setTimeout(function(){
-      const _dp2=_xPanelEl||(document.body.classList.contains('xuat-lotmode')&&g('xuat-lot-view'))||g('detailPanel');
-  const bd=_dp2&&_dp2.querySelector('.detail-body');
+      const bd=g('detailPanel')&&g('detailPanel').querySelector('.detail-body');
       if(bd&&!bd.querySelector('.lock-banner')){
         const bn=document.createElement('div');
         bn.className='lock-banner';
@@ -3263,7 +3102,7 @@ function openLot(id, tt){
   lotIdx=id; currentTab=tt;
   const cols=tt==='xuat'?XCOLS:NCOLS;
   const r=id?cache[tt].find(x=>x._id===id)||{}:{};
-  g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'Shipment List':'nhập khẩu');
+  g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'xuất khẩu':'nhập khẩu');
   g('lotSub').textContent=id?(r.bookingNo||''):'';
   const pC=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname);
   const pS=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname);
@@ -7941,7 +7780,7 @@ tr:hover td{background:var(--bg-secondary)}
 .perm-toggle::after{content:'';position:absolute;top:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
 .perm-toggle.on::after{left:19px}.perm-toggle.off::after{left:3px}
 /* DETAIL PANEL */
-.detail-panel{position:fixed;top:0;right:0;transform:translateX(100%);width:clamp(560px,70vw,1400px);max-width:98vw;height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:transform .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
+.detail-panel{position:fixed;top:0;right:0;transform:translateX(100%);width:clamp(480px,67vw,1600px);max-width:98vw;height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:transform .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
 .detail-panel.open{transform:translateX(0)}
 .dpanel-tabbar{display:flex;align-items:center;gap:2px;background:var(--bg-secondary);border-bottom:1px solid var(--border-light);padding:6px 8px 0;position:sticky;top:0;z-index:10;overflow-x:auto;flex-wrap:nowrap}
 .dpanel-tab{display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-primary);border:1px solid var(--border-light);border-bottom:none;border-radius:8px 8px 0 0;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;color:var(--text-secondary);max-width:200px}
@@ -8055,7 +7894,8 @@ tr:hover td{background:var(--bg-secondary)}
     </div>
     <div class="sb-divider"></div>
     <div class="sb-section">Hàng hóa</div>
-    <button class="sb-item" id="sb-xuat" onclick="goTab('xuat')"><i class="ti ti-arrow-up-right"></i> Shipment List</button>
+    <button class="sb-item" id="sb-xuat" onclick="goTab('xuat')"><i class="ti ti-arrow-up-right"></i> Xuất khẩu</button>
+    <button class="sb-item" id="sb-nhap" onclick="goTab('nhap')"><i class="ti ti-arrow-down-left"></i> Nhập khẩu</button>
     <div class="sb-section" style="margin-top:.4rem">Vận hành</div>
     <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-checklist"></i> Tiến độ công việc<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
     <button class="sb-item" id="sb-thu-chi" onclick="goTab('thu-chi')"><i class="ti ti-cash"></i> Quản lý thu chi</button>
@@ -9114,7 +8954,7 @@ window.updateEtdCutoffs=updateEtdCutoffs;
 //  BACKUP & RESTORE — toàn bộ dữ liệu Firestore
 // ═══════════════════════════════════════════════════════
 const BACKUP_COLLECTIONS=[
-  {name:'lots_xuat',   label:'Shipment List'},
+  {name:'lots_xuat',   label:'Lô hàng xuất'},
   {name:'lots_nhap',   label:'Lô hàng nhập'},
   {name:'vessels',     label:'Tàu'},
   {name:'partners',    label:'Đối tác CRM'},
@@ -12037,7 +11877,7 @@ function renderDocMaker(){
   <span style="font-weight:700;font-size:15px">Document Maker</span>
   <span style="font-size:11px;color:var(--text-secondary)">— Invoice / Packing List / Contract / INV T.Khai / SI</span>
 </div>
-<div style="display:grid;grid-template-columns:600px 1fr;gap:1.25rem;align-items:start">
+<div style="display:grid;grid-template-columns:minmax(0,560px) 1fr;gap:1.25rem;align-items:start">
 <div>
 <div class="table-card" style="padding:1.1rem">
   <label class="lbl">Tìm lô hàng (Job ID hoặc MBL)</label>
@@ -12089,17 +11929,16 @@ function renderDocMaker(){
 
     <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🚢 Container / Weight (cho PKL & SI)</div>
     <div style="overflow-x:auto;margin-bottom:4px">
-      <table style="width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed">
-        <colgroup><col style="width:28px"/><col style="width:108px"/><col style="width:100px"/><col style="width:52px"/><col style="width:68px"/><col style="width:68px"/><col style="width:50px"/><col/></colgroup>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead><tr style="background:var(--bg-secondary)">
           <th style="padding:4px;border:1px solid var(--border-light);text-align:center">#</th>
-          <th style="padding:4px;border:1px solid var(--border-light);text-align:center">Cont</th>
-          <th style="padding:4px;border:1px solid var(--border-light);text-align:center">Seal</th>
+          <th style="padding:4px;border:1px solid var(--border-light)">Cont</th>
+          <th style="padding:4px;border:1px solid var(--border-light)">Seal</th>
           <th style="padding:4px;border:1px solid var(--border-light);text-align:center">Pkg</th>
-          <th style="padding:4px;border:1px solid var(--border-light);text-align:center">N.W</th>
-          <th style="padding:4px;border:1px solid var(--border-light);text-align:center">G.W</th>
-          <th style="padding:4px;border:1px solid var(--border-light);text-align:center">Tare</th>
-          <th style="padding:4px;border:1px solid var(--border-light);text-align:center">Date</th>
+          <th style="padding:4px;border:1px solid var(--border-light);text-align:right">N.W</th>
+          <th style="padding:4px;border:1px solid var(--border-light);text-align:right">G.W</th>
+          <th style="padding:4px;border:1px solid var(--border-light);text-align:right">Tare</th>
+          <th style="padding:4px;border:1px solid var(--border-light)">Date</th>
         </tr></thead>
         <tbody id="dmContBody"></tbody>
         <tfoot><tr style="background:var(--bg-secondary);font-weight:700">
@@ -12269,16 +12108,15 @@ function dmPickLot(id,tt,targetBkArg){
   const tbody=g('dmContBody');
   tbody.innerHTML=conts.map(function(c,i){
     const gw=parseFloat(c.gw)||0;
-    const INP='font-size:11px;width:100%;box-sizing:border-box;border:none;background:transparent;padding:1px 3px;';
     return '<tr>'
       +'<td style="padding:2px 4px;border:1px solid var(--border-light);text-align:center;font-size:11px">'+(i+1)+'</td>'
-      +'<td style="padding:1px 2px;border:1px solid var(--border-light)"><input type="text" id="dmc_cont_'+i+'" value="'+c.no+'" style="'+INP+'"/></td>'
-      +'<td style="padding:1px 2px;border:1px solid var(--border-light)"><input type="text" id="dmc_seal_'+i+'" value="'+(c.seal||'')+'" style="'+INP+'"/></td>'
-      +'<td style="padding:1px 2px;border:1px solid var(--border-light)"><input type="number" id="dmc_pkg_'+i+'" value="'+(c.pkg||'')+'" placeholder="pkg" style="'+INP+'text-align:center" oninput="dmUpdateTotals()"/></td>'
-      +'<td style="padding:1px 2px;border:1px solid var(--border-light)"><input type="number" id="dmc_nw_'+i+'" value="'+(c.nw||'')+'" placeholder="NW" style="'+INP+'text-align:right" oninput="dmNWChange('+i+')"/></td>'
-      +'<td style="padding:1px 2px;border:1px solid var(--border-light)"><input type="number" id="dmc_gw_'+i+'" value="'+(gw||'')+'" placeholder="GW" style="'+INP+'text-align:right" oninput="dmUpdateTotals()"/></td>'
-      +'<td style="padding:1px 2px;border:1px solid var(--border-light)"><input type="number" id="dmc_tare_'+i+'" value="'+(c.tare||'')+'" placeholder="Tare" style="'+INP+'text-align:right"/></td>'
-      +'<td style="padding:1px 2px;border:1px solid var(--border-light)"><input type="date" id="dmc_date_'+i+'" value="'+(c.date||r.etd||'')+'" style="'+INP+'"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_cont_'+i+'" value="'+c.no+'" style="font-size:11px;width:100px"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="text" id="dmc_seal_'+i+'" value="'+(c.seal||'')+'" style="font-size:11px;width:92px"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_pkg_'+i+'" value="'+(c.pkg||'')+'" placeholder="pkg" style="font-size:11px;width:50px;text-align:center" oninput="dmUpdateTotals()"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_nw_'+i+'" value="'+(c.nw||'')+'" placeholder="NW" style="font-size:11px;width:62px;text-align:right" oninput="dmNWChange('+i+')"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_gw_'+i+'" value="'+(gw||'')+'" placeholder="GW" style="font-size:11px;width:62px;text-align:right" oninput="dmUpdateTotals()"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="number" id="dmc_tare_'+i+'" value="'+(c.tare||'')+'" placeholder="Tare" style="font-size:11px;width:55px;text-align:right"/></td>'
+      +'<td style="padding:2px 3px;border:1px solid var(--border-light)"><input type="date" id="dmc_date_'+i+'" value="'+(c.date||r.etd||'')+'" style="font-size:11px;width:88px"/></td>'
     +'</tr>';
   }).join('');
   dmUpdateTotals();
@@ -12840,46 +12678,6 @@ function _carrierList(){
   return Object.values(cache.partners).filter(function(p){return p.type==='carrier';}).map(function(p){return p.shortname;}).sort();
 }
 
-// Lưu 1 field của voyage và đồng bộ sang các lô hàng tương ứng
-async function saveVesselVoyField(vesId, field, value, vesName, voy, inputEl){
-  if(inputEl) inputEl.style.borderColor='var(--border-light)';
-  try{
-    // 1. Update vessel record
-    await db.collection('vessels').doc(vesId).update({[field]:value, updatedAt:Date.now()});
-
-    // 2. Nếu thay đổi ETD → sync sang tất cả lô hàng có vessel + voy trùng khớp
-    if(field==='etd' && vesName && voy){
-      const updatePayload={etd:value, updatedAt:Date.now(), updatedBy:currentUser?.email||''};
-      const toBatch=[];
-      (cache.xuat||[]).forEach(function(l){
-        if((l.vessel||'').toUpperCase()===vesName.toUpperCase()&&(l.voy||'')===voy) toBatch.push({col:'lots_xuat',id:l._id});
-      });
-      (cache.nhap||[]).forEach(function(l){
-        if((l.vessel||'').toUpperCase()===vesName.toUpperCase()&&(l.voy||'')===voy) toBatch.push({col:'lots_nhap',id:l._id});
-      });
-      if(toBatch.length){
-        // Batch update (Firestore max 500/batch)
-        for(let i=0;i<toBatch.length;i+=400){
-          const bt=db.batch();
-          toBatch.slice(i,i+400).forEach(function(x){bt.update(db.collection(x.col).doc(x.id),updatePayload);});
-          await bt.commit();
-        }
-        toast('Đã cập nhật ETD cho '+toBatch.length+' lô hàng','success');
-      } else {
-        toast('Đã lưu ETD','success');
-      }
-    } else {
-      toast('Đã lưu','success');
-    }
-    if(inputEl) inputEl.style.borderColor='#22c55e';
-    setTimeout(function(){if(inputEl)inputEl.style.borderColor='var(--border-light)';},1500);
-  } catch(e){
-    toast('Lỗi lưu: '+e.message,'error');
-    if(inputEl) inputEl.style.borderColor='var(--red)';
-  }
-}
-window.saveVesselVoyField=saveVesselVoyField;
-
 function renderVesselTool(){
   const pg=g('page-vessel');
   if(!pg)return;
@@ -12936,84 +12734,38 @@ function renderVesselTool(){
     grouped[name].push(v);
   });
   const tdS2='padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
-  // Track expanded vessels
-  if(!window._vesExpanded) window._vesExpanded={};
-
   let rows='';
   if(!vessels.length){
     rows='<tr><td colspan="10" style="text-align:center;color:var(--text-tertiary);padding:2rem">'+(q?'Không tìm thấy tàu phù hợp':'Chưa có tàu nào. Bấm "Thêm tàu"')+'</td></tr>';
   } else {
+    var _ri=0;
     vesselOrder.forEach(function(vesName){
       const vList=grouped[vesName];
-      const isOpen=!!window._vesExpanded[vesName];
-      // Count lots matching this vessel
-      const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
-      const lotsCount=allLots.filter(function(l){return (l.vessel||'').toUpperCase()===vesName;}).length;
-      // Vessel header row (clickable)
-      rows+='<tr style="background:#e8f0fe;cursor:pointer;border-top:2px solid #1a4b8c" onclick="window._vesExpanded[\''+vesName.replace(/'/g,"\\'")+'\']=!window._vesExpanded[\''+vesName.replace(/'/g,"\\'")+'\'];renderVesselTool()">'
-        +'<td colspan="10" style="padding:9px 14px">'
-        +'<span style="font-size:13.5px;font-weight:700;color:#1a4b8c;letter-spacing:.3px">'
-        +'<i class="ti '+(isOpen?'ti-chevron-down':'ti-chevron-right')+'" style="font-size:12px;margin-right:6px"></i>'
-        +vesName
-        +'</span>'
-        +'<span style="margin-left:12px;font-size:11.5px;color:#64748b">'
-        +vList.length+' chuyến'+(lotsCount?' · <b style="color:#1a4b8c">'+lotsCount+' lô hàng</b>':'')
-        +'</span>'
-        +'<span style="float:right">'
-        +'<button class="btn sm" onclick="event.stopPropagation();openVesselEditor(null,\''+vesName.replace(/'/g,"\\'")+'\')" style="font-size:11px;padding:3px 8px"><i class="ti ti-plus"></i> Thêm chuyến</button>'
-        +'</span>'
-        +'</td>'
-        +'</tr>';
-      if(isOpen){
-        // Voyage sub-header
-        rows+='<tr style="background:#f8fafc;font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">'
-          +'<td style="padding:5px 10px 5px 32px;border-bottom:1px solid var(--border-light)">Voy</td>'
-          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">Carrier</td>'
-          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">POL</td>'
-          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">ETD</td>'
-          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">CY Cutoff</td>'
-          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">SI Cutoff</td>'
-          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">POD / ETA</td>'
-          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">Lô hàng</td>'
-          +'<td colspan="2" style="padding:5px 10px;border-bottom:1px solid var(--border-light)"></td>'
-          +'</tr>';
-        vList.forEach(function(v){
-          const lotsForVoy=allLots.filter(function(l){return (l.vessel||'').toUpperCase()===vesName&&(l.voy||'')===v.voy;});
-          const carrierStr=(v.carriers||[]).join(', ')||'—';
-          const podStr=(v.pods||[]).map(function(p){return (p.pod||'—')+' '+(p.eta||'');}).join(', ')||'—';
-          rows+='<tr style="background:#fff;border-bottom:1px solid #f1f5f9" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'#fff\'">'
-            +'<td style="padding:7px 10px 7px 32px;font-weight:700;font-size:13px;color:#334155">'+( v.voy||'—')+'</td>'
-            +'<td style="padding:7px 10px;font-size:12px;color:#64748b">'+carrierStr+'</td>'
-            +'<td style="padding:7px 10px;font-size:12px">'+( v.pol||'—')+'</td>'
-            // Editable ETD
-            +'<td style="padding:4px 6px">'
-            +'<input type="date" value="'+(v.etd||'')+'" style="font-size:12px;font-weight:600;color:var(--blue);border:1px solid var(--border-light);border-radius:5px;padding:3px 6px;width:130px;background:transparent" '
-            +'onchange="saveVesselVoyField(\''+v._id+'\',\'etd\',this.value,\''+vesName.replace(/'/g,"\\'")+'\',\''+( v.voy||'').replace(/'/g,"\\'")+'\',this)" '
-            +'title="Chỉnh ETD → tự cập nhật tất cả lô hàng"/>'
-            +'</td>'
-            // Editable CY Cutoff
-            +'<td style="padding:4px 6px">'
-            +'<input type="text" value="'+(v.cutoffCY||'')+'" placeholder="—" style="font-size:11.5px;color:#b45309;border:1px solid var(--border-light);border-radius:5px;padding:3px 6px;width:110px;background:transparent" '
-            +'onchange="saveVesselVoyField(\''+v._id+'\',\'cutoffCY\',this.value,null,null,this)" title="CY Cutoff"/>'
-            +'</td>'
-            // Editable SI Cutoff
-            +'<td style="padding:4px 6px">'
-            +'<input type="text" value="'+(v.cutoffSI||'')+'" placeholder="—" style="font-size:11.5px;color:#b45309;border:1px solid var(--border-light);border-radius:5px;padding:3px 6px;width:110px;background:transparent" '
-            +'onchange="saveVesselVoyField(\''+v._id+'\',\'cutoffSI\',this.value,null,null,this)" title="SI Cutoff"/>'
-            +'</td>'
-            +'<td style="padding:7px 10px;font-size:11px;color:var(--text-secondary)">'+podStr+'</td>'
-            +'<td style="padding:7px 10px;font-size:12px">'
-            +(lotsForVoy.length?'<span style="background:#dbeafe;color:#1a4b8c;padding:2px 8px;border-radius:10px;font-weight:600">'+lotsForVoy.length+' lô</span>':'<span style="color:#94a3b8">—</span>')
-            +'</td>'
-            +'<td style="padding:6px 8px;text-align:right;white-space:nowrap">'
-            +'<button class="btn sm" onclick="openVesselEditor(\''+v._id+'\')"><i class="ti ti-edit"></i></button>'
-            +'</td>'
-            +'<td style="padding:6px 4px">'
+      vList.forEach(function(v,vi){
+        const carrierStr=(v.carriers||[]).join(', ')||'—';
+        const transStr=(v.transships&&v.transships.length)?v.transships.map(function(t){return (t.port||t.country||'');}).join(' → '):'—';
+        const podStr=(v.pods||[]).map(function(p){return (p.pod||'—');}).join(', ')||'—';
+        const etaStr=(v.pods||[]).map(function(p){return p.eta||'';}).filter(Boolean).join(', ')||'—';
+        const bg=_ri%2===0?'var(--bg-primary)':'var(--bg-secondary)';
+        const topBorder=vi===0&&_ri>0?'border-top:2px solid var(--blue);':'' ;
+        rows+='<tr style="background:'+bg+';'+topBorder+'">'
+          +'<td style="'+tdS2+';font-weight:700;color:#1a4b8c;white-space:nowrap">'+(v.vessel||'—')+'</td>'
+          +'<td style="'+tdS2+';font-weight:600">'+(v.voy||'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px">'+carrierStr+'</td>'
+          +'<td style="'+tdS2+';white-space:nowrap">'+(v.pol||'—')+'</td>'
+          +'<td style="'+tdS2+';font-weight:600;color:var(--blue);white-space:nowrap">'+(v.etd?v.etd.replace(/-/g,'/'):'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:#b45309;white-space:nowrap">'+(v.cutoffCY||'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:#b45309;white-space:nowrap">'+(v.cutoffSI||'—')+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:var(--text-secondary)">'+transStr+'</td>'
+          +'<td style="'+tdS2+';font-size:11px">'+podStr+'</td>'
+          +'<td style="'+tdS2+';font-size:11px;color:var(--text-secondary)">'+etaStr+'</td>'
+          +'<td style="'+tdS2+';text-align:right;white-space:nowrap">'
+            +'<button class="btn sm" onclick="openVesselEditor(\''+v._id+'\')" style="margin-right:4px"><i class="ti ti-edit"></i></button>'
             +'<button class="rac red" onclick="deleteVessel(\''+v._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>'
-            +'</td>'
-            +'</tr>';
-        });
-      }
+          +'</td>'
+        +'</tr>';
+        _ri++;
+      });
     });
   }
   pg.innerHTML=`
@@ -15867,23 +15619,7 @@ function exportExcelDebt(){
     }).join('');
 
     allHtml+=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
-<head><meta charset="UTF-8"/><style>body{font-family:Calibri,Arial,sans-serif}table{border-collapse:collapse}
-/* ── Xuat Lot Tab System ── */
-/* ── Xuat Tab Bar: container styling only, tabs styled inline in JS ── */
-#xuat-tabbar-wrap{
-  background:#f0f2f5;border-bottom:2px solid #d0d5dd;
-  box-shadow:0 2px 6px rgba(0,0,0,.07);
-}
-/* Xuat lot mode: hide sidebar, content fills full width */
-/* sidebar stays visible in xuat-lotmode */
-/* Tab bar always part of page-xuat, no offset needed */
-/* Lot detail view: full width inside page-xuat */
-#xuat-lot-view{display:none;overflow-y:auto;min-height:calc(100vh - 88px);}
-#xuat-lot-view.active{display:block;}
-#xuat-list-view{overflow-y:auto;}
-/* Remove dpanel-tabbar inside xuat lot view */
-#xuat-lot-view .dpanel-tabbar{display:none!important;}
-</style></head>
+<head><meta charset="UTF-8"/><style>body{font-family:Calibri,Arial,sans-serif}table{border-collapse:collapse}</style></head>
 <body>
 <table style="width:100%;margin-bottom:14px;border-collapse:collapse">
   <tr>
@@ -15982,6 +15718,5 @@ window.exportExcel=exportExcel;
 window.exportExcelDebt=exportExcelDebt;
 
 </script>
-<div id="xuat-tabbar-wrap" style="display:none"></div>
 </body>
 </html>
