@@ -12840,6 +12840,46 @@ function _carrierList(){
   return Object.values(cache.partners).filter(function(p){return p.type==='carrier';}).map(function(p){return p.shortname;}).sort();
 }
 
+// Lưu 1 field của voyage và đồng bộ sang các lô hàng tương ứng
+async function saveVesselVoyField(vesId, field, value, vesName, voy, inputEl){
+  if(inputEl) inputEl.style.borderColor='var(--border-light)';
+  try{
+    // 1. Update vessel record
+    await db.collection('vessels').doc(vesId).update({[field]:value, updatedAt:Date.now()});
+
+    // 2. Nếu thay đổi ETD → sync sang tất cả lô hàng có vessel + voy trùng khớp
+    if(field==='etd' && vesName && voy){
+      const updatePayload={etd:value, updatedAt:Date.now(), updatedBy:currentUser?.email||''};
+      const toBatch=[];
+      (cache.xuat||[]).forEach(function(l){
+        if((l.vessel||'').toUpperCase()===vesName.toUpperCase()&&(l.voy||'')===voy) toBatch.push({col:'lots_xuat',id:l._id});
+      });
+      (cache.nhap||[]).forEach(function(l){
+        if((l.vessel||'').toUpperCase()===vesName.toUpperCase()&&(l.voy||'')===voy) toBatch.push({col:'lots_nhap',id:l._id});
+      });
+      if(toBatch.length){
+        // Batch update (Firestore max 500/batch)
+        for(let i=0;i<toBatch.length;i+=400){
+          const bt=db.batch();
+          toBatch.slice(i,i+400).forEach(function(x){bt.update(db.collection(x.col).doc(x.id),updatePayload);});
+          await bt.commit();
+        }
+        toast('Đã cập nhật ETD cho '+toBatch.length+' lô hàng','success');
+      } else {
+        toast('Đã lưu ETD','success');
+      }
+    } else {
+      toast('Đã lưu','success');
+    }
+    if(inputEl) inputEl.style.borderColor='#22c55e';
+    setTimeout(function(){if(inputEl)inputEl.style.borderColor='var(--border-light)';},1500);
+  } catch(e){
+    toast('Lỗi lưu: '+e.message,'error');
+    if(inputEl) inputEl.style.borderColor='var(--red)';
+  }
+}
+window.saveVesselVoyField=saveVesselVoyField;
+
 function renderVesselTool(){
   const pg=g('page-vessel');
   if(!pg)return;
@@ -12896,38 +12936,84 @@ function renderVesselTool(){
     grouped[name].push(v);
   });
   const tdS2='padding:7px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+  // Track expanded vessels
+  if(!window._vesExpanded) window._vesExpanded={};
+
   let rows='';
   if(!vessels.length){
     rows='<tr><td colspan="10" style="text-align:center;color:var(--text-tertiary);padding:2rem">'+(q?'Không tìm thấy tàu phù hợp':'Chưa có tàu nào. Bấm "Thêm tàu"')+'</td></tr>';
   } else {
-    var _ri=0;
     vesselOrder.forEach(function(vesName){
       const vList=grouped[vesName];
-      vList.forEach(function(v,vi){
-        const carrierStr=(v.carriers||[]).join(', ')||'—';
-        const transStr=(v.transships&&v.transships.length)?v.transships.map(function(t){return (t.port||t.country||'');}).join(' → '):'—';
-        const podStr=(v.pods||[]).map(function(p){return (p.pod||'—');}).join(', ')||'—';
-        const etaStr=(v.pods||[]).map(function(p){return p.eta||'';}).filter(Boolean).join(', ')||'—';
-        const bg=_ri%2===0?'var(--bg-primary)':'var(--bg-secondary)';
-        const topBorder=vi===0&&_ri>0?'border-top:2px solid var(--blue);':'' ;
-        rows+='<tr style="background:'+bg+';'+topBorder+'">'
-          +'<td style="'+tdS2+';font-weight:700;color:#1a4b8c;white-space:nowrap">'+(v.vessel||'—')+'</td>'
-          +'<td style="'+tdS2+';font-weight:600">'+(v.voy||'—')+'</td>'
-          +'<td style="'+tdS2+';font-size:11px">'+carrierStr+'</td>'
-          +'<td style="'+tdS2+';white-space:nowrap">'+(v.pol||'—')+'</td>'
-          +'<td style="'+tdS2+';font-weight:600;color:var(--blue);white-space:nowrap">'+(v.etd?v.etd.replace(/-/g,'/'):'—')+'</td>'
-          +'<td style="'+tdS2+';font-size:11px;color:#b45309;white-space:nowrap">'+(v.cutoffCY||'—')+'</td>'
-          +'<td style="'+tdS2+';font-size:11px;color:#b45309;white-space:nowrap">'+(v.cutoffSI||'—')+'</td>'
-          +'<td style="'+tdS2+';font-size:11px;color:var(--text-secondary)">'+transStr+'</td>'
-          +'<td style="'+tdS2+';font-size:11px">'+podStr+'</td>'
-          +'<td style="'+tdS2+';font-size:11px;color:var(--text-secondary)">'+etaStr+'</td>'
-          +'<td style="'+tdS2+';text-align:right;white-space:nowrap">'
-            +'<button class="btn sm" onclick="openVesselEditor(\''+v._id+'\')" style="margin-right:4px"><i class="ti ti-edit"></i></button>'
-            +'<button class="rac red" onclick="deleteVessel(\''+v._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>'
-          +'</td>'
+      const isOpen=!!window._vesExpanded[vesName];
+      // Count lots matching this vessel
+      const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+      const lotsCount=allLots.filter(function(l){return (l.vessel||'').toUpperCase()===vesName;}).length;
+      // Vessel header row (clickable)
+      rows+='<tr style="background:#e8f0fe;cursor:pointer;border-top:2px solid #1a4b8c" onclick="window._vesExpanded[\''+vesName.replace(/'/g,"\\'")+'\']=!window._vesExpanded[\''+vesName.replace(/'/g,"\\'")+'\'];renderVesselTool()">'
+        +'<td colspan="10" style="padding:9px 14px">'
+        +'<span style="font-size:13.5px;font-weight:700;color:#1a4b8c;letter-spacing:.3px">'
+        +'<i class="ti '+(isOpen?'ti-chevron-down':'ti-chevron-right')+'" style="font-size:12px;margin-right:6px"></i>'
+        +vesName
+        +'</span>'
+        +'<span style="margin-left:12px;font-size:11.5px;color:#64748b">'
+        +vList.length+' chuyến'+(lotsCount?' · <b style="color:#1a4b8c">'+lotsCount+' lô hàng</b>':'')
+        +'</span>'
+        +'<span style="float:right">'
+        +'<button class="btn sm" onclick="event.stopPropagation();openVesselEditor(null,\''+vesName.replace(/'/g,"\\'")+'\')" style="font-size:11px;padding:3px 8px"><i class="ti ti-plus"></i> Thêm chuyến</button>'
+        +'</span>'
+        +'</td>'
         +'</tr>';
-        _ri++;
-      });
+      if(isOpen){
+        // Voyage sub-header
+        rows+='<tr style="background:#f8fafc;font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">'
+          +'<td style="padding:5px 10px 5px 32px;border-bottom:1px solid var(--border-light)">Voy</td>'
+          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">Carrier</td>'
+          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">POL</td>'
+          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">ETD</td>'
+          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">CY Cutoff</td>'
+          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">SI Cutoff</td>'
+          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">POD / ETA</td>'
+          +'<td style="padding:5px 10px;border-bottom:1px solid var(--border-light)">Lô hàng</td>'
+          +'<td colspan="2" style="padding:5px 10px;border-bottom:1px solid var(--border-light)"></td>'
+          +'</tr>';
+        vList.forEach(function(v){
+          const lotsForVoy=allLots.filter(function(l){return (l.vessel||'').toUpperCase()===vesName&&(l.voy||'')===v.voy;});
+          const carrierStr=(v.carriers||[]).join(', ')||'—';
+          const podStr=(v.pods||[]).map(function(p){return (p.pod||'—')+' '+(p.eta||'');}).join(', ')||'—';
+          rows+='<tr style="background:#fff;border-bottom:1px solid #f1f5f9" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'#fff\'">'
+            +'<td style="padding:7px 10px 7px 32px;font-weight:700;font-size:13px;color:#334155">'+( v.voy||'—')+'</td>'
+            +'<td style="padding:7px 10px;font-size:12px;color:#64748b">'+carrierStr+'</td>'
+            +'<td style="padding:7px 10px;font-size:12px">'+( v.pol||'—')+'</td>'
+            // Editable ETD
+            +'<td style="padding:4px 6px">'
+            +'<input type="date" value="'+(v.etd||'')+'" style="font-size:12px;font-weight:600;color:var(--blue);border:1px solid var(--border-light);border-radius:5px;padding:3px 6px;width:130px;background:transparent" '
+            +'onchange="saveVesselVoyField(\''+v._id+'\',\'etd\',this.value,\''+vesName.replace(/'/g,"\\'")+'\',\''+( v.voy||'').replace(/'/g,"\\'")+'\',this)" '
+            +'title="Chỉnh ETD → tự cập nhật tất cả lô hàng"/>'
+            +'</td>'
+            // Editable CY Cutoff
+            +'<td style="padding:4px 6px">'
+            +'<input type="text" value="'+(v.cutoffCY||'')+'" placeholder="—" style="font-size:11.5px;color:#b45309;border:1px solid var(--border-light);border-radius:5px;padding:3px 6px;width:110px;background:transparent" '
+            +'onchange="saveVesselVoyField(\''+v._id+'\',\'cutoffCY\',this.value,null,null,this)" title="CY Cutoff"/>'
+            +'</td>'
+            // Editable SI Cutoff
+            +'<td style="padding:4px 6px">'
+            +'<input type="text" value="'+(v.cutoffSI||'')+'" placeholder="—" style="font-size:11.5px;color:#b45309;border:1px solid var(--border-light);border-radius:5px;padding:3px 6px;width:110px;background:transparent" '
+            +'onchange="saveVesselVoyField(\''+v._id+'\',\'cutoffSI\',this.value,null,null,this)" title="SI Cutoff"/>'
+            +'</td>'
+            +'<td style="padding:7px 10px;font-size:11px;color:var(--text-secondary)">'+podStr+'</td>'
+            +'<td style="padding:7px 10px;font-size:12px">'
+            +(lotsForVoy.length?'<span style="background:#dbeafe;color:#1a4b8c;padding:2px 8px;border-radius:10px;font-weight:600">'+lotsForVoy.length+' lô</span>':'<span style="color:#94a3b8">—</span>')
+            +'</td>'
+            +'<td style="padding:6px 8px;text-align:right;white-space:nowrap">'
+            +'<button class="btn sm" onclick="openVesselEditor(\''+v._id+'\')"><i class="ti ti-edit"></i></button>'
+            +'</td>'
+            +'<td style="padding:6px 4px">'
+            +'<button class="rac red" onclick="deleteVessel(\''+v._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button>'
+            +'</td>'
+            +'</tr>';
+        });
+      }
     });
   }
   pg.innerHTML=`
