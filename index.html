@@ -434,6 +434,90 @@ const TASKS=[
   {key:'send',label:'Gửi Debit Note cho khách hàng'},
 ];
 const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã Fill giá':'bdg-tl','Đã Costing':'bdg-b','Đã gửi DN':'bdg-purple','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
+// ── Xuat Lot Tab System ────────────────────────────────────────
+let _xuatLotTabs=[]; // [{id,tt,label,dpTab}]
+let _xuatCurTab='home'; // 'home' or lot _id
+
+function _xuatRenderTabBar(){
+  const wrap=g('xuat-tabbar-wrap'); if(!wrap)return;
+  wrap.innerHTML=
+    `<div class="xtab${_xuatCurTab==='home'?' xtab-active':''}" onclick="xuatSwitchTab('home')" title="Danh sách lô xuất khẩu">
+      <i class="ti ti-list" style="font-size:13px"></i>
+      <span class="xtab-label">Lô hàng xuất</span>
+    </div>`
+    +_xuatLotTabs.map(function(lt){
+      return`<div class="xtab${_xuatCurTab===lt.id?' xtab-active':''}" onclick="xuatSwitchTab('${lt.id}')" title="${lt.label}">
+        <i class="ti ti-file-invoice" style="font-size:12px;flex-shrink:0"></i>
+        <span class="xtab-label">${lt.label}</span>
+        <span class="xtab-close" onclick="xuatCloseTab('${lt.id}',event)" title="Đóng tab">✕</span>
+      </div>`;
+    }).join('');
+}
+
+function xuatOpenLotTab(id,tt,startTab){
+  const r=(cache[tt]||[]).find(x=>x._id===id)||{};
+  const label=r.jobNo||r.bookingNo||id;
+  const existing=_xuatLotTabs.find(x=>x.id===id);
+  if(!existing) _xuatLotTabs.push({id,tt,label,dpTab:startTab||'info'});
+  else if(startTab) existing.dpTab=startTab;
+  xuatSwitchTab(id);
+}
+
+function xuatSwitchTab(id){
+  _xuatCurTab=id;
+  _xuatRenderTabBar();
+  if(id==='home'){
+    document.body.classList.remove('xuat-lotmode');
+    g('detailPanel').classList.remove('open');
+    g('detailBackdrop').classList.remove('open');
+    renderLotTable('xuat');
+  } else {
+    const lt=_xuatLotTabs.find(x=>x.id===id); if(!lt){xuatSwitchTab('home');return;}
+    document.body.classList.add('xuat-lotmode');
+    detailId=lt.id; detailTt=lt.tt; detailTab=lt.dpTab||'info';
+    const r=(cache[lt.tt]||[]).find(x=>x._id===lt.id)||{};
+    // Sync _openTabs for renderDpanelTabs
+    const key='lot_'+lt.id;
+    let ot=_openTabs.find(x=>x.key===key);
+    if(!ot){ot={key,type:'lot',id:lt.id,tt:lt.tt,label:lt.label,tab:lt.dpTab||'info'};_openTabs.push(ot);}
+    _activeTabKey=key;
+    renderDpanelTabs();
+    renderDetailPanel(r,lt.tt);
+    g('detailPanel').classList.add('open');
+    g('detailBackdrop').classList.remove('open');
+  }
+}
+
+function xuatCloseTab(id,event){
+  if(event){event.stopPropagation();}
+  const idx=_xuatLotTabs.findIndex(x=>x.id===id);
+  _xuatLotTabs=_xuatLotTabs.filter(x=>x.id!==id);
+  _openTabs=_openTabs.filter(x=>x.id!==id);
+  if(_xuatCurTab===id){
+    if(_xuatLotTabs.length){
+      const ni=Math.max(0,idx-1);
+      xuatSwitchTab(_xuatLotTabs[ni]?_xuatLotTabs[ni].id:'home');
+    } else { xuatSwitchTab('home'); }
+  } else { _xuatRenderTabBar(); }
+}
+
+// Ctrl+Left / Ctrl+Right: chuyển nhanh giữa các tab xuat
+document.addEventListener('keydown',function(e){
+  if(!e.ctrlKey)return;
+  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;
+  if(!document.body.classList.contains('xuat-tabmode'))return;
+  e.preventDefault();
+  const allIds=['home',..._xuatLotTabs.map(x=>x.id)];
+  const cur=allIds.indexOf(_xuatCurTab);
+  if(e.key==='ArrowRight') xuatSwitchTab(allIds[(cur+1)%allIds.length]);
+  else xuatSwitchTab(allIds[(cur-1+allIds.length)%allIds.length]);
+});
+
+window.xuatOpenLotTab=xuatOpenLotTab;
+window.xuatSwitchTab=xuatSwitchTab;
+window.xuatCloseTab=xuatCloseTab;
+// ────────────────────────────────────────────────────────────────
+
 // ── App Update Checker: poll HEAD mỗi 5 phút, hiện banner nếu có version mới
 (function(){
   var _sig=null;
@@ -1102,6 +1186,23 @@ function updateSidebar(){
 ───────────────────────────────────────────── */
 function goTab(t){
   currentTab=t;
+  // ── Xuat tab bar: show/hide + body class
+  const _xtWrap=g('xuat-tabbar-wrap');
+  if(t==='xuat'){
+    document.body.classList.add('xuat-tabmode');
+    if(_xtWrap)_xtWrap.style.display='flex';
+    _xuatRenderTabBar();
+    if(_xuatCurTab!=='home'){
+      document.body.classList.add('xuat-lotmode');
+      const _xl=_xuatLotTabs.find(x=>x.id===_xuatCurTab);
+      if(_xl){const _xr=(cache[_xl.tt]||[]).find(x=>x._id===_xl.id)||{};renderDpanelTabs();renderDetailPanel(_xr,_xl.tt);g('detailPanel').classList.add('open');}
+    }
+  } else {
+    document.body.classList.remove('xuat-tabmode','xuat-lotmode');
+    if(_xtWrap)_xtWrap.style.display='none';
+    g('detailPanel').classList.remove('open');
+    g('detailBackdrop').classList.remove('open');
+  }
   ['xuat','nhap','deadline','thu-chi','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings','trucking-report','scy-report'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
@@ -1438,6 +1539,11 @@ let _openTabs=[]; // {key, type:'lot'|'docmaker', id, tt, label, tab}
 let _activeTabKey=null;
 
 function openDetail(id, tt, startTab){
+  // ── Xuat tab mode: mở lô trong tab thay vì slide-in panel
+  if(tt==='xuat' && document.body.classList.contains('xuat-tabmode')){
+    xuatOpenLotTab(id, tt, startTab);
+    return;
+  }
   const r=cache[tt].find(x=>x._id===id)||{};
   const key='lot_'+id;
   let t=_openTabs.find(x=>x.key===key);
@@ -7895,7 +8001,6 @@ tr:hover td{background:var(--bg-secondary)}
     <div class="sb-divider"></div>
     <div class="sb-section">Hàng hóa</div>
     <button class="sb-item" id="sb-xuat" onclick="goTab('xuat')"><i class="ti ti-arrow-up-right"></i> Xuất khẩu</button>
-    <button class="sb-item" id="sb-nhap" onclick="goTab('nhap')"><i class="ti ti-arrow-down-left"></i> Nhập khẩu</button>
     <div class="sb-section" style="margin-top:.4rem">Vận hành</div>
     <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-checklist"></i> Tiến độ công việc<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
     <button class="sb-item" id="sb-thu-chi" onclick="goTab('thu-chi')"><i class="ti ti-cash"></i> Quản lý thu chi</button>
@@ -7933,6 +8038,8 @@ tr:hover td{background:var(--bg-secondary)}
         <button class="btn sm red" onclick="doLogout()"><i class="ti ti-logout"></i> Đăng xuất</button>
       </div>
     </div>
+    <!-- ── Xuat Lot Tab Bar (fixed top, shown only on xuat page) ── -->
+    <div id="xuat-tabbar-wrap" style="display:none"></div>
     <div class="content">
       <div id="page-xuat"></div>
       <div id="page-nhap" style="display:none"></div>
@@ -15619,7 +15726,47 @@ function exportExcelDebt(){
     }).join('');
 
     allHtml+=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
-<head><meta charset="UTF-8"/><style>body{font-family:Calibri,Arial,sans-serif}table{border-collapse:collapse}</style></head>
+<head><meta charset="UTF-8"/><style>body{font-family:Calibri,Arial,sans-serif}table{border-collapse:collapse}
+/* ── Xuat Lot Tab System ── */
+#xuat-tabbar-wrap{
+  position:fixed;top:0;left:0;right:0;height:44px;z-index:300;
+  background:var(--bg-primary);border-bottom:2px solid var(--border-light);
+  display:flex;align-items:flex-end;padding:0 14px;gap:2px;
+  box-shadow:0 2px 10px rgba(0,0,0,.08);
+}
+.xtab{
+  display:flex;align-items:center;gap:6px;padding:6px 13px;
+  height:38px;cursor:pointer;font-size:12.5px;color:var(--text-secondary);
+  border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;
+  max-width:185px;white-space:nowrap;overflow:hidden;
+  transition:background .12s,color .12s;margin-bottom:-2px;
+  user-select:none;
+}
+.xtab:hover{background:var(--bg-hover);color:var(--text-primary);}
+.xtab.xtab-active{
+  background:var(--bg-primary);border-color:var(--border-light);
+  color:var(--blue);font-weight:600;border-bottom-color:var(--bg-primary);
+}
+.xtab-label{overflow:hidden;text-overflow:ellipsis;flex:1;}
+.xtab-close{
+  opacity:0;font-size:12px;line-height:1;padding:2px 3px;border-radius:3px;
+  transition:opacity .12s;margin-left:2px;flex-shrink:0;
+}
+.xtab:hover .xtab-close{opacity:.55;}
+.xtab-close:hover{opacity:1!important;background:rgba(0,0,0,.12);}
+/* When xuat tab bar visible: push main content down */
+body.xuat-tabmode .main{padding-top:44px;}
+body.xuat-tabmode .sidebar{margin-top:44px;}
+/* When a lot tab is active: hide sidebar, expand detail panel fullscreen */
+body.xuat-lotmode .sidebar{display:none!important;}
+body.xuat-lotmode #detailPanel{
+  transform:none!important;left:0!important;width:100vw!important;
+  top:44px!important;height:calc(100vh - 44px)!important;
+  border-left:none!important;border-radius:0!important;box-shadow:none!important;
+}
+body.xuat-lotmode #detailBackdrop{display:none!important;}
+body.xuat-lotmode #dpanelTabbar{display:none!important;}
+</style></head>
 <body>
 <table style="width:100%;margin-bottom:14px;border-collapse:collapse">
   <tr>
