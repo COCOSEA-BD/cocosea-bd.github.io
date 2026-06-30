@@ -6676,7 +6676,10 @@ async function savePayStatusDetail(){
   const status=ctx.status||'unpaid';
   const date=g('psDate')?.value||'';
   const bank=g('psBank')?.value||'';
-  const amount=parseFloat(g('psAmount')?.value)||0;
+  const amountRaw=g('psAmount')?.value;
+  // Để trống khi "Đã TT" = mặc định đủ số (theo gợi ý hiển thị) — trước đây bị bỏ trống thành 0,
+  // khiến PDF/SOA (dựa vào số tiền) tính sai ra "Chưa TT" dù trạng thái đã là "Đã TT"
+  const amount=(amountRaw!==''&&amountRaw!=null)?(parseFloat(amountRaw)||0):(status==='paid'?(ctx.suggestAmount||0):0);
 
   setLoading(true,'Đang lưu...');
   try{
@@ -15542,24 +15545,34 @@ function exportSOA(){
       lineItems.push({name:sv.customName||s.name,qty:sv.qty||1,unit:sv.unit||'',price:sv.price||0,cur:sv.cur||'USD',amtVND:amtVND,vatPct:vatPct,vatAmt:vatAmt,total:amtVND+vatAmt,type:isYes?'cty':'cn'});
     });
     // Payment: tách riêng inv (có HĐ) và noInv (không HĐ)
+    // QUAN TRỌNG: quyết định "đã TT" dựa vào field .status==='paid' TRỰC TIẾP, KHÔNG dựa vào
+    // số tiền .amount (vì amount có thể =0 nếu lúc đánh dấu paid người dùng để trống số tiền —
+    // số tiền chỉ dùng để HIỂN THỊ, không dùng để xác định đã/chưa thanh toán)
     var dnPmts=r.dnPayments||{};
-    var invPaid=0,noInvPaid=0,invUnpaid=0,noInvUnpaid=0;
+    var invEntries=[],noInvEntries=[];
     Object.values(dnPmts).forEach(function(p){
-      if(p&&p.inv){if(p.inv.status==='paid'){invPaid+=parseFloat(p.inv.amount)||0;}else{invUnpaid++;}}
-      if(p&&p.noInv){if(p.noInv.status==='paid'){noInvPaid+=parseFloat(p.noInv.amount)||0;}else{noInvUnpaid++;}}
+      if(p&&p.inv&&p.inv.status)invEntries.push(p.inv);
+      if(p&&p.noInv&&p.noInv.status)noInvEntries.push(p.noInv);
     });
-    // Fallback legacy dnPayStatus
-    if(!Object.keys(dnPmts).length){
+    var invAllPaid=invEntries.length>0&&invEntries.every(function(x){return x.status==='paid';});
+    var noInvAllPaid=noInvEntries.length>0&&noInvEntries.every(function(x){return x.status==='paid';});
+    var invHasData=invEntries.length>0, noInvHasData=noInvEntries.length>0;
+    // Fallback legacy dnPayStatus — CHỈ áp dụng cho Có HĐ khi chưa hề có dnPayments
+    if(!invHasData){
       var psMap=r.dnPayStatus||{};
-      Object.values(psMap).forEach(function(v){v==='paid'?invPaid++:invUnpaid++;});
+      var psVals=Object.values(psMap);
+      if(psVals.length){invHasData=true;invAllPaid=psVals.every(function(v){return v==='paid';});}
     }
-    function _fmtPay(paid,unpaid,total){
-      if(paid>0&&unpaid===0)return {status:'paid',display:'Đã TT'+(paid>1000?' '+Math.round(paid).toLocaleString()+' đ':''),paid:paid};
-      if(paid>0&&unpaid>0)return {status:'partial',display:'Đã TT '+Math.round(paid).toLocaleString()+' đ',paid:paid};
+    var invPaidAmt=0; invEntries.forEach(function(x){if(x.status==='paid')invPaidAmt+=parseFloat(x.amount)||0;});
+    var noInvPaidAmt=0; noInvEntries.forEach(function(x){if(x.status==='paid')noInvPaidAmt+=parseFloat(x.amount)||0;});
+    function _fmtPay(allPaid,hasData,paidAmt,total){
+      if(!hasData)return {status:'unpaid',display:'Chưa TT',paid:0};
+      if(allPaid){var amt=paidAmt>0?paidAmt:total;return {status:'paid',display:'Đã TT'+(amt>1000?' '+Math.round(amt).toLocaleString()+' đ':''),paid:amt};}
+      if(paidAmt>0)return {status:'partial',display:'Đã TT '+Math.round(paidAmt).toLocaleString()+' đ',paid:paidAmt};
       return {status:'unpaid',display:'Chưa TT',paid:0};
     }
-    var invPs=_fmtPay(invPaid,invUnpaid,preYes+vatYes);
-    var noInvPs=_fmtPay(noInvPaid,noInvUnpaid,preNo+vatNo);
+    var invPs=_fmtPay(invAllPaid,invHasData,invPaidAmt,preYes+vatYes);
+    var noInvPs=_fmtPay(noInvAllPaid,noInvHasData,noInvPaidAmt,preNo+vatNo);
     var dnMap=r.dnByParty||{};var dnNo=Object.values(dnMap).find(function(x){return x;})||r.dnNo||'—';
     return {r:r,preYes:preYes,vatYes:vatYes,totalYes:preYes+vatYes,preNo:preNo,vatNo:vatNo,totalNo:preNo+vatNo,lineItems:lineItems,invPs:invPs,noInvPs:noInvPs};
   });
