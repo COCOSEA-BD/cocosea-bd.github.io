@@ -5752,7 +5752,7 @@ function renderTcBody(){
 // Idempotent: bỏ qua các bản ghi đã có cashTxId (đã được ghi nhận rồi).
 async function backfillCashBookFromHistory(){
   if(currentProfile?.role!=='admin'){ toast('Chỉ Admin mới có quyền thực hiện thao tác này','error'); return; }
-  if(!confirm('Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng chưa có giao dịch trong Sổ quỹ, và tạo bù các bút toán Thu/Chi tương ứng.\n\nNếu bản ghi không có tài khoản thanh toán cụ thể (chưa từng chọn lúc đánh dấu TT), hệ thống sẽ tự ghi vào "Tiền mặt" — bạn có thể chuyển sang đúng tài khoản sau.\n\nLưu ý: với các khoản CHI trả NCC ghi nhận trước khi có tính năng này, số tiền sẽ được ƯỚC TÍNH từ chi phí hiện tại của dịch vụ (do số tiền thanh toán chính xác lúc đó không được lưu lại) — vui lòng kiểm tra lại sau khi quét. Các khoản THU (Debit Note) dùng đúng số tiền đã ghi nhận.\n\nTiếp tục?'))return;
+  if(!confirm('Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng chưa có giao dịch trong Sổ quỹ, và tạo bù các bút toán Thu/Chi tương ứng.\n\nBản cập nhật này quét bù cho TỪNG ĐỐI TÁC (party) riêng lẻ trong mỗi lô — kể cả các khoản Thu cũ ghi nhận theo cách cũ (trước khi có tách Có HĐ/Không HĐ) mà trước đây có thể đã bị bỏ sót nếu lô hàng đó có ít nhất 1 đối tác khác đã dùng giao diện mới.\n\nNếu bản ghi không có tài khoản thanh toán cụ thể (chưa từng chọn lúc đánh dấu TT), hệ thống sẽ tự ghi vào "Tiền mặt" — bạn có thể chuyển sang đúng tài khoản sau.\n\nLưu ý: với các khoản CHI trả NCC ghi nhận trước khi có tính năng này, số tiền sẽ được ƯỚC TÍNH từ chi phí hiện tại của dịch vụ (do số tiền thanh toán chính xác lúc đó không được lưu lại) — vui lòng kiểm tra lại sau khi quét. Các khoản THU (Debit Note) dùng đúng số tiền đã ghi nhận.\n\nTiếp tục?'))return;
 
   setLoading(true,'Đang quét lịch sử thanh toán...');
   let createdChi=0, createdThu=0, skippedNoAmount=0, skippedCurrency=0, lotErrors=0, scannedLots=0;
@@ -5830,13 +5830,24 @@ async function backfillCashBookFromHistory(){
           }
   
           // ── AR: Invoice tab — dnPayments (Có HĐ / Không HĐ) ──
+          // Quét theo TỪNG PARTY độc lập, gộp cả nguồn dnPayments (mới) lẫn dnPayStatus (legacy),
+          // vì một lô hàng có thể có party đã "nâng cấp" sang dnPayments và party khác vẫn còn ở dạng legacy
+          // (trước đây code chỉ xử lý legacy khi CẢ LÔ chưa hề có dnPayments → bỏ sót rất nhiều party).
           const dnPm=r.dnPayments||{};
-          if(Object.keys(dnPm).length){
+          const legacyStatus=r.dnPayStatus||{};
+          const legacyCashTxMap=r.dnPayCashTxId||{};
+          const allParties=new Set([...Object.keys(dnPm),...Object.keys(legacyStatus)]);
+          if(allParties.size){
             const newDnPm=JSON.parse(JSON.stringify(dnPm));
-            let dnChanged=false;
-            for(const party of Object.keys(dnPm)){
+            const newLegacyCashTxMap=JSON.parse(JSON.stringify(legacyCashTxMap));
+            let dnChanged=false, legacyChanged=false;
+            for(const party of allParties){
+              const pmEntry=dnPm[party]||{};
+              const hasInv=!!pmEntry.inv;
+              const hasNoInv=!!pmEntry.noInv;
+              //── Nguồn mới: dnPayments[party].inv / .noInv ──
               for(const section of ['inv','noInv']){
-                const p=(dnPm[party]||{})[section];
+                const p=pmEntry[section];
                 if(!p||p.status!=='paid'||p.cashTxId)continue;
                 const acc=_normalizeBankAccountId(p.bank||'')||'cash';
                 const amt=p.amount||0;
@@ -5849,37 +5860,34 @@ async function backfillCashBookFromHistory(){
                   partnerRef:party||null,
                   lotRef:lotRefBase
                 });
+                if(!newDnPm[party])newDnPm[party]={};
+                if(!newDnPm[party][section])newDnPm[party][section]=Object.assign({},p);
                 newDnPm[party][section].cashTxId=txId;
                 dnChanged=true; createdThu++;
               }
+              // ── Nguồn legacy: dnPayStatus[party] (chỉ xử lý nếu party này CHƯA có dữ liệu inv/noInv tương ứng,
+              // tránh ghi trùng khoản đã được quét/ghi nhận qua nguồn mới ở trên) ──
+              if(legacyStatus[party]==='paid'&&!newLegacyCashTxMap[party]&&!hasInv&&!hasNoInv){
+                const bankRaw=(r.dnPayBank||{})[party]||'';
+                const acc=_normalizeBankAccountId(bankRaw)||'cash';
+                const amt=(r.dnPayAmount||{})[party]||0;
+                if(amt<=0){skippedNoAmount++;}
+                else{
+                  const txId=await _syncPayToCashBook({
+                    existingTxId:null,status:'paid',txType:'thu',account:acc,amount:amt,
+                    date:(r.dnPayDate||{})[party]||r.etd||new Date().toISOString().slice(0,10),
+                    category:'Thu Debit Note (quét lịch sử)',
+                    description:bookingLabel+' — '+party,
+                    partnerRef:party||null,
+                    lotRef:lotRefBase
+                  });
+                  newLegacyCashTxMap[party]=txId;
+                  legacyChanged=true; createdThu++;
+                }
+              }
             }
             if(dnChanged) updatePayload.dnPayments=newDnPm;
-          }
-  
-          // ── AR: Debit Note legacy (dnPayStatus flat map) ──
-          const legacyStatus=r.dnPayStatus||{};
-          if(Object.keys(legacyStatus).length && !Object.keys(dnPm).length){
-            // chỉ xử lý legacy nếu chưa có dnPayments (tránh ghi trùng với phần trên)
-            const newCashTxMap=JSON.parse(JSON.stringify(r.dnPayCashTxId||{}));
-            let legacyChanged=false;
-            for(const party of Object.keys(legacyStatus)){
-              if(legacyStatus[party]!=='paid'||newCashTxMap[party])continue;
-              const bankRaw=(r.dnPayBank||{})[party]||'';
-              const acc=_normalizeBankAccountId(bankRaw)||'cash';
-              const amt=(r.dnPayAmount||{})[party]||0;
-              if(amt<=0){skippedNoAmount++;continue;}
-              const txId=await _syncPayToCashBook({
-                existingTxId:null,status:'paid',txType:'thu',account:acc,amount:amt,
-                date:(r.dnPayDate||{})[party]||r.etd||new Date().toISOString().slice(0,10),
-                category:'Thu Debit Note (quét lịch sử)',
-                description:bookingLabel+' — '+party,
-                partnerRef:party||null,
-                lotRef:lotRefBase
-              });
-              newCashTxMap[party]=txId;
-              legacyChanged=true; createdThu++;
-            }
-            if(legacyChanged) updatePayload.dnPayCashTxId=newCashTxMap;
+            if(legacyChanged) updatePayload.dnPayCashTxId=newLegacyCashTxMap;
           }
   
           if(Object.keys(updatePayload).length){
