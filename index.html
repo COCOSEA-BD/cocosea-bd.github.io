@@ -996,26 +996,23 @@ function _stopInactivityTracker(){
    FIRESTORE REALTIME LISTENERS
 ───────────────────────────────────────────── */
 function startListeners(){
-  loadBankAccounts();
-  loadCargoNames();
-  loadServices();
-  if(typeof loadWarehouses==='function')loadWarehouses();
-  if(typeof loadCocoQuote==='function'&&can('manageUsers'))loadCocoQuote();
-  if(typeof loadContractPartyA==='function'&&can('manageUsers')){loadContractPartyA();loadContracts();}
-  loadAcctInfo();
-  if(typeof loadTcOpeningBalances==='function')loadTcOpeningBalances();
   stopListeners();
 
   // Debounce cho lot list render — tránh render nhiều lần khi Firestore gửi nhiều changes liên tiếp
   let _xRenderTimer=null, _nRenderTimer=null;
-  // Lô hàng xuất
-  // ── 2-Phase Loading: Phase 1 nhanh (ETD window) → Phase 2 đầy đủ (background)
   const _today=new Date();
   const _p1From=new Date(_today.getTime()-2*86400000).toISOString().slice(0,10);
   const _p1To=new Date(_today.getTime()+20*86400000).toISOString().slice(0,10);
   const _phase2Ready={xuat:false,nhap:false};
 
-  // PHASE 1 — lots_xuat: chỉ load lô có ETD trong cửa sổ -2/+20 ngày
+  // ══════════════════════════════════════════════════════════════════
+  // ƯU TIÊN #1 — SHIPMENT LIST (lots_xuat): load trước tiên, một mình,
+  // không tranh băng thông với các module khác → vào làm việc được ngay.
+  // Mọi module còn lại (vessels, partners, thu-chi, lots_nhap, danh mục...)
+  // chỉ bắt đầu load SAU KHI Phase 1 của shipment list đã có phản hồi.
+  // ══════════════════════════════════════════════════════════════════
+
+  // PHASE 1 — lots_xuat: chỉ load lô có ETD trong cửa sổ -2/+20 ngày (nhanh)
   db.collection('lots_xuat').where('etd','>=',_p1From).where('etd','<=',_p1To)
     .get().then(function(snap){
       if(_phase2Ready.xuat)return; // Phase 2 đã xong, bỏ qua Phase 1
@@ -1024,136 +1021,157 @@ function startListeners(){
       cache.xuat.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
       if(currentTab==='xuat'){clearTimeout(_xRenderTimer);_xRenderTimer=setTimeout(function(){renderLotTable('xuat');},0);}
       updateSidebar();
-    }).catch(function(){});
-
-  // PHASE 2 — lots_xuat: toàn bộ lô hàng (onSnapshot real-time)
-  const u1 = db.collection('lots_xuat').onSnapshot(snap => {
-    _phase2Ready.xuat=true;
-    cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
-    cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(currentTab==='xuat'){
-      clearTimeout(_xRenderTimer);
-      _xRenderTimer=setTimeout(function(){renderLotTable('xuat');},50);
-    }
-    if(detailId&&detailTt==='xuat'&&g('detailPanel').classList.contains('open')){
-      const fresh=cache.xuat.find(x=>x._id===detailId);
-      if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'xuat');
-    }
-    updateSidebar();
-  });
-
-  // PHASE 1 — lots_nhap
-  db.collection('lots_nhap').where('etd','>=',_p1From).where('etd','<=',_p1To)
-    .get().then(function(snap){
-      if(_phase2Ready.nhap)return;
-      if(snap.empty)return;
-      cache.nhap=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
-      cache.nhap.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
-      if(currentTab==='nhap'){clearTimeout(_nRenderTimer);_nRenderTimer=setTimeout(function(){renderLotTable('nhap');},0);}
-      updateSidebar();
-    }).catch(function(){});
-
-  // PHASE 2 — lots_nhap
-  const u2 = db.collection('lots_nhap').onSnapshot(snap => {
-    _phase2Ready.nhap=true;
-    cache.nhap = snap.docs.map(d=>({_id:d.id,...d.data()}));
-    cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(currentTab==='nhap'){
-      clearTimeout(_nRenderTimer);
-      _nRenderTimer=setTimeout(function(){renderLotTable('nhap');},50);
-    }
-    if(detailId&&detailTt==='nhap'&&g('detailPanel').classList.contains('open')){
-      const fresh=cache.nhap.find(x=>x._id===detailId);
-      if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'nhap');
-    }
-    updateSidebar();
-  });
-
-  const u3 = db.collection('partners').onSnapshot(snap => {
-    cache.partners = {};
-    snap.docs.forEach(d=>{ cache.partners[d.id]={shortname:d.id,...d.data()}; });
-    if(currentTab==='doi-tac') renderPartners();
-    if(currentTab==='contract'&&typeof _ctrRefreshPartnerSelect==='function') _ctrRefreshPartnerSelect();
-    // Nếu đang mở panel chi tiết CRM của 1 đối tác, làm mới panel theo dữ liệu mới nhất
-    // (bỏ qua nếu đang gõ dở trong 1 ô input của panel, tránh mất dữ liệu chưa lưu)
-    if(crmDetailKey&&g('crmDetailOv')&&g('crmDetailOv').classList.contains('open')&&cache.partners[crmDetailKey]&&!_isEditingCrmDetail()){
-      renderCrmDetail();
-    }
-  });
-
-  // Users
-  // Live-sync permissions from Firestore (persists across F5)
-  const uPerm=db.collection('_config').doc('permissions').onSnapshot(function(snap){
-    if(snap.exists){
-      const saved=snap.data().roles||{};
-      ['operator','accountant','doc','cus','viewer'].forEach(function(role){
-        if(saved[role]) Object.assign(ROLES[role].perms, saved[role]);
+    }).catch(function(){})
+    .then(function(){
+      // PHASE 2 — lots_xuat: toàn bộ lô hàng (onSnapshot real-time)
+      const u1 = db.collection('lots_xuat').onSnapshot(snap => {
+        _phase2Ready.xuat=true;
+        cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
+        cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+        if(currentTab==='xuat'){
+          clearTimeout(_xRenderTimer);
+          _xRenderTimer=setTimeout(function(){renderLotTable('xuat');},50);
+        }
+        if(detailId&&detailTt==='xuat'&&g('detailPanel').classList.contains('open')){
+          const fresh=cache.xuat.find(x=>x._id===detailId);
+          if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'xuat');
+        }
+        updateSidebar();
       });
+      listeners.push(u1);
+
+      // ── Shipment List đã sẵn sàng → giờ mới load các module còn lại ──
+      _bootRestOfApp();
+    });
+
+  // Mọi thứ KHÔNG thuộc shipment list — load sau, dần dần, không chặn UI
+  function _bootRestOfApp(){
+    loadBankAccounts();
+    loadCargoNames();
+    loadServices();
+    if(typeof loadWarehouses==='function')loadWarehouses();
+    if(typeof loadCocoQuote==='function'&&can('manageUsers'))loadCocoQuote();
+    if(typeof loadContractPartyA==='function'&&can('manageUsers')){loadContractPartyA();loadContracts();}
+    loadAcctInfo();
+    if(typeof loadTcOpeningBalances==='function')loadTcOpeningBalances();
+
+    // PHASE 1 — lots_nhap
+    db.collection('lots_nhap').where('etd','>=',_p1From).where('etd','<=',_p1To)
+      .get().then(function(snap){
+        if(_phase2Ready.nhap)return;
+        if(snap.empty)return;
+        cache.nhap=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+        cache.nhap.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
+        if(currentTab==='nhap'){clearTimeout(_nRenderTimer);_nRenderTimer=setTimeout(function(){renderLotTable('nhap');},0);}
+        updateSidebar();
+      }).catch(function(){});
+
+    // PHASE 2 — lots_nhap
+    const u2 = db.collection('lots_nhap').onSnapshot(snap => {
+      _phase2Ready.nhap=true;
+      cache.nhap = snap.docs.map(d=>({_id:d.id,...d.data()}));
+      cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+      if(currentTab==='nhap'){
+        clearTimeout(_nRenderTimer);
+        _nRenderTimer=setTimeout(function(){renderLotTable('nhap');},50);
+      }
+      if(detailId&&detailTt==='nhap'&&g('detailPanel').classList.contains('open')){
+        const fresh=cache.nhap.find(x=>x._id===detailId);
+        if(fresh&&!_isEditingDetailPanel()) renderDetailPanel(fresh,'nhap');
+      }
+      updateSidebar();
+    });
+    listeners.push(u2);
+
+    const u3 = db.collection('partners').onSnapshot(snap => {
+      cache.partners = {};
+      snap.docs.forEach(d=>{ cache.partners[d.id]={shortname:d.id,...d.data()}; });
+      if(currentTab==='doi-tac') renderPartners();
+      if(currentTab==='contract'&&typeof _ctrRefreshPartnerSelect==='function') _ctrRefreshPartnerSelect();
+      // Nếu đang mở panel chi tiết CRM của 1 đối tác, làm mới panel theo dữ liệu mới nhất
+      // (bỏ qua nếu đang gõ dở trong 1 ô input của panel, tránh mất dữ liệu chưa lưu)
+      if(crmDetailKey&&g('crmDetailOv')&&g('crmDetailOv').classList.contains('open')&&cache.partners[crmDetailKey]&&!_isEditingCrmDetail()){
+        renderCrmDetail();
+      }
+    });
+    listeners.push(u3);
+
+    // Users
+    // Live-sync permissions from Firestore (persists across F5)
+    const uPerm=db.collection('_config').doc('permissions').onSnapshot(function(snap){
+      if(snap.exists){
+        const saved=snap.data().roles||{};
+        ['operator','accountant','doc','cus','viewer'].forEach(function(role){
+          if(saved[role]) Object.assign(ROLES[role].perms, saved[role]);
+        });
+        if(currentTab==='users') renderUsers();
+        updateSidebar();
+      }
+    },function(){});
+    listeners.push(uPerm);
+
+    // Vessels (realtime) — Vessel tool
+    const uVes = db.collection('vessels').onSnapshot(snap => {
+      cache.vessels = snap.docs.map(d=>({_id:d.id,...d.data()}));
+      cache.vessels.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+      if(currentTab==='vessel') renderVesselTool();
+    },function(){});
+    listeners.push(uVes);
+
+    // Quản lý thu chi: giao dịch sổ quỹ (realtime)
+    const uCashTx = db.collection('cashTransactions').onSnapshot(snap => {
+      cache.cashTx = snap.docs.map(d=>({_id:d.id,...d.data()}));
+      cache.cashTx.sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.createdAt||0)-(a.createdAt||0));
+      if(currentTab==='thu-chi') renderThuChi();
+    },function(){});
+    listeners.push(uCashTx);
+
+    // Quản lý thu chi: công nợ phải thu / phải trả (realtime)
+    const uDebts = db.collection('debtEntries').onSnapshot(snap => {
+      cache.debts = snap.docs.map(d=>({_id:d.id,...d.data()}));
+      cache.debts.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+      if(currentTab==='thu-chi') renderThuChi();
+    },function(){});
+    listeners.push(uDebts);
+
+    // Quản lý thu chi: danh mục thu/chi (realtime)
+    const uThuChiCat = db.collection('_config').doc('thuChiCategories').onSnapshot(function(snap){
+      if(snap.exists){
+        const d=snap.data();
+        window._thuChiCategories={thu:d.thu||DEFAULT_THU_CATS,chi:d.chi||DEFAULT_CHI_CATS};
+      } else {
+        window._thuChiCategories={thu:DEFAULT_THU_CATS,chi:DEFAULT_CHI_CATS};
+      }
+      if(currentTab==='thu-chi') renderThuChi();
+    },function(){});
+    listeners.push(uThuChiCat);
+
+    // Ocean freight rates (realtime)
+    const uOcean=db.collection('ocean_rates').onSnapshot(function(snap){
+      cache.ocean=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+      if(currentTab==='ocean') renderOcean();
+    },function(){cache.ocean=[];});
+    listeners.push(uOcean);
+
+    const u4 = db.collection('users').onSnapshot(snap => {
+      const profiles = snap.docs.map(d=>({_docId:d.id,...d.data()}));
+      cache.users = profiles;
+      // Refresh currentProfile if it updated
+      if(currentUser){
+        const emailKeyDot = currentUser.email.replace(/\./g,'_');
+        const fresh = profiles.find(p=>p.email===currentUser.email)
+          || profiles.find(p=>p.uid===currentUser.uid)
+          || profiles.find(p=>p._docId===currentUser.uid)
+          || profiles.find(p=>p._docId===emailKeyDot);
+        if(fresh) currentProfile = fresh;
+      }
       if(currentTab==='users') renderUsers();
       updateSidebar();
-    }
-  },function(){});
-
-  // Vessels (realtime) — Vessel tool
-  const uVes = db.collection('vessels').onSnapshot(snap => {
-    cache.vessels = snap.docs.map(d=>({_id:d.id,...d.data()}));
-    cache.vessels.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(currentTab==='vessel') renderVesselTool();
-  },function(){});
-  listeners.push(uVes);
-
-  // Quản lý thu chi: giao dịch sổ quỹ (realtime)
-  const uCashTx = db.collection('cashTransactions').onSnapshot(snap => {
-    cache.cashTx = snap.docs.map(d=>({_id:d.id,...d.data()}));
-    cache.cashTx.sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.createdAt||0)-(a.createdAt||0));
-    if(currentTab==='thu-chi') renderThuChi();
-  },function(){});
-  listeners.push(uCashTx);
-
-  // Quản lý thu chi: công nợ phải thu / phải trả (realtime)
-  const uDebts = db.collection('debtEntries').onSnapshot(snap => {
-    cache.debts = snap.docs.map(d=>({_id:d.id,...d.data()}));
-    cache.debts.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(currentTab==='thu-chi') renderThuChi();
-  },function(){});
-  listeners.push(uDebts);
-
-  // Quản lý thu chi: danh mục thu/chi (realtime)
-  const uThuChiCat = db.collection('_config').doc('thuChiCategories').onSnapshot(function(snap){
-    if(snap.exists){
-      const d=snap.data();
-      window._thuChiCategories={thu:d.thu||DEFAULT_THU_CATS,chi:d.chi||DEFAULT_CHI_CATS};
-    } else {
-      window._thuChiCategories={thu:DEFAULT_THU_CATS,chi:DEFAULT_CHI_CATS};
-    }
-    if(currentTab==='thu-chi') renderThuChi();
-  },function(){});
-  listeners.push(uThuChiCat);
-
-  // Ocean freight rates (realtime)
-  db.collection('ocean_rates').onSnapshot(function(snap){
-    cache.ocean=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
-    if(currentTab==='ocean') renderOcean();
-  },function(){cache.ocean=[];});
-
-  const u4 = db.collection('users').onSnapshot(snap => {
-    const profiles = snap.docs.map(d=>({_docId:d.id,...d.data()}));
-    cache.users = profiles;
-    // Refresh currentProfile if it updated
-    if(currentUser){
-      const emailKeyDot = currentUser.email.replace(/\./g,'_');
-      const fresh = profiles.find(p=>p.email===currentUser.email)
-        || profiles.find(p=>p.uid===currentUser.uid)
-        || profiles.find(p=>p._docId===currentUser.uid)
-        || profiles.find(p=>p._docId===emailKeyDot);
-      if(fresh) currentProfile = fresh;
-    }
-    if(currentTab==='users') renderUsers();
-    updateSidebar();
-  });
-
-  listeners = [u1,u2,u3,u4];
+    });
+    listeners.push(u4);
+  }
 }
+
 function stopListeners(){ listeners.forEach(u=>u&&u()); listeners=[]; }
 
 /* ─────────────────────────────────────────────
@@ -1423,6 +1441,12 @@ function clearEtdFilter(tt){
 const _MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const _fdCache={};
 function fd(s){if(!s)return'—';return _fdCache[s]||(_fdCache[s]=(function(){const d=new Date(s+'T00:00:00');return d.getDate()+'-'+_MO[d.getMonth()]+'-'+d.getFullYear();})());}
+// Cộng/trừ N ngày vào chuỗi 'YYYY-MM-DD', trả về chuỗi cùng định dạng
+function _addDaysStr(dateStr,n){
+  const d=new Date(dateStr+'T00:00:00');
+  d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
 
 function renderLotTable(tt){
   const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
@@ -1506,11 +1530,16 @@ function renderLotTable(tt){
           return`<td style="white-space:nowrap"><button onclick="_openVesselFromLot('${(r.vessel||'').replace(/'/g,"\\'")}','${(r.voy||'').replace(/'/g,"\\'")}','${r.etd||''}')" style="color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-size:inherit;text-align:left;font-weight:600" title="Mở Vessel Tool">${r.vessel}</button>${r.voy?`<div style="font-size:11px;color:var(--text-secondary)">V.${r.voy}</div>`:''}</td>`;
         }
         // ── ETD / POL
-        if(c.k==='etd') return`<td style="white-space:nowrap">`
-          +`<div style="font-weight:700;color:${isUrgent?'#E24B4A':'var(--blue)'};background:rgba(34,197,94,.13);display:inline-block;padding:1px 7px;border-radius:4px">${fd(r.etd)}</div>`
+        if(c.k==='etd'){
+          // Màu ETD: trước ETD = xám | ETD→ETD+3 = đỏ | sau ETD+3 = navy
+          const etdPlus3=r.etd?_addDaysStr(r.etd,3):'';
+          const etdColor=!r.etd?'var(--text-secondary)':(todayStr<r.etd?'#94a3b8':(todayStr<=etdPlus3?'#E24B4A':'#1a4b8c'));
+          return`<td style="white-space:nowrap;background:rgba(59,130,246,.08)">`
+          +`<div style="font-weight:700;color:${etdColor}">${fd(r.etd)}</div>`
           +(r.pol?`<div style="font-size:11px;color:var(--text-secondary)">${r.pol}</div>`:'')
           +(r.cutoffCY?`<div style="font-size:10.5px;color:#b45309">CY: ${r.cutoffCY}</div>`:'')
           +`</td>`;
+        }
         // ── ETA / POD
         if(c.k==='eta') return`<td style="white-space:nowrap">`
           +`<div style="font-weight:400">${fd(r.eta)}</div>`
