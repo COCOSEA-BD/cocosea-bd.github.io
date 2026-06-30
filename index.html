@@ -5740,15 +5740,22 @@ function renderTcBody(){
 // Idempotent: bỏ qua các bản ghi đã có cashTxId (đã được ghi nhận rồi).
 async function backfillCashBookFromHistory(){
   if(currentProfile?.role!=='admin'){ toast('Chỉ Admin mới có quyền thực hiện thao tác này','error'); return; }
-  if(!confirm('Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng chưa có giao dịch trong Sổ quỹ, và tạo bù các bút toán Thu/Chi tương ứng.\n\nLưu ý: với các khoản CHI trả NCC ghi nhận trước khi có tính năng này, số tiền sẽ được ƯỚC TÍNH từ chi phí hiện tại của dịch vụ (do số tiền thanh toán chính xác lúc đó không được lưu lại) — vui lòng kiểm tra lại sau khi quét. Các khoản THU (Debit Note) dùng đúng số tiền đã ghi nhận.\n\nTiếp tục?'))return;
+  if(!confirm('Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng chưa có giao dịch trong Sổ quỹ, và tạo bù các bút toán Thu/Chi tương ứng.\n\nNếu bản ghi không có tài khoản thanh toán cụ thể (chưa từng chọn lúc đánh dấu TT), hệ thống sẽ tự ghi vào "Tiền mặt" — bạn có thể chuyển sang đúng tài khoản sau.\n\nLưu ý: với các khoản CHI trả NCC ghi nhận trước khi có tính năng này, số tiền sẽ được ƯỚC TÍNH từ chi phí hiện tại của dịch vụ (do số tiền thanh toán chính xác lúc đó không được lưu lại) — vui lòng kiểm tra lại sau khi quét. Các khoản THU (Debit Note) dùng đúng số tiền đã ghi nhận.\n\nTiếp tục?'))return;
 
   setLoading(true,'Đang quét lịch sử thanh toán...');
-  let createdChi=0, createdThu=0, skippedNoAccount=0, skippedNoAmount=0, skippedCurrency=0;
+  let createdChi=0, createdThu=0, skippedNoAmount=0, skippedCurrency=0, lotErrors=0, scannedLots=0;
+  const errLog=[];
 
-  try{
-    for(const tt of ['xuat','nhap']){
-      const colN=colName(tt);
-      for(const r of (cache[tt]||[]).slice()){
+  for(const tt of ['xuat','nhap']){
+    const colN=colName(tt);
+    // QUAN TRỌNG: quét trực tiếp TOÀN BỘ collection trên Firestore, KHÔNG dùng cache.xuat/nhap —
+    // vì cache chỉ chứa lô trong cửa sổ ETD gần đây (cơ chế ưu tiên load nhanh lúc khởi động app),
+    // các lô cũ đã thanh toán từ lâu có thể chưa nằm trong cache nếu Phase 2 chưa tải xong.
+    const snapAll=await db.collection(colN).get();
+    for(const _doc of snapAll.docs){
+      const r=Object.assign({_id:_doc.id},_doc.data());
+      scannedLots++;
+      try{
         const updatePayload={};
         let changed=false;
         const bookingLabel=r.bookingNo||r.jobNo||'';
@@ -5761,8 +5768,7 @@ async function backfillCashBookFromHistory(){
           for(const key of Object.keys(svcs)){
             const sv=svcs[key];
             if(sv.apPaidStatus!=='paid'||sv.apCashTxId)continue;
-            const acc=_normalizeBankAccountId(sv.apPaidBank||'');
-            if(!acc){skippedNoAccount++;continue;}
+            const acc=_normalizeBankAccountId(sv.apPaidBank||'')||'cash';
             if(sv.svcCur&&sv.svcCur!=='VND'){skippedCurrency++;continue;}
             const estAmount=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
             if(estAmount<=0){skippedNoAmount++;continue;}
@@ -5790,8 +5796,7 @@ async function backfillCashBookFromHistory(){
           for(let idx=0;idx<newItems.length;idx++){
             const it=newItems[idx];
             if(it.apPaidStatus!=='paid'||it.apCashTxId)continue;
-            const acc=_normalizeBankAccountId(it.apPaidBank||'');
-            if(!acc){skippedNoAccount++;continue;}
+            const acc=_normalizeBankAccountId(it.apPaidBank||'')||'cash';
             if(it.cur&&it.cur!=='VND'){skippedCurrency++;continue;}
             const amt=it.amt||(it.price||0)*(it.qty||1)||0;
             if(amt<=0){skippedNoAmount++;continue;}
@@ -5820,8 +5825,7 @@ async function backfillCashBookFromHistory(){
             for(const section of ['inv','noInv']){
               const p=(dnPm[party]||{})[section];
               if(!p||p.status!=='paid'||p.cashTxId)continue;
-              const acc=_normalizeBankAccountId(p.bank||'');
-              if(!acc){skippedNoAccount++;continue;}
+              const acc=_normalizeBankAccountId(p.bank||'')||'cash';
               const amt=p.amount||0;
               if(amt<=0){skippedNoAmount++;continue;}
               const txId=await _syncPayToCashBook({
@@ -5848,8 +5852,7 @@ async function backfillCashBookFromHistory(){
           for(const party of Object.keys(legacyStatus)){
             if(legacyStatus[party]!=='paid'||newCashTxMap[party])continue;
             const bankRaw=(r.dnPayBank||{})[party]||'';
-            const acc=_normalizeBankAccountId(bankRaw);
-            if(!acc){skippedNoAccount++;continue;}
+            const acc=_normalizeBankAccountId(bankRaw)||'cash';
             const amt=(r.dnPayAmount||{})[party]||0;
             if(amt<=0){skippedNoAmount++;continue;}
             const txId=await _syncPayToCashBook({
@@ -5872,19 +5875,31 @@ async function backfillCashBookFromHistory(){
           // Cập nhật cache local luôn để khỏi chờ onSnapshot
           Object.assign(r,updatePayload);
         }
+      }catch(lotErr){
+        lotErrors++;
+        errLog.push((r.bookingNo||r.jobNo||r._id)+': '+lotErr.message);
+        console.warn('[backfillCashBookFromHistory] lỗi tại lô', r._id, lotErr);
+        // Tiếp tục quét các lô còn lại, không dừng giữa chừng
       }
     }
-
-    toast('Quét xong: +'+createdThu+' Thu, +'+createdChi+' Chi'
-      +(skippedNoAccount?' · bỏ qua '+skippedNoAccount+' (chưa chọn TK)':'')
-      +(skippedCurrency?' · bỏ qua '+skippedCurrency+' (khác VND)':''),
-      'success');
-    renderTcBody();
-  }catch(e){
-    toast('Lỗi khi quét: '+e.message,'error');
   }
+
   setLoading(false);
+
+  // Báo cáo kết quả chi tiết bằng modal (rõ ràng hơn toast, không bị trôi mất)
+  const summary=
+    'Đã quét '+scannedLots+' lô hàng.\n\n'
+    +'✅ Tạo mới: +'+createdThu+' giao dịch Thu, +'+createdChi+' giao dịch Chi\n'
+    +(skippedNoAmount?'⏭ Bỏ qua '+skippedNoAmount+' bản ghi (chưa có số tiền hợp lệ)\n':'')
+    +(skippedCurrency?'⏭ Bỏ qua '+skippedCurrency+' bản ghi (đơn vị tiền tệ khác VND, cần xử lý thủ công)\n':'')
+    +(lotErrors?'⚠ Lỗi tại '+lotErrors+' lô hàng:\n'+errLog.slice(0,10).join('\n')+(errLog.length>10?'\n... và '+(errLog.length-10)+' lỗi khác':''):'')
+    +((createdThu+createdChi)===0?'\n\nKhông tìm thấy bản ghi nào cần quét bù — có thể tất cả đã được ghi nhận từ trước, hoặc chưa có lô hàng nào được đánh dấu "Đã thanh toán".':'');
+  alert(summary);
+
+  if(createdThu+createdChi>0) toast('Đã cập nhật Sổ quỹ: +'+createdThu+' Thu, +'+createdChi+' Chi','success');
+  renderTcBody();
 }
+
 window.backfillCashBookFromHistory=backfillCashBookFromHistory;
 
 function renderTcSoQuy(){
