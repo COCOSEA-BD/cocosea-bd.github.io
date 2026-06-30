@@ -5472,12 +5472,14 @@ function runDebtReport(){
         +'<td style="'+tdS+';color:var(--green);font-weight:600">'+rowTotalVND.toLocaleString()+' VND</td>'
         +'<td style="'+tdS+';color:var(--orange);font-weight:600">'+rowTotalNoVND.toLocaleString()+' VND</td>'
         +'<td style="'+tdS+';color:var(--text-primary);font-weight:700">'+rowTotalAllVND.toLocaleString()+' VND</td>'
-        +(function(){var dnPm=r.dnPayments||{},legPm=r.dnPayStatus||{};
-          var hasAny=false,allPaid=false;
-          if(Object.keys(dnPm).length){hasAny=true;allPaid=Object.values(dnPm).every(function(p){return (!p.inv||!p.inv.status||p.inv.status==='paid')&&(!p.noInv||!p.noInv.status||p.noInv.status==='paid');});}
-          else if(Object.keys(legPm).length){hasAny=true;allPaid=Object.values(legPm).every(function(v){return v==='paid';});}
-          return '<td style="'+tdS+';font-weight:600;color:'+(allPaid?'var(--green)':'var(--red)')+'">'+(hasAny?(allPaid?'Đã TT':'Chưa TT'):'—')+'</td>';}
-        )()
+        +(function(){
+          const ps=_dnPayStatusSplit(r,rowTotalVND,rowTotalNoVND);
+          const yesOk=ps.inv!=='Chưa thanh toán';   // 'Đã thanh toán' hoặc '—' (không có due) đều OK
+          const noOk=ps.noInv!=='Chưa thanh toán';
+          const hasAny=ps.inv!=='—'||ps.noInv!=='—';
+          const allPaid=yesOk&&noOk;
+          return '<td style="'+tdS+';font-weight:600;color:'+(allPaid?'var(--green)':'var(--red)')+'">'+(hasAny?(allPaid?'Đã TT':'Chưa TT'):'—')+'</td>';
+        })()
         +'</tr>';
     }).join('');
 
@@ -15810,24 +15812,25 @@ window.exportSOA=exportSOA;
 // Tính trạng thái TT riêng cho Có HĐ (inv) và Không HĐ (noInv) của 1 lô hàng.
 // Ưu tiên đọc r.dnPayments (mới, có tách inv/noInv); fallback r.dnPayStatus (legacy, gộp chung).
 // Dùng chung cho Excel debt, SOA PDF, và báo cáo công nợ trên màn hình để tránh lệch số liệu.
-function _dnPayStatusSplit(r){
+function _dnPayStatusSplit(r, totalYesVND, totalNoVND){
   const dnPm=r.dnPayments||{};
-  let invHasAny=false,invAllPaid=true,noInvHasAny=false,noInvAllPaid=true;
-  Object.values(dnPm).forEach(function(p){
-    if(p&&p.inv&&p.inv.status){invHasAny=true;if(p.inv.status!=='paid')invAllPaid=false;}
-    if(p&&p.noInv&&p.noInv.status){noInvHasAny=true;if(p.noInv.status!=='paid')noInvAllPaid=false;}
-  });
-  if(!invHasAny&&!noInvHasAny){
-    // Fallback legacy: dnPayStatus gộp chung, áp dụng cho cả 2 phần
+  const entries=Object.values(dnPm);
+  // CHỈ coi 1 phần là "đã TT" khi có record .status==='paid' RÕ RÀNG cho TẤT CẢ party có due.
+  // Không có record (chưa từng đánh dấu) => KHÔNG được coi là đã TT (trước đây bị bug coi missing=OK).
+  const invEntries=entries.filter(function(p){return p&&p.inv&&p.inv.status;});
+  const noInvEntries=entries.filter(function(p){return p&&p.noInv&&p.noInv.status;});
+  let invPaid=invEntries.length>0&&invEntries.every(function(p){return p.inv.status==='paid';});
+  let noInvPaid=noInvEntries.length>0&&noInvEntries.every(function(p){return p.noInv.status==='paid';});
+  // Fallback legacy dnPayStatus — CHỈ áp dụng cho Có HĐ (hệ thống cũ không tách Không HĐ riêng)
+  if(invEntries.length===0){
     const psVals=Object.values(r.dnPayStatus||{});
-    if(psVals.length){
-      const allPaid=psVals.every(function(v){return v==='paid';});
-      invHasAny=true;noInvHasAny=true;invAllPaid=allPaid;noInvAllPaid=allPaid;
-    }
+    if(psVals.length)invPaid=psVals.every(function(v){return v==='paid';});
   }
+  const hasYes=totalYesVND===undefined||totalYesVND>0;
+  const hasNo=totalNoVND===undefined||totalNoVND>0;
   return{
-    inv:invHasAny?(invAllPaid?'Đã thanh toán':'Chưa thanh toán'):'—',
-    noInv:noInvHasAny?(noInvAllPaid?'Đã thanh toán':'Chưa thanh toán'):'—'
+    inv:!hasYes?'—':(invPaid?'Đã thanh toán':'Chưa thanh toán'),
+    noInv:!hasNo?'—':(noInvPaid?'Đã thanh toán':'Chưa thanh toán')
   };
 }
 window._dnPayStatusSplit=_dnPayStatusSplit;
@@ -15892,7 +15895,7 @@ function exportExcelDebt(){
       var dnNo=(matchedDnKey&&dnMap2[matchedDnKey])||dnKeys.reduce(function(best,k){return dnMap2[k]?dnMap2[k]:best;},'')|| r.dnNo||'—';
       // Payment status: tách riêng Có HĐ (inv) / Không HĐ (noInv) — đồng bộ với SOA PDF và báo cáo trên màn hình
       // (trước đây dùng chung 1 trạng thái gộp từ dnPayStatus legacy → sai khi 1 bên đã TT, bên kia chưa)
-      const payStatusSplit=_dnPayStatusSplit(r);
+      const payStatusSplit=_dnPayStatusSplit(r,totalYesVND,totalNoVND);
       if(totalYesVND>0)dataRows.push({dn:dnNo,job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',pre:preYes,vat:vatYes,amt:totalYesVND,tk:'Công ty',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.inv,type:'co'});
       if(totalNoVND>0)dataRows.push({dn:dnNo+'(CN)',job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',pre:preNo,vat:vatNo,amt:totalNoVND,tk:'Cá nhân',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.noInv,type:'cn'});
     });
