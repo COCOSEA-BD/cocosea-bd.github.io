@@ -1504,6 +1504,7 @@ function renderLotTable(tt){
   // Urgency: so sánh string thay vì new Date() mỗi row
   const todayStr=today.toISOString().slice(0,10);
   const urgDeadline=new Date(today.getTime()+deadlineDays*86400000).toISOString().slice(0,10);
+  const todayPlus3=_addDaysStr(todayStr,3); // cho màu ETD: hôm nay → +3 ngày = đỏ
 
   // ── Build HTML string (nhanh); DOM write là bottleneck chính
   function buildRowHtml(r){
@@ -1532,8 +1533,8 @@ function renderLotTable(tt){
         // ── ETD / POL
         if(c.k==='etd'){
           // Màu ETD: trước ETD = xám | ETD→ETD+3 = đỏ | sau ETD+3 = navy
-          const etdPlus3=r.etd?_addDaysStr(r.etd,3):'';
-          const etdColor=!r.etd?'var(--text-secondary)':(todayStr<r.etd?'#94a3b8':(todayStr<=etdPlus3?'#E24B4A':'#1a4b8c'));
+          // Màu ETD: ETD trước hôm nay = xám | ETD trong [hôm nay, hôm nay+3] = đỏ | ETD sau hôm nay+3 = navy
+          const etdColor=!r.etd?'var(--text-secondary)':(r.etd<todayStr?'#94a3b8':(r.etd<=todayPlus3?'#E24B4A':'#1a4b8c'));
           return`<td style="white-space:nowrap;background:rgba(59,130,246,.08)">`
           +`<div style="font-weight:700;color:${etdColor}">${fd(r.etd)}</div>`
           +(r.pol?`<div style="font-size:11px;color:var(--text-secondary)">${r.pol}</div>`:'')
@@ -15547,8 +15548,8 @@ function exportSOA(){
   if(!lots.length){toast('Không có dữ liệu cho shipper này','error');return;}
   var sp=cache.partners[filterShipper]||{};
   var roe=26390;
-  var today=new Date().toLocaleDateString('vi-VN');
-  var dateRange=(from||'—').replace(/-/g,'/')+' – '+(to||'—').replace(/-/g,'/');
+  var today=fd(new Date().toISOString().slice(0,10));
+  var dateRange=(from?fd(from):'—')+' – '+(to?fd(to):'—');
   var soaNo='SOA-'+new Date().getFullYear().toString().slice(-2)+String(new Date().getMonth()+1).padStart(2,'0')+'-'+Math.floor(Math.random()*9000+1000);
 
   var fmt=function(v){return Math.round(v||0).toLocaleString('en-US');};
@@ -15627,7 +15628,7 @@ function exportSOA(){
         +'<td style="'+tdStyle+';color:#666;text-align:center">'+(i+1)+'</td>'
         +'<td style="'+tdStyle+';font-weight:600">'+bkgNos+'</td>'
         +'<td style="'+tdStyle+'">'+(r.mblNo||'—')+'</td>'
-        +'<td style="'+tdStyle+'">'+(r.etd||'—').replace(/-/g,'/')+'</td>'
+        +'<td style="'+tdStyle+'">'+fd(r.etd)+'</td>'
         +'<td style="'+tdStyle+'">'+(r.pod||'—')+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(pickPre(d))+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+fmt(pickVat(d))+'</td>'
@@ -15693,7 +15694,7 @@ function exportSOA(){
         +'<td style="'+tdStyle+';color:#666;text-align:center">'+(i+1)+'</td>'
         +'<td style="'+tdStyle+';font-weight:600">'+bkgNos+'</td>'
         +'<td style="'+tdStyle+'">'+(r.mblNo||'—')+'</td>'
-        +'<td style="'+tdStyle+'">'+((r.etd||'—').replace(/-/g,'/'))+'</td>'
+        +'<td style="'+tdStyle+'">'+fd(r.etd)+'</td>'
         +'<td style="'+tdStyle+'">'+podStr+'</td>'
         +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+row.color+'">'+row.kind+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(row.pre)+'</td>'
@@ -15752,7 +15753,7 @@ function exportSOA(){
       +'</div>'
       +'<table style="border-collapse:collapse;width:100%;margin-bottom:10px"><tr>'
         +'<td style="'+tdStyle+';width:50%"><strong>Booking:</strong> '+bkgNos+'<br><strong>MBL:</strong> '+(r.mblNo||'—')+'<br><strong>Tên hàng:</strong> '+(r.tenHang||'—')+'</td>'
-        +'<td style="'+tdStyle+';width:50%"><strong>Vessel:</strong> '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'<br><strong>ETD:</strong> '+((r.etd||'—').replace(/-/g,'/'))+'<br><strong>Route:</strong> '+(r.pol||'—')+' → '+(r.pod||'—')+'</td>'
+        +'<td style="'+tdStyle+';width:50%"><strong>Vessel:</strong> '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'<br><strong>ETD:</strong> '+fd(r.etd)+'<br><strong>Route:</strong> '+(r.pol||'—')+' → '+(r.pod||'—')+'</td>'
       +'</tr></table>'
       +'<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#0F6E56">'
         +'<th style="'+thStyle+';text-align:center">#</th>'
@@ -15896,8 +15897,8 @@ function exportExcelDebt(){
   function makeDN(){return 'DN'+new Date().getFullYear().toString().slice(-2)+String(new Date().getMonth()+1).padStart(2,'0')+String(dnSeq++).padStart(6,'0');}
   var shippers=[...new Set(filtered.map(r=>r.shipper||r.supplier||''))].filter(Boolean);
   if(!filterShipper) shippers=[shippers[0]];
-  var today=new Date().toLocaleDateString('vi-VN');
-  var dateRange=(from||'01/01/2026').replace(/-/g,'/')+'  –  '+(to?to.replace(/-/g,'/'):today);
+  var today=fd(new Date().toISOString().slice(0,10));
+  var dateRange=fd(from||'2026-01-01')+'  –  '+(to?fd(to):today);
 
   // Color palette
   const C={green:'#0F6E56',greenL:'#E8F5F0',greenM:'#d0ece6',blue:'#1a4b8c',blueL:'#EEF4FB',purple:'#5B21B6',purpleL:'#F3E8FF',gray:'#F5F5F3',border:'#D0D0C8',white:'#FFFFFF',red:'#FFF0F0',amber:'#FFFBE6'};
@@ -15910,7 +15911,7 @@ function exportExcelDebt(){
     lots.forEach(r=>{
       var svcs=r.svcs||{};
       var contStr=(r.vol||'')+'×'+(r.typeCont||'')+(r.pod?' '+(r.pod.split(',')[0]).toUpperCase():'');
-      var etdFmt=r.etd?r.etd.replace(/-/g,'/'):'';
+      var etdFmt=fd(r.etd);
       var preYes=0,vatYes=0,preNo=0,vatNo=0;
       SVCS.forEach(s=>{
         var sv=svcs[s.key]; if(!sv||!sv.on||sv.invoice==='Waived')return;
