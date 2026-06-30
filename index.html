@@ -5746,145 +5746,150 @@ async function backfillCashBookFromHistory(){
   let createdChi=0, createdThu=0, skippedNoAmount=0, skippedCurrency=0, lotErrors=0, scannedLots=0;
   const errLog=[];
 
+  try{
   for(const tt of ['xuat','nhap']){
-    const colN=colName(tt);
-    // QUAN TRỌNG: quét trực tiếp TOÀN BỘ collection trên Firestore, KHÔNG dùng cache.xuat/nhap —
-    // vì cache chỉ chứa lô trong cửa sổ ETD gần đây (cơ chế ưu tiên load nhanh lúc khởi động app),
-    // các lô cũ đã thanh toán từ lâu có thể chưa nằm trong cache nếu Phase 2 chưa tải xong.
-    const snapAll=await db.collection(colN).get();
-    for(const _doc of snapAll.docs){
-      const r=Object.assign({_id:_doc.id},_doc.data());
-      scannedLots++;
-      try{
-        const updatePayload={};
-        let changed=false;
-        const bookingLabel=r.bookingNo||r.jobNo||'';
-        const lotRefBase={lotId:r._id,tt:tt,bookingNo:bookingLabel};
-
-        // ── AP: tab Dịch vụ (svcs) ──
-        const svcs=r.svcs||{};
-        if(Object.keys(svcs).length){
-          const newSvcs=JSON.parse(JSON.stringify(svcs));
-          for(const key of Object.keys(svcs)){
-            const sv=svcs[key];
-            if(sv.apPaidStatus!=='paid'||sv.apCashTxId)continue;
-            const acc=_normalizeBankAccountId(sv.apPaidBank||'')||'cash';
-            if(sv.svcCur&&sv.svcCur!=='VND'){skippedCurrency++;continue;}
-            const estAmount=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
-            if(estAmount<=0){skippedNoAmount++;continue;}
-            const svcMeta=SVCS.find(function(s){return s.key===key;});
-            const svcName=sv.customName||(svcMeta?svcMeta.name:key);
-            const txId=await _syncPayToCashBook({
-              existingTxId:null,status:'paid',txType:'chi',account:acc,amount:estAmount,
-              date:sv.apPaidDate||r.etd||new Date().toISOString().slice(0,10),
-              category:'Trả nhà cung cấp — Dịch vụ (quét lịch sử)',
-              description:svcName+' — '+bookingLabel+' (ước tính)',
-              partnerRef:sv.svcSupplier||sv.party||null,
-              lotRef:lotRefBase
-            });
-            newSvcs[key].apCashTxId=txId;
-            changed=true; createdChi++;
+      const colN=colName(tt);
+      // QUAN TRỌNG: quét trực tiếp TOÀN BỘ collection trên Firestore, KHÔNG dùng cache.xuat/nhap —
+      // vì cache chỉ chứa lô trong cửa sổ ETD gần đây (cơ chế ưu tiên load nhanh lúc khởi động app),
+      // các lô cũ đã thanh toán từ lâu có thể chưa nằm trong cache nếu Phase 2 chưa tải xong.
+      const snapAll=await db.collection(colN).get();
+      for(const _doc of snapAll.docs){
+        const r=Object.assign({_id:_doc.id},_doc.data());
+        scannedLots++;
+        try{
+          const updatePayload={};
+          let changed=false;
+          const bookingLabel=r.bookingNo||r.jobNo||'';
+          const lotRefBase={lotId:r._id,tt:tt,bookingNo:bookingLabel};
+  
+          // ── AP: tab Dịch vụ (svcs) ──
+          const svcs=r.svcs||{};
+          if(Object.keys(svcs).length){
+            const newSvcs=JSON.parse(JSON.stringify(svcs));
+            for(const key of Object.keys(svcs)){
+              const sv=svcs[key];
+              if(sv.apPaidStatus!=='paid'||sv.apCashTxId)continue;
+              const acc=_normalizeBankAccountId(sv.apPaidBank||'')||'cash';
+              if(sv.svcCur&&sv.svcCur!=='VND'){skippedCurrency++;continue;}
+              const estAmount=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
+              if(estAmount<=0){skippedNoAmount++;continue;}
+              const svcMeta=SVCS.find(function(s){return s.key===key;});
+              const svcName=sv.customName||(svcMeta?svcMeta.name:key);
+              const txId=await _syncPayToCashBook({
+                existingTxId:null,status:'paid',txType:'chi',account:acc,amount:estAmount,
+                date:sv.apPaidDate||r.etd||new Date().toISOString().slice(0,10),
+                category:'Trả nhà cung cấp — Dịch vụ (quét lịch sử)',
+                description:svcName+' — '+bookingLabel+' (ước tính)',
+                partnerRef:sv.svcSupplier||sv.party||null,
+                lotRef:lotRefBase
+              });
+              newSvcs[key].apCashTxId=txId;
+              changed=true; createdChi++;
+            }
+            if(changed) updatePayload.svcs=newSvcs;
           }
-          if(changed) updatePayload.svcs=newSvcs;
-        }
-
-        // ── AP: Costing (items thủ công) ──
-        const items=(r.costing&&r.costing.items)||[];
-        if(items.length){
-          const newItems=JSON.parse(JSON.stringify(items));
-          let itemsChanged=false;
-          for(let idx=0;idx<newItems.length;idx++){
-            const it=newItems[idx];
-            if(it.apPaidStatus!=='paid'||it.apCashTxId)continue;
-            const acc=_normalizeBankAccountId(it.apPaidBank||'')||'cash';
-            if(it.cur&&it.cur!=='VND'){skippedCurrency++;continue;}
-            const amt=it.amt||(it.price||0)*(it.qty||1)||0;
-            if(amt<=0){skippedNoAmount++;continue;}
-            const txId=await _syncPayToCashBook({
-              existingTxId:null,status:'paid',txType:'chi',account:acc,amount:amt,
-              date:it.apPaidDate||r.etd||new Date().toISOString().slice(0,10),
-              category:'Trả nhà cung cấp — Costing (quét lịch sử)',
-              description:(it.name||'Chi phí')+' — '+bookingLabel,
-              partnerRef:it.partnerRef||null,
-              lotRef:lotRefBase
-            });
-            newItems[idx].apCashTxId=txId;
-            itemsChanged=true; createdChi++;
+  
+          // ── AP: Costing (items thủ công) ──
+          const items=(r.costing&&r.costing.items)||[];
+          if(items.length){
+            const newItems=JSON.parse(JSON.stringify(items));
+            let itemsChanged=false;
+            for(let idx=0;idx<newItems.length;idx++){
+              const it=newItems[idx];
+              if(it.apPaidStatus!=='paid'||it.apCashTxId)continue;
+              const acc=_normalizeBankAccountId(it.apPaidBank||'')||'cash';
+              if(it.cur&&it.cur!=='VND'){skippedCurrency++;continue;}
+              const amt=it.amt||(it.price||0)*(it.qty||1)||0;
+              if(amt<=0){skippedNoAmount++;continue;}
+              const txId=await _syncPayToCashBook({
+                existingTxId:null,status:'paid',txType:'chi',account:acc,amount:amt,
+                date:it.apPaidDate||r.etd||new Date().toISOString().slice(0,10),
+                category:'Trả nhà cung cấp — Costing (quét lịch sử)',
+                description:(it.name||'Chi phí')+' — '+bookingLabel,
+                partnerRef:it.partnerRef||null,
+                lotRef:lotRefBase
+              });
+              newItems[idx].apCashTxId=txId;
+              itemsChanged=true; createdChi++;
+            }
+            if(itemsChanged){
+              updatePayload.costing=Object.assign({},r.costing||{},{items:newItems});
+            }
           }
-          if(itemsChanged){
-            updatePayload.costing=Object.assign({},r.costing||{},{items:newItems});
+  
+          // ── AR: Invoice tab — dnPayments (Có HĐ / Không HĐ) ──
+          const dnPm=r.dnPayments||{};
+          if(Object.keys(dnPm).length){
+            const newDnPm=JSON.parse(JSON.stringify(dnPm));
+            let dnChanged=false;
+            for(const party of Object.keys(dnPm)){
+              for(const section of ['inv','noInv']){
+                const p=(dnPm[party]||{})[section];
+                if(!p||p.status!=='paid'||p.cashTxId)continue;
+                const acc=_normalizeBankAccountId(p.bank||'')||'cash';
+                const amt=p.amount||0;
+                if(amt<=0){skippedNoAmount++;continue;}
+                const txId=await _syncPayToCashBook({
+                  existingTxId:null,status:'paid',txType:'thu',account:acc,amount:amt,
+                  date:p.date||r.etd||new Date().toISOString().slice(0,10),
+                  category:'Thu Debit Note — '+(section==='inv'?'Có HĐ':'Không HĐ')+' (quét lịch sử)',
+                  description:bookingLabel+' — '+party,
+                  partnerRef:party||null,
+                  lotRef:lotRefBase
+                });
+                newDnPm[party][section].cashTxId=txId;
+                dnChanged=true; createdThu++;
+              }
+            }
+            if(dnChanged) updatePayload.dnPayments=newDnPm;
           }
-        }
-
-        // ── AR: Invoice tab — dnPayments (Có HĐ / Không HĐ) ──
-        const dnPm=r.dnPayments||{};
-        if(Object.keys(dnPm).length){
-          const newDnPm=JSON.parse(JSON.stringify(dnPm));
-          let dnChanged=false;
-          for(const party of Object.keys(dnPm)){
-            for(const section of ['inv','noInv']){
-              const p=(dnPm[party]||{})[section];
-              if(!p||p.status!=='paid'||p.cashTxId)continue;
-              const acc=_normalizeBankAccountId(p.bank||'')||'cash';
-              const amt=p.amount||0;
+  
+          // ── AR: Debit Note legacy (dnPayStatus flat map) ──
+          const legacyStatus=r.dnPayStatus||{};
+          if(Object.keys(legacyStatus).length && !Object.keys(dnPm).length){
+            // chỉ xử lý legacy nếu chưa có dnPayments (tránh ghi trùng với phần trên)
+            const newCashTxMap=JSON.parse(JSON.stringify(r.dnPayCashTxId||{}));
+            let legacyChanged=false;
+            for(const party of Object.keys(legacyStatus)){
+              if(legacyStatus[party]!=='paid'||newCashTxMap[party])continue;
+              const bankRaw=(r.dnPayBank||{})[party]||'';
+              const acc=_normalizeBankAccountId(bankRaw)||'cash';
+              const amt=(r.dnPayAmount||{})[party]||0;
               if(amt<=0){skippedNoAmount++;continue;}
               const txId=await _syncPayToCashBook({
                 existingTxId:null,status:'paid',txType:'thu',account:acc,amount:amt,
-                date:p.date||r.etd||new Date().toISOString().slice(0,10),
-                category:'Thu Debit Note — '+(section==='inv'?'Có HĐ':'Không HĐ')+' (quét lịch sử)',
+                date:(r.dnPayDate||{})[party]||r.etd||new Date().toISOString().slice(0,10),
+                category:'Thu Debit Note (quét lịch sử)',
                 description:bookingLabel+' — '+party,
                 partnerRef:party||null,
                 lotRef:lotRefBase
               });
-              newDnPm[party][section].cashTxId=txId;
-              dnChanged=true; createdThu++;
+              newCashTxMap[party]=txId;
+              legacyChanged=true; createdThu++;
             }
+            if(legacyChanged) updatePayload.dnPayCashTxId=newCashTxMap;
           }
-          if(dnChanged) updatePayload.dnPayments=newDnPm;
-        }
-
-        // ── AR: Debit Note legacy (dnPayStatus flat map) ──
-        const legacyStatus=r.dnPayStatus||{};
-        if(Object.keys(legacyStatus).length && !Object.keys(dnPm).length){
-          // chỉ xử lý legacy nếu chưa có dnPayments (tránh ghi trùng với phần trên)
-          const newCashTxMap=JSON.parse(JSON.stringify(r.dnPayCashTxId||{}));
-          let legacyChanged=false;
-          for(const party of Object.keys(legacyStatus)){
-            if(legacyStatus[party]!=='paid'||newCashTxMap[party])continue;
-            const bankRaw=(r.dnPayBank||{})[party]||'';
-            const acc=_normalizeBankAccountId(bankRaw)||'cash';
-            const amt=(r.dnPayAmount||{})[party]||0;
-            if(amt<=0){skippedNoAmount++;continue;}
-            const txId=await _syncPayToCashBook({
-              existingTxId:null,status:'paid',txType:'thu',account:acc,amount:amt,
-              date:(r.dnPayDate||{})[party]||r.etd||new Date().toISOString().slice(0,10),
-              category:'Thu Debit Note (quét lịch sử)',
-              description:bookingLabel+' — '+party,
-              partnerRef:party||null,
-              lotRef:lotRefBase
-            });
-            newCashTxMap[party]=txId;
-            legacyChanged=true; createdThu++;
+  
+          if(Object.keys(updatePayload).length){
+            updatePayload.updatedAt=Date.now();
+            await db.collection(colN).doc(r._id).set(updatePayload,{merge:true});
+            // Cập nhật cache local luôn để khỏi chờ onSnapshot
+            Object.assign(r,updatePayload);
           }
-          if(legacyChanged) updatePayload.dnPayCashTxId=newCashTxMap;
+        }catch(lotErr){
+          lotErrors++;
+          errLog.push((r.bookingNo||r.jobNo||r._id)+': '+lotErr.message);
+          console.warn('[backfillCashBookFromHistory] lỗi tại lô', r._id, lotErr);
+          // Tiếp tục quét các lô còn lại, không dừng giữa chừng
         }
-
-        if(Object.keys(updatePayload).length){
-          updatePayload.updatedAt=Date.now();
-          await db.collection(colN).doc(r._id).set(updatePayload,{merge:true});
-          // Cập nhật cache local luôn để khỏi chờ onSnapshot
-          Object.assign(r,updatePayload);
-        }
-      }catch(lotErr){
-        lotErrors++;
-        errLog.push((r.bookingNo||r.jobNo||r._id)+': '+lotErr.message);
-        console.warn('[backfillCashBookFromHistory] lỗi tại lô', r._id, lotErr);
-        // Tiếp tục quét các lô còn lại, không dừng giữa chừng
       }
     }
+  }catch(fatalErr){
+    toast('Lỗi khi quét: '+fatalErr.message,'error');
+    console.error('[backfillCashBookFromHistory] fatal error', fatalErr);
+  }finally{
+    setLoading(false);
   }
-
-  setLoading(false);
 
   // Báo cáo kết quả chi tiết bằng modal (rõ ràng hơn toast, không bị trôi mất)
   const summary=
@@ -16158,19 +16163,20 @@ async function _syncPayToCashBook(opts){
       autoFromPayment:true,
       createdAt:Date.now(), createdBy:(currentUser&&currentUser.email)||''
     };
-    try{
-      if(opts.existingTxId){
-        await db.collection('cashTransactions').doc(opts.existingTxId).set(rec,{merge:true});
-        return opts.existingTxId;
-      } else {
-        const ref=await db.collection('cashTransactions').add(rec);
-        return ref.id;
-      }
-    }catch(e){ console.warn('_syncPayToCashBook failed',e); return opts.existingTxId||null; }
+    // QUAN TRỌNG: KHÔNG nuốt lỗi ở đây — nếu ghi Firestore thất bại (vd. quyền truy cập),
+    // phải để lỗi nổi lên cho hàm gọi xử lý, tránh trường hợp gọi nơi tưởng đã ghi thành công
+    // (đếm +1 giao dịch) trong khi thực tế Firestore không hề có bản ghi nào được tạo.
+    if(opts.existingTxId){
+      await db.collection('cashTransactions').doc(opts.existingTxId).set(rec,{merge:true});
+      return opts.existingTxId;
+    } else {
+      const ref=await db.collection('cashTransactions').add(rec);
+      return ref.id;
+    }
   } else {
     // Chưa TT hoặc không chọn tài khoản → xóa giao dịch Sổ quỹ đã ghi trước đó (nếu có)
     if(opts.existingTxId){
-      try{ await db.collection('cashTransactions').doc(opts.existingTxId).delete(); }catch(e){}
+      try{ await db.collection('cashTransactions').doc(opts.existingTxId).delete(); }catch(e){console.warn('_syncPayToCashBook: xóa giao dịch cũ thất bại',e);}
     }
     return null;
   }
