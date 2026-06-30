@@ -5636,9 +5636,12 @@ function _tcAccountLabel(id){
 }
 // Số dư hiện tại của 1 tài khoản, theo từng loại tiền tệ — tính từ toàn bộ giao dịch (không phụ thuộc bộ lọc đang xem)
 function _tcBalances(accountId){
+  const ob=(window._tcOpeningBalances||{})[accountId]||{};
+  const obDate=ob.date||'';
   const bal={VND:_tcOpening(accountId,'VND'),USD:_tcOpening(accountId,'USD')};
   (cache.cashTx||[]).forEach(function(tx){
     if(tx.account!==accountId)return;
+    if(obDate&&tx.date&&tx.date<obDate)return; // bỏ qua giao dịch trước thời điểm đầu kỳ
     const cur=tx.currency||'VND'; if(bal[cur]===undefined)bal[cur]=0;
     bal[cur]+= tx.type==='thu'?(tx.amount||0):-(tx.amount||0);
   });
@@ -5660,7 +5663,7 @@ function _tcOpening(accountId,cur){
 }
 function openTcOpeningBalance(accountId){
   const label=_tcAccountLabel(accountId);
-  const ob=(window._tcOpeningBalances||{})[accountId]||{VND:0,USD:0};
+  const ob=(window._tcOpeningBalances||{})[accountId]||{VND:0,USD:0,date:''};
   g('tcVoucherOv').innerHTML=`
   <div class="modal" style="max-width:380px">
     <div class="mhdr"><div><div class="mtitle">Số tiền đầu kỳ</div><div class="msub">${label}</div></div>
@@ -5668,6 +5671,7 @@ function openTcOpeningBalance(accountId){
     <div class="fg">
       <div class="fi"><label class="lbl">Đầu kỳ VND</label><input type="number" id="tob_vnd" value="${ob.VND||0}"/></div>
       <div class="fi"><label class="lbl">Đầu kỳ USD</label><input type="number" id="tob_usd" value="${ob.USD||0}"/></div>
+      <div class="fi full"><label class="lbl">Thời điểm đầu kỳ</label><input type="date" id="tob_date" value="${ob.date||''}"/><div style="font-size:10.5px;color:var(--text-secondary);margin-top:3px">Giao dịch trước ngày này sẽ không được cộng dồn thêm (tránh tính trùng với số dư đầu kỳ)</div></div>
     </div>
     <div class="mftr"><button class="btn" onclick="closeOv('tcVoucherOv')">Hủy</button><button class="btn pri" onclick="saveTcOpeningBalance('${accountId}')"><i class="ti ti-check"></i> Lưu</button></div>
   </div>`;
@@ -5676,8 +5680,9 @@ function openTcOpeningBalance(accountId){
 async function saveTcOpeningBalance(accountId){
   const vnd=parseFloat(g('tob_vnd').value)||0;
   const usd=parseFloat(g('tob_usd').value)||0;
+  const date=g('tob_date')?.value||'';
   window._tcOpeningBalances=window._tcOpeningBalances||{};
-  window._tcOpeningBalances[accountId]={VND:vnd,USD:usd};
+  window._tcOpeningBalances[accountId]={VND:vnd,USD:usd,date:date};
   setLoading(true,'Đang lưu...');
   try{
     await fsSet('_config','openingBalances',{balances:window._tcOpeningBalances,updatedAt:Date.now()});
@@ -5730,6 +5735,158 @@ function renderTcBody(){
 }
 
 /* ── TAB: Sổ quỹ ── */
+// Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng CHƯA có giao dịch Sổ quỹ tương ứng
+// (ví dụ các bản ghi từ trước khi tính năng tự động ghi Sổ quỹ ra đời) — tạo bù các bút toán còn thiếu.
+// Idempotent: bỏ qua các bản ghi đã có cashTxId (đã được ghi nhận rồi).
+async function backfillCashBookFromHistory(){
+  if(currentProfile?.role!=='admin'){ toast('Chỉ Admin mới có quyền thực hiện thao tác này','error'); return; }
+  if(!confirm('Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng chưa có giao dịch trong Sổ quỹ, và tạo bù các bút toán Thu/Chi tương ứng.\n\nLưu ý: với các khoản CHI trả NCC ghi nhận trước khi có tính năng này, số tiền sẽ được ƯỚC TÍNH từ chi phí hiện tại của dịch vụ (do số tiền thanh toán chính xác lúc đó không được lưu lại) — vui lòng kiểm tra lại sau khi quét. Các khoản THU (Debit Note) dùng đúng số tiền đã ghi nhận.\n\nTiếp tục?'))return;
+
+  setLoading(true,'Đang quét lịch sử thanh toán...');
+  let createdChi=0, createdThu=0, skippedNoAccount=0, skippedNoAmount=0, skippedCurrency=0;
+
+  try{
+    for(const tt of ['xuat','nhap']){
+      const colN=colName(tt);
+      for(const r of (cache[tt]||[]).slice()){
+        const updatePayload={};
+        let changed=false;
+        const bookingLabel=r.bookingNo||r.jobNo||'';
+        const lotRefBase={lotId:r._id,tt:tt,bookingNo:bookingLabel};
+
+        // ── AP: tab Dịch vụ (svcs) ──
+        const svcs=r.svcs||{};
+        if(Object.keys(svcs).length){
+          const newSvcs=JSON.parse(JSON.stringify(svcs));
+          for(const key of Object.keys(svcs)){
+            const sv=svcs[key];
+            if(sv.apPaidStatus!=='paid'||sv.apCashTxId)continue;
+            const acc=_normalizeBankAccountId(sv.apPaidBank||'');
+            if(!acc){skippedNoAccount++;continue;}
+            if(sv.svcCur&&sv.svcCur!=='VND'){skippedCurrency++;continue;}
+            const estAmount=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
+            if(estAmount<=0){skippedNoAmount++;continue;}
+            const svcMeta=SVCS.find(function(s){return s.key===key;});
+            const svcName=sv.customName||(svcMeta?svcMeta.name:key);
+            const txId=await _syncPayToCashBook({
+              existingTxId:null,status:'paid',txType:'chi',account:acc,amount:estAmount,
+              date:sv.apPaidDate||r.etd||new Date().toISOString().slice(0,10),
+              category:'Trả nhà cung cấp — Dịch vụ (quét lịch sử)',
+              description:svcName+' — '+bookingLabel+' (ước tính)',
+              partnerRef:sv.svcSupplier||sv.party||null,
+              lotRef:lotRefBase
+            });
+            newSvcs[key].apCashTxId=txId;
+            changed=true; createdChi++;
+          }
+          if(changed) updatePayload.svcs=newSvcs;
+        }
+
+        // ── AP: Costing (items thủ công) ──
+        const items=(r.costing&&r.costing.items)||[];
+        if(items.length){
+          const newItems=JSON.parse(JSON.stringify(items));
+          let itemsChanged=false;
+          for(let idx=0;idx<newItems.length;idx++){
+            const it=newItems[idx];
+            if(it.apPaidStatus!=='paid'||it.apCashTxId)continue;
+            const acc=_normalizeBankAccountId(it.apPaidBank||'');
+            if(!acc){skippedNoAccount++;continue;}
+            if(it.cur&&it.cur!=='VND'){skippedCurrency++;continue;}
+            const amt=it.amt||(it.price||0)*(it.qty||1)||0;
+            if(amt<=0){skippedNoAmount++;continue;}
+            const txId=await _syncPayToCashBook({
+              existingTxId:null,status:'paid',txType:'chi',account:acc,amount:amt,
+              date:it.apPaidDate||r.etd||new Date().toISOString().slice(0,10),
+              category:'Trả nhà cung cấp — Costing (quét lịch sử)',
+              description:(it.name||'Chi phí')+' — '+bookingLabel,
+              partnerRef:it.partnerRef||null,
+              lotRef:lotRefBase
+            });
+            newItems[idx].apCashTxId=txId;
+            itemsChanged=true; createdChi++;
+          }
+          if(itemsChanged){
+            updatePayload.costing=Object.assign({},r.costing||{},{items:newItems});
+          }
+        }
+
+        // ── AR: Invoice tab — dnPayments (Có HĐ / Không HĐ) ──
+        const dnPm=r.dnPayments||{};
+        if(Object.keys(dnPm).length){
+          const newDnPm=JSON.parse(JSON.stringify(dnPm));
+          let dnChanged=false;
+          for(const party of Object.keys(dnPm)){
+            for(const section of ['inv','noInv']){
+              const p=(dnPm[party]||{})[section];
+              if(!p||p.status!=='paid'||p.cashTxId)continue;
+              const acc=_normalizeBankAccountId(p.bank||'');
+              if(!acc){skippedNoAccount++;continue;}
+              const amt=p.amount||0;
+              if(amt<=0){skippedNoAmount++;continue;}
+              const txId=await _syncPayToCashBook({
+                existingTxId:null,status:'paid',txType:'thu',account:acc,amount:amt,
+                date:p.date||r.etd||new Date().toISOString().slice(0,10),
+                category:'Thu Debit Note — '+(section==='inv'?'Có HĐ':'Không HĐ')+' (quét lịch sử)',
+                description:bookingLabel+' — '+party,
+                partnerRef:party||null,
+                lotRef:lotRefBase
+              });
+              newDnPm[party][section].cashTxId=txId;
+              dnChanged=true; createdThu++;
+            }
+          }
+          if(dnChanged) updatePayload.dnPayments=newDnPm;
+        }
+
+        // ── AR: Debit Note legacy (dnPayStatus flat map) ──
+        const legacyStatus=r.dnPayStatus||{};
+        if(Object.keys(legacyStatus).length && !Object.keys(dnPm).length){
+          // chỉ xử lý legacy nếu chưa có dnPayments (tránh ghi trùng với phần trên)
+          const newCashTxMap=JSON.parse(JSON.stringify(r.dnPayCashTxId||{}));
+          let legacyChanged=false;
+          for(const party of Object.keys(legacyStatus)){
+            if(legacyStatus[party]!=='paid'||newCashTxMap[party])continue;
+            const bankRaw=(r.dnPayBank||{})[party]||'';
+            const acc=_normalizeBankAccountId(bankRaw);
+            if(!acc){skippedNoAccount++;continue;}
+            const amt=(r.dnPayAmount||{})[party]||0;
+            if(amt<=0){skippedNoAmount++;continue;}
+            const txId=await _syncPayToCashBook({
+              existingTxId:null,status:'paid',txType:'thu',account:acc,amount:amt,
+              date:(r.dnPayDate||{})[party]||r.etd||new Date().toISOString().slice(0,10),
+              category:'Thu Debit Note (quét lịch sử)',
+              description:bookingLabel+' — '+party,
+              partnerRef:party||null,
+              lotRef:lotRefBase
+            });
+            newCashTxMap[party]=txId;
+            legacyChanged=true; createdThu++;
+          }
+          if(legacyChanged) updatePayload.dnPayCashTxId=newCashTxMap;
+        }
+
+        if(Object.keys(updatePayload).length){
+          updatePayload.updatedAt=Date.now();
+          await db.collection(colN).doc(r._id).set(updatePayload,{merge:true});
+          // Cập nhật cache local luôn để khỏi chờ onSnapshot
+          Object.assign(r,updatePayload);
+        }
+      }
+    }
+
+    toast('Quét xong: +'+createdThu+' Thu, +'+createdChi+' Chi'
+      +(skippedNoAccount?' · bỏ qua '+skippedNoAccount+' (chưa chọn TK)':'')
+      +(skippedCurrency?' · bỏ qua '+skippedCurrency+' (khác VND)':''),
+      'success');
+    renderTcBody();
+  }catch(e){
+    toast('Lỗi khi quét: '+e.message,'error');
+  }
+  setLoading(false);
+}
+window.backfillCashBookFromHistory=backfillCashBookFromHistory;
+
 function renderTcSoQuy(){
   const accs=_tcAccountList();
   const balCards=accs.map(function(a){
@@ -5759,6 +5916,7 @@ function renderTcSoQuy(){
     <input type="date" id="tcToSel" value="${tcTo}" onchange="tcTo=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
     <button class="btn pri" style="background:var(--green)" onclick="openTcVoucher('thu')"><i class="ti ti-plus"></i> Phiếu Thu</button>
     <button class="btn red" onclick="openTcVoucher('chi')"><i class="ti ti-minus"></i> Phiếu Chi</button>
+    ${currentProfile?.role==='admin'?'<button class="btn" onclick="backfillCashBookFromHistory()" title="Quét toàn bộ lô hàng đã thanh toán nhưng chưa có giao dịch Sổ quỹ"><i class="ti ti-history"></i> Quét lịch sử</button>':''}
   </div>
   <div class="table-card"><div class="table-wrap"><table>
     <thead><tr>
