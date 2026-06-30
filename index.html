@@ -6767,13 +6767,24 @@ async function savePayStatusDetail(){
       // Lưu trực tiếp vào Firestore — merge:true để không mất các field svc khác
       const colN=colName(detailTt);
       const snap=await db.collection(colN).doc(detailId).get();
+      let newCashTxId=null;
       if(snap.exists){
         const rFs=snap.data();
         const svcs=JSON.parse(JSON.stringify(rFs.svcs||{}));
         if(!svcs[ctx.key])svcs[ctx.key]={};
+        const svcMeta=SVCS.find(function(s){return s.key===ctx.key;});
+        const svcName=svcs[ctx.key].customName||(svcMeta?svcMeta.name:ctx.key);
+        // Ghi nhận vào Sổ quỹ: phí trả NCC → khoản CHI, trừ vào tài khoản đã chọn
+        newCashTxId=await _syncPayToCashBook({
+          existingTxId:svcs[ctx.key].apCashTxId||null, status, txType:'chi', account:bank, amount, date,
+          category:'Trả nhà cung cấp — Dịch vụ', description:svcName+' — '+(rFs.bookingNo||rFs.jobNo||''),
+          partnerRef:svcs[ctx.key].svcSupplier||svcs[ctx.key].party||null,
+          lotRef:{lotId:detailId,tt:detailTt,bookingNo:rFs.bookingNo||rFs.jobNo||''}
+        });
         svcs[ctx.key].apPaidStatus=status;
         svcs[ctx.key].apPaidDate=date;
         svcs[ctx.key].apPaidBank=bank;
+        svcs[ctx.key].apCashTxId=newCashTxId;
         await db.collection(colN).doc(detailId).set({svcs,updatedAt:Date.now()},{merge:true});
       }
       const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
@@ -6781,6 +6792,7 @@ async function savePayStatusDetail(){
         r.svcs[ctx.key].apPaidStatus=status;
         r.svcs[ctx.key].apPaidDate=date;
         r.svcs[ctx.key].apPaidBank=bank;
+        r.svcs[ctx.key].apCashTxId=newCashTxId;
       }
       toast('Đã lưu trạng thái thanh toán');
 
@@ -6798,9 +6810,17 @@ async function savePayStatusDetail(){
         const items=JSON.parse(JSON.stringify((r.costing||{}).items||[]));
         const idx=items.findIndex(function(it){return it.id===itemId||('idx_'+items.indexOf(it))===itemId;});
         if(idx>=0){
+          // Ghi nhận vào Sổ quỹ: phí trả NCC (costing thủ công) → khoản CHI
+          const newCashTxId=await _syncPayToCashBook({
+            existingTxId:items[idx].apCashTxId||null, status, txType:'chi', account:bank, amount, date,
+            category:'Trả nhà cung cấp — Costing', description:(items[idx].name||'Chi phí')+' — '+(r.bookingNo||r.jobNo||''),
+            partnerRef:items[idx].partnerRef||null,
+            lotRef:{lotId:ctx.lotId,tt:ctx.tt,bookingNo:r.bookingNo||r.jobNo||''}
+          });
           items[idx].apPaidStatus=status;
           items[idx].apPaidDate=date;
           items[idx].apPaidBank=bank;
+          items[idx].apCashTxId=newCashTxId;
         }
         await db.collection(colN).doc(ctx.lotId).set({costing:Object.assign({},r.costing||{},{items,updatedAt:Date.now()}),updatedAt:Date.now()},{merge:true});
         // Update cache
@@ -6821,9 +6841,17 @@ async function savePayStatusDetail(){
         // Auto-cost từ SVC — lưu vào svcs[key]
         const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
         if(!svcs[ctx.svcKey])svcs[ctx.svcKey]={};
-        svcs[ctx.svcKey].apPaidStatus=status; svcs[ctx.svcKey].apPaidDate=date; svcs[ctx.svcKey].apPaidBank=bank;
+        const svcMeta2=SVCS.find(function(s){return s.key===ctx.svcKey;});
+        const svcName2=svcs[ctx.svcKey].customName||(svcMeta2?svcMeta2.name:ctx.svcKey);
+        const newCashTxId2=await _syncPayToCashBook({
+          existingTxId:svcs[ctx.svcKey].apCashTxId||null, status, txType:'chi', account:bank, amount, date,
+          category:'Trả nhà cung cấp — Dịch vụ', description:svcName2+' — '+(r.bookingNo||r.jobNo||''),
+          partnerRef:svcs[ctx.svcKey].svcSupplier||svcs[ctx.svcKey].party||null,
+          lotRef:{lotId:ctx.lotId,tt:ctx.tt,bookingNo:r.bookingNo||r.jobNo||''}
+        });
+        svcs[ctx.svcKey].apPaidStatus=status; svcs[ctx.svcKey].apPaidDate=date; svcs[ctx.svcKey].apPaidBank=bank; svcs[ctx.svcKey].apCashTxId=newCashTxId2;
         await db.collection(colN).doc(ctx.lotId).set({svcs,updatedAt:Date.now()},{merge:true});
-        if(cr){cr.svcs=cr.svcs||{};cr.svcs[ctx.svcKey]=Object.assign({},cr.svcs[ctx.svcKey],{apPaidStatus:status,apPaidDate:date,apPaidBank:bank});}
+        if(cr){cr.svcs=cr.svcs||{};cr.svcs[ctx.svcKey]=Object.assign({},cr.svcs[ctx.svcKey],{apPaidStatus:status,apPaidDate:date,apPaidBank:bank,apCashTxId:newCashTxId2});}
         // Re-render costing nếu đang mở
         if(detailId===ctx.lotId&&typeof renderCostingRows==='function'){
           const fresh=cr;
@@ -6843,15 +6871,29 @@ async function savePayStatusDetail(){
         const itemId=ctx.svcKey.slice(5);
         const items=JSON.parse(JSON.stringify((r.costing||{}).items||[]));
         const idx=items.findIndex(function(it){return it.id===itemId||('idx_'+items.indexOf(it))===itemId;});
-        if(idx>=0){items[idx].apPaidStatus=status;items[idx].apPaidDate=date;items[idx].apPaidBank=bank;}
+        if(idx>=0){
+          const newCashTxId=await _syncPayToCashBook({
+            existingTxId:items[idx].apCashTxId||null, status, txType:'chi', account:bank, amount, date,
+            category:'Trả nhà cung cấp', description:(ctx.label||items[idx].name||'Chi phí')+' — '+(r.bookingNo||r.jobNo||''),
+            partnerRef:(typeof tcSupPartner!=='undefined'?tcSupPartner:null)||items[idx].partnerRef||null,
+            lotRef:{lotId:ctx.lotId,tt:ctx.tt,bookingNo:r.bookingNo||r.jobNo||''}
+          });
+          items[idx].apPaidStatus=status;items[idx].apPaidDate=date;items[idx].apPaidBank=bank;items[idx].apCashTxId=newCashTxId;
+        }
         await db.collection(colN).doc(ctx.lotId).set({costing:Object.assign({},r.costing||{},{items,updatedAt:Date.now()}),updatedAt:Date.now()},{merge:true});
         if(cr&&cr.costing)cr.costing.items=items;
       } else {
         const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
         if(!svcs[ctx.svcKey])svcs[ctx.svcKey]={};
-        svcs[ctx.svcKey].apPaidStatus=status;svcs[ctx.svcKey].apPaidDate=date;svcs[ctx.svcKey].apPaidBank=bank;
+        const newCashTxId=await _syncPayToCashBook({
+          existingTxId:svcs[ctx.svcKey].apCashTxId||null, status, txType:'chi', account:bank, amount, date,
+          category:'Trả nhà cung cấp', description:(ctx.label||'Dịch vụ')+' — '+(r.bookingNo||r.jobNo||''),
+          partnerRef:(typeof tcSupPartner!=='undefined'?tcSupPartner:null)||svcs[ctx.svcKey].svcSupplier||null,
+          lotRef:{lotId:ctx.lotId,tt:ctx.tt,bookingNo:r.bookingNo||r.jobNo||''}
+        });
+        svcs[ctx.svcKey].apPaidStatus=status;svcs[ctx.svcKey].apPaidDate=date;svcs[ctx.svcKey].apPaidBank=bank;svcs[ctx.svcKey].apCashTxId=newCashTxId;
         await db.collection(colN).doc(ctx.lotId).set({svcs,updatedAt:Date.now()},{merge:true});
-        if(cr){cr.svcs=cr.svcs||{};cr.svcs[ctx.svcKey]=Object.assign({},cr.svcs[ctx.svcKey],{apPaidStatus:status,apPaidDate:date,apPaidBank:bank});}
+        if(cr){cr.svcs=cr.svcs||{};cr.svcs[ctx.svcKey]=Object.assign({},cr.svcs[ctx.svcKey],{apPaidStatus:status,apPaidDate:date,apPaidBank:bank,apCashTxId:newCashTxId});}
       }
       toast('Đã cập nhật trạng thái thanh toán');
       renderSupplierDetailPopup();
@@ -6862,7 +6904,16 @@ async function savePayStatusDetail(){
       const dnPm=JSON.parse(JSON.stringify(r.dnPayments||{}));
       if(!dnPm[ctx.party])dnPm[ctx.party]={inv:{},noInv:{}};
       const section=ctx.type==='ar_party_inv'?'inv':'noInv';
-      dnPm[ctx.party][section]={status:status,date:date,bank:bank,amount:amount};
+      const existingCashTxId=(dnPm[ctx.party][section]||{}).cashTxId||null;
+      // Ghi nhận vào Sổ quỹ: thanh toán Debit Note từ khách hàng → khoản THU, cộng vào tài khoản đã chọn
+      const newCashTxId=await _syncPayToCashBook({
+        existingTxId:existingCashTxId, status, txType:'thu', account:bank, amount, date,
+        category:'Thu Debit Note — '+(section==='inv'?'Có HĐ':'Không HĐ'),
+        description:(r.bookingNo||r.jobNo||'')+' — '+ctx.party,
+        partnerRef:ctx.party||null,
+        lotRef:{lotId:detailId,tt:detailTt,bookingNo:r.bookingNo||r.jobNo||''}
+      });
+      dnPm[ctx.party][section]={status:status,date:date,bank:bank,amount:amount,cashTxId:newCashTxId};
       await fsSet(colName(detailTt),detailId,{dnPayments:dnPm});
       const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
       if(ci>=0){cache[detailTt][ci].dnPayments=dnPm;}
@@ -6889,10 +6940,17 @@ async function savePayStatusDetail(){
       const dateMap=JSON.parse(JSON.stringify(r.dnPayDate||{}));
       const bankMap=JSON.parse(JSON.stringify(r.dnPayBank||{}));
       const amtMap=JSON.parse(JSON.stringify(r.dnPayAmount||{}));
-      payMap[ctx.party]=status; dateMap[ctx.party]=date; bankMap[ctx.party]=bank; amtMap[ctx.party]=amount;
-      await fsSet(colName(detailTt),detailId,{dnPayStatus:payMap,dnPayDate:dateMap,dnPayBank:bankMap,dnPayAmount:amtMap});
+      const cashTxMap=JSON.parse(JSON.stringify(r.dnPayCashTxId||{}));
+      const newCashTxId=await _syncPayToCashBook({
+        existingTxId:cashTxMap[ctx.party]||null, status, txType:'thu', account:bank, amount, date,
+        category:'Thu Debit Note', description:(r.bookingNo||r.jobNo||'')+' — '+ctx.party,
+        partnerRef:ctx.party||null,
+        lotRef:{lotId:detailId,tt:detailTt,bookingNo:r.bookingNo||r.jobNo||''}
+      });
+      payMap[ctx.party]=status; dateMap[ctx.party]=date; bankMap[ctx.party]=bank; amtMap[ctx.party]=amount; cashTxMap[ctx.party]=newCashTxId;
+      await fsSet(colName(detailTt),detailId,{dnPayStatus:payMap,dnPayDate:dateMap,dnPayBank:bankMap,dnPayAmount:amtMap,dnPayCashTxId:cashTxMap});
       const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
-      if(ci>=0){cache[detailTt][ci].dnPayStatus=payMap;cache[detailTt][ci].dnPayDate=dateMap;cache[detailTt][ci].dnPayBank=bankMap;cache[detailTt][ci].dnPayAmount=amtMap;}
+      if(ci>=0){cache[detailTt][ci].dnPayStatus=payMap;cache[detailTt][ci].dnPayDate=dateMap;cache[detailTt][ci].dnPayBank=bankMap;cache[detailTt][ci].dnPayAmount=amtMap;cache[detailTt][ci].dnPayCashTxId=cashTxMap;}
       toast('Đã cập nhật trạng thái thanh toán');
       if(typeof renderDetailPanel==='function'){
         const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
@@ -15902,6 +15960,49 @@ window.exportSOA=exportSOA;
 // Dùng chung cho Excel debt, SOA PDF, và báo cáo công nợ trên màn hình để tránh lệch số liệu.
 // Ghi nhận hoạt động thay đổi của user đối với 1 lô hàng (tab "Lịch sử")
 // Dùng arrayUnion để ghi atomic, tránh race condition khi nhiều người cùng thao tác.
+// Quy đổi account id từ popup thanh toán (co:/pers:) sang định dạng Sổ quỹ (cash/bank:)
+// vì 2 nơi này dùng 2 hệ tiền tố khác nhau cho cùng 1 danh sách tài khoản ngân hàng.
+function _normalizeBankAccountId(id){
+  if(!id)return '';
+  if(id==='cash'||id.indexOf('bank:')===0)return id; // đã đúng định dạng Sổ quỹ
+  const m=id.match(/^(co|pers):(.+)$/);
+  if(m)return 'bank:'+m[2];
+  return id;
+}
+
+// Ghi nhận / cập nhật / đảo ngược 1 giao dịch Sổ quỹ tự động phát sinh từ việc đánh dấu
+// thanh toán DN (thu) hoặc phí NCC (chi) tại lô hàng. Idempotent: truyền existingTxId để
+// update thay vì tạo trùng; nếu status không phải 'paid' hoặc không chọn tài khoản, sẽ xóa
+// giao dịch cũ (nếu có) để đảo ngược việc ghi nhận trước đó.
+async function _syncPayToCashBook(opts){
+  const accId=_normalizeBankAccountId(opts.account);
+  if(opts.status==='paid' && accId && opts.amount>0){
+    const rec={
+      type:opts.txType, date:opts.date||new Date().toISOString().slice(0,10),
+      amount:opts.amount, currency:'VND', account:accId,
+      category:opts.category||'', description:opts.description||'',
+      lotRef:opts.lotRef||null, partnerRef:opts.partnerRef||null,
+      autoFromPayment:true,
+      createdAt:Date.now(), createdBy:(currentUser&&currentUser.email)||''
+    };
+    try{
+      if(opts.existingTxId){
+        await db.collection('cashTransactions').doc(opts.existingTxId).set(rec,{merge:true});
+        return opts.existingTxId;
+      } else {
+        const ref=await db.collection('cashTransactions').add(rec);
+        return ref.id;
+      }
+    }catch(e){ console.warn('_syncPayToCashBook failed',e); return opts.existingTxId||null; }
+  } else {
+    // Chưa TT hoặc không chọn tài khoản → xóa giao dịch Sổ quỹ đã ghi trước đó (nếu có)
+    if(opts.existingTxId){
+      try{ await db.collection('cashTransactions').doc(opts.existingTxId).delete(); }catch(e){}
+    }
+    return null;
+  }
+}
+
 async function logLotEvent(lotId, tt, type, action, detail){
   if(!lotId||!tt)return;
   const entry={ts:Date.now(), user:(currentUser&&currentUser.email)||'system', type:type||'update', action:action||'', detail:detail||''};
