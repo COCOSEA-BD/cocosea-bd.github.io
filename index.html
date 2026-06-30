@@ -5574,16 +5574,28 @@ function runDebtReport(){
     });
   });
   const grandAllVND=grandVND+grandNoVND;
-  // Tổng đã thanh toán và còn lại
+  // Tổng đã thanh toán và còn lại — DÙNG ĐÚNG logic trạng thái (_dnPayStatusSplit) + số tiền
+  // thực tế của từng dòng (rowTotalVND/rowTotalNoVND), KHÔNG dùng field .amount đã lưu vì
+  // field này có thể bị lệch/cũ (vd. lưu = 0 từ trước khi có fix "để trống = đủ số") khiến
+  // box "Đã thanh toán" không khớp với badge "Trạng thái TT" của từng dòng (đều đã "Đã TT"
+  // nhưng box vẫn hiện thiếu tiền).
   let grandPaidVND=0;
   filtered.forEach(function(r){
-    const dnPm=r.dnPayments||{};
-    Object.values(dnPm).forEach(function(p){
-      grandPaidVND+=((p.inv&&p.inv.amount)||0)+((p.noInv&&p.noInv.amount)||0);
-    });
-    if(!Object.keys(dnPm).length&&r.dnPayAmount){
-      Object.values(r.dnPayAmount||{}).forEach(function(a){grandPaidVND+=(a||0);});
+    const svcs=r.svcs||{};
+    const sh2=r.shipper||r.supplier||'';
+    const sp3=cache.partners[sh2]||{};
+    function partyOk2(sv){
+      if(!filterShipper)return true;
+      const svParty=(sv.party||'').trim();
+      return !svParty||svParty===sh2||svParty===(sp3.fullname||'')||svParty===(sp3.enName||'')||svParty===(sp3.enShort||'');
     }
+    const invSvcs2=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice!=='Waived'&&e[1].invoice!=='No'&&partyOk2(e[1]);});
+    const invSvcsNo2=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice==='No'&&partyOk2(e[1]);});
+    let rTotVND=0; invSvcs2.forEach(function(e){const sv=e[1];const base=_amtVND(sv,r);const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;rTotVND+=Math.round(base*(1+vr/100));});
+    let rTotNoVND=0; invSvcsNo2.forEach(function(e){rTotNoVND+=_amtVND(e[1],r);});
+    const ps=_dnPayStatusSplit(r,rTotVND,rTotNoVND);
+    if(ps.inv==='Đã thanh toán')grandPaidVND+=rTotVND;
+    if(ps.noInv==='Đã thanh toán')grandPaidVND+=rTotNoVND;
   });
   const grandRemainVND=Math.max(0,grandAllVND-grandPaidVND);
   function _sumBox(label,val,color,bg,bd){return '<div style="flex:1;min-width:180px;padding:.65rem 1rem;background:'+bg+';border:1px solid '+bd+';border-radius:8px"><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">'+label+'</div><div style="font-size:14px"><strong style="color:'+color+'">'+val.toLocaleString()+' VND</strong></div></div>';}
