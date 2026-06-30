@@ -1507,13 +1507,13 @@ function renderLotTable(tt){
         }
         // ── ETD / POL
         if(c.k==='etd') return`<td style="white-space:nowrap">`
-          +`<div style="font-weight:600;color:${isUrgent?'#E24B4A':'var(--blue)'}">${fd(r.etd)}</div>`
+          +`<div style="font-weight:700;color:${isUrgent?'#E24B4A':'var(--blue)'};background:rgba(34,197,94,.13);display:inline-block;padding:1px 7px;border-radius:4px">${fd(r.etd)}</div>`
           +(r.pol?`<div style="font-size:11px;color:var(--text-secondary)">${r.pol}</div>`:'')
           +(r.cutoffCY?`<div style="font-size:10.5px;color:#b45309">CY: ${r.cutoffCY}</div>`:'')
           +`</td>`;
         // ── ETA / POD
         if(c.k==='eta') return`<td style="white-space:nowrap">`
-          +`<div style="font-weight:600">${fd(r.eta)}</div>`
+          +`<div style="font-weight:400">${fd(r.eta)}</div>`
           +(r.pod?`<div style="font-size:12.5px;font-weight:700;color:#1a4b8c">${r.pod}</div>`:'')
           +`</td>`;
         // ── Partner: Shipper/Carrier — bold navy
@@ -6679,7 +6679,9 @@ async function savePayStatusDetail(){
   setLoading(true,'Đang lưu...');
   try{
     if(ctx.type==='ap_svc'){
-      // Tab Dịch vụ: update hidden inputs + cache (save happens via saveDetailSvc)
+      // Tab Dịch vụ: cập nhật hidden inputs (đồng bộ form) + LƯU TRỰC TIẾP Firestore ngay
+      // (trước đây chỉ lưu local, phải bấm "Lưu dịch vụ" mới ghi hệ thống → dễ mất đồng bộ
+      //  với Costing Report / SOA nếu quên bấm hoặc Firestore onSnapshot ghi đè cache trước đó)
       const si=g('sstatus_'+ctx.key); if(si)si.value=status;
       const sd=g('spaiddate_'+ctx.key); if(sd)sd.value=date;
       const sb=g('spaidbank_'+ctx.key); if(sb)sb.value=bank;
@@ -6691,13 +6693,25 @@ async function savePayStatusDetail(){
         bd.style.color=status==='paid'?'var(--green)':'var(--red)';
         bd.style.borderColor=status==='paid'?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)';
       }
+      // Lưu trực tiếp vào Firestore — merge:true để không mất các field svc khác
+      const colN=colName(detailTt);
+      const snap=await db.collection(colN).doc(detailId).get();
+      if(snap.exists){
+        const rFs=snap.data();
+        const svcs=JSON.parse(JSON.stringify(rFs.svcs||{}));
+        if(!svcs[ctx.key])svcs[ctx.key]={};
+        svcs[ctx.key].apPaidStatus=status;
+        svcs[ctx.key].apPaidDate=date;
+        svcs[ctx.key].apPaidBank=bank;
+        await db.collection(colN).doc(detailId).set({svcs,updatedAt:Date.now()},{merge:true});
+      }
       const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
       if(r&&r.svcs&&r.svcs[ctx.key]){
         r.svcs[ctx.key].apPaidStatus=status;
         r.svcs[ctx.key].apPaidDate=date;
         r.svcs[ctx.key].apPaidBank=bank;
       }
-      toast('Cập nhật trạng thái — bấm "Lưu dịch vụ" để ghi vào hệ thống');
+      toast('Đã lưu trạng thái thanh toán');
 
     } else if(ctx.type==='ap_cost'){
       // Costing rows (auto từ SVC và manual thêm mới)
