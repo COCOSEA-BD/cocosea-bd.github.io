@@ -1761,6 +1761,7 @@ function renderDetailPanel(r,tt){
       {k:'invoice',label:'Invoice',icon:'ti-file-invoice'},
     ]:[]),
     {k:'document',label:'Document',icon:'ti-folder'},
+    {k:'log',label:'Lịch sử',icon:'ti-history'},
   ];
   const tabsHtml=tabs.map(t=>`<button class="dtab${detailTab===t.k?' active':''}" onclick="switchDetailTab('${t.k}')"><i class="ti ${t.icon}" style="font-size:13px"></i> ${t.label}</button>`).join('');
 
@@ -2470,6 +2471,35 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
       +'</div>'+docRows;
   }
 
+  if(detailTab==='log'){
+    const events=(r.eventLog||[]).slice().reverse(); // mới nhất lên đầu
+    if(!events.length){
+      bodyHtml=`<div style="text-align:center;padding:40px 20px;color:var(--text-secondary)"><i class="ti ti-history" style="font-size:32px;opacity:.4"></i><div style="margin-top:8px;font-size:13px">Chưa có lịch sử hoạt động cho lô hàng này</div><div style="font-size:11px;margin-top:4px">Các thay đổi từ giờ trở đi sẽ được ghi nhận tại đây</div></div>`;
+    } else {
+      const ICONS={create:'ti-circle-plus',update:'ti-edit',cont:'ti-container',svc:'ti-clipboard-list',pay:'ti-cash',trucking:'ti-truck',invoice:'ti-file-invoice',costing:'ti-calculator',status:'ti-flag',delete:'ti-trash',doc:'ti-folder',scy:'ti-package'};
+      const COLORS={create:'#16a34a',update:'#2563eb',cont:'#7c3aed',svc:'#0891b2',pay:'#d97706',trucking:'#dc2626',invoice:'#1a4b8c',costing:'#9333ea',status:'#16a34a',delete:'#dc2626',doc:'#64748b',scy:'#0d9488'};
+      bodyHtml=`<div style="padding:4px 2px">
+        <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:14px;display:flex;align-items:center;gap:6px"><i class="ti ti-history"></i> ${events.length} hoạt động được ghi nhận</div>
+        <div style="position:relative;padding-left:26px">
+          <div style="position:absolute;left:9px;top:6px;bottom:6px;width:2px;background:var(--border-light)"></div>
+          ${events.map(function(ev){
+            const ic=ICONS[ev.type]||'ti-point';
+            const col=COLORS[ev.type]||'var(--text-secondary)';
+            const dt=new Date(ev.ts||Date.now());
+            const dateStr=dt.getDate()+'-'+_MO[dt.getMonth()]+'-'+dt.getFullYear();
+            const timeStr=String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
+            return`<div style="position:relative;margin-bottom:16px">
+              <div style="position:absolute;left:-26px;top:1px;width:20px;height:20px;border-radius:50%;background:${col};display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 3px var(--bg-primary)"><i class="ti ${ic}" style="font-size:11px;color:#fff"></i></div>
+              <div style="font-size:12.5px;color:var(--text-primary);font-weight:600">${ev.action||''}</div>
+              ${ev.detail?`<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px">${ev.detail}</div>`:''}
+              <div style="font-size:10.5px;color:var(--text-tertiary);margin-top:3px;display:flex;align-items:center;gap:5px"><i class="ti ti-user" style="font-size:10px"></i>${ev.user||'—'}<span style="opacity:.5">·</span>${dateStr} ${timeStr}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }
+  }
+
   (_xPanelEl||(document.body.classList.contains('xuat-lotmode')&&g('xuat-lot-view'))||g('detailPanel')).innerHTML=`
   <div class="dpanel-tabbar" id="dpanelTabbar"></div>
   <div class="detail-hdr">
@@ -2874,6 +2904,7 @@ async function saveContSealAll(){
     }
 
     toast('Đã lưu tất cả Cont/Seal');
+    logLotEvent(detailId,detailTt,'cont','Cập nhật Cont/Seal',allConts.length+' container');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -3230,6 +3261,7 @@ async function saveDetailSvc(){
       await db.collection(colName(detailTt)).doc(detailId).update(delMap);
     }
     toast('Đã lưu dịch vụ');
+    logLotEvent(detailId,detailTt,'svc','Cập nhật dịch vụ');
     // Cập nhật cache NGAY (listener Firestore là async) để re-render không bị khôi phục dịch vụ đã xóa
     const ci=cache[detailTt].findIndex(x=>x._id===detailId);
     if(ci>=0){ cache[detailTt][ci].svcs=svcs; }
@@ -3652,9 +3684,11 @@ async function saveLot(){
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
   if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; if(!rec.jobNo) rec.jobNo=getNextJobNo(rec.loaiHang||'XK - Xuất khẩu'); }
   const docId=lotIdx||genId();
+  const isNew=!lotIdx;
   setLoading(true,'Đang lưu...');
   try {
     await fsSet(colName(currentTab), docId, rec);
+    logLotEvent(docId,currentTab,isNew?'create':'update',isNew?'Tạo lô hàng mới':'Cập nhật thông tin lô hàng',isNew?'':'Sửa thông tin chung (booking, vessel, cảng, đối tác...)');
     toast('Đã lưu lô hàng');
     closeOv('lotOv');
   } catch(e){ toast('Lỗi: '+e.message,'error'); }
@@ -4691,6 +4725,7 @@ async function saveTruckings(){
     const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
     if(ci>=0){cache[detailTt][ci].truckings=rows; cache[detailTt][ci].bookingConts=bookingConts;}
     toast('Đã lưu '+rows.length+' dòng Trucking — Cont/Seal đã đồng bộ');
+    logLotEvent(detailId,detailTt,'trucking','Cập nhật Trucking',rows.length+' dòng');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -4836,6 +4871,7 @@ async function saveScyItems(){
     const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
     if(ci>=0)cache[detailTt][ci].scyItems=rows;
     toast('Đã lưu '+rows.length+' lệnh đóng bãi');
+    logLotEvent(detailId,detailTt,'scy','Cập nhật SCY',rows.length+' lệnh đóng bãi');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -6504,7 +6540,7 @@ function renderSupplierDetailPopup(){
       <thead><tr><th>Lô hàng</th><th>Loại</th><th>Shipper</th><th>ETD</th><th>Tên chi phí</th><th style="text-align:right">Số tiền</th><th>Trạng thái thanh toán</th><th>Remark</th></tr></thead>
       <tbody>${rows.length?rows.map(function(l){
         return '<tr>'
-          +'<td style="font-weight:600">'+(l.bookingNo||l.jobNo||'—')+'</td>'
+          +'<td style="font-weight:600"><button class="plink" data-id="'+l.lotId+'" data-tt="'+l.tt+'" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline" onclick="closeOv(\'tcSupplierDetailOv\');openDetail(this.dataset.id,this.dataset.tt)" title="Xem chi tiết lô hàng">'+(l.bookingNo||l.jobNo||'—')+'</button></td>'
           +'<td><span class="bdg '+(l.tt==='xuat'?'bdg-b':'bdg-a')+'">'+(l.tt==='xuat'?'Xuất':'Nhập')+'</span></td>'
           +'<td>'+(l.shipper||'—')+'</td>'
           +'<td>'+(l.date||'—')+'</td>'
@@ -6864,6 +6900,12 @@ async function savePayStatusDetail(){
       }
     }
     closeOv('payStatusOv');
+    // Ghi nhận hoạt động: xác định đúng lô + nhãn theo loại context
+    const _logId=(ctx.type==='ap_cost')?ctx.lotId:detailId;
+    const _logTt=(ctx.type==='ap_cost')?ctx.tt:detailTt;
+    const _typeLabel={ap_svc:'Phải trả — Dịch vụ',ap_cost:'Phải trả — Costing',ap_popup:'Phải trả',ar_party_inv:'Phải thu — Có HĐ',ar_party_noinv:'Phải thu — Không HĐ',ar_party:'Phải thu'}[ctx.type]||'Thanh toán';
+    const _partyTxt=ctx.party?(' ('+ctx.party+')'):'';
+    logLotEvent(_logId,_logTt,'pay','Cập nhật TT: '+_typeLabel+_partyTxt,status==='paid'?('Đã thanh toán'+(amount?' — '+Math.round(amount).toLocaleString()+' đ':'')):'Chưa thanh toán');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -9712,6 +9754,7 @@ async function saveDnInfo(){
     if(dnUpdateStatus) dnUpdate.status=dnUpdateStatus;
     await fsSet(colName(detailTt),detailId,dnUpdate);
     toast('Đã lưu: '+dnNo+(dnStatus?' — '+dnStatus:'')+(dnUpdateStatus?' → Trạng thái: '+dnUpdateStatus:''));
+    logLotEvent(detailId,detailTt,'invoice','Cập nhật Invoice',dnNo+(dnStatus?' — '+dnStatus:''));
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -9990,6 +10033,7 @@ async function saveCosting(){
     _tempCosting=null;
     await fsSet(colName(detailTt),detailId,{costingStatus:'Đã costing',status:'Đã Costing',updatedAt:Date.now()});
     toast('Đã lưu Costing → Trạng thái: Đã Costing');
+    logLotEvent(detailId,detailTt,'costing','Cập nhật Costing','Trạng thái: Đã Costing');
     const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
     renderDetailPanel(Object.assign({},fresh,{status:'Đã Costing',costingStatus:'Đã costing'}),detailTt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -12534,7 +12578,7 @@ function _dmGoodsTable(d){
     +'</table>';
 }
 function _dmSign(d){
-  const stampImg=d.sStamp?'<div style="margin-top:4px"><img src="'+d.sStamp+'" style="max-width:170px;max-height:120px;object-fit:contain"/></div>':'<div style="height:80px"></div>';
+  const stampImg=d.sStamp?'<div style="margin-top:4px"><img src="'+d.sStamp+'" style="max-width:196px;max-height:138px;object-fit:contain"/></div>':'<div style="height:80px"></div>';
   return '<div style="margin-top:24px;text-align:right"><div class="b">'+(d.sShort||d.sName)+'</div>'+stampImg+'</div>';
 }
 
@@ -12612,7 +12656,7 @@ function _dmContract(d){
     +'<p>1) Original Bill of Loading in 3 original (or copy, in case original B/L Surrendered).</p><p>2) Commercial Invoice and Packing List in 3 original;</p><p>3) Certificate of Origin (Form E) the original page only;</p><p>4) Phytosanitary Certificate (1 Original and 1 Copy);</p>'
     +'<p class="b" style="margin-top:4px">4. Shipment : within '+_dmEndOfMonth(d.contractDate||d.invoiceDate||d.date||d.dateRaw)+'</p>'
     +'</div>'
-    +'<table class="nb" style="width:100%;margin-top:24px"><tr><td class="c b" style="width:50%">FOR THE BUYER</td><td class="c b">FOR THE SELLER</td></tr><tr><td class="c" style="height:120px;vertical-align:top;padding-top:8px"><div class="b">'+(d.cnee||'')+'</div></td><td class="c" style="vertical-align:top"><div class="b">'+(d.sShort||d.sName)+'</div>'+(d.sStamp?'<img src="'+d.sStamp+'" style="max-width:170px;max-height:120px;object-fit:contain"/>':'')+'</td></tr></table>'
+    +'<table class="nb" style="width:100%;margin-top:24px"><tr><td class="c b" style="width:50%">FOR THE BUYER</td><td class="c b">FOR THE SELLER</td></tr><tr><td class="c" style="height:120px;vertical-align:top;padding-top:8px"><div class="b">'+(d.cnee||'')+'</div></td><td class="c" style="vertical-align:top"><div class="b">'+(d.sShort||d.sName)+'</div>'+(d.sStamp?'<img src="'+d.sStamp+'" style="max-width:196px;max-height:138px;object-fit:contain"/>':'')+'</td></tr></table>'
     +'</body></html>';
 }
 
@@ -12689,6 +12733,7 @@ async function saveDocToLot(type, html, name){
     await fsSet(tt==='xuat'?'lots_xuat':'lots_nhap',id,{savedDocs});
     const arr=cache[tt]||[];const ci=arr.findIndex(x=>x._id===id);if(ci>=0)arr[ci].savedDocs=savedDocs;
     toast('Đã lưu chứng từ vào lô hàng');
+    logLotEvent(id,tt,'doc','Lưu chứng từ: '+(name||type||''));
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -15855,6 +15900,27 @@ window.exportSOA=exportSOA;
 // Tính trạng thái TT riêng cho Có HĐ (inv) và Không HĐ (noInv) của 1 lô hàng.
 // Ưu tiên đọc r.dnPayments (mới, có tách inv/noInv); fallback r.dnPayStatus (legacy, gộp chung).
 // Dùng chung cho Excel debt, SOA PDF, và báo cáo công nợ trên màn hình để tránh lệch số liệu.
+// Ghi nhận hoạt động thay đổi của user đối với 1 lô hàng (tab "Lịch sử")
+// Dùng arrayUnion để ghi atomic, tránh race condition khi nhiều người cùng thao tác.
+async function logLotEvent(lotId, tt, type, action, detail){
+  if(!lotId||!tt)return;
+  const entry={ts:Date.now(), user:(currentUser&&currentUser.email)||'system', type:type||'update', action:action||'', detail:detail||''};
+  // Cập nhật cache ngay để tab Lịch sử phản hồi tức thì (không chờ Firestore round-trip)
+  const r=cache[tt]&&cache[tt].find(function(x){return x._id===lotId;});
+  if(r){
+    r.eventLog=(r.eventLog||[]).concat([entry]);
+    if(detailId===lotId&&detailTt===tt&&detailTab==='log') renderDetailPanel(r,tt);
+  }
+  try{
+    await db.collection(colName(tt)).doc(lotId).update({
+      eventLog: firebase.firestore.FieldValue.arrayUnion(entry)
+    });
+  }catch(e){
+    console.warn('logLotEvent failed:', e);
+  }
+}
+window.logLotEvent=logLotEvent;
+
 function _dnPayStatusSplit(r, totalYesVND, totalNoVND){
   const dnPm=r.dnPayments||{};
   const entries=Object.values(dnPm);
