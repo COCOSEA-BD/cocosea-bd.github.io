@@ -5616,9 +5616,9 @@ function runDebtReport(){
    CRM — Quản lý đối tác (Shipper / Hãng tàu / Forwarder / Nhà cung cấp)
 ───────────────────────────────────────────── */
 let crmType='shipper', crmDetailKey=null, crmDetailTab='general';
-const CRM_TYPES=['shipper','carrier','fwd','supplier'];
-const CRM_TLABEL={shipper:'Shipper',carrier:'Hãng tàu',fwd:'Forwarder',supplier:'Nhà cung cấp'};
-const CRM_TICON={shipper:'ti-building-factory',carrier:'ti-ship',fwd:'ti-truck',supplier:'ti-package-import'};
+const CRM_TYPES=['shipper','carrier','fwd','supplier','salan'];
+const CRM_TLABEL={shipper:'Shipper',carrier:'Hãng tàu',fwd:'Forwarder',supplier:'Nhà cung cấp',salan:'Sà Lan'};
+const CRM_TICON={shipper:'ti-building-factory',carrier:'ti-ship',fwd:'ti-truck',supplier:'ti-package-import',salan:'ti-sailing'};
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -7477,8 +7477,46 @@ function renderCrmList(){
   const tableEl=g('crmListTable'); if(!tableEl)return;
   const q=(g('crmSearch')?.value||'').toLowerCase();
   const list=Object.values(cache.partners).filter(function(p){return p.type===crmType;})
-    .filter(function(p){return !q||(p.shortname||'').toLowerCase().includes(q)||(p.fullname||'').toLowerCase().includes(q)||(p.email||'').toLowerCase().includes(q);})
-    .sort(function(a,b){return a.shortname.localeCompare(b.shortname);});
+    .filter(function(p){return !q||(p.shortname||'').toLowerCase().includes(q)||(p.fullname||'').toLowerCase().includes(q)||(p.email||'').toLowerCase().includes(q)||(p.phone||'').toLowerCase().includes(q);})
+    .sort(function(a,b){return (a.shortname||'').localeCompare(b.shortname||'');});
+
+  // ── Bảng riêng cho Sà Lan ──
+  if(crmType==='salan'){
+    const thS2='padding:9px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border-light)';
+    tableEl.innerHTML=`
+    <div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden;background:var(--bg-primary)">
+      ${list.length?`<table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg-secondary)">
+          <th style="${thS2}">Tên / Mã sà lan</th>
+          <th style="${thS2}">Chủ sà lan</th>
+          <th style="${thS2}">Số điện thoại</th>
+          <th style="${thS2}">Sức chứa</th>
+          <th style="${thS2}">STK / Ghi chú</th>
+          <th style="${thS2};text-align:center"></th>
+        </tr></thead>
+        <tbody>${list.map(function(p,i){
+          return `<tr style="border-bottom:${i<list.length-1?'1px solid var(--border-light)':'none'}">
+            <td style="padding:10px 14px">
+              <button onclick="openPartnerView('${p.shortname}')" style="display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer;padding:0;text-align:left;font-family:inherit">
+                <div style="width:30px;height:30px;border-radius:7px;background:#e0f2f1;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;color:#0f766e;flex-shrink:0"><i class="ti ti-sailing" style="font-size:14px"></i></div>
+                <span style="font-weight:700;font-size:12.5px;color:var(--green);text-decoration:underline;text-underline-offset:2px">${p.shortname}</span>
+              </button>
+            </td>
+            <td style="padding:10px 14px;font-size:12px">${p.fullname||'—'}</td>
+            <td style="padding:10px 14px;font-size:12px">${p.phone||'—'}</td>
+            <td style="padding:10px 14px;font-size:12px">${p.sucChua||'—'}</td>
+            <td style="padding:10px 14px;font-size:11px;color:var(--text-secondary);max-width:260px;white-space:pre-wrap">${p.remark||'—'}</td>
+            <td style="padding:10px 14px;text-align:center">
+              <button class="rac red" onclick="delPartner('${p.shortname}')" title="Xóa"><i class="ti ti-trash"></i></button>
+            </td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`:`<div style="padding:2.5rem;text-align:center;color:var(--text-secondary);font-size:12px"><i class="ti ti-sailing" style="font-size:24px;display:block;margin-bottom:8px;color:var(--text-tertiary)"></i>Chưa có sà lan nào${q?' khớp với tìm kiếm':''}</div>`}
+    </div>`;
+    return;
+  }
+
+  // ── Bảng mặc định cho các loại đối tác khác ──
   tableEl.innerHTML=`
   <div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden;background:var(--bg-primary)">
     ${list.length?`<table style="width:100%;border-collapse:collapse">
@@ -7532,6 +7570,21 @@ function openPartnerModal(name){
   partnerIdx=name; partnerIsNew=!name;
   const p=name?cache.partners[name]:{};
   g('partnerTitle').textContent=name?'Chỉnh sửa: '+name:'Thêm đối tác mới';
+
+  // ── Form riêng cho Sà Lan ──
+  if(crmType==='salan'||p.type==='salan'){
+    g('partnerFields').innerHTML=`
+      <div class="fi"><label class="lbl">Mã / Tên sà lan (ID)</label><input type="text" id="pf_sn" value="${p.shortname||''}" ${name?'readonly':''} placeholder="VD: SALAN01"/></div>
+      <input type="hidden" id="pf_type" value="salan"/>
+      <div class="fi"><label class="lbl">Chủ sà lan</label><input type="text" id="pf_fn" value="${(p.fullname||'').replace(/"/g,'&quot;')}" placeholder="Họ tên chủ sà lan"/></div>
+      <div class="fi"><label class="lbl">Số điện thoại</label><input type="tel" id="pf_phone" value="${p.phone||''}" placeholder="0909..."/></div>
+      <div class="fi"><label class="lbl">Sức chứa</label><input type="text" id="pf_sucChua" value="${(p.sucChua||'').replace(/"/g,'&quot;')}" placeholder="VD: 200 tấn, 5 cont 40HC..."/></div>
+      <div class="fi full"><label class="lbl">STK ngân hàng / Ghi chú</label><textarea id="pf_remark" rows="3" style="font-size:12px;resize:vertical" placeholder="Số tài khoản ngân hàng, tên ngân hàng, ghi chú...">${p.remark||''}</textarea></div>`;
+    openOv('partnerOv');
+    return;
+  }
+
+  // ── Form mặc định cho các loại đối tác khác ──
   g('partnerFields').innerHTML=`
     <div class="fi"><label class="lbl">Short name (ID)</label><input type="text" id="pf_sn" value="${p.shortname||''}" ${name?'readonly':''}/></div>
     <div class="fi"><label class="lbl">Loại đối tác</label><select id="pf_type"><option value="carrier"${p.type==='carrier'?' selected':''}>Carrier</option><option value="shipper"${p.type==='shipper'?' selected':''}>Shipper</option><option value="fwd"${p.type==='fwd'?' selected':''}>Forwarder</option><option value="supplier"${p.type==='supplier'?' selected':''}>Nhà cung cấp</option></select></div>
@@ -7607,10 +7660,22 @@ window.clearStamp=clearStamp;
 async function savePartner(){
   const sn=g('pf_sn').value.trim(); if(!sn){toast('Nhập tên viết tắt','error');return;}
   const remark=g('pf_remark')?.value||'';
+  const type=g('pf_type')?.value||crmType;
+
+  // Sà Lan: chỉ lưu các field riêng
+  if(type==='salan'){
+    const rec={type:'salan',fullname:g('pf_fn')?.value||'',phone:g('pf_phone')?.value||'',sucChua:g('pf_sucChua')?.value||'',remark,updatedAt:Date.now()};
+    setLoading(true,'Đang lưu...');
+    try{ await fsSet('partners',sn,rec); toast('Đã lưu sà lan'); closeOv('partnerOv'); }
+    catch(e){ toast('Lỗi: '+e.message,'error'); }
+    setLoading(false);
+    return;
+  }
+
   const enName=g('pf_enName')?.value||'';const enShort=g('pf_enShort')?.value||'';const enAddr=g('pf_enAddr')?.value||'';
   const bankAcc=g('pf_bankAcc')?.value||'';const bankName=g('pf_bankName')?.value||'';
   const acctName=g('pf_acctName')?.value||'';const swift=g('pf_swift')?.value||'';const bankAddr=g('pf_bankAddr')?.value||'';const stamp=g('pf_stamp')?.value||'';
-  const rec={type:g('pf_type').value,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,invEmail:g('pf_invEmail')?.value||'',contact:g('pf_contact').value,phone:g('pf_phone').value,remark,enName,enShort,enAddr,bankAcc,bankName,acctName,swift,bankAddr,stamp,updatedAt:Date.now()};
+  const rec={type,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,invEmail:g('pf_invEmail')?.value||'',contact:g('pf_contact').value,phone:g('pf_phone').value,remark,enName,enShort,enAddr,bankAcc,bankName,acctName,swift,bankAddr,stamp,updatedAt:Date.now()};
   setLoading(true,'Đang lưu...');
   try { await fsSet('partners',sn,rec); toast('Đã lưu đối tác'); closeOv('partnerOv'); }
   catch(e){ toast('Lỗi: '+e.message,'error'); }
@@ -7674,11 +7739,15 @@ function _isEditingCrmDetail(){
 }
 function renderCrmDetail(){
   const p=cache.partners[crmDetailKey]||{};
-  const tabs=[
-    {k:'general',label:'Thông tin chung',icon:'ti-info-circle'},
-    {k:'contacts',label:'Người liên hệ',icon:'ti-users'},
-    {k:'cnee',label:'Cnee',icon:'ti-package'},
-  ];
+  const isSaLan=p.type==='salan';
+  const tabs=isSaLan
+    ?[{k:'general',label:'Thông tin',icon:'ti-info-circle'}]
+    :[
+      {k:'general',label:'Thông tin chung',icon:'ti-info-circle'},
+      {k:'contacts',label:'Người liên hệ',icon:'ti-users'},
+      {k:'cnee',label:'Cnee',icon:'ti-package'},
+    ];
+  if(isSaLan) crmDetailTab='general'; // reset về general cho sà lan
   g('crmDetailOv').innerHTML=`
   <div class="modal" style="max-width:820px;max-height:92vh;overflow-y:auto">
     <div class="mhdr">
@@ -7701,9 +7770,41 @@ function renderCrmDetail(){
 function switchCrmDetailTab(tab){ crmDetailTab=tab; renderCrmDetail(); }
 window.switchCrmDetailTab=switchCrmDetailTab;
 
+async function saveCrmSaLan(){
+  const p=cache.partners[crmDetailKey]||{};
+  const rec={type:'salan',
+    fullname:g('cg_fn')?.value||'',
+    phone:g('cg_phone')?.value||'',
+    sucChua:g('cg_sucChua')?.value||'',
+    remark:g('cg_remark')?.value||'',
+    updatedAt:Date.now()};
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet('partners',crmDetailKey,rec);
+    toast('Đã lưu thông tin sà lan');
+    closeOv('crmDetailOv');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveCrmSaLan=saveCrmSaLan;
+
 function renderCrmDetailBody(){
   const body=g('crmDetailBody'); if(!body)return;
   const p=cache.partners[crmDetailKey]||{};
+  if(p.type==='salan'){
+    body.innerHTML=`<div class="fg">
+      <div class="fi"><label class="lbl">Mã / Tên sà lan</label><input type="text" id="cg_sn" value="${(p.shortname||'').replace(/"/g,'&quot;')}" readonly style="background:var(--bg-secondary);color:var(--text-secondary)"/></div>
+      <div class="fi"><label class="lbl">Chủ sà lan</label><input type="text" id="cg_fn" value="${(p.fullname||'').replace(/"/g,'&quot;')}" placeholder="Họ tên chủ sà lan"/></div>
+      <div class="fi"><label class="lbl">Số điện thoại</label><input type="tel" id="cg_phone" value="${(p.phone||'').replace(/"/g,'&quot;')}"/></div>
+      <div class="fi"><label class="lbl">Sức chứa</label><input type="text" id="cg_sucChua" value="${(p.sucChua||'').replace(/"/g,'&quot;')}" placeholder="VD: 200 tấn, 5 cont 40HC..."/></div>
+      <div class="fi full"><label class="lbl">STK ngân hàng / Ghi chú</label><textarea id="cg_remark" rows="4" style="font-size:12px;resize:vertical" placeholder="Số tài khoản ngân hàng, tên ngân hàng, ghi chú...">${p.remark||''}</textarea></div>
+      <div class="fi full" style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn" onclick="closeOv('crmDetailOv')">Đóng</button>
+        <button class="btn pri" onclick="saveCrmSaLan()"><i class="ti ti-check"></i> Lưu</button>
+      </div>
+    </div>`;
+    return;
+  }
   if(crmDetailTab==='general') body.innerHTML=renderCrmGeneralTab(p);
   else if(crmDetailTab==='contacts') body.innerHTML=renderCrmContactsTab(p);
   else if(crmDetailTab==='cnee') body.innerHTML=renderCrmCneeTab(p);
@@ -11503,6 +11604,7 @@ function filterCostingRows(){
 window.setCostingFilter=setCostingFilter;
 window.filterCostingRows=filterCostingRows;
 // ─────────── TRUCKING REPORT ───────────
+window._truckRptSort=window._truckRptSort||{col:'date',dir:'desc'}; // mặc định: ngày đóng mới nhất trước
 function renderTruckingReport(){
   const pg=g('page-trucking-report'); if(!pg)return;
   const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
@@ -11519,8 +11621,12 @@ function renderTruckingReport(){
       }));
     });
   });
-  // Sort theo ETD lô hàng giảm dần (ETD lớn hơn lên trên trước)
-  rows.sort(function(a,b){return (b._etd||'').localeCompare(a._etd||'');});
+  // Sort theo state hiện tại
+  const _s=window._truckRptSort;
+  rows.sort(function(a,b){
+    const va=(a[_s.col]||''), vb=(b[_s.col]||'');
+    return _s.dir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
+  });
 
   // Filter state
   const fs=window._truckRptFilter=window._truckRptFilter||{shipper:'',wh:'',dateFrom:'',dateTo:'',status:''};
@@ -11556,6 +11662,12 @@ function renderTruckingReport(){
     +'</tr>';
   }).join('');
 
+  const _sortIcon=function(col){
+    if(_s.col!==col)return '<i class="ti ti-selector" style="font-size:9px;opacity:.4;margin-left:3px"></i>';
+    return _s.dir==='desc'
+      ?'<i class="ti ti-chevron-down" style="font-size:9px;margin-left:3px;color:var(--green)"></i>'
+      :'<i class="ti ti-chevron-up" style="font-size:9px;margin-left:3px;color:var(--green)"></i>';
+  };
   pg.innerHTML='<div style="padding:1rem 1.25rem">'
     +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">'
       +'<i class="ti ti-truck" style="font-size:20px;color:#1a4b8c"></i>'
@@ -11580,7 +11692,7 @@ function renderTruckingReport(){
         +'<th style="'+thS+';width:36px">#</th>'
         +'<th style="'+thS+'">Booking No</th>'
         +'<th style="'+thS+'">Shipper</th>'
-        +'<th style="'+thS+'">Ngày đóng</th>'
+        +'<th style="'+thS+';cursor:pointer;user-select:none" onclick="window._truckRptSort={col:\'date\',dir:(window._truckRptSort.col===\'date\'&&window._truckRptSort.dir===\'desc\'?\'asc\':\'desc\')};renderTruckingReport()">Ngày đóng'+_sortIcon('date')+'</th>'
         +'<th style="'+thS+';width:40px">Vol</th>'
         +'<th style="'+thS+'">Type</th>'
         +'<th style="'+thS+'">Kho đóng</th>'
@@ -11590,7 +11702,7 @@ function renderTruckingReport(){
         +'<th style="'+thS+'">Số cont</th>'
         +'<th style="'+thS+'">Số xe</th>'
       +'</tr></thead>'
-      +'<tbody>'+(bodyRows||'<tr><td colspan="11" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-truck" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu trucking</td></tr>')+'</tbody>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-truck" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu trucking</td></tr>')+'</tbody>'
     +'</table></div>'
   +'</div>';
 }
