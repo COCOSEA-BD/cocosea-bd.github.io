@@ -778,6 +778,29 @@ auth.onAuthStateChanged(async (user) => {
           alert('Tài khoản của bạn đã bị chặn truy cập. Vui lòng liên hệ quản trị viên.');
           return;
         }
+        // AUTO-MIGRATION: Firestore rules lookup users theo {uid} làm docId.
+        // Nếu profile hiện tại được lưu theo docId cũ (email-key) thay vì UID,
+        // rules sẽ không tìm thấy role → deny mọi thao tác ghi.
+        // Fix: tạo/đồng bộ document users/{uid} để rules luôn đọc đúng role.
+        if(currentProfile._docId && currentProfile._docId !== user.uid){
+          try{
+            const _profileData={
+              uid:user.uid,
+              email:currentProfile.email||user.email,
+              name:currentProfile.name||'',
+              role:currentProfile.role||'viewer',
+              avatar:currentProfile.avatar||'',
+              emailSignature:currentProfile.emailSignature||'',
+              active:currentProfile.active!==false,
+              migratedAt:Date.now()
+            };
+            await db.collection('users').doc(user.uid).set(_profileData,{merge:true});
+            console.log('COCOFLOW: Auto-migrated users doc to UID key for', user.email);
+          }catch(_migErr){
+            // Không block login nếu migration lỗi (ví dụ rules chưa deploy)
+            console.warn('COCOFLOW: Could not auto-migrate users doc:', _migErr.message);
+          }
+        }
       }
     } catch(e) {
       console.error('Profile load error:', e);
