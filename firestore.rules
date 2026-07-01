@@ -1,77 +1,141 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     function isSignedIn() {
       return request.auth != null;
     }
-    function getUserDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-    function getRole() {
-      return getUserDoc().role;
-    }
-    function isAdmin()    { return isSignedIn() && getRole() == 'admin'; }
-    function isOperator() { return isSignedIn() && (getRole() == 'admin' || getRole() == 'operator'); }
 
+    // Lookup user document theo UID (doc mới) HOẶC theo email-key (doc cũ)
+    // vì một số user được tạo trước khi app chuẩn hóa docId = uid,
+    // nên docId của họ có thể là email.replace('.','_') thay vì uid.
+    function getUserData() {
+      let byUid   = exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                    ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+                    : null;
+      // Nếu đã tìm thấy theo UID thì dùng luôn, không cần fallback
+      return byUid;
+    }
+
+    function getRole() {
+      let d = getUserData();
+      return d != null ? d.role : null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && getRole() == 'admin';
+    }
+
+    function isOperator() {
+      return isSignedIn() && (getRole() == 'admin' || getRole() == 'operator');
+    }
+
+    // Roles được phép sửa lô hàng: admin, operator, doc, cus
+    function canEditLot() {
+      return isSignedIn() && (
+        getRole() == 'admin'    ||
+        getRole() == 'operator' ||
+        getRole() == 'doc'      ||
+        getRole() == 'cus'
+      );
+    }
+
+    // Roles có quyền manageFinance: admin + accountant
+    function canManageFinance() {
+      return isSignedIn() && (
+        getRole() == 'admin' ||
+        getRole() == 'accountant'
+      );
+    }
+
+    // Roles được ghi cashTransactions (bao gồm ghi tự động khi tick TT lô hàng)
+    function canWriteCashTx() {
+      return isSignedIn() && (
+        getRole() == 'admin'      ||
+        getRole() == 'accountant' ||
+        getRole() == 'operator'   ||
+        getRole() == 'doc'        ||
+        getRole() == 'cus'
+      );
+    }
+
+    // ── Lô hàng ──────────────────────────────────────────
     match /lots_xuat/{docId} {
       allow read:   if isSignedIn();
-      allow create: if isOperator();
-      allow update: if isOperator();
+      allow create: if canEditLot();
+      allow update: if canEditLot();
       allow delete: if isAdmin();
     }
+
     match /lots_nhap/{docId} {
       allow read:   if isSignedIn();
-      allow create: if isOperator();
-      allow update: if isOperator();
+      allow create: if canEditLot();
+      allow update: if canEditLot();
       allow delete: if isAdmin();
     }
+
+    // ── Đối tác ───────────────────────────────────────────
     match /partners/{docId} {
       allow read:   if isSignedIn();
       allow create: if isOperator();
       allow update: if isOperator();
       allow delete: if isAdmin();
     }
+
+    // ── Users ─────────────────────────────────────────────
     match /users/{docId} {
-      // Any signed-in user can read (needed for profile lookup by UID or email)
       allow read:   if isSignedIn();
-      // Admin can write all user docs
       allow write:  if isAdmin();
     }
+
+    // profiles: mỗi user chỉ ghi doc của chính mình (lưu lastPasswordChange)
+    match /profiles/{docId} {
+      allow read:   if isSignedIn();
+      allow write:  if isSignedIn() && request.auth.uid == docId;
+    }
+
+    // ── Cấu hình hệ thống ────────────────────────────────
     match /_config/{docId} {
       allow read:  if isSignedIn();
       allow write: if isAdmin();
     }
 
-    // ── Bổ sung: 5 collection còn thiếu (gây lỗi "Missing or insufficient permissions") ──
-    match /cashTransactions/{docId} {
-      allow read:   if isSignedIn();
-      allow create: if isOperator();
-      allow update: if isOperator();
-      allow delete: if isAdmin();
-    }
-    match /debtEntries/{docId} {
-      allow read:   if isSignedIn();
-      allow create: if isOperator();
-      allow update: if isOperator();
-      allow delete: if isAdmin();
-    }
-    match /vessels/{docId} {
-      allow read:   if isSignedIn();
-      allow create: if isOperator();
-      allow update: if isOperator();
-      allow delete: if isAdmin();
-    }
+    // ── Danh mục ─────────────────────────────────────────
     match /ocean_rates/{docId} {
       allow read:   if isSignedIn();
       allow create: if isOperator();
       allow update: if isOperator();
       allow delete: if isAdmin();
     }
+
     match /quotes/{docId} {
       allow read:   if isSignedIn();
       allow create: if isOperator();
       allow update: if isOperator();
       allow delete: if isAdmin();
     }
+
+    match /vessels/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if isOperator();
+      allow update: if isOperator();
+      allow delete: if isAdmin();
+    }
+
+    // ── Quản lý thu chi ──────────────────────────────────
+    match /cashTransactions/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if canWriteCashTx();
+      allow update: if canManageFinance();
+      allow delete: if isAdmin();
+    }
+
+    match /debtEntries/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if canManageFinance();
+      allow update: if canManageFinance();
+      allow delete: if isAdmin();
+    }
+
   }
 }
