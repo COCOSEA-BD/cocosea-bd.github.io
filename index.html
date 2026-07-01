@@ -5497,10 +5497,13 @@ function runDebtReport(){
     const sh=r.shipper||r.supplier||'(Không rõ)';
     if(!byShipper[sh])byShipper[sh]={rows:[],totalVND:0};
     byShipper[sh].rows.push(r);
-    // Sum from svcs where invoice=Yes
+    // Sum từ svcs — CHỈ lấy dịch vụ của đúng party này khi đang lọc theo 1 shipper
     const svcs=r.svcs||{};
+    const sp2=cache.partners[sh]||{};
     Object.values(svcs).forEach(function(sv){
       if(!sv.on||sv.invoice==='Waived'||sv.invoice==='No')return;
+      // Lọc theo party nếu đang xem 1 shipper cụ thể
+      if(filterShipper&&!_partyMatchesShipper(sv.party,sh,sp2))return;
       byShipper[sh].totalVND+=_amtVND(sv,r);
     });
   });
@@ -5527,6 +5530,17 @@ function runDebtReport(){
       let rowTotalVND=0; invSvcs.forEach(function(e){const sv=e[1];const base=_amtVND(sv,r);const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;rowTotalVND+=Math.round(base*(1+vr/100));});
       let rowTotalNoVND=0; invSvcsNo.forEach(function(e){rowTotalNoVND+=_amtVND(e[1],r);});
       const rowTotalAllVND=rowTotalVND+rowTotalNoVND;
+      // Tìm party keys của shipper này trong dnPayments để lọc đúng trạng thái TT
+      function _getPartyKeys(r, sh, sp){
+        if(!filterShipper)return null; // không lọc khi xem tất cả
+        const dnPm=r.dnPayments||{};
+        // Lấy tất cả key trong dnPayments mà match với shipper đang xem
+        const matched=Object.keys(dnPm).filter(function(k){return _partyMatchesShipper(k,sh,sp);});
+        // Cũng check dnPayStatus legacy
+        const legKeys=Object.keys(r.dnPayStatus||{}).filter(function(k){return _partyMatchesShipper(k,sh,sp);});
+        const all=[...new Set([...matched,...legKeys])];
+        return all.length?all:null;
+      }
       return '<tr>'
         +'<td style="'+tdS+';font-weight:600"><button class="plink" data-id="'+r._id+'" data-tt="'+(r.loai==='Xuất'?'xuat':'nhap')+'" data-tab="invoice" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-align:left" onclick="openDetail(this.dataset.id,this.dataset.tt,this.dataset.tab)">'+r.bookingNo+'</button></td>'
         +'<td style="'+tdS+'"><span class="bdg '+(r.loai==='Xuất'?'bdg-b':'bdg-a')+'">'+r.loai+'</span></td>'
@@ -5538,8 +5552,11 @@ function runDebtReport(){
         +'<td style="'+tdS+';color:var(--orange);font-weight:600">'+rowTotalNoVND.toLocaleString()+' VND</td>'
         +'<td style="'+tdS+';color:var(--text-primary);font-weight:700">'+rowTotalAllVND.toLocaleString()+' VND</td>'
         +(function(){
-          const ps=_dnPayStatusSplit(r,rowTotalVND,rowTotalNoVND);
-          const yesOk=ps.inv!=='Chưa thanh toán';   // 'Đã thanh toán' hoặc '—' (không có due) đều OK
+          const sh2=r.shipper||r.supplier||'';
+          const sp3=cache.partners[sh2]||{};
+          const partyKeys=_getPartyKeys(r,sh2,sp3);
+          const ps=_dnPayStatusSplit(r,rowTotalVND,rowTotalNoVND,partyKeys);
+          const yesOk=ps.inv!=='Chưa thanh toán';
           const noOk=ps.noInv!=='Chưa thanh toán';
           const hasAny=ps.inv!=='—'||ps.noInv!=='—';
           const allPaid=yesOk&&noOk;
@@ -5564,8 +5581,12 @@ function runDebtReport(){
   let grandVND=0, grandNoVND=0;
   filtered.forEach(function(r){
     const svcs=r.svcs||{};
+    const sh3=r.shipper||r.supplier||'';
+    const sp3=cache.partners[sh3]||{};
     Object.values(svcs).forEach(function(sv){
       if(!sv.on||sv.invoice==='Waived')return;
+      // Lọc theo party khi đang xem 1 shipper cụ thể
+      if(filterShipper&&!_partyMatchesShipper(sv.party,sh3,sp3))return;
       const base=_amtVND(sv,r);
       const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;
       const v=Math.round(base*(1+vr/100)); // Bao gồm VAT
@@ -5575,9 +5596,7 @@ function runDebtReport(){
   const grandAllVND=grandVND+grandNoVND;
   // Tổng đã thanh toán và còn lại — DÙNG ĐÚNG logic trạng thái (_dnPayStatusSplit) + số tiền
   // thực tế của từng dòng (rowTotalVND/rowTotalNoVND), KHÔNG dùng field .amount đã lưu vì
-  // field này có thể bị lệch/cũ (vd. lưu = 0 từ trước khi có fix "để trống = đủ số") khiến
-  // box "Đã thanh toán" không khớp với badge "Trạng thái TT" của từng dòng (đều đã "Đã TT"
-  // nhưng box vẫn hiện thiếu tiền).
+  // field này có thể bị lệch/cũ khiến box "Đã thanh toán" không khớp với badge từng dòng.
   let grandPaidVND=0;
   filtered.forEach(function(r){
     const svcs=r.svcs||{};
@@ -5592,7 +5611,16 @@ function runDebtReport(){
     const invSvcsNo2=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice==='No'&&partyOk2(e[1]);});
     let rTotVND=0; invSvcs2.forEach(function(e){const sv=e[1];const base=_amtVND(sv,r);const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;rTotVND+=Math.round(base*(1+vr/100));});
     let rTotNoVND=0; invSvcsNo2.forEach(function(e){rTotNoVND+=_amtVND(e[1],r);});
-    const ps=_dnPayStatusSplit(r,rTotVND,rTotNoVND);
+    // Lấy party keys của shipper đang xem để lọc đúng trạng thái TT
+    let partyKeys2=null;
+    if(filterShipper){
+      const dnPm=r.dnPayments||{};
+      const m=Object.keys(dnPm).filter(function(k){return _partyMatchesShipper(k,sh2,sp3);});
+      const leg=Object.keys(r.dnPayStatus||{}).filter(function(k){return _partyMatchesShipper(k,sh2,sp3);});
+      const all=[...new Set([...m,...leg])];
+      if(all.length)partyKeys2=all;
+    }
+    const ps=_dnPayStatusSplit(r,rTotVND,rTotNoVND,partyKeys2);
     if(ps.inv==='Đã thanh toán')grandPaidVND+=rTotVND;
     if(ps.noInv==='Đã thanh toán')grandPaidVND+=rTotNoVND;
   });
@@ -6406,18 +6434,22 @@ function _tcSupplierBreakdown(){
     const svcs=r.svcs||{};
     Object.keys(svcs).forEach(function(key){
       const sv=svcs[key];
-      if(!sv||!sv.on||!sv.cost||!sv.svcSupplier)return;
+      if(!sv||!sv.on||!sv.svcSupplier)return;
+      // Bỏ qua nếu cost bằng 0 (chưa nhập), nhưng cho phép cost âm (NCC phát sinh phí bị thu)
+      const rawCost=parseFloat(sv.cost)||0;
+      if(rawCost===0)return;
       const supplierKey=sv.svcSupplier;
       const svcDef=SVCS.find(function(s){return s.key===key;});
       const svcName=svcDef?svcDef.name:key;
       const qty=parseFloat(sv.svcQty)||1;
       const cur=sv.svcCur||'VND';
-      const amt=(parseFloat(sv.cost)||0)*qty;
-      if(!amt)return;
+      // Lấy sau VAT
+      const vatPct=parseFloat((sv.svcVat||sv.vat||'0%').replace('%',''))||0;
+      const amt=rawCost*qty*(1+vatPct/100);
       if(!byPartner[supplierKey])byPartner[supplierKey]={partner:supplierKey,lots:[],total:{}};
       byPartner[supplierKey].lots.push({
         tt:r._tt,lotId:r._id,svcKey:key,bookingNo:r.bookingNo||r.jobNo||'',jobNo:r.jobNo||'',
-        name:svcName,amt,cur,date:r.etd||'',finish:!!sv.finish,
+        name:svcName+(vatPct?` (có VAT ${vatPct}%)`:''),amt,cur,date:r.etd||'',finish:!!sv.finish,
         shipper:r.shipper||r.supplier||'',
         paidStatus:sv.apPaidStatus||'unpaid',paidDate:sv.apPaidDate||'',paidBank:sv.apPaidBank||'',remark:sv.apRemark||''
       });
@@ -6465,7 +6497,11 @@ function renderTcApAuto(){
     html+='<div class="table-card"><div class="table-wrap"><table>'
       +'<thead><tr><th>Nhà cung cấp</th><th>Số lô</th><th style="text-align:right">Tổng tiền</th><th style="text-align:center">Xuất báo cáo</th></tr></thead>'
       +'<tbody>'+(suppliers.length?suppliers.map(function(s){
-        const totStr=Object.entries(s.total).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ');
+        const totStr=Object.entries(s.total).map(function(e){
+          const v=e[1], cur=e[0];
+          const neg=v<0;
+          return '<span style="color:'+(neg?'var(--orange)':'var(--red)')+'">'+v.toLocaleString()+' '+cur+'</span>';
+        }).join(' / ');
         return '<tr><td><button class="plink" data-p="'+s.partner.replace(/"/g,'&quot;')+'" onclick="openSupplierDetailPopup(this.dataset.p)" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline" title="Xem chi tiết">'+s.partner+'</button></td><td>'+s.lots.length+'</td>'
           +'<td style="text-align:right;font-weight:700;color:var(--red)">'+totStr+'</td>'
           +'<td style="text-align:center"><button class="btn sm" data-p="'+s.partner.replace(/"/g,'&quot;')+'" onclick="exportSupplierExcel(this.dataset.p)" style="margin-right:4px"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
@@ -16339,19 +16375,31 @@ async function logLotEvent(lotId, tt, type, action, detail){
 }
 window.logLotEvent=logLotEvent;
 
-function _dnPayStatusSplit(r, totalYesVND, totalNoVND){
+function _dnPayStatusSplit(r, totalYesVND, totalNoVND, partyKeys){
+  // partyKeys: mảng các key party cần kiểm tra (khi lô có nhiều party, lọc đúng bên đang xem)
+  // Nếu không truyền → kiểm tra TẤT CẢ party (hành vi cũ, backward-compatible)
   const dnPm=r.dnPayments||{};
-  const entries=Object.values(dnPm);
+  let entries=Object.values(dnPm);
+  if(partyKeys&&partyKeys.length){
+    // Chỉ lấy các party khớp với partyKeys
+    entries=partyKeys.map(function(k){return dnPm[k];}).filter(Boolean);
+  }
   // CHỈ coi 1 phần là "đã TT" khi có record .status==='paid' RÕ RÀNG cho TẤT CẢ party có due.
-  // Không có record (chưa từng đánh dấu) => KHÔNG được coi là đã TT (trước đây bị bug coi missing=OK).
+  // Không có record (chưa từng đánh dấu) => KHÔNG được coi là đã TT.
   const invEntries=entries.filter(function(p){return p&&p.inv&&p.inv.status;});
   const noInvEntries=entries.filter(function(p){return p&&p.noInv&&p.noInv.status;});
   let invPaid=invEntries.length>0&&invEntries.every(function(p){return p.inv.status==='paid';});
   let noInvPaid=noInvEntries.length>0&&noInvEntries.every(function(p){return p.noInv.status==='paid';});
-  // Fallback legacy dnPayStatus — CHỈ áp dụng cho Có HĐ (hệ thống cũ không tách Không HĐ riêng)
+  // Fallback legacy dnPayStatus — CHỈ áp dụng cho Có HĐ khi chưa có dnPayments nào cho party này
   if(invEntries.length===0){
-    const psVals=Object.values(r.dnPayStatus||{});
-    if(psVals.length)invPaid=psVals.every(function(v){return v==='paid';});
+    if(partyKeys&&partyKeys.length){
+      // Legacy: chỉ lấy trạng thái của đúng party đang xem
+      const psVals=partyKeys.map(function(k){return (r.dnPayStatus||{})[k];}).filter(Boolean);
+      if(psVals.length)invPaid=psVals.every(function(v){return v==='paid';});
+    } else {
+      const psVals=Object.values(r.dnPayStatus||{});
+      if(psVals.length)invPaid=psVals.every(function(v){return v==='paid';});
+    }
   }
   const hasYes=totalYesVND===undefined||totalYesVND>0;
   const hasNo=totalNoVND===undefined||totalNoVND>0;
