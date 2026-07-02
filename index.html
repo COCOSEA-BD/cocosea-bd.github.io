@@ -1761,6 +1761,16 @@ function switchDetailTab(tab){
   renderDetailPanel(r,detailTt);
 }
 
+// Làm mới tab Invoice: lấy dữ liệu mới nhất từ cache (đã đồng bộ realtime từ Firestore)
+// và vẽ lại panel — để thấy ngay thay đổi từ tab Dịch vụ/Fill giá mà không cần đóng/mở lại lô.
+function refreshInvoiceTab(){
+  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  renderDetailPanel(r,detailTt);
+  toast('Đã làm mới dữ liệu Invoice');
+}
+window.refreshInvoiceTab=refreshInvoiceTab;
+
 // Phát hiện người dùng đang nhập liệu trong panel chi tiết (tránh listener Firestore vẽ lại làm mất input đang gõ)
 function _isEditingDetailPanel(){
   const panel=g('detailPanel');
@@ -2397,6 +2407,7 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
             +buildDnPartyRows(r,svcs)
           +'</div>'
           +'<div style="display:flex;justify-content:flex-end;gap:8px">'
+            +'<button class="btn" onclick="refreshInvoiceTab()" title="Tải lại dữ liệu mới nhất từ các tab khác (Dịch vụ, Fill giá...)"><i class="ti ti-refresh"></i> Làm mới</button>'
             +'<button class="btn pri" onclick="saveInvoiceSettings()"><i class="ti ti-device-floppy"></i> Lưu</button>'
           +'</div>';
       }
@@ -2631,7 +2642,7 @@ function doAddSvcByKey(key){
   const grid=g('detailSvcGrid');
   if(!grid){closeOv('combineOv');return;}
   const div=document.createElement('div');
-  div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcQty:0,svcCur:'VND',svcSupplier:'',svcStatus:''});
+  var _rVol=(cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{});div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcQty:parseInt(_rVol.vol)||1,svcUnit:'Cont',svcCur:'VND',svcSupplier:'',svcStatus:''});
   while(div.firstChild)grid.appendChild(div.firstChild);
   toast(s.name+' đã thêm','success');
 }
@@ -2680,7 +2691,7 @@ function doAddSvcToLot(){
     const tg=g('tg_'+s.key);tg.classList.add('on');tg.classList.remove('off');
   } else {
     const div=document.createElement('div');
-    div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcQty:0,svcCur:'VND',svcSupplier:'',svcStatus:''});
+    var _rVol=(cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{});div.innerHTML=svcRowHTML(s,{on:true,desc:'',cost:0,svcQty:parseInt(_rVol.vol)||1,svcUnit:'Cont',svcCur:'VND',svcSupplier:'',svcStatus:''});
     g('detailSvcGrid').appendChild(div.firstChild);
     ['sd_','scost_','sstatus_'].forEach(function(p){const el=g(p+s.key);if(el)el.disabled=false;});
     const tg=g('tg_'+s.key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
@@ -10286,7 +10297,7 @@ function addCostingItem(){
   const costing=r.costing||{items:[],note:''};
   const items=[...(costing.items||[]),{
     id:'ci_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-    name:'',price:0,qty:1,unit:'Cont',cur:'VND',
+    name:'',price:0,qty:parseInt(r.vol)||1,unit:'Cont',cur:'VND',
     partnerRef:'',apPaidStatus:'unpaid',remark:''
   }];
   _tempCosting=items;
