@@ -5442,20 +5442,24 @@ function renderDebt(targetId){
   // Unique shippers
   const shippers=[...new Set(allR.map(r=>r.shipper||r.supplier||'').filter(Boolean))].sort();
 
-  // Date range defaults
-  const today=new Date().toISOString().slice(0,10);
-  const monthAgo=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  // Giữ nguyên state filter trong phiên — chỉ dùng default khi lần đầu mở
+  if(!window._cnRptState){
+    const today=new Date().toISOString().slice(0,10);
+    const monthAgo=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+    window._cnRptState={shipper:'',from:monthAgo,to:today};
+  }
+  const st=window._cnRptState;
 
   pg.innerHTML=
     '<div style="font-weight:600;font-size:14px;margin-bottom:1rem">Báo cáo công nợ theo Shipper</div>'
     +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
       +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">Shipper:</label>'
-      +'<select id="cnReportShipper" style="width:160px;font-size:12px"><option value="">Tất cả</option>'
-      +shippers.map(s=>'<option>'+s+'</option>').join('')+'</select>'
+      +'<select id="cnReportShipper" style="width:160px;font-size:12px" onchange="window._cnRptState.shipper=this.value"><option value="">Tất cả</option>'
+      +shippers.map(s=>'<option'+(s===st.shipper?' selected':'')+'>'+s+'</option>').join('')+'</select>'
       +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">ETD từ:</label>'
-      +'<input type="date" id="cnFrom" value="'+monthAgo+'" style="font-size:12px;width:128px"/>'
+      +'<input type="date" id="cnFrom" value="'+st.from+'" style="font-size:12px;width:128px" onchange="window._cnRptState.from=this.value"/>'
       +'<label style="font-size:12px;color:var(--text-secondary)">đến:</label>'
-      +'<input type="date" id="cnTo" value="'+today+'" style="font-size:12px;width:128px"/>'
+      +'<input type="date" id="cnTo" value="'+st.to+'" style="font-size:12px;width:128px" onchange="window._cnRptState.to=this.value"/>'
       +'<button class="btn pri" onclick="runDebtReport()"><i class="ti ti-chart-bar"></i> Chạy báo cáo</button>'
       +'<button class="btn" onclick="exportExcelDebt()"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
       +'<button class="btn" onclick="exportSOA()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-text"></i> Xuất SOA (PDF)</button>'
@@ -5466,9 +5470,12 @@ function renderDebt(targetId){
 }
 
 function runDebtReport(){
-  const filterShipper=g('cnReportShipper')?.value||'';
-  const from=g('cnFrom')?.value||'';
-  const to=g('cnTo')?.value||'';
+  // Đọc từ DOM nếu có (user vừa thay đổi), đồng thời lưu lại vào state
+  const filterShipper=g('cnReportShipper')?.value??window._cnRptState?.shipper??'';
+  const from=g('cnFrom')?.value??window._cnRptState?.from??'';
+  const to=g('cnTo')?.value??window._cnRptState?.to??'';
+  if(window._cnRptState){window._cnRptState.shipper=filterShipper;window._cnRptState.from=from;window._cnRptState.to=to;}
+  window._cnBulkChecked={}; // reset bulk selection khi chạy báo cáo mới
   const allR=[...cache.xuat.map(r=>({...r,loai:'Xuất'})),...cache.nhap.map(r=>({...r,loai:'Nhập'}))];
 
   const filtered=allR.filter(r=>{
@@ -5541,7 +5548,14 @@ function runDebtReport(){
         const all=[...new Set([...matched,...legKeys])];
         return all.length?all:null;
       }
+      // Data encode cho bulk
+      const _rowData=JSON.stringify({
+        id:r._id,tt:(r.loai==='Xuất'?'xuat':'nhap'),
+        booking:r.bookingNo,mbl:r.mblNo||'',
+        amtYes:rowTotalVND,amtNo:rowTotalNoVND,amtAll:rowTotalAllVND
+      }).replace(/"/g,'&quot;');
       return '<tr>'
+        +'<td style="'+tdS+';text-align:center"><input type="checkbox" class="cn-ar-chk" data-sh="'+sh.replace(/"/g,'&quot;')+'" data-row="'+_rowData+'" onchange="_cnBulkChkChange(this)" style="cursor:pointer"/></td>'
         +'<td style="'+tdS+';font-weight:600"><button class="plink" data-id="'+r._id+'" data-tt="'+(r.loai==='Xuất'?'xuat':'nhap')+'" data-tab="invoice" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-align:left" onclick="openDetail(this.dataset.id,this.dataset.tt,this.dataset.tab)">'+r.bookingNo+'</button></td>'
         +'<td style="'+tdS+'"><span class="bdg '+(r.loai==='Xuất'?'bdg-b':'bdg-a')+'">'+r.loai+'</span></td>'
         +'<td style="'+tdS+'">'+(r.etd||'—')+'</td>'
@@ -5565,13 +5579,21 @@ function runDebtReport(){
         +'</tr>';
     }).join('');
 
+    // Nút bulk payment ở đầu bảng
+    const bulkBtn='<button onclick="_cnOpenBulkAR(\''+sh.replace(/'/g,"\\'")+'\')" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1.5px solid var(--green);background:var(--green-bg);color:var(--green);cursor:pointer;font-weight:700;display:flex;align-items:center;gap:4px"><i class="ti ti-credit-card-pay" style="font-size:13px"></i> Cập nhật TT hàng loạt</button>';
     html+='<div style="margin-bottom:1rem;border:1px solid var(--border-light);border-radius:10px;overflow:hidden;background:var(--bg-primary)">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;padding:.65rem 1rem;background:var(--bg-secondary);border-bottom:1px solid var(--border-light)">'
         +'<div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px"><i class="ti ti-building-factory" style="font-size:14px;color:var(--text-secondary)"></i>'+sh+'</div>'
-        +'<div style="font-size:12px"><span style="color:var(--text-secondary)">'+data.rows.length+' lô</span> &nbsp;|&nbsp; Tổng: <strong style="color:var(--green)">'+totalStr+'</strong></div>'
+        +'<div style="display:flex;align-items:center;gap:10px">'
+          +'<span style="font-size:12px"><span style="color:var(--text-secondary)">'+data.rows.length+' lô</span> &nbsp;|&nbsp; Tổng: <strong style="color:var(--green)">'+totalStr+'</strong></span>'
+          +bulkBtn
+        +'</div>'
       +'</div>'
       +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
-        +'<thead><tr><th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Doanh thu có HĐ (có VAT)</th><th style="'+thS+'">Doanh thu không hóa đơn</th><th style="'+thS+'">Total</th><th style="'+thS+'">Trạng thái TT</th></tr></thead>'
+        +'<thead><tr>'
+          +'<th style="'+thS+';width:32px"><input type="checkbox" title="Chọn tất cả" onchange="_cnToggleAllAR(this,\''+sh.replace(/'/g,"\\'")+'\')" style="cursor:pointer"/></th>'
+          +'<th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Trạng thái</th><th style="'+thS+'">Doanh thu có HĐ (có VAT)</th><th style="'+thS+'">Doanh thu không hóa đơn</th><th style="'+thS+'">Total</th><th style="'+thS+'">Trạng thái TT</th>'
+        +'</tr></thead>'
         +'<tbody>'+rows+'</tbody>'
       +'</table></div>'
     +'</div>';
@@ -6763,7 +6785,7 @@ function renderSupplierDetailPopup(){
   const totStr=Object.entries(totals).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND';
   const paidStr=Object.entries(totalsPaid).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND';
   g('tcSupplierDetailOv').innerHTML=`
-  <div class="modal" style="max-width:940px;max-height:92vh;overflow-y:auto">
+  <div class="modal" style="max-width:960px;max-height:92vh;overflow-y:auto">
     <div class="mhdr">
       <div><div class="mtitle"><i class="ti ti-truck" style="font-size:15px;margin-right:6px"></i>${tcSupPartner}</div><div class="msub">Chi tiết các khoản phải trả — theo lô hàng &amp; loại phí</div></div>
       <button class="rac" onclick="closeOv('tcSupplierDetailOv')"><i class="ti ti-x"></i></button>
@@ -6775,21 +6797,30 @@ function renderSupplierDetailPopup(){
       <input type="date" value="${tcSupFrom}" onchange="tcSupFrom=this.value;renderSupplierDetailPopup()" style="font-size:12px;flex:0 0 145px"/>
       <label style="font-size:11.5px;color:var(--text-secondary)">đến:</label>
       <input type="date" value="${tcSupTo}" onchange="tcSupTo=this.value;renderSupplierDetailPopup()" style="font-size:12px;flex:0 0 145px"/>
+      <button onclick="_cnOpenBulkAP('${tcSupPartner.replace(/'/g,"\\'")}')" style="margin-left:auto;font-size:11px;padding:4px 10px;border-radius:6px;border:1.5px solid var(--red);background:rgba(220,53,69,.07);color:var(--red);cursor:pointer;font-weight:700;display:flex;align-items:center;gap:4px"><i class="ti ti-credit-card-pay" style="font-size:13px"></i> Cập nhật TT hàng loạt</button>
     </div>
     <div class="table-card"><div class="table-wrap"><table>
-      <thead><tr><th>Lô hàng</th><th>Loại</th><th>Shipper</th><th>ETD</th><th>Tên chi phí</th><th style="text-align:right">Số tiền</th><th>Trạng thái thanh toán</th><th>Remark</th></tr></thead>
+      <thead><tr>
+        <th><input type="checkbox" title="Chọn tất cả" onchange="_cnToggleAllAP(this,'${tcSupPartner.replace(/'/g,"\\'")}')"/></th>
+        <th>Lô hàng</th><th>Loại</th><th>Shipper</th><th>ETD</th><th>Tên chi phí</th><th style="text-align:right">Số tiền</th><th>Trạng thái thanh toán</th><th>Remark</th>
+      </tr></thead>
       <tbody>${rows.length?rows.map(function(l){
+        const _apRowData=JSON.stringify({
+          id:l.lotId,tt:l.tt,booking:l.bookingNo||l.jobNo||'',
+          svcKey:l.svcKey,amt:l.amt,cur:l.cur
+        }).replace(/"/g,'&quot;');
         return '<tr>'
+          +'<td style="padding:6px 9px;text-align:center"><input type="checkbox" class="cn-ap-chk" data-partner="'+tcSupPartner.replace(/"/g,'&quot;')+'" data-row="'+_apRowData+'" onchange="_cnBulkChkChange(this)" style="cursor:pointer"/></td>'
           +'<td style="font-weight:600"><button class="plink" data-id="'+l.lotId+'" data-tt="'+l.tt+'" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline" onclick="closeOv(\'tcSupplierDetailOv\');openDetail(this.dataset.id,this.dataset.tt)" title="Xem chi tiết lô hàng">'+(l.bookingNo||l.jobNo||'—')+'</button></td>'
           +'<td><span class="bdg '+(l.tt==='xuat'?'bdg-b':'bdg-a')+'">'+(l.tt==='xuat'?'Xuất':'Nhập')+'</span></td>'
           +'<td>'+(l.shipper||'—')+'</td>'
           +'<td>'+(l.date||'—')+'</td>'
           +'<td>'+l.name+'</td>'
-          +'<td style="text-align:right;font-weight:700;color:var(--red)">'+l.amt.toLocaleString()+' '+l.cur+'</td>'
+          +'<td style="text-align:right;font-weight:700;color:'+(l.amt<0?'var(--orange)':'var(--red)')+'">'+l.amt.toLocaleString()+' '+l.cur+'</td>'
           +'<td>'+_apPayBadge(l.paidStatus,l.paidDate||'',{type:'ap_popup',tt:l.tt,lotId:l.lotId,svcKey:l.svcKey,status:l.paidStatus,date:l.paidDate||'',bank:l.paidBank||'',label:l.name})+'</td>'
           +'<td><input type="text" value="'+(l.remark||'').replace(/"/g,'&quot;')+'" data-tt="'+l.tt+'" data-id="'+l.lotId+'" data-key="'+l.svcKey+'" onchange="saveSupplierRemark(this)" placeholder="Remark" style="font-size:11.5px;width:130px"/></td>'
         +'</tr>';
-      }).join(''):'<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có dữ liệu khớp bộ lọc</td></tr>'}</tbody>
+      }).join(''):'<tr><td colspan="9" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có dữ liệu khớp bộ lọc</td></tr>'}</tbody>
     </table></div></div>
     <div style="display:flex;justify-content:flex-end;gap:18px;margin-top:.75rem;font-size:12.5px">
       <span>Đã thanh toán: <strong style="color:var(--green)">${paidStr}</strong></span>
@@ -16409,6 +16440,283 @@ function _dnPayStatusSplit(r, totalYesVND, totalNoVND, partyKeys){
   };
 }
 window._dnPayStatusSplit=_dnPayStatusSplit;
+
+/* ═══════════════════════════════════════════════════════════════
+   BULK PAYMENT — Cập nhật trạng thái thanh toán hàng loạt (AR & AP)
+═══════════════════════════════════════════════════════════════ */
+window._cnBulkChecked=window._cnBulkChecked||{}; // {lotId: rowDataObj}
+
+function _cnBulkChkChange(el){
+  const row=JSON.parse(el.getAttribute('data-row').replace(/&quot;/g,'"'));
+  if(el.checked) window._cnBulkChecked[row.id]=row;
+  else delete window._cnBulkChecked[row.id];
+}
+window._cnBulkChkChange=_cnBulkChkChange;
+
+function _cnToggleAllAR(masterEl,sh){
+  const chks=document.querySelectorAll('.cn-ar-chk[data-sh="'+sh+'"]');
+  chks.forEach(function(c){
+    c.checked=masterEl.checked;
+    _cnBulkChkChange(c);
+  });
+}
+window._cnToggleAllAR=_cnToggleAllAR;
+
+function _cnToggleAllAP(masterEl,partner){
+  const chks=document.querySelectorAll('.cn-ap-chk[data-partner="'+partner+'"]');
+  chks.forEach(function(c){
+    c.checked=masterEl.checked;
+    _cnBulkChkChange(c);
+  });
+}
+window._cnToggleAllAP=_cnToggleAllAP;
+
+function _bankOptsHtml(selectedId){
+  const banks=window._bankAccounts||{company:[],personal:[]};
+  const co=Array.isArray(banks)?banks:(banks.company||[]);
+  const pers=Array.isArray(banks)?[]:(banks.personal||[]);
+  const all=[
+    ...co.map(function(b){return{id:'co:'+b.account,label:(b.beneficiary||b.account)+(b.bank?' ('+b.bank+')':'')};} ),
+    ...pers.map(function(b){return{id:'pers:'+b.account,label:(b.beneficiary||b.account)+(b.bank?' ('+b.bank+')':'')};} )
+  ];
+  return '<option value="">— Chọn tài khoản —</option>'+all.map(function(b){return '<option value="'+b.id.replace(/"/g,'&quot;')+'"'+(b.id===selectedId?' selected':'')+'>'+b.label+'</option>';}).join('');
+}
+
+// Mở popup bulk AR (Shipper → nhận tiền)
+function _cnOpenBulkAR(sh){
+  const items=Object.values(window._cnBulkChecked).filter(function(r){
+    // Lấy tất cả checked của shipper này
+    const chk=document.querySelector('.cn-ar-chk[data-sh="'+sh+'"][data-row*=\'"id":"'+r.id+'"\'');
+    return true; // đã lưu vào _cnBulkChecked, không cần filter lại
+  });
+  // Lấy đúng các item thuộc shipper này
+  const allChk=document.querySelectorAll('.cn-ar-chk[data-sh="'+sh+'"]:checked');
+  const rows=[];
+  allChk.forEach(function(c){
+    try{rows.push(JSON.parse(c.getAttribute('data-row').replace(/&quot;/g,'"')));}catch(e){}
+  });
+  if(!rows.length){toast('Chưa chọn lô hàng nào','error');return;}
+  _cnOpenBulkPopup({mode:'ar',label:sh,rows:rows});
+}
+window._cnOpenBulkAR=_cnOpenBulkAR;
+
+// Mở popup bulk AP (NCC → trả tiền)
+function _cnOpenBulkAP(partner){
+  const allChk=document.querySelectorAll('.cn-ap-chk[data-partner="'+partner+'"]:checked');
+  const rows=[];
+  allChk.forEach(function(c){
+    try{rows.push(JSON.parse(c.getAttribute('data-row').replace(/&quot;/g,'"')));}catch(e){}
+  });
+  if(!rows.length){toast('Chưa chọn lô hàng nào','error');return;}
+  _cnOpenBulkPopup({mode:'ap',label:partner,rows:rows});
+}
+window._cnOpenBulkAP=_cnOpenBulkAP;
+
+// Render popup bulk
+function _cnOpenBulkPopup(cfg){
+  window._cnBulkCfg=cfg;
+  const isAR=cfg.mode==='ar';
+  const today=new Date().toISOString().slice(0,10);
+  const bankLabel=isAR?'Tài khoản nhận tiền (chung)':'Tài khoản trừ tiền (chung)';
+
+  // Bảng từng lô
+  const rowsHtml=cfg.rows.map(function(r,i){
+    const sugAmt=isAR?(r.amtAll||0):(r.amt||0);
+    return '<tr>'
+      +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px">'
+        +'<input type="checkbox" checked id="blk_chk_'+i+'" style="margin-right:5px;cursor:pointer"/>'
+        +'<strong style="color:var(--blue)">'+(r.booking||r.bookingNo||r.svcKey||'—')+'</strong>'
+      +'</td>'
+      +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light)">'
+        +'<input type="number" id="blk_amt_'+i+'" value="'+sugAmt+'" placeholder="Số tiền VND" min="0" style="width:130px;font-size:12px"/>'
+      +'</td>'
+      +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light)">'
+        +'<input type="date" id="blk_date_'+i+'" class="blk-date-row" style="font-size:12px"/>'
+        +' <span style="font-size:10px;color:var(--text-secondary)">(để trống = dùng ngày chung)</span>'
+      +'</td>'
+      +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light)">'
+        +'<select id="blk_bank_'+i+'" class="blk-bank-row" style="font-size:11px;width:160px">'+_bankOptsHtml('')+'</select>'
+        +' <span style="font-size:10px;color:var(--text-secondary)">(để trống = dùng TK chung)</span>'
+      +'</td>'
+    +'</tr>';
+  }).join('');
+
+  const ov=g('cnBulkPayOv')||document.createElement('div');
+  ov.id='cnBulkPayOv'; ov.className='overlay';
+  if(!g('cnBulkPayOv'))document.body.appendChild(ov);
+
+  ov.innerHTML=`<div class="modal" style="max-width:860px;max-height:92vh;overflow-y:auto">
+    <div class="mhdr">
+      <div>
+        <div class="mtitle"><i class="ti ti-credit-card-pay" style="font-size:15px;margin-right:6px"></i>${isAR?'Thu tiền hàng loạt':'Trả NCC hàng loạt'}</div>
+        <div class="msub">${cfg.label} &nbsp;·&nbsp; ${cfg.rows.length} lô đã chọn</div>
+      </div>
+      <button class="rac" onclick="closeOv('cnBulkPayOv')"><i class="ti ti-x"></i></button>
+    </div>
+    <!-- Phần chung -->
+    <div style="background:var(--bg-secondary);border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;border:1px solid var(--border-light)">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.4px;margin-bottom:.6rem">Thông tin chung (áp dụng cho tất cả lô bên dưới nếu ô riêng để trống)</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <label class="lbl">Trạng thái</label>
+          <div style="display:flex;gap:6px;margin-top:3px">
+            <button id="blkBtnUnpaid" onclick="_blkSetStatus('unpaid')" class="btn" style="font-size:12px;color:var(--red)">Chưa TT</button>
+            <button id="blkBtnPaid"   onclick="_blkSetStatus('paid')"   class="btn active" style="font-size:12px;font-weight:700;color:var(--green);background:rgba(40,167,69,.1);border-color:var(--green)">Đã TT ✓</button>
+          </div>
+        </div>
+        <div>
+          <label class="lbl">Ngày thanh toán (chung)</label>
+          <input type="date" id="blk_date_common" value="${today}" onchange="_blkSyncDates()" style="font-size:12px;display:block;margin-top:3px"/>
+        </div>
+        <div style="flex:1;min-width:200px">
+          <label class="lbl">${bankLabel}</label>
+          <select id="blk_bank_common" onchange="_blkSyncBanks()" style="font-size:12px;display:block;margin-top:3px;width:100%">${_bankOptsHtml('')}</select>
+        </div>
+      </div>
+    </div>
+    <!-- Bảng từng lô -->
+    <div style="border:1px solid var(--border-light);border-radius:10px;overflow:hidden;margin-bottom:1rem">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg-secondary)">
+          <th style="padding:7px 9px;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;border-bottom:1px solid var(--border-light);text-align:left">Lô hàng</th>
+          <th style="padding:7px 9px;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;border-bottom:1px solid var(--border-light);text-align:left">Số tiền VND</th>
+          <th style="padding:7px 9px;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;border-bottom:1px solid var(--border-light);text-align:left">Ngày TT riêng</th>
+          <th style="padding:7px 9px;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;border-bottom:1px solid var(--border-light);text-align:left">Tài khoản riêng</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('cnBulkPayOv')">Hủy</button>
+      <button class="btn pri" onclick="_cnSaveBulkPay()"><i class="ti ti-check"></i> Cập nhật ${cfg.rows.length} lô</button>
+    </div>
+  </div>`;
+  window._cnBulkStatus='paid';
+  ov.classList.add('open');
+}
+window._cnOpenBulkPopup=_cnOpenBulkPopup;
+
+function _blkSetStatus(val){
+  window._cnBulkStatus=val;
+  const paid=val==='paid';
+  const u=g('blkBtnUnpaid'),p=g('blkBtnPaid');
+  if(u){u.style.background=!paid?'rgba(220,53,69,.1)':'';u.style.borderColor=!paid?'var(--red)':'var(--border-light)';u.style.fontWeight=!paid?'700':'400';}
+  if(p){p.style.background=paid?'rgba(40,167,69,.1)':'';p.style.borderColor=paid?'var(--green)':'var(--border-light)';p.style.fontWeight=paid?'700':'400';}
+}
+window._blkSetStatus=_blkSetStatus;
+
+function _blkSyncDates(){
+  const v=g('blk_date_common')?.value||'';
+  document.querySelectorAll('.blk-date-row').forEach(function(el){if(!el.value)el.value=v;});
+}
+window._blkSyncDates=_blkSyncDates;
+
+function _blkSyncBanks(){
+  const v=g('blk_bank_common')?.value||'';
+  document.querySelectorAll('.blk-bank-row').forEach(function(el){if(!el.value)el.value=v;});
+}
+window._blkSyncBanks=_blkSyncBanks;
+
+// Lưu bulk payment
+async function _cnSaveBulkPay(){
+  const cfg=window._cnBulkCfg; if(!cfg)return;
+  const isAR=cfg.mode==='ar';
+  const status=window._cnBulkStatus||'paid';
+  const commonDate=g('blk_date_common')?.value||new Date().toISOString().slice(0,10);
+  const commonBank=g('blk_bank_common')?.value||'';
+  const rows=cfg.rows;
+  let saved=0, failed=0;
+  setLoading(true,'Đang cập nhật '+rows.length+' lô...');
+  for(let i=0;i<rows.length;i++){
+    const chk=g('blk_chk_'+i); if(chk&&!chk.checked)continue;
+    const row=rows[i];
+    const date=g('blk_date_'+i)?.value||commonDate;
+    const bank=g('blk_bank_'+i)?.value||commonBank;
+    const amount=parseFloat(g('blk_amt_'+i)?.value)||0;
+    try{
+      if(isAR){
+        // AR: cập nhật dnPayments[party].inv và .noInv
+        const colN=colName(row.tt);
+        const snap=await db.collection(colN).doc(row.id).get();
+        if(!snap.exists){failed++;continue;}
+        const rFs=snap.data();
+        const dnPm=JSON.parse(JSON.stringify(rFs.dnPayments||{}));
+        const sh=window._cnRptState?.shipper||cfg.label;
+        const sp=cache.partners[sh]||{};
+        // Tìm party keys khớp shipper
+        const partyKeys=Object.keys(dnPm).filter(function(k){return _partyMatchesShipper(k,sh,sp);});
+        // Nếu chưa có party nào trong dnPayments, dùng shipper shortname làm key
+        const usedKeys=partyKeys.length?partyKeys:[sh];
+        let changed=false;
+        for(const pk of usedKeys){
+          if(!dnPm[pk])dnPm[pk]={};
+          if(row.amtYes>0){
+            if(!dnPm[pk].inv)dnPm[pk].inv={};
+            dnPm[pk].inv.status=status; dnPm[pk].inv.date=date; dnPm[pk].inv.bank=bank;
+            if(amount>0)dnPm[pk].inv.amount=amount;
+            // Sync Sổ quỹ
+            const txId=await _syncPayToCashBook({
+              existingTxId:dnPm[pk].inv.cashTxId||null,status,txType:'thu',account:bank,amount:amount||row.amtYes,date,
+              category:'Thu Debit Note — Có HĐ',description:(rFs.bookingNo||rFs.jobNo||row.id)+' — '+pk,
+              partnerRef:pk,lotRef:{lotId:row.id,tt:row.tt,bookingNo:rFs.bookingNo||rFs.jobNo||''}
+            });
+            if(txId)dnPm[pk].inv.cashTxId=txId;
+            changed=true;
+          }
+          if(row.amtNo>0){
+            if(!dnPm[pk].noInv)dnPm[pk].noInv={};
+            dnPm[pk].noInv.status=status; dnPm[pk].noInv.date=date; dnPm[pk].noInv.bank=bank;
+            if(amount>0)dnPm[pk].noInv.amount=amount;
+            const txId2=await _syncPayToCashBook({
+              existingTxId:dnPm[pk].noInv.cashTxId||null,status,txType:'thu',account:bank,amount:amount||row.amtNo,date,
+              category:'Thu Debit Note — Không HĐ',description:(rFs.bookingNo||rFs.jobNo||row.id)+' — '+pk,
+              partnerRef:pk,lotRef:{lotId:row.id,tt:row.tt,bookingNo:rFs.bookingNo||rFs.jobNo||''}
+            });
+            if(txId2)dnPm[pk].noInv.cashTxId=txId2;
+            changed=true;
+          }
+        }
+        if(changed){
+          await db.collection(colN).doc(row.id).set({dnPayments:dnPm,updatedAt:Date.now()},{merge:true});
+          const cr=cache[row.tt]&&cache[row.tt].find(function(x){return x._id===row.id;});
+          if(cr)cr.dnPayments=dnPm;
+          saved++;
+        }
+      } else {
+        // AP: cập nhật svcs[svcKey].apPaidStatus
+        const colN=colName(row.tt);
+        const snap=await db.collection(colN).doc(row.id).get();
+        if(!snap.exists){failed++;continue;}
+        const rFs=snap.data();
+        const svcs=JSON.parse(JSON.stringify(rFs.svcs||{}));
+        const svcKey=row.svcKey;
+        if(svcKey&&svcs[svcKey]){
+          const txId=await _syncPayToCashBook({
+            existingTxId:svcs[svcKey].apCashTxId||null,status,txType:'chi',account:bank,amount:amount||row.amt||0,date,
+            category:'Trả nhà cung cấp — '+cfg.label,
+            description:(svcs[svcKey].customName||svcKey)+' — '+(rFs.bookingNo||rFs.jobNo||''),
+            partnerRef:cfg.label,
+            lotRef:{lotId:row.id,tt:row.tt,bookingNo:rFs.bookingNo||rFs.jobNo||''}
+          });
+          svcs[svcKey].apPaidStatus=status; svcs[svcKey].apPaidDate=date; svcs[svcKey].apPaidBank=bank;
+          if(txId)svcs[svcKey].apCashTxId=txId;
+          await db.collection(colN).doc(row.id).set({svcs,updatedAt:Date.now()},{merge:true});
+          const cr=cache[row.tt]&&cache[row.tt].find(function(x){return x._id===row.id;});
+          if(cr&&cr.svcs&&cr.svcs[svcKey]){cr.svcs[svcKey].apPaidStatus=status;cr.svcs[svcKey].apPaidDate=date;cr.svcs[svcKey].apPaidBank=bank;}
+          saved++;
+        }
+      }
+    }catch(err){console.error('bulk pay error row',row.id,err);failed++;}
+  }
+  setLoading(false);
+  closeOv('cnBulkPayOv');
+  window._cnBulkChecked={};
+  toast('Đã cập nhật '+saved+' lô'+(failed?' ('+failed+' lỗi)':''));
+  // Refresh báo cáo
+  runDebtReport();
+  if(!isAR)_tcToggleApAuto&&_tcToggleApAuto();
+}
+window._cnSaveBulkPay=_cnSaveBulkPay;
 
 function exportExcelDebt(){
   if(!can('export')){toast('Không có quyền','error');return;}
