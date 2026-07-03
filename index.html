@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v241';
+window.APP_BUILD='v242';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1421,7 +1421,12 @@ function renderLot(tt){
     <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}><i class="ti ti-plus"></i> Thêm lô hàng</button>
   </div>
   <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
-  <div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>`;
+  <div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>
+  <div id="lotStatusBar_${tt}" style="position:sticky;bottom:0;margin-top:8px;padding:8px 14px;background:#0F1E2E;color:#cbd5e1;border-radius:8px;font-size:12.5px;display:flex;align-items:center;gap:16px;box-shadow:0 -2px 10px rgba(0,0,0,.1);z-index:5">
+    <span style="display:flex;align-items:center;gap:6px"><i class="ti ti-package" style="font-size:14px;color:#14B8A6"></i> Đang hiển thị: <strong id="lotCountShown_${tt}" style="color:#fff">0</strong></span>
+    <span style="color:#64748b">|</span>
+    <span>Tổng: <strong id="lotCountTotal_${tt}" style="color:#fff">0</strong> lô hàng</span>
+  </div>`;
   renderLotTable(tt);
   renderVstWarning(tt);
   _startVstWarnAutoRefresh(tt);
@@ -1545,7 +1550,17 @@ function renderLotTable(tt){
   const tbody=g('tb_'+tt);
   if(!thEl||!tbody)return;
 
-  thEl.innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>`<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
+  // Cập nhật thanh trạng thái: số lô đang hiển thị (sau lọc) và tổng số lô
+  const _shownEl=g('lotCountShown_'+tt), _totalEl=g('lotCountTotal_'+tt);
+  if(_shownEl)_shownEl.textContent=rows.length.toLocaleString();
+  if(_totalEl)_totalEl.textContent=((cache[tt]||[]).length).toLocaleString();
+
+  thEl.innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>{
+    if(c.k==='etd'){
+      return `<th style="color:#1a4b8c;font-weight:800;font-size:11.5px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px;background:rgba(59,130,246,.22);border-left:2px solid rgba(59,130,246,.5);border-right:2px solid rgba(59,130,246,.5)">${c.l} / POL</th>`;
+    }
+    return `<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`;
+  }).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
 
   if(!rows.length){
     tbody.innerHTML=`<tr><td colspan="${cols.length+1}"><div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu</div></td></tr>`;
@@ -1587,11 +1602,10 @@ function renderLotTable(tt){
         // ── ETD / POL
         if(c.k==='etd'){
           // Màu ETD: trước ETD = xám | ETD→ETD+3 = đỏ | sau ETD+3 = navy
-          // Màu ETD: ETD trước hôm nay = xám | ETD trong [hôm nay, hôm nay+3] = đỏ | ETD sau hôm nay+3 = navy
           const etdColor=!r.etd?'var(--text-secondary)':(r.etd<todayStr?'#94a3b8':(r.etd<=todayPlus3?'#E24B4A':'#1a4b8c'));
-          return`<td style="white-space:nowrap;background:rgba(59,130,246,.08)">`
-          +`<div style="font-weight:700;color:${etdColor}">${fd(r.etd)}</div>`
-          +(r.pol?`<div style="font-size:11px;color:var(--text-secondary)">${r.pol}</div>`:'')
+          return`<td style="white-space:nowrap;background:rgba(59,130,246,.16);border-left:2px solid rgba(59,130,246,.5);border-right:2px solid rgba(59,130,246,.5)">`
+          +`<div style="font-weight:800;font-size:13px;color:${etdColor}">${fd(r.etd)}</div>`
+          +(r.pol?`<div style="font-size:11.5px;font-weight:700;color:#1a4b8c">${r.pol}</div>`:'')
           +(r.cutoffCY?`<div style="font-size:10.5px;color:#b45309">CY: ${r.cutoffCY}</div>`:'')
           +`</td>`;
         }
@@ -9878,12 +9892,17 @@ function renderSettings(){
   // Inject Backup & Restore section
   const pgS=g('page-settings');
   if(pgS){
+    const _bkOpen=!!(window._settingsOpen&&window._settingsOpen.backup);
     pgS.insertAdjacentHTML('beforeend',`
-    <div style="margin-top:1.5rem;background:var(--bg-primary);border-radius:12px;border:1.5px solid #1a4b8c30;padding:1.25rem 1.5rem">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-        <i class="ti ti-database-export" style="font-size:20px;color:#1a4b8c"></i>
-        <div style="font-weight:700;font-size:14px;color:#1a4b8c">Backup & Restore dữ liệu</div>
+    <div style="margin-top:1.5rem;background:var(--bg-primary);border-radius:12px;border:1.5px solid #1a4b8c30;overflow:hidden">
+      <div onclick="_stgToggle('backup')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
+        <div style="display:flex;align-items:center;gap:8px">
+          <i class="ti ti-database-export" style="font-size:18px;color:#1a4b8c"></i>
+          <div style="font-weight:700;font-size:13px;color:#1a4b8c">Backup & Restore dữ liệu</div>
+        </div>
+        <i class="ti ti-chevron-${_bkOpen?'down':'right'}" id="stg_icon_backup" style="font-size:13px;color:var(--text-tertiary)"></i>
       </div>
+      <div id="stg_body_backup" style="display:${_bkOpen?'block':'none'};padding:0 1.1rem 1.25rem">
       <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1rem">Xuất toàn bộ dữ liệu (lô hàng, đối tác, tàu, thu chi, giá cước...) ra file JSON. Có thể khôi phục khi cần hoặc chuyển sang môi trường khác.</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn pri" onclick="backupAllData()" style="background:#1a4b8c;border-color:#1a4b8c">
@@ -9913,6 +9932,7 @@ function renderSettings(){
           <button class="btn" onclick="backupExcelByDate()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-export"></i> Xuất Excel</button>
         </div>
         <div id="bkxStatus" style="margin-top:.6rem;font-size:12px;min-height:18px"></div>
+      </div>
       </div>
     </div>`);
   }
