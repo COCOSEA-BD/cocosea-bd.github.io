@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v243';
+window.APP_BUILD='v244';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2864,6 +2864,23 @@ function _getContPanel(){
   return (document.body.classList.contains('xuat-lotmode')&&g('xuat-lot-view'))||g('detailPanel');
 }
 
+// Chọn đúng tbody section cho 1 booking khi có nhiều section trùng bkKey.
+// Dùng thứ tự xuất hiện: booking thứ N trong danh sách trùng bkKey → section thứ N.
+function _pickContBodyForBooking(bodies,bookings,bk,bkIndex){
+  if(!bodies||!bodies.length)return null;
+  if(bodies.length===1)return bodies[0];
+  const bkKey=(bk.bookingNo||'(no booking)').replace(/[^a-zA-Z0-9]/g,'_');
+  // Đếm xem bk này là booking thứ mấy trong số các booking CÙNG bkKey
+  let ordinal=0;
+  for(let i=0;i<bookings.length;i++){
+    const kk=(bookings[i].bookingNo||'(no booking)').replace(/[^a-zA-Z0-9]/g,'_');
+    if(i===bkIndex)break;
+    if(kk===bkKey)ordinal++;
+  }
+  return bodies[ordinal]||bodies[0];
+}
+window._pickContBodyForBooking=_pickContBodyForBooking;
+
 async function saveContSealAll(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   // Note: Cont/Seal is operational data, allowed even when lot is locked
@@ -2899,24 +2916,30 @@ async function saveContSealAll(){
   }
   const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:parseInt(r.vol)||1,typeCont:r.typeCont||'40HC'}];
   const bookingConts={};
-  // Collect tờ khai for each booking
-  bookings.forEach(function(bk){
+  const panelAll=_getContPanel();
+  // Collect containers + tờ khai cho TỪNG booking, đọc theo đúng tbody section của booking đó
+  // (tránh việc querySelectorAll theo class quét nhầm cont của booking khác khi trùng bkKey).
+  bookings.forEach(function(bk,bkIndex){
     const bkNo=bk.bookingNo||'(no booking)';
     const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
-    // Containers
+    // Containers — đọc từ đúng tbody.contBody_<bkKey> thứ bkIndex
+    // (nếu có nhiều section trùng bkKey, lấy đúng section theo thứ tự booking)
     const conts=[];
-    const panel=_getContPanel();
-    if(panel){
-      const nos=panel.querySelectorAll('.cno_'+bkKey);
-      nos.forEach(function(el,i){
-        const row=el.closest('tr')||{};
-        const get=function(cls){return (panel.querySelectorAll('.'+cls+'_'+bkKey)[i]||{}).value||'';};
-        const no=el.value.trim().toUpperCase();
-        if(no)conts.push({no,seal:get('cseal'),pkg:parseFloat(get('cpkg'))||0,nw:parseFloat(get('cnw'))||0,gw:parseFloat(get('cgw'))||0,tare:parseFloat(get('ctare'))||0,date:get('cdate')});
-      });
+    if(panelAll){
+      const bodies=panelAll.querySelectorAll('tbody.contBody_'+bkKey);
+      // Chọn đúng section: nếu chỉ có 1 → dùng nó; nếu nhiều (trùng bkKey) → theo thứ tự xuất hiện
+      let tbodyEl=bodies.length===1?bodies[0]:_pickContBodyForBooking(bodies,bookings,bk,bkIndex);
+      if(tbodyEl){
+        tbodyEl.querySelectorAll('tr').forEach(function(tr){
+          const get=function(cls){const el=tr.querySelector('.'+cls+'_'+bkKey);return el?el.value:'';};
+          const noEl=tr.querySelector('.cno_'+bkKey);
+          const no=noEl?noEl.value.trim().toUpperCase():'';
+          if(no)conts.push({no,seal:get('cseal'),pkg:parseFloat(get('cpkg'))||0,nw:parseFloat(get('cnw'))||0,gw:parseFloat(get('cgw'))||0,tare:parseFloat(get('ctare'))||0,date:get('cdate')});
+        });
+      }
     }
     // PkgUnit
-    const puEl=panel&&panel.querySelector('.cPkgUnit[data-bk="'+bkNo+'"]');
+    const puEl=panelAll&&panelAll.querySelector('.cPkgUnit[data-bk="'+bkNo+'"]');
     const pkgUnit=puEl?puEl.value:'Bales';
     // Tờ khai
     const tkhaiBox=g('tkhaiBox_'+bkKey);
