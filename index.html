@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v242';
+window.APP_BUILD='v243';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2931,8 +2931,15 @@ async function saveContSealAll(){
     }
     bookingConts[bkKey]={containers:conts,pkgUnit,tkhaiList,bookingNo:bkNo};
   });
-  // Also compute legacy fields from all containers
-  const allConts=Object.values(bookingConts).flatMap(b=>b.containers||[]);
+  // Also compute legacy fields from all containers — DEDUP theo cont no chuẩn hóa
+  // để flat array `containers` không bao giờ chứa cont trùng (nguồn gây lỗi lặp ở Document Maker tổng).
+  const _allRaw=Object.values(bookingConts).flatMap(b=>b.containers||[]);
+  const _seenSave=new Set();
+  const allConts=_allRaw.filter(function(c){
+    const key=(c.no||'').toString().trim().toUpperCase();
+    if(!key||_seenSave.has(key))return false;
+    _seenSave.add(key);return true;
+  });
   const first=bookings[0]||{};
   const firstKey=(first.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
   const firstTkhai=(bookingConts[firstKey]&&bookingConts[firstKey].tkhaiList)||[];
@@ -13473,22 +13480,34 @@ function dmPickLot(id,tt,targetBkArg){
     if(bkInfo2){_dmLot.vol=bkInfo2.vol;_dmLot.typeCont=bkInfo2.typeCont;}
   } else if(r.bookingConts&&Object.keys(r.bookingConts).length){
     // No specific target = whole lot: aggregate ALL bookings' containers
+    // ƯU TIÊN aggregate từ bookingConts theo đúng danh sách r.bookings hiện tại —
+    // đây là nguồn CHUẨN theo từng booking. Không tin r.containers (flat array) vì nó
+    // dễ bị stale/trùng do các lần lưu cũ, gây ra lỗi lặp cont giữa các booking.
     let allC=[];
-    // Tổng: ưu tiên r.containers (aggregate chính xác từ saveContSealAll, flat array luôn được REPLACE)
-    if(r.containers&&r.containers.length){
-      r.containers.forEach(function(c){if(c.no)allC.push(c);});
-    } else {
-      // Fallback nếu r.containers trống: aggregate từ bookingConts theo r.bookings (tránh stale keys)
-      const _bkArr=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+    const _bkArr=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+    const _usedBkData=_bkArr.some(function(bk){
+      const bkKey=(bk.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+      const bkData=r.bookingConts[bkKey];
+      return bkData&&bkData.containers&&bkData.containers.length;
+    });
+    if(_usedBkData){
       _bkArr.forEach(function(bk){
         const bkKey=(bk.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
         const bkData=r.bookingConts[bkKey];
         if(bkData&&bkData.containers){bkData.containers.forEach(function(c){if(c.no)allC.push(c);});}
       });
+    } else if(r.containers&&r.containers.length){
+      // Fallback: chỉ dùng r.containers nếu bookingConts hoàn toàn trống
+      r.containers.forEach(function(c){if(c.no)allC.push(c);});
     }
-    // Deduplicate theo cont number (phòng trường hợp bookingConts có stale data trùng)
+    // Deduplicate theo cont number ĐÃ CHUẨN HÓA (trim + uppercase) —
+    // tránh trường hợp cùng 1 cont nhưng khác khoảng trắng/hoa-thường bị coi là 2 cont.
     const _seenNo=new Set();
-    allC=allC.filter(function(c){if(_seenNo.has(c.no))return false;_seenNo.add(c.no);return true;});
+    allC=allC.filter(function(c){
+      const key=(c.no||'').toString().trim().toUpperCase();
+      if(!key||_seenNo.has(key))return false;
+      _seenNo.add(key);return true;
+    });
     if(allC.length)_dmLot.containers=allC;
   }
   _dmLot._targetBooking=targetBk;
