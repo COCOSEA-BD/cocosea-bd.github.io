@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v238';
+window.APP_BUILD='v239';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2985,7 +2985,6 @@ function addTkhaiRowForBk(bkKey){
 function importContFromExcelBk(input){
   const bkNo=input.dataset.bk;
   if(!bkNo){importContFromExcel(input);return;}
-  // Use existing importContFromExcel but target the per-booking inputs
   const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
   const file=input.files[0]; if(!file)return;
   const XLSX=window.XLSX;
@@ -2996,38 +2995,108 @@ function importContFromExcelBk(input){
       const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
       const ws=wb.Sheets[wb.SheetNames[0]];
       const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
-      const colLetter=prompt('Cột chứa SỐ CONT đầu tiên? (A, B, C...)','A');
-      if(colLetter==null)return;
-      const rowNum=prompt('Hàng chứa SỐ CONT đầu tiên? (số hàng Excel)','2');
-      if(rowNum==null)return;
-      let col0;const cl=(colLetter+'').trim().toUpperCase();
-      if(/^[A-Z]+$/.test(cl)){col0=0;for(let k=0;k<cl.length;k++)col0=col0*26+(cl.charCodeAt(k)-64);col0-=1;}
-      else col0=(parseInt(cl)||1)-1;
-      const row0=(parseInt(rowNum)||2)-1;
+      if(grid.length<2){toast('File không có dữ liệu','error');return;}
+
+      // Nhận diện thông minh theo tiêu đề cột (dùng chung logic với bản chính)
+      const parsed=_smartParseContGrid(grid,XLSX);
+      if(!parsed){toast('Không tìm thấy cột Container No. Kiểm tra tiêu đề file Excel.','error');return;}
+      const {rows,colMap}=parsed;
+
       const panel=_getContPanel();
       let count=0;
-      for(let i=0;row0+i<grid.length;i++){
-        const grow=grid[row0+i]||[];
-        const no=(grow[col0]||'').toString().trim().toUpperCase();
-        if(!no)break;
-        if(/^(total|tong|tổng)/i.test(no))continue;
+      rows.forEach(function(rowData,i){
         const setV=function(cls,val){const els=panel.querySelectorAll('.'+cls+'_'+bkKey);if(els[i]&&val!==''&&val!=null)els[i].value=val;};
-        setV('cno',no);setV('cseal',(grow[col0+1]||'').toString().trim());
-        const pkg=parseFloat(grow[col0+2]);if(!isNaN(pkg))setV('cpkg',pkg);
-        const nw=parseFloat(grow[col0+3]);if(!isNaN(nw))setV('cnw',nw);
-        const gw=parseFloat(grow[col0+4]);if(!isNaN(gw))setV('cgw',gw);
-        const tare=parseFloat(grow[col0+5]);if(!isNaN(tare))setV('ctare',tare);
-        let dv=grow[col0+6];
-        if(typeof dv==='number'){const dt=XLSX.SSF&&XLSX.SSF.parse_date_code(dv);if(dt)dv=dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
-        else if(dv instanceof Date){dv=dv.getFullYear()+'-'+String(dv.getMonth()+1).padStart(2,'0')+'-'+String(dv.getDate()).padStart(2,'0');}
-        if(dv)setV('cdate',(dv||'').toString().slice(0,10));
+        setV('cno',rowData.no);
+        if(rowData.seal!=null)setV('cseal',rowData.seal);
+        if(rowData.type!=null)setV('ctype',rowData.type);
+        if(rowData.pkg!=null)setV('cpkg',rowData.pkg);
+        if(rowData.nw!=null)setV('cnw',rowData.nw);
+        if(rowData.gw!=null)setV('cgw',rowData.gw);
+        if(rowData.tare!=null)setV('ctare',rowData.tare);
+        if(rowData.date)setV('cdate',rowData.date);
         count++;
-      }
-      toast('Đã nhập '+count+' container cho booking '+bkNo);
+      });
+      const foundCols=Object.keys(colMap).map(function(k){return k.toUpperCase();}).join(', ');
+      toast('Đã nhập '+count+' container cho booking '+bkNo+'. Cột: '+foundCols);
     }catch(err){toast('Lỗi: '+err.message,'error');}
   };
   reader.readAsArrayBuffer(file);
 }
+
+// Nhận diện thông minh header + parse rows — dùng chung cho cả 2 hàm import cont
+function _smartParseContGrid(grid,XLSX){
+  function norm(v){return (v==null?'':(v+'')).toLowerCase().replace(/[._\-\s]+/g,' ').trim();}
+  const KW={
+    cont:['cont no','container no','container','cont','cont number','container number','so cont','số cont'],
+    seal:['seal no','seal number','seal','so seal','số seal','niem phong','niêm phong'],
+    pkg:['number of package','no of package','no. of package','package','pkg','quantity','q ty','qty','bales','bags','number of','so luong','số lượng','package(s)','no of bales','no of bags'],
+    nw:['net weight','n w','nw','net wt','net','khoi luong tinh','khối lượng tịnh','trong luong tinh','trọng lượng tịnh','tl tinh','tịnh'],
+    gw:['gross weight','g w','gw','gross wt','gross','khoi luong','khối lượng','trong luong','trọng lượng','tong trong luong','tổng trọng lượng','tong tl','ca bi','cả bì'],
+    date:['stuff date','stuffing date','ngay dong hang','ngày đóng hàng','ngay dong','ngày đóng','stuffing','date','ngay','ngày'],
+    type:['size type','size/type','cont type','loai cont','loại cont','type','size'],
+    tare:['tare weight','tare','tare wt','tare(kgs)','trong luong vo','trọng lượng vỏ','vo cont','vỏ cont','tare kgs']
+  };
+  function matchKey(headerText){
+    const h=norm(headerText); if(!h)return null;
+    let best=null,bestLen=0;
+    for(const f in KW){
+      for(const kw of KW[f]){
+        if(h===kw)return f;
+        if(h.indexOf(kw)>=0 && kw.length>bestLen){best=f;bestLen=kw.length;}
+      }
+    }
+    return best;
+  }
+  let headerRow=-1,bestScore=0,colMap={};
+  for(let rIdx=0;rIdx<Math.min(8,grid.length);rIdx++){
+    const row=grid[rIdx]||[];
+    const map={};let score=0;
+    row.forEach(function(cell,ci){
+      const f=matchKey(cell);
+      if(f&&map[f]==null){map[f]=ci;score++;}
+    });
+    if(score>bestScore){bestScore=score;headerRow=rIdx;colMap=map;}
+  }
+  if(headerRow<0||colMap.cont==null)return null;
+
+  const toNum=function(v){if(v==null||v==='')return null;const n=parseFloat((v+'').replace(/[, ]/g,''));return isNaN(n)?null:n;};
+  const toDate=function(v){
+    if(v==null||v==='')return '';
+    if(v instanceof Date && !isNaN(v))return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+    if(typeof v==='number'){var dt=XLSX.SSF&&XLSX.SSF.parse_date_code(v);if(dt)return dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
+    var s=(v+'').trim();
+    var m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+    if(m){var y=m[3].length===2?'20'+m[3]:m[3];return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');}
+    if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+    var mn=s.match(/^(\d{1,2})[\-\s]([A-Za-z]{3,})[\-\s](\d{2,4})$/);
+    if(mn){
+      var months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+      var mo=months[mn[2].slice(0,3).toLowerCase()];
+      if(mo){var yy=mn[3].length===2?'20'+mn[3]:mn[3];return yy+'-'+String(mo).padStart(2,'0')+'-'+mn[1].padStart(2,'0');}
+    }
+    var dd=new Date(s); if(!isNaN(dd))return dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0');
+    return '';
+  };
+  const rows=[];
+  for(let rIdx=headerRow+1;rIdx<grid.length;rIdx++){
+    const row=grid[rIdx]||[];
+    const no=(colMap.cont!=null?row[colMap.cont]:'').toString().trim().toUpperCase();
+    if(!no)continue;
+    if(/^(total|tong|tổng|grand)/i.test(no))continue;
+    rows.push({
+      no:no,
+      seal:colMap.seal!=null?(row[colMap.seal]||'').toString().trim():null,
+      type:colMap.type!=null?(row[colMap.type]||'').toString().trim():null,
+      pkg:colMap.pkg!=null?toNum(row[colMap.pkg]):null,
+      nw:colMap.nw!=null?toNum(row[colMap.nw]):null,
+      gw:colMap.gw!=null?toNum(row[colMap.gw]):null,
+      tare:colMap.tare!=null?toNum(row[colMap.tare]):null,
+      date:colMap.date!=null?toDate(row[colMap.date]):''
+    });
+  }
+  return {rows:rows,colMap:colMap};
+}
+window._smartParseContGrid=_smartParseContGrid;
 
 function openDocMakerForBooking(bkNo){
   // Store the target booking key so dmPickLot can use it
@@ -13194,6 +13263,13 @@ function dmPickLot(id,tt,targetBkArg){
   g('dmSearchResults').innerHTML='<div style="padding:6px 10px;background:rgba(15,110,86,.08);border:1px solid var(--green);border-radius:8px;font-size:11.5px;color:var(--green);font-weight:600"><i class="ti ti-check"></i> '+(r.jobNo||'')+' — '+(r.shipper||r.supplier||'')+'</div>';
 
   g('dm_date').value=r.etd||new Date().toISOString().slice(0,10);
+  // Set mặc định ngày Contract/Invoice/PKL = ETD ngay lần đầu chọn lô
+  // (trước đây các ngày này chỉ được set trong dmLoadSaved khi đã có docData,
+  //  nên lô mới chưa tạo chứng từ lần nào sẽ để trống → phải tắt/mở lại mới có).
+  const _defDate=r.etd||new Date().toISOString().slice(0,10);
+  if(g('dm_cdate'))g('dm_cdate').value=_defDate;
+  if(g('dm_idate'))g('dm_idate').value=_defDate;
+  if(g('dm_pdate'))g('dm_pdate').value=_defDate;
   g('dm_pod').value=(r.pod||'').split(',')[0].toUpperCase().trim();
   g('dm_cno').value=r.jobNo||'';
   g('dm_ino').value=r.dnNo||'';
