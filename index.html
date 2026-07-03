@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v236';
+window.APP_BUILD='v237';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6809,7 +6809,7 @@ function _tcSupplierBreakdown(){
       if(!byPartner[supplierKey])byPartner[supplierKey]={partner:supplierKey,lots:[],total:{}};
       byPartner[supplierKey].lots.push({
         tt:r._tt,lotId:r._id,svcKey:key,bookingNo:r.bookingNo||r.jobNo||'',jobNo:r.jobNo||'',
-        name:svcName+(vatPct?` (có VAT ${vatPct}%)`:''),amt,cur,date:r.etd||'',finish:!!sv.finish,
+        name:svcName+(vatAmt?' (đã gồm VAT)':''),amt,cur,date:r.etd||'',finish:!!sv.finish,
         shipper:r.shipper||r.supplier||'',
         paidStatus:sv.apPaidStatus||'unpaid',paidDate:sv.apPaidDate||'',paidBank:sv.apPaidBank||'',remark:sv.apRemark||''
       });
@@ -7139,7 +7139,7 @@ function renderSupplierDetailPopup(){
     </div>
     <div class="table-card"><div class="table-wrap"><table>
       <thead><tr>
-        <th><input type="checkbox" title="Chọn tất cả" onchange="_cnToggleAllAP(this,'${tcSupPartner.replace(/'/g,"\\'")}')"/></th>
+        <th><input type="checkbox" title="Chọn tất cả" onchange="_cnToggleAllAP(this,'${tcSupPartner.replace(/'/g,"\\'")}');_apRecalcSelected()"/></th>
         <th>Lô hàng</th><th>Loại</th><th>Shipper</th><th>ETD</th><th>Tên chi phí</th><th style="text-align:right">Số tiền</th><th>Trạng thái thanh toán</th><th>Remark</th>
       </tr></thead>
       <tbody>${rows.length?rows.map(function(l){
@@ -7148,7 +7148,7 @@ function renderSupplierDetailPopup(){
           svcKey:l.svcKey,amt:l.amt,cur:l.cur
         }).replace(/"/g,'&quot;');
         return '<tr>'
-          +'<td style="padding:6px 9px;text-align:center"><input type="checkbox" class="cn-ap-chk" data-partner="'+tcSupPartner.replace(/"/g,'&quot;')+'" data-row="'+_apRowData+'" onchange="_cnBulkChkChange(this)" style="cursor:pointer"/></td>'
+          +'<td style="padding:6px 9px;text-align:center"><input type="checkbox" class="cn-ap-chk" data-partner="'+tcSupPartner.replace(/"/g,'&quot;')+'" data-row="'+_apRowData+'" data-amt="'+l.amt+'" data-cur="'+l.cur+'" data-paid="'+(l.paidStatus==='paid'?'1':'0')+'" onchange="_cnBulkChkChange(this);_apRecalcSelected()" style="cursor:pointer"/></td>'
           +'<td style="font-weight:600"><button class="plink" data-id="'+l.lotId+'" data-tt="'+l.tt+'" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline" onclick="closeOv(\'tcSupplierDetailOv\');openDetail(this.dataset.id,this.dataset.tt)" title="Xem chi tiết lô hàng">'+(l.bookingNo||l.jobNo||'—')+'</button></td>'
           +'<td><span class="bdg '+(l.tt==='xuat'?'bdg-b':'bdg-a')+'">'+(l.tt==='xuat'?'Xuất':'Nhập')+'</span></td>'
           +'<td>'+(l.shipper||'—')+'</td>'
@@ -7160,13 +7160,44 @@ function renderSupplierDetailPopup(){
         +'</tr>';
       }).join(''):'<tr><td colspan="9" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có dữ liệu khớp bộ lọc</td></tr>'}</tbody>
     </table></div></div>
-    <div style="display:flex;justify-content:flex-end;gap:18px;margin-top:.75rem;font-size:12.5px">
-      <span>Đã thanh toán: <strong style="color:var(--green)">${paidStr}</strong></span>
-      <span>Tổng cộng: <strong style="color:var(--red)">${totStr}</strong></span>
+    <div style="display:flex;justify-content:flex-end;gap:18px;margin-top:.75rem;font-size:12.5px;flex-wrap:wrap">
+      <span id="apSelectedInfo" style="display:none;color:var(--blue);font-weight:600"></span>
+      <span>Đã thanh toán: <strong id="apPaidTotal" style="color:var(--green)">${paidStr}</strong></span>
+      <span>Tổng cộng: <strong id="apGrandTotal" style="color:var(--red)">${totStr}</strong></span>
     </div>
   </div>`;
+  window._apFullTotals={tot:totStr,paid:paidStr};
 }
 window.renderSupplierDetailPopup=renderSupplierDetailPopup;
+
+// Tính lại tổng "Đã thanh toán" và "Tổng cộng" theo các dòng ĐANG TICK.
+// Nếu không tick dòng nào → hiển thị lại tổng đầy đủ của toàn bảng.
+function _apRecalcSelected(){
+  const chks=Array.from(document.querySelectorAll('.cn-ap-chk'));
+  const checked=chks.filter(function(c){return c.checked;});
+  const info=g('apSelectedInfo'), paidEl=g('apPaidTotal'), totEl=g('apGrandTotal');
+  if(!paidEl||!totEl)return;
+  if(!checked.length){
+    // Không tick gì → hiện tổng đầy đủ
+    const full=window._apFullTotals||{tot:'0 VND',paid:'0 VND'};
+    totEl.textContent=full.tot;
+    paidEl.textContent=full.paid;
+    if(info)info.style.display='none';
+    return;
+  }
+  const tot={}, paid={};
+  checked.forEach(function(c){
+    const cur=c.getAttribute('data-cur')||'VND';
+    const amt=parseFloat(c.getAttribute('data-amt'))||0;
+    tot[cur]=(tot[cur]||0)+amt;
+    if(c.getAttribute('data-paid')==='1')paid[cur]=(paid[cur]||0)+amt;
+  });
+  const fmt=function(o){return Object.entries(o).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND';};
+  totEl.textContent=fmt(tot);
+  paidEl.textContent=fmt(paid);
+  if(info){info.style.display='';info.textContent='Đã chọn '+checked.length+' dòng — ';}
+}
+window._apRecalcSelected=_apRecalcSelected;
 
 async function saveSupplierPayStatus(sel){
   const tt=sel.dataset.tt, lotId=sel.dataset.id, key=sel.dataset.key, status=sel.value;
