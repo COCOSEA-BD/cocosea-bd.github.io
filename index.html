@@ -5809,6 +5809,7 @@ function renderThuChi(){
   const tabs=[
     {k:'soquy',label:'Sổ quỹ',icon:'ti-cash-banknote'},
     {k:'congno',label:'Công nợ',icon:'ti-receipt'},
+    {k:'luong',label:'Bảng lương',icon:'ti-users-group'},
     {k:'danhmuc',label:'Danh mục thu/chi',icon:'ti-category'},
     {k:'baocao',label:'Báo cáo tài chính',icon:'ti-chart-line'},
   ];
@@ -5826,6 +5827,276 @@ function renderThuChi(){
 function switchTcTab(t){ tcTab=t; renderThuChi(); }
 window.switchTcTab=switchTcTab;
 
+/* ═══════════════════════════════════════════════════════════════
+   TAB: BẢNG LƯƠNG NHÂN VIÊN (payroll theo tháng)
+═══════════════════════════════════════════════════════════════ */
+// State bộ lọc — giữ qua các lần render trong phiên
+window._prState=window._prState||{
+  month:(new Date().getMonth()+1),
+  year:(new Date().getFullYear()),
+  emp:'' // lọc theo 1 nhân viên (uid/docId), '' = tất cả
+};
+window._prCache=window._prCache||{}; // {docId 'YYYY-MM': dataObj}
+
+function _prDocId(y,m){ return String(y)+'-'+String(m).padStart(2,'0'); }
+function _prFmt(n){ return (parseFloat(n)||0).toLocaleString('vi-VN'); }
+
+// Map role → chức vụ tiếng Việt gợi ý
+const _PR_ROLE_LABEL={admin:'Giám đốc',operator:'Nhân viên OPS',doc:'Nhân viên chứng từ',cus:'Nhân viên CS',accountant:'Kế toán',viewer:'Nhân viên',sale:'Sales'};
+
+// Lấy danh sách nhân viên từ users
+function _prEmployees(){
+  return (cache.users||[]).map(function(u){
+    return {
+      uid:u.uid||u._docId,
+      name:u.name||u.email||'(không tên)',
+      email:u.email||'',
+      role:u.role||'viewer',
+      defaultPos:_PR_ROLE_LABEL[u.role]||'Nhân viên'
+    };
+  }).filter(function(u){return u.name&&u.name!=='(không tên)';});
+}
+
+async function _prLoad(y,m){
+  const id=_prDocId(y,m);
+  if(window._prCache[id])return window._prCache[id];
+  try{
+    const snap=await db.collection('payroll').doc(id).get();
+    const data=snap.exists?snap.data():{rows:[]};
+    window._prCache[id]=data;
+    return data;
+  }catch(e){ console.warn('payroll load',e); return {rows:[]}; }
+}
+
+function renderTcPayroll(){
+  const st=window._prState;
+  const emps=_prEmployees();
+  // Dropdown tháng/năm
+  const monthOpts=Array.from({length:12},function(_,i){var mm=i+1;return '<option value="'+mm+'"'+(mm===st.month?' selected':'')+'>Tháng '+mm+'</option>';}).join('');
+  const curY=new Date().getFullYear();
+  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-3+i;return '<option value="'+yy+'"'+(yy===st.year?' selected':'')+'>'+yy+'</option>';}).join('');
+  const empOpts='<option value="">Tất cả nhân viên</option>'+emps.map(function(e){return '<option value="'+e.uid+'"'+(e.uid===st.emp?' selected':'')+'>'+e.name+'</option>';}).join('');
+
+  return `
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
+    <label style="font-size:12px;font-weight:600;color:var(--text-secondary)">Tháng:</label>
+    <select id="prMonth" onchange="window._prState.month=parseInt(this.value);renderTcBody()" style="font-size:12px">${monthOpts}</select>
+    <select id="prYear" onchange="window._prState.year=parseInt(this.value);renderTcBody()" style="font-size:12px">${yearOpts}</select>
+    <label style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-left:8px">Nhân viên:</label>
+    <select id="prEmp" onchange="window._prState.emp=this.value;renderTcBody()" style="font-size:12px;min-width:170px">${empOpts}</select>
+    <div style="flex:1"></div>
+    <button class="btn" onclick="_prAddRow()"><i class="ti ti-user-plus"></i> Thêm dòng</button>
+    <button class="btn pri" onclick="_prSave()"><i class="ti ti-device-floppy"></i> Lưu bảng lương</button>
+    <button class="btn" onclick="_prExportExcel()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
+  </div>
+  <div id="prTableWrap"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải bảng lương...</div></div></div>`;
+}
+
+async function _tcPayrollAfterRender(){
+  const st=window._prState;
+  const data=await _prLoad(st.year,st.month);
+  window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
+  _prRenderTable();
+}
+
+function _prRenderTable(){
+  const wrap=g('prTableWrap'); if(!wrap)return;
+  const st=window._prState;
+  let rows=window._prRows||[];
+  if(st.emp) rows=rows.filter(function(r){return r.uid===st.emp;});
+
+  const th='padding:7px 8px;background:#f5c518;color:#3a2f00;font-size:10px;font-weight:700;border:1px solid #e0b000;text-align:center;text-transform:uppercase;letter-spacing:.2px;white-space:nowrap';
+  const td='padding:5px 7px;border:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+  const tdR='padding:5px 7px;border:1px solid var(--border-light);font-size:12px;text-align:right;vertical-align:middle';
+
+  // Tính tổng cột
+  let sum={base:0,days:0,real:0,anTrua:0,dienThoai:0,trachNhiem:0,tongLuong:0,bhxh:0,bhyt:0,tru:0,nhan:0};
+
+  const bodyRows=rows.map(function(r,idx){
+    // idx thực trong window._prRows (do có thể đang lọc)
+    const realIdx=window._prRows.indexOf(r);
+    const base=parseFloat(r.luongCoBan)||0;
+    const days=parseFloat(r.ngayCong)||0;
+    const stdDays=parseFloat(r.ngayCongChuan)||26;
+    const real=days&&stdDays?Math.round(base/stdDays*days):base; // lương thực tế theo ngày công
+    const anTrua=parseFloat(r.phuCapAnTrua)||0;
+    const dienThoai=parseFloat(r.phuCapDienThoai)||0;
+    const trachNhiem=parseFloat(r.phuCapTrachNhiem)||0;
+    const tongLuong=real+anTrua+dienThoai+trachNhiem;
+    const bhxh=Math.round(base*0.08);
+    const bhyt=Math.round(base*0.015);
+    const tongTru=(r.hasInsurance!==false)?(bhxh+bhyt):0;
+    const nhan=tongLuong-tongTru;
+
+    sum.base+=base;sum.days+=days;sum.real+=real;sum.anTrua+=anTrua;sum.dienThoai+=dienThoai;
+    sum.trachNhiem+=trachNhiem;sum.tongLuong+=tongLuong;
+    sum.bhxh+=(r.hasInsurance!==false?bhxh:0);sum.bhyt+=(r.hasInsurance!==false?bhyt:0);
+    sum.tru+=tongTru;sum.nhan+=nhan;
+
+    return '<tr>'
+      +'<td style="'+td+';text-align:center">'+(idx+1)+'</td>'
+      +'<td style="'+td+';min-width:150px;font-weight:600">'+(r.name||'—')+'</td>'
+      +'<td style="'+td+';min-width:110px"><input type="text" value="'+(r.position||'').replace(/"/g,'&quot;')+'" onchange="_prEdit('+realIdx+',\'position\',this.value)" style="font-size:11.5px;width:100%;border:none;background:transparent;box-sizing:border-box" placeholder="Chức vụ"/></td>'
+      +'<td style="'+tdR+'"><input type="number" value="'+base+'" onchange="_prEdit('+realIdx+',\'luongCoBan\',this.value)" style="font-size:11.5px;width:100px;text-align:right;border:none;background:transparent"/></td>'
+      +'<td style="'+tdR+'"><input type="number" value="'+days+'" onchange="_prEdit('+realIdx+',\'ngayCong\',this.value)" style="font-size:11.5px;width:50px;text-align:right;border:none;background:transparent"/></td>'
+      +'<td style="'+tdR+';color:var(--blue);font-weight:600">'+_prFmt(real)+'</td>'
+      +'<td style="'+tdR+'"><input type="number" value="'+anTrua+'" onchange="_prEdit('+realIdx+',\'phuCapAnTrua\',this.value)" style="font-size:11.5px;width:80px;text-align:right;border:none;background:transparent"/></td>'
+      +'<td style="'+tdR+'"><input type="number" value="'+dienThoai+'" onchange="_prEdit('+realIdx+',\'phuCapDienThoai\',this.value)" style="font-size:11.5px;width:80px;text-align:right;border:none;background:transparent"/></td>'
+      +'<td style="'+tdR+'"><input type="number" value="'+trachNhiem+'" onchange="_prEdit('+realIdx+',\'phuCapTrachNhiem\',this.value)" style="font-size:11.5px;width:80px;text-align:right;border:none;background:transparent"/></td>'
+      +'<td style="'+tdR+';font-weight:700">'+_prFmt(tongLuong)+'</td>'
+      +'<td style="'+tdR+';color:var(--red)">'+(r.hasInsurance!==false?_prFmt(bhxh):'—')+'</td>'
+      +'<td style="'+tdR+';color:var(--red)">'+(r.hasInsurance!==false?_prFmt(bhyt):'—')+'</td>'
+      +'<td style="'+tdR+';color:var(--red);font-weight:600">'+_prFmt(tongTru)+'</td>'
+      +'<td style="'+tdR+';font-weight:800;color:var(--green)">'+_prFmt(nhan)+'</td>'
+      +'<td style="'+td+';text-align:center">'
+        +'<label style="font-size:9px;display:block;color:var(--text-secondary)"><input type="checkbox" '+(r.hasInsurance!==false?'checked':'')+' onchange="_prEdit('+realIdx+',\'hasInsurance\',this.checked)" style="cursor:pointer"/> BH</label>'
+        +'<button class="rac red" onclick="_prDelRow('+realIdx+')" title="Xóa" style="font-size:12px;margin-top:2px"><i class="ti ti-trash"></i></button>'
+      +'</td>'
+    +'</tr>';
+  }).join('');
+
+  wrap.innerHTML=`
+  <div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:8px">
+    <table style="width:100%;border-collapse:collapse;min-width:1200px">
+      <thead>
+        <tr>
+          <th style="${th}" rowspan="2">STT</th>
+          <th style="${th}" rowspan="2">Họ và tên</th>
+          <th style="${th}" rowspan="2">Chức vụ</th>
+          <th style="${th}" rowspan="2">Lương cơ bản</th>
+          <th style="${th}" rowspan="2">Ngày công</th>
+          <th style="${th}" rowspan="2">Lương thực tế</th>
+          <th style="${th}" colspan="3">Phụ cấp</th>
+          <th style="${th}" rowspan="2">Tổng lương</th>
+          <th style="${th}" colspan="3">Các khoản trừ</th>
+          <th style="${th}" rowspan="2">Thực nhận</th>
+          <th style="${th}" rowspan="2"></th>
+        </tr>
+        <tr>
+          <th style="${th}">Ăn trưa</th>
+          <th style="${th}">Điện thoại</th>
+          <th style="${th}">Trách nhiệm</th>
+          <th style="${th}">BHXH (8%)</th>
+          <th style="${th}">BHYT (1.5%)</th>
+          <th style="${th}">Tổng trừ</th>
+        </tr>
+      </thead>
+      <tbody>${bodyRows||'<tr><td colspan="15" style="text-align:center;padding:2rem;color:var(--text-secondary)">Chưa có dòng lương nào. Bấm "Thêm dòng" để chọn nhân viên.</td></tr>'}</tbody>
+      ${rows.length?`<tfoot><tr style="background:#fef3c7;font-weight:800">
+        <td style="${td};text-align:center" colspan="3">TỔNG</td>
+        <td style="${tdR}">${_prFmt(sum.base)}</td>
+        <td style="${tdR}">${sum.days}</td>
+        <td style="${tdR}">${_prFmt(sum.real)}</td>
+        <td style="${tdR}">${_prFmt(sum.anTrua)}</td>
+        <td style="${tdR}">${_prFmt(sum.dienThoai)}</td>
+        <td style="${tdR}">${_prFmt(sum.trachNhiem)}</td>
+        <td style="${tdR}">${_prFmt(sum.tongLuong)}</td>
+        <td style="${tdR}">${_prFmt(sum.bhxh)}</td>
+        <td style="${tdR}">${_prFmt(sum.bhyt)}</td>
+        <td style="${tdR}">${_prFmt(sum.tru)}</td>
+        <td style="${tdR};color:var(--green)">${_prFmt(sum.nhan)}</td>
+        <td style="${td}"></td>
+      </tr></tfoot>`:''}
+    </table>
+  </div>
+  <div style="font-size:11px;color:var(--text-secondary);margin-top:8px"><i class="ti ti-info-circle"></i> Lương thực tế = Lương cơ bản ÷ ngày công chuẩn (26) × ngày công thực tế. BHXH 8% + BHYT 1.5% tính trên lương cơ bản. Bỏ tick "BH" nếu nhân viên không đóng bảo hiểm.</div>`;
+}
+
+function _prEdit(idx,field,val){
+  if(!window._prRows||!window._prRows[idx])return;
+  window._prRows[idx][field]=val;
+  // Re-render để cập nhật các cột tính toán + tổng
+  _prRenderTable();
+}
+window._prEdit=_prEdit;
+
+function _prAddRow(){
+  const emps=_prEmployees();
+  if(!emps.length){toast('Chưa có nhân viên nào trong hệ thống','error');return;}
+  // Popup chọn nhân viên
+  const opts=emps.map(function(e){return '<option value="'+e.uid+'">'+e.name+' — '+e.defaultPos+'</option>';}).join('');
+  let ov=g('cnBulkPayOv'); // tái dùng overlay chung
+  if(!ov){ov=document.createElement('div');ov.id='cnBulkPayOv';ov.className='ov';ov.style.padding='.75rem';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML=`<div class="modal" style="max-width:420px">
+    <div class="mhdr"><div><div class="mtitle"><i class="ti ti-user-plus" style="margin-right:6px"></i>Thêm nhân viên vào bảng lương</div></div>
+    <div class="mhdr-btns"><button class="rac" onclick="closeOv('cnBulkPayOv')"><i class="ti ti-x"></i></button></div></div>
+    <div class="fg">
+      <div class="fi full"><label class="lbl">Chọn nhân viên</label><select id="prPickEmp" style="width:100%;font-size:12.5px">${opts}</select></div>
+      <div class="fi"><label class="lbl">Lương cơ bản</label><input type="number" id="prPickBase" value="0" style="font-size:12.5px"/></div>
+      <div class="fi"><label class="lbl">Ngày công</label><input type="number" id="prPickDays" value="26" style="font-size:12.5px"/></div>
+    </div>
+    <div class="mftr"><button class="btn" onclick="closeOv('cnBulkPayOv')">Hủy</button><button class="btn pri" onclick="_prConfirmAddRow()"><i class="ti ti-check"></i> Thêm</button></div>
+  </div>`;
+  openOv('cnBulkPayOv');
+}
+window._prAddRow=_prAddRow;
+
+function _prConfirmAddRow(){
+  const uid=g('prPickEmp')?.value;
+  const emps=_prEmployees();
+  const e=emps.find(function(x){return x.uid===uid;});
+  if(!e){toast('Chọn nhân viên','error');return;}
+  if((window._prRows||[]).some(function(r){return r.uid===uid;})){toast('Nhân viên này đã có trong bảng','error');closeOv('cnBulkPayOv');return;}
+  window._prRows=window._prRows||[];
+  window._prRows.push({
+    uid:e.uid,name:e.name,position:e.defaultPos,
+    luongCoBan:parseFloat(g('prPickBase')?.value)||0,
+    ngayCong:parseFloat(g('prPickDays')?.value)||26,
+    ngayCongChuan:26,
+    phuCapAnTrua:0,phuCapDienThoai:0,phuCapTrachNhiem:0,
+    hasInsurance:true
+  });
+  closeOv('cnBulkPayOv');
+  _prRenderTable();
+}
+window._prConfirmAddRow=_prConfirmAddRow;
+
+function _prDelRow(idx){
+  if(!window._prRows||!window._prRows[idx])return;
+  if(!confirm('Xóa '+(window._prRows[idx].name||'dòng này')+' khỏi bảng lương tháng này?'))return;
+  window._prRows.splice(idx,1);
+  _prRenderTable();
+}
+window._prDelRow=_prDelRow;
+
+async function _prSave(){
+  const st=window._prState;
+  const id=_prDocId(st.year,st.month);
+  setLoading(true,'Đang lưu bảng lương...');
+  try{
+    const data={month:st.month,year:st.year,rows:window._prRows||[],updatedAt:Date.now()};
+    await fsSet('payroll',id,data);
+    window._prCache[id]=data;
+    toast('Đã lưu bảng lương tháng '+st.month+'/'+st.year);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._prSave=_prSave;
+
+function _prExportExcel(){
+  const XLSX=window.XLSX; if(!XLSX){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const st=window._prState;
+  let rows=window._prRows||[];
+  if(st.emp)rows=rows.filter(function(r){return r.uid===st.emp;});
+  const ws=[['STT','Họ và tên','Chức vụ','Lương cơ bản','Ngày công','Lương thực tế','PC Ăn trưa','PC Điện thoại','PC Trách nhiệm','Tổng lương','BHXH 8%','BHYT 1.5%','Tổng trừ','Thực nhận']];
+  rows.forEach(function(r,i){
+    const base=parseFloat(r.luongCoBan)||0,days=parseFloat(r.ngayCong)||0,stdD=parseFloat(r.ngayCongChuan)||26;
+    const real=days&&stdD?Math.round(base/stdD*days):base;
+    const at=parseFloat(r.phuCapAnTrua)||0,dt=parseFloat(r.phuCapDienThoai)||0,tn=parseFloat(r.phuCapTrachNhiem)||0;
+    const tong=real+at+dt+tn;
+    const bhxh=r.hasInsurance!==false?Math.round(base*0.08):0;
+    const bhyt=r.hasInsurance!==false?Math.round(base*0.015):0;
+    const tru=bhxh+bhyt;
+    ws.push([i+1,r.name,r.position,base,days,real,at,dt,tn,tong,bhxh,bhyt,tru,tong-tru]);
+  });
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ws),'Bang luong');
+  XLSX.writeFile(wb,'BangLuong_'+st.month+'_'+st.year+'.xlsx');
+  toast('Đã xuất Excel');
+}
+window._prExportExcel=_prExportExcel;
+
 function renderTcBody(){
   const body=g('tcBody'); if(!body)return;
   try{
@@ -5836,6 +6107,7 @@ function renderTcBody(){
     }
     else if(tcTab==='danhmuc') body.innerHTML=renderTcDanhMuc();
     else if(tcTab==='baocao') body.innerHTML=renderTcBaoCao();
+    else if(tcTab==='luong'){ body.innerHTML=renderTcPayroll(); _tcPayrollAfterRender(); }
   }catch(e){
     console.error('[renderTcBody]',e);
     body.innerHTML='<div style="padding:2rem;text-align:center;color:var(--red)"><i class="ti ti-alert-circle" style="font-size:32px;display:block;margin-bottom:.5rem"></i><b>Lỗi hiển thị: '+e.message+'</b></div>';
