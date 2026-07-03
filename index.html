@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v244';
+window.APP_BUILD='v245';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -13594,7 +13594,11 @@ function dmPickLot(id,tt,targetBkArg){
   ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=true;b.style.opacity='.4';}});
   // Load previously saved doc data. If a specific booking was targeted, do NOT overwrite
   // the booking's containers with lot-level saved docConts (which may be from another booking).
-  if(r.docData){var _skipConts=!!targetBk;setTimeout(function(){dmLoadSaved(r.docData,_skipConts);},100);}
+  // LUÔN skip reload containers từ docData.docConts: dmPickLot đã populate containers
+  // đúng từ nguồn chuẩn (bookingConts theo từng booking, đã dedup). docConts là snapshot
+  // cũ lưu từ lần tạo document trước — nếu để nó ghi đè sẽ tái hiện dữ liệu cont bị trùng.
+  // Các field khác của docData (ngày, hàng hóa, giá, cnee...) vẫn được load bình thường.
+  if(r.docData){setTimeout(function(){dmLoadSaved(r.docData,true);},100);}
 }
 
 function dmPickGoods(){
@@ -16581,7 +16585,14 @@ function dmLoadSaved(d, skipConts){
   set('dm_priceLabel',d.priceLabel);set('dm_freight',d.freight);
   if(d.cneeIdx!==''&&d.cneeIdx!=null){const cs=g('dm_cnee');if(cs){cs.value=d.cneeIdx;dmOnCneeChange();}}
   if(!skipConts && d.docConts&&d.docConts.length){
-    d.docConts.forEach(function(c,i){
+    // Dedup docConts theo cont no chuẩn hóa trước khi ghi (phòng snapshot cũ bị trùng)
+    var _seen=new Set();
+    var _dc=d.docConts.filter(function(c){
+      var k=((c&&c.no)||'').toString().trim().toUpperCase();
+      if(!k||_seen.has(k))return false;
+      _seen.add(k);return true;
+    });
+    _dc.forEach(function(c,i){
       const set2=function(id,v){const el=g(id);if(el&&v)el.value=v;};
       set2('dmc_cont_'+i,c.no);set2('dmc_seal_'+i,c.seal);
       set2('dmc_pkg_'+i,c.pkg);set2('dmc_nw_'+i,c.nw);set2('dmc_gw_'+i,c.gw);
