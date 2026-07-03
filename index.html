@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v239';
+window.APP_BUILD='v240';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1900,6 +1900,7 @@ function renderDetailPanel(r,tt){
     </div>`:''}
     <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
+      <button class="btn blu" onclick="openBookingEmail('${r._id}','${tt}')"><i class="ti ti-mail"></i> Email Booking</button>
       ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')">
         <i class="ti ${r.locked?'ti-lock-open':'ti-lock'}"></i> ${r.locked?'Mở khóa':'Khóa lô hàng'}
       </button>`:''}
@@ -4471,6 +4472,113 @@ function _emailSignatureHtml(){
   return '<div style="margin-top:18px;padding-top:12px;border-top:1px solid #ddd;font-size:12px;color:#333;white-space:pre-line">'+esc+'</div>';
 }
 window._emailSignatureHtml=_emailSignatureHtml;
+
+// ─────────── EMAIL BOOKING CONFIRMATION ───────────
+// Tìm email của các user theo tên/khóa để CC cố định
+function _findUserEmail(keywords){
+  const users=cache.users||[];
+  const kws=(Array.isArray(keywords)?keywords:[keywords]).map(function(k){return k.toLowerCase();});
+  const u=users.find(function(u){
+    const hay=((u.name||'')+' '+(u.email||'')).toLowerCase();
+    return kws.some(function(k){return hay.indexOf(k)>=0;});
+  });
+  return u?u.email:'';
+}
+
+function openBookingEmail(id,tt){
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;})||{};
+  const shipperKey=r.shipper||r.supplier||'';
+  const sp=cache.partners[shipperKey]||{};
+
+  // Email khách hàng (Shipper) — lấy từ CRM: ưu tiên email chính, rồi contacts
+  let toEmail=sp.email||'';
+  if(!toEmail && sp.contacts && sp.contacts.length){
+    toEmail=sp.contacts.map(function(c){return c.email;}).filter(Boolean).join(', ');
+  }
+
+  // CC cố định: Hans, TIENNTC, MAITHUY (tìm trong user list)
+  const ccList=[
+    _findUserEmail(['hans','han']),
+    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
+    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
+  ].filter(Boolean);
+  const ccEmail=[...new Set(ccList)].join(', ');
+
+  // Chuẩn bị dữ liệu hiển thị
+  const bkNo=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):r.bookingNo)||'—';
+  const volLines=[];
+  if(r.bookings&&r.bookings.length){
+    r.bookings.forEach(function(b){ volLines.push((b.vol||1)+' x '+(b.typeCont||'')); });
+  } else {
+    volLines.push((r.vol||1)+' x '+(r.typeCont||''));
+  }
+  const volDisplay=volLines.join('<br>')+(r.tenHang?('<br>'+r.tenHang):'');
+  const podFull=(r.pod||'—');
+  const potFull=(r.icd||r.transship||'');
+  const fmtDT=function(v){return v||'—';};
+
+  // Bảng thông tin — BỎ Booking Party & Free plug-in after; Volume không show nhiệt độ/vent
+  const rowsData=[
+    ['Booking Number', bkNo],
+    ['Job ID', r.jobNo||'—'],
+    ['Shipper', shipperKey||'—'],
+    ['Port of Loading', r.pol||'—'],
+  ];
+  if(potFull) rowsData.push(['Port of Transit', potFull]);
+  rowsData.push(
+    ['Port of Discharge', podFull],
+    ['Volume', volDisplay],
+    ['Stuffing Place', r.wh||r.cyLocation||'—'],
+    ['ETD', r.etd?fmtDMY(r.etd):'—'],
+    ['Vessel/ Voyage', (r.vessel||'—')+(r.voy?' V. '+r.voy:'')],
+    ['Cut-off Time', r.cutoffCY||calcDefaultCutoff(r.etd,-2,'21:00')||'—'],
+    ['Full Return', r.cyLocation||r.fullReturn||'—'],
+    ['Submit SI before', r.cutoffSI||calcDefaultCutoff(r.etd,-2,'08:30')||'—'],
+    ['ETA', r.eta?fmtDMY(r.eta)+' (dự kiến)':'—'],
+    ['Freight/ Charge', r.freightNote||'To be advised later'],
+    ['Booking remark', r.remark||'—']
+  );
+
+  const tblRows=rowsData.map(function(rw){
+    return '<tr>'
+      +'<td style="background:#d9d9d9;border:1px solid #999;padding:6px 10px;font-weight:600;font-size:12.5px;white-space:nowrap;vertical-align:top;width:170px">'+rw[0]+'</td>'
+      +'<td style="border:1px solid #999;padding:6px 10px;font-size:12.5px;vertical-align:top">'+rw[1]+'</td>'
+    +'</tr>';
+  }).join('');
+
+  const co=_coInfo();
+  const bodyHtml=''
+    +'<div style="font-family:Arial,sans-serif;color:#000">'
+    +'<div style="font-size:19px;font-weight:800;color:#1a56db;background:#fff200;display:inline-block;padding:2px 10px;margin-bottom:12px">[Booking Confirmation]</div>'
+    +'<p style="font-size:13px;margin:6px 0">To: <strong>'+(shipperKey||'Valued Customer')+'</strong><br>'
+    +'Dear Valued Customer,<br>Please be informed that your booking(s) below is received.</p>'
+    +'<table style="border-collapse:collapse;width:100%;max-width:640px;margin:10px 0">'+tblRows+'</table>'
+    +'<p style="font-size:12.5px;margin-top:14px">We look forward to your cooperation. Please do not hesitate to contact us for any further information.</p>'
+    +_bookingEmailSignature()
+    +'</div>';
+
+  const subject='[Booking Confirmation] '+bkNo+(shipperKey?(' — '+shipperKey):'');
+  _openEmailModal({
+    title:'Email Booking → '+(shipperKey||''),
+    to:toEmail, cc:ccEmail, subject:subject, bodyHtml:bodyHtml, attachments:[]
+  });
+}
+window.openBookingEmail=openBookingEmail;
+
+// Chữ ký email chuyên nghiệp cho Booking Confirmation
+function _bookingEmailSignature(){
+  return ''
+    +'<div style="margin-top:20px;padding-top:14px;border-top:2px solid #1a56db;font-family:Arial,sans-serif">'
+    +'<div style="font-size:15px;font-weight:800;color:#0f766e;letter-spacing:.3px">COCO SEA CO., LTD</div>'
+    +'<table style="border:none;border-collapse:collapse;margin-top:6px;font-size:12px;color:#333">'
+    +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">📞</td><td style="border:none;padding:1px 0">Hotline: <strong>0909 641 011</strong></td></tr>'
+    +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">✉️</td><td style="border:none;padding:1px 0">Cocosea.bd@gmail.com</td></tr>'
+    +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">🏢</td><td style="border:none;padding:1px 0">991B Tân Kỳ Tân Quý, P. Bình Hưng Hòa, TP. Hồ Chí Minh, Việt Nam</td></tr>'
+    +'</table>'
+    +'<div style="font-size:10.5px;color:#888;margin-top:8px;font-style:italic">This email and any attachments are confidential and intended solely for the addressee.</div>'
+    +'</div>';
+}
+window._bookingEmailSignature=_bookingEmailSignature;
 
 function _openEmailModal(opts){
   // opts: {title, to, cc, subject, bodyHtml, attachments:[{filename,dataUrl}]}
