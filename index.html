@@ -536,30 +536,43 @@ window.xuatSwitchTab=xuatSwitchTab;
 window.xuatCloseTab=xuatCloseTab;
 // ────────────────────────────────────────────────────────────────
 
-// ── App Update Checker: poll HEAD mỗi 5 phút, hiện banner nếu có version mới
+// ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
+// (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
+window.APP_BUILD='v236';
 (function(){
-  var _sig=null;
+  var _remoteBuild=null;
+  function _parseBuild(txt){
+    var m=txt&&txt.match(/window\.APP_BUILD\s*=\s*['"]([^'"]+)['"]/);
+    return m?m[1]:null;
+  }
   function _check(){
-    fetch((location.pathname||'/')+'?_uc='+Date.now(),{method:'HEAD',cache:'no-store'})
-      .then(function(r){
-        var s=r.headers.get('etag')||r.headers.get('last-modified')||'';
-        if(!_sig){_sig=s;return;}
-        if(s&&s!==_sig)_showUpdate();
+    // Fetch chính file HTML (không query-string động để CDN trả bản cache ổn định),
+    // đọc nội dung và trích APP_BUILD để so sánh với bản đang chạy.
+    fetch(location.pathname||'/',{cache:'no-store'})
+      .then(function(r){return r.ok?r.text():null;})
+      .then(function(txt){
+        if(!txt)return;
+        var remote=_parseBuild(txt);
+        if(!remote)return; // không đọc được version → bỏ qua, không báo nhầm
+        // Chỉ báo khi version remote KHÁC RÕ RÀNG version đang chạy
+        if(remote!==window.APP_BUILD){
+          _remoteBuild=remote;
+          _showUpdate(remote);
+        }
       }).catch(function(){});
   }
-  function _showUpdate(){
+  function _showUpdate(remote){
     if(document.getElementById('_appUpdateBar'))return;
     var bar=document.createElement('div');
     bar.id='_appUpdateBar';
     bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:linear-gradient(90deg,#1a4b8c 0%,#2563eb 100%);color:#fff;display:flex;align-items:center;justify-content:center;gap:10px;padding:10px 16px;font-size:13.5px;font-weight:500;box-shadow:0 3px 14px rgba(0,0,0,.28);animation:_slideDown .3s ease';
-    bar.innerHTML='<span style="font-size:16px">🔄</span><span>COCOSEA có phiên bản mới, hãy refresh để cập nhật!</span>'
-      +'<button onclick="location.reload()" style="background:#fff;color:#1a4b8c;border:none;padding:5px 16px;border-radius:5px;cursor:pointer;font-weight:700;font-size:13px;margin-left:4px">↻ Cập nhật ngay</button>'
+    bar.innerHTML='<span style="font-size:16px">🔄</span><span>COCOSEA có phiên bản mới ('+(remote||'')+'), hãy refresh để cập nhật!</span>'
+      +'<button onclick="location.reload(true)" style="background:#fff;color:#1a4b8c;border:none;padding:5px 16px;border-radius:5px;cursor:pointer;font-weight:700;font-size:13px;margin-left:4px">↻ Cập nhật ngay</button>'
       +'<button onclick="document.getElementById(\'_appUpdateBar\').remove()" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);padding:5px 10px;border-radius:5px;cursor:pointer;font-size:12px">Bỏ qua</button>';
     document.body?document.body.prepend(bar):document.addEventListener('DOMContentLoaded',function(){document.body.prepend(bar);});
   }
-  // Lấy signature ban đầu sau 4s (tránh load lần đầu)
-  setTimeout(_check,4000);
-  // Poll mỗi 5 phút
+  // Kiểm tra lần đầu sau 30s (tránh nhiễu lúc mới load), rồi mỗi 5 phút
+  setTimeout(_check,30000);
   setInterval(_check,5*60*1000);
   // CSS animation
   var style=document.createElement('style');
@@ -1387,7 +1400,7 @@ function renderLot(tt){
     </div>
   </div>
   <div class="toolbar">
-    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier..." oninput="renderLotTable('${tt}')"/></div>
+    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Số Cont..." oninput="renderLotTable('${tt}')"/></div>
     <button class="btn sm" id="sortBtn_${tt}" onclick="toggleSort('${tt}')" title="Sắp xếp theo ETD" style="font-size:12px;white-space:nowrap"><i class="ti ti-arrows-sort"></i> ETD <span id="sortDir_${tt}">↑</span></button>
     <select id="fst_${tt}" style="width:140px" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả trạng thái</option>
@@ -1514,7 +1527,13 @@ function renderLotTable(tt){
       if(allBkNos.some(b=>b.includes(q)))return true;
       // Tìm trong các field chính (thay vì Object.values toàn bộ lot)
       const hay=((r.bookingNo||'')+' '+(r.jobNo||'')+' '+(r.mblNo||'')+' '+(r.shipper||r.supplier||'')+' '+(r.pod||'')+' '+(r.carrier||'')+' '+(r.status||'')).toLowerCase();
-      return hay.includes(q);
+      if(hay.includes(q))return true;
+      // Tìm theo SỐ CONTAINER (containers[] + bookingConts theo từng booking)
+      let contStr='';
+      if(r.containers&&r.containers.length){contStr+=' '+r.containers.map(function(c){return (c&&c.no)||'';}).join(' ');}
+      if(r.bookingConts){Object.values(r.bookingConts).forEach(function(arr){if(Array.isArray(arr))contStr+=' '+arr.map(function(c){return (c&&c.no)||'';}).join(' ');});}
+      if(contStr.toLowerCase().includes(q))return true;
+      return false;
     }
     return true;
   }).sort(function(a,b){
@@ -8700,7 +8719,10 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .sidebar .ua{background:linear-gradient(135deg,#14B8A6,#0F766E)!important;color:#fff!important}
 .sb-footer .user-row>div>div:nth-child(2){color:#5B7185!important}
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
-.topbar{background:var(--bg-primary);border-bottom:1px solid var(--border-light);padding:.6rem 1.5rem;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:10}
+.topbar{background:#0F1E2E;border-bottom:1px solid rgba(255,255,255,.06);padding:.6rem 1.5rem;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:10}
+.topbar #pageTitle{color:#fff}
+.topbar .theme-btn{color:#cbd5e1}
+.topbar .theme-btn:hover{color:#fff;background:rgba(255,255,255,.08)}
 .content{padding:1.25rem 1.5rem;flex:1}
 /* BTNS */
 .btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:var(--radius-md);border:1px solid var(--border-light);background:var(--bg-primary);cursor:pointer;font-size:12.5px;color:var(--text-primary);font-family:inherit;transition:all .15s;white-space:nowrap}
@@ -12026,12 +12048,13 @@ function renderTruckingReport(){
   });
 
   // Filter state
-  const fs=window._truckRptFilter=window._truckRptFilter||{shipper:'',wh:'',dateFrom:'',dateTo:'',status:''};
+  const fs=window._truckRptFilter=window._truckRptFilter||{shipper:'',wh:'',dateFrom:'',dateTo:'',status:'',cont:''};
 
   // Apply filters
   let filtered=rows.filter(function(r){
     if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
     if(fs.wh&&!(r.wh||'').toLowerCase().includes(fs.wh.toLowerCase()))return false;
+    if(fs.cont&&!(r.contNo||'').toLowerCase().includes(fs.cont.toLowerCase()))return false;
     if(fs.dateFrom&&(r.date||'')<fs.dateFrom)return false;
     if(fs.dateTo&&(r.date||'')>fs.dateTo)return false;
     return true;
@@ -12075,12 +12098,13 @@ function renderTruckingReport(){
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
       +'<input type="text" placeholder="🔍 Shipper/Supplier" value="'+(fs.shipper||'')+'" oninput="window._truckRptFilter.shipper=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:130px"/>'
       +'<input type="text" placeholder="🏭 Kho đóng hàng" value="'+(fs.wh||'')+'" oninput="window._truckRptFilter.wh=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:130px"/>'
+      +'<input type="text" placeholder="🔢 Số Cont" value="'+(fs.cont||'')+'" oninput="window._truckRptFilter.cont=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:120px"/>'
       +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">Ngày:'
         +'<input type="date" value="'+(fs.dateFrom||'')+'" oninput="window._truckRptFilter.dateFrom=this.value;renderTruckingReport()" style="font-size:12px"/>'
         +'<span>→</span>'
         +'<input type="date" value="'+(fs.dateTo||'')+'" oninput="window._truckRptFilter.dateTo=this.value;renderTruckingReport()" style="font-size:12px"/>'
       +'</div>'
-      +'<button class="btn sm" onclick="window._truckRptFilter={shipper:\'\',wh:\'\',dateFrom:\'\',dateTo:\'\'};renderTruckingReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
+      +'<button class="btn sm" onclick="window._truckRptFilter={shipper:\'\',wh:\'\',cont:\'\',dateFrom:\'\',dateTo:\'\'};renderTruckingReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
     +'</div>'
     // Table
     +'<div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:10px">'
@@ -12121,7 +12145,12 @@ function renderScyReport(){
       }));
     });
   });
-  rows.sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+  window._scyRptSort=window._scyRptSort||{col:'date',dir:'desc'}; // mặc định: ngày đóng mới nhất trước
+  const _ss=window._scyRptSort;
+  rows.sort(function(a,b){
+    const va=(a[_ss.col]||''), vb=(b[_ss.col]||'');
+    return _ss.dir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
+  });
 
   const fs=window._scyRptFilter=window._scyRptFilter||{shipper:'',icd:'',dateFrom:'',dateTo:''};
   let filtered=rows.filter(function(r){
@@ -12171,7 +12200,7 @@ function renderScyReport(){
         +'<th style="'+thS+';width:36px">#</th>'
         +'<th style="'+thS+'">Booking No</th>'
         +'<th style="'+thS+'">Shipper</th>'
-        +'<th style="'+thS+'">Ngày đóng</th>'
+        +'<th style="'+thS+';cursor:pointer;user-select:none" onclick="window._scyRptSort={col:\'date\',dir:(window._scyRptSort.col===\'date\'&&window._scyRptSort.dir===\'desc\'?\'asc\':\'desc\')};renderScyReport()">Ngày đóng'+(_ss.col==='date'?(_ss.dir==='desc'?' <i class="ti ti-chevron-down" style="font-size:9px;color:var(--green)"></i>':' <i class="ti ti-chevron-up" style="font-size:9px;color:var(--green)"></i>'):' <i class="ti ti-selector" style="font-size:9px;opacity:.4"></i>')+'</th>'
         +'<th style="'+thS+';width:40px">Vol</th>'
         +'<th style="'+thS+'">Type</th>'
         +'<th style="'+thS+'">Bãi đóng hàng (ICD)</th>'
