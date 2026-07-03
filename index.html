@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v245';
+window.APP_BUILD='v246';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1336,7 +1336,7 @@ function goTab(t){
   if(t==='cocoquote') renderCocoQuote();
   if(t==='contract') renderContractTool();
   if(t==='users') renderUsers();
-  if(t==='docs') renderDocMaker();
+  if(t==='docs'){ window._dmScopeLot=null; renderDocMaker(); }
   if(t==='costing-report') renderCostingReport();
   if(t==='trucking-report') renderTruckingReport();
   if(t==='scy-report') renderScyReport();
@@ -1557,7 +1557,7 @@ function renderLotTable(tt){
 
   thEl.innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>{
     if(c.k==='etd'){
-      return `<th style="color:#1a4b8c;font-weight:800;font-size:11.5px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px;background:rgba(59,130,246,.22);border-left:2px solid rgba(59,130,246,.5);border-right:2px solid rgba(59,130,246,.5)">${c.l} / POL</th>`;
+      return `<th style="color:#1a4b8c;font-weight:800;font-size:11.5px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px;background:rgba(59,130,246,.22);border-left:2px solid rgba(59,130,246,.5);border-right:2px solid rgba(59,130,246,.5)">${c.l}</th>`;
     }
     return `<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:left;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`;
   }).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
@@ -1715,6 +1715,9 @@ function openDocMakerTab(id, tt, targetBk){
   let t=_openTabs.find(x=>x.key===key);
   if(!t){t={key,type:'docmaker',label:'Document Maker',id:id||null,tt:tt||null,bk:targetBk||null};_openTabs.push(t);}
   else if(id&&tt){t.id=id;t.tt=tt;t.bk=targetBk||null;} // remember last lot + booking
+  // Đánh dấu scope: mở từ 1 lô cụ thể → chỉ hiện chứng từ của lô đó trong danh sách "đã lưu"
+  const _sid=id||t.id, _stt=tt||t.tt;
+  window._dmScopeLot=(_sid&&_stt)?{id:_sid,tt:_stt}:null;
   _activeTabKey=key;
   g('detailPanel').innerHTML='<div class="dpanel-tabbar" id="dpanelTabbar"></div><div style="display:flex;justify-content:flex-end;padding:6px 12px 0"><button class="rac" onclick="closeDetail()" title="Đóng" style="font-size:18px"><i class="ti ti-x"></i></button></div><div id="dmPanelHost" style="padding:0 1rem 1rem"></div>';
   renderDpanelTabs();
@@ -2045,9 +2048,10 @@ function renderDetailPanel(r,tt){
     // Nếu lô chưa có dịch vụ nào → tự thêm các dịch vụ mặc định (default) để hiển thị ngay
     // (phòng trường hợp seeding lúc tạo lô bị lỡ do SVCS/loadServices chưa kịp tải)
     if(Object.keys(svcs).length===0){
+      const _volDef=parseInt(r.vol)||1;
       SVCS.forEach(function(s){
         if(s.default){
-          svcs[s.key]={on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:1,svcCur:'VND'};
+          svcs[s.key]={on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:_volDef,svcUnit:'Cont',svcCur:'VND'};
           svcs[s.key]._name=s.name; if(s.code)svcs[s.key]._code=s.code;
         }
       });
@@ -3793,15 +3797,6 @@ async function saveLot(){
   const cols=currentTab==='xuat'?XCOLS:NCOLS;
   const existing=lotIdx?cache[currentTab].find(x=>x._id===lotIdx):null;
   const rec={svcs:existing?.svcs||{},tasks:existing?.tasks||{}};
-  // Lô MỚI: tự bật các dịch vụ được đánh dấu 'default'
-  if(!existing){
-    SVCS.forEach(function(s){
-      if(s.default && !rec.svcs[s.key]){
-        rec.svcs[s.key]={on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:1,svcCur:'VND'};
-        if(s.custom)rec.svcs[s.key]._name=s.name;
-      }
-    });
-  }
   cols.forEach(c=>{
     const el=g('f_'+c.k);
     if(!el)return;
@@ -3830,6 +3825,29 @@ async function saveLot(){
     rec.bookingNo=bookings[0].bookingNo||rec.bookingNo||'';
     rec.vol=String(bookings.reduce((s,b)=>s+(parseInt(b.vol)||0),0)); // total vol
     rec.typeCont=bookings[0].typeCont||rec.typeCont||'40HC';
+  }
+  // Lô MỚI: seed dịch vụ mặc định (default toàn hệ thống + mặc định riêng của shipper).
+  // svcQty mặc định = TỔNG VOL của lô (đã tính ở trên), đơn vị Cont.
+  if(!existing){
+    const _volDef=parseInt(rec.vol)||1;
+    const _mkSvc=function(sdef){return {on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:_volDef,svcUnit:'Cont',svcCur:'VND'};};
+    // 1) Dịch vụ default toàn hệ thống
+    SVCS.forEach(function(s){
+      if(s.default && !rec.svcs[s.key]){
+        rec.svcs[s.key]=_mkSvc(s);
+        if(s.custom)rec.svcs[s.key]._name=s.name;
+      }
+    });
+    // 2) Dịch vụ mặc định riêng của shipper (CRM › Dịch vụ mặc định)
+    const _shipperKey=rec.shipper||rec.supplier||'';
+    const _sp=cache.partners[_shipperKey]||{};
+    (_sp.defaultSvcs||[]).forEach(function(sk){
+      if(!rec.svcs[sk]){
+        const sdef=SVCS.find(function(s){return s.key===sk;})||{};
+        rec.svcs[sk]=_mkSvc(sdef);
+        if(sdef.custom)rec.svcs[sk]._name=sdef.name;
+      }
+    });
   }
   // MBL No lives inside the booking block (f_mblNo), read it explicitly
   const mblEl=g('f_mblNo');
@@ -8409,6 +8427,7 @@ function renderCrmDetail(){
       {k:'general',label:'Thông tin chung',icon:'ti-info-circle'},
       {k:'contacts',label:'Người liên hệ',icon:'ti-users'},
       {k:'cnee',label:'Cnee',icon:'ti-package'},
+      {k:'defsvc',label:'Dịch vụ mặc định',icon:'ti-list-check'},
     ];
   if(isSaLan) crmDetailTab='general'; // reset về general cho sà lan
   g('crmDetailOv').innerHTML=`
@@ -8471,7 +8490,41 @@ function renderCrmDetailBody(){
   if(crmDetailTab==='general') body.innerHTML=renderCrmGeneralTab(p);
   else if(crmDetailTab==='contacts') body.innerHTML=renderCrmContactsTab(p);
   else if(crmDetailTab==='cnee') body.innerHTML=renderCrmCneeTab(p);
+  else if(crmDetailTab==='defsvc') body.innerHTML=renderCrmDefSvcTab(p);
 }
+
+// ── TAB: Dịch vụ mặc định cho shipper ──
+function renderCrmDefSvcTab(p){
+  const defSvcs=p.defaultSvcs||[];
+  const rows=SVCS.map(function(s){
+    const checked=defSvcs.indexOf(s.key)>=0;
+    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;background:'+(checked?'var(--green-bg)':'var(--bg-primary)')+';transition:.15s" onmouseover="this.style.borderColor=\'var(--green)\'" onmouseout="this.style.borderColor=\'var(--border-light)\'">'
+      +'<input type="checkbox" class="crm-defsvc-chk" value="'+s.key+'" '+(checked?'checked':'')+' onchange="this.closest(\'label\').style.background=this.checked?\'var(--green-bg)\':\'var(--bg-primary)\'" style="cursor:pointer;width:16px;height:16px"/>'
+      +'<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text-primary)">'+s.name+'</div>'
+      +'<div style="font-size:10.5px;color:var(--text-tertiary)">Mã: '+(s.code||'—')+'</div></div>'
+    +'</label>';
+  }).join('');
+  return '<div style="padding:4px 2px">'
+    +'<div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:1rem;padding:10px 12px;background:rgba(59,130,246,.08);border-radius:8px;border-left:3px solid var(--blue)"><i class="ti ti-info-circle"></i> Chọn các dịch vụ mặc định cho <strong>'+(p.shortname||crmDetailKey)+'</strong>. Khi tạo lô hàng mới với shipper này, các dịch vụ đã chọn sẽ tự động được bật sẵn trong tab Dịch vụ.</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:1.25rem">'+rows+'</div>'
+    +'<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn pri" onclick="saveCrmDefSvc()"><i class="ti ti-device-floppy"></i> Lưu dịch vụ mặc định</button></div>'
+  +'</div>';
+}
+window.renderCrmDefSvcTab=renderCrmDefSvcTab;
+
+async function saveCrmDefSvc(){
+  const chks=Array.from(document.querySelectorAll('.crm-defsvc-chk')).filter(function(c){return c.checked;});
+  const keys=chks.map(function(c){return c.value;});
+  const p=cache.partners[crmDetailKey]||{};
+  setLoading(true,'Đang lưu dịch vụ mặc định...');
+  try{
+    await db.collection('partners').doc(crmDetailKey).update({defaultSvcs:keys,updatedAt:Date.now()});
+    if(cache.partners[crmDetailKey])cache.partners[crmDetailKey].defaultSvcs=keys;
+    toast('Đã lưu '+keys.length+' dịch vụ mặc định cho '+(p.shortname||crmDetailKey));
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveCrmDefSvc=saveCrmDefSvc;
 
 // ── TAB: Thông tin chung (dùng prefix cg_ để không trùng ID với form "Thêm đối tác" pf_) ──
 function renderCrmGeneralTab(p){
@@ -13421,7 +13474,7 @@ function renderDocMaker(){
     <div style="text-align:center;padding:3rem;color:var(--text-tertiary)"><i class="ti ti-file-certificate" style="font-size:40px;opacity:.25"></i><div style="margin-top:.5rem;font-size:12px">Tìm lô hàng → Điền thông tin → Xem trước</div></div>
   </div>
   <div style="margin-top:1rem">
-    <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem"><i class="ti ti-files" style="font-size:13px"></i> Chứng từ đã lưu</div>
+    <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem"><i class="ti ti-files" style="font-size:13px"></i> <span id="dmSavedTitle">Chứng từ đã lưu</span></div>
     <input type="text" id="dmSavedSearch" placeholder="Tìm theo Job ID / Booking / MBL..." oninput="renderDmSavedList()" style="font-size:11.5px;width:100%;margin-bottom:6px;box-sizing:border-box"/>
     <div id="dmSavedList"></div>
   </div>
@@ -13435,13 +13488,21 @@ function renderDmSavedList(){
   const q=(g('dmSavedSearch')?.value||'').toLowerCase().trim();
   const allR=[...cache.xuat.map(r=>({...r,_tt:'xuat'})),...cache.nhap.map(r=>({...r,_tt:'nhap'}))];
   let saved=allR.filter(function(r){return r.docData&&r.docData.savedAt;}).sort(function(a,b){return (b.docData.savedAt||0)-(a.docData.savedAt||0);});
+  // Nếu mở Document Maker TỪ 1 LÔ cụ thể (_dmScopeLot) → chỉ hiện chứng từ của lô đó.
+  // Nếu mở từ sidebar (module Document Maker) → hiện TẤT CẢ chứng từ.
+  const scope=window._dmScopeLot;
+  const titleEl=g('dmSavedTitle');
+  if(titleEl)titleEl.textContent=(scope&&scope.id)?'Chứng từ đã lưu của lô này':'Chứng từ đã lưu (tất cả)';
+  if(scope&&scope.id){
+    saved=saved.filter(function(r){return r._id===scope.id&&r._tt===scope.tt;});
+  }
   if(q){
     saved=saved.filter(function(r){
       const dd=r.docData||{};
       return (r.jobNo||'').toLowerCase().includes(q)||(r.bookingNo||'').toLowerCase().includes(q)||(r.mblNo||'').toLowerCase().includes(q)||(dd.invoiceNo||'').toLowerCase().includes(q);
     });
   }
-  if(!saved.length){box.innerHTML='<div style="font-size:11.5px;color:var(--text-tertiary);padding:8px">'+(q?'Không tìm thấy chứng từ phù hợp':'Chưa có lô hàng nào được làm chứng từ')+'</div>';return;}
+  if(!saved.length){box.innerHTML='<div style="font-size:11.5px;color:var(--text-tertiary);padding:8px">'+(q?'Không tìm thấy chứng từ phù hợp':(scope&&scope.id?'Lô hàng này chưa có chứng từ đã lưu':'Chưa có lô hàng nào được làm chứng từ'))+'</div>';return;}
   box.innerHTML='<div style="display:flex;flex-direction:column;gap:5px">'+saved.map(function(r){
     const dd=r.docData||{};
     const dt=dd.savedAt?new Date(dd.savedAt).toLocaleDateString('vi-VN'):'';
