@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v249';
+window.APP_BUILD='v250';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1417,6 +1417,7 @@ function renderLot(tt){
       <input type="date" id="etdTo_${tt}" value="${getDefaultEtdTo()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
       <button class="btn sm" onclick="clearEtdFilter('${tt}')" title="Tất cả"><i class="ti ti-calendar-off"></i></button>
     </div>
+    <button class="btn" onclick="openJobReport('${tt}')" style="color:#1a4b8c;border-color:#1a4b8c"><i class="ti ti-report"></i> Job Report</button>
     <button class="btn" onclick="exportExcel('${tt}')" ${can('export')?'':'disabled'}><i class="ti ti-file-spreadsheet"></i> Excel</button>
     <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}><i class="ti ti-plus"></i> Thêm lô hàng</button>
   </div>
@@ -9951,6 +9952,209 @@ function _registerRobotoFont(doc){
     doc.addFont('Roboto-Bold.ttf','Roboto','bold');
     doc.__robotoReady=true;
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  JOB REPORT — Báo cáo lô hàng theo shipper + khoảng thời gian
+// ═══════════════════════════════════════════════════════════
+function openJobReport(tt){
+  const allR=[...cache.xuat,...cache.nhap];
+  const shippers=[...new Set(allR.map(function(r){return r.shipper||r.supplier||'';}).filter(Boolean))].sort();
+  const shipperOpts='<option value="">— Tất cả shipper —</option>'+shippers.map(function(s){return '<option value="'+s.replace(/"/g,'&quot;')+'">'+s+'</option>';}).join('');
+  const today=new Date().toISOString().slice(0,10);
+  const d=new Date(); d.setMonth(d.getMonth()-1); const monthAgo=d.toISOString().slice(0,10);
+
+  let ov=g('jobReportOv');
+  if(!ov){ov=document.createElement('div');ov.id='jobReportOv';ov.className='ov';ov.style.padding='.75rem';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML=`<div class="modal" style="max-width:520px">
+    <div class="mhdr"><div><div class="mtitle"><i class="ti ti-report" style="margin-right:6px;color:#1a4b8c"></i>Job Report — Báo cáo lô hàng</div><div class="msub">Chọn shipper và khoảng thời gian để xuất báo cáo</div></div>
+    <div class="mhdr-btns"><button class="rac" onclick="closeOv('jobReportOv')"><i class="ti ti-x"></i></button></div></div>
+    <div class="fg">
+      <div class="fi full"><label class="lbl">Shipper</label><select id="jr_shipper">${shipperOpts}</select></div>
+      <div class="fi"><label class="lbl">Loại</label><select id="jr_loai"><option value="all">Xuất + Nhập</option><option value="xuat"${tt==='xuat'?' selected':''}>Chỉ Xuất</option><option value="nhap"${tt==='nhap'?' selected':''}>Chỉ Nhập</option></select></div>
+      <div class="fi"><label class="lbl">&nbsp;</label><div style="font-size:11px;color:var(--text-tertiary);padding-top:8px">Lọc theo ETD</div></div>
+      <div class="fi"><label class="lbl">ETD từ</label><input type="date" id="jr_from" value="${monthAgo}"/></div>
+      <div class="fi"><label class="lbl">ETD đến</label><input type="date" id="jr_to" value="${today}"/></div>
+    </div>
+    <div class="mftr">
+      <button class="btn" onclick="closeOv('jobReportOv')">Hủy</button>
+      <button class="btn" onclick="_jobReportExport('pdf')" style="color:#b91c1c;border-color:#b91c1c"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>
+      <button class="btn pri" onclick="_jobReportExport('excel')" style="background:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
+    </div>
+  </div>`;
+  openOv('jobReportOv');
+}
+window.openJobReport=openJobReport;
+
+function _jobReportData(){
+  const shipper=g('jr_shipper')?.value||'';
+  const loai=g('jr_loai')?.value||'all';
+  const from=g('jr_from')?.value||'';
+  const to=g('jr_to')?.value||'';
+  let lots=[];
+  if(loai==='all'||loai==='xuat')lots=lots.concat((cache.xuat||[]).map(function(r){return Object.assign({},r,{_tt:'xuat'});}));
+  if(loai==='all'||loai==='nhap')lots=lots.concat((cache.nhap||[]).map(function(r){return Object.assign({},r,{_tt:'nhap'});}));
+  lots=lots.filter(function(r){
+    const sh=r.shipper||r.supplier||'';
+    if(shipper&&sh!==shipper)return false;
+    if(from&&(r.etd||'')<from)return false;
+    if(to&&(r.etd||'')>to)return false;
+    return true;
+  }).sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');});
+
+  const rows=[];
+  lots.forEach(function(r){
+    const cnee=r.cnee||r.consignee||'';
+    const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:r.vol,typeCont:r.typeCont}];
+    bookings.forEach(function(bk){
+      const bkKey=(bk.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+      const bkData=(r.bookingConts||{})[bkKey]||{};
+      let tkhai='';
+      if(bkData.tkhaiList&&bkData.tkhaiList.length)tkhai=bkData.tkhaiList.map(function(t){return t.sotk;}).filter(Boolean).join(', ');
+      if(!tkhai)tkhai=r.soTkhai||'';
+      rows.push({
+        jobId:r.jobNo||'',
+        booking:bk.bookingNo||'',
+        bill:r.mblNo||'',
+        pol:r.pol||'', etd:r.etd||'',
+        pod:r.pod||'',
+        vol:bk.vol||r.vol||'',
+        typeCont:bk.typeCont||r.typeCont||'',
+        carrier:r.carrier||'',
+        vesselVoy:(r.vessel||'')+(r.voy?' / '+r.voy:''),
+        cnee:cnee,
+        tkhai:tkhai
+      });
+    });
+  });
+  return {shipper:shipper,loai:loai,from:from,to:to,rows:rows,lotCount:lots.length};
+}
+
+async function _jobReportExport(fmt){
+  const data=_jobReportData();
+  if(!data.rows.length){toast('Không có lô hàng khớp bộ lọc','error');return;}
+  const sp=data.shipper?(cache.partners[data.shipper]||{}):null;
+  if(fmt==='excel')await _jobReportExcel(data,sp);
+  else _jobReportPdf(data,sp);
+}
+window._jobReportExport=_jobReportExport;
+
+async function _jobReportExcel(data,sp){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  setLoading(true,'Đang tạo file Excel...');
+  try{
+    const wb=new ExcelJS.Workbook();
+    const ws=wb.addWorksheet('Job Report',{views:[{state:'frozen',ySplit:8}]});
+    const NAVY='FF0F1E2E', GOLD='FFF5C518', LIGHT='FFF2F6FC';
+    const co=_coInfo();
+
+    ws.mergeCells('A1:L1');
+    const t1=ws.getCell('A1'); t1.value=co.name; t1.font={bold:true,size:16,color:{argb:NAVY}}; t1.alignment={horizontal:'center'};
+    ws.mergeCells('A2:L2');
+    const t2=ws.getCell('A2'); t2.value=co.addr+'  |  MST: '+co.mst; t2.font={size:9,color:{argb:'FF666666'}}; t2.alignment={horizontal:'center'};
+    ws.mergeCells('A3:L3');
+    const t3=ws.getCell('A3'); t3.value='BÁO CÁO LÔ HÀNG — JOB REPORT'; t3.font={bold:true,size:14,color:{argb:'FF1A4B8C'}}; t3.alignment={horizontal:'center'};
+
+    ws.mergeCells('A5:L5');
+    const shName=sp?(sp.fullname||data.shipper):(data.shipper||'Tất cả shipper');
+    ws.getCell('A5').value='Shipper: '+shName; ws.getCell('A5').font={bold:true,size:11};
+    ws.mergeCells('A6:L6');
+    ws.getCell('A6').value=(sp&&sp.addr?('Địa chỉ: '+sp.addr+'    '):'')+(sp&&sp.mst?('MST: '+sp.mst):''); ws.getCell('A6').font={size:9,color:{argb:'FF666666'}};
+    ws.mergeCells('A7:L7');
+    ws.getCell('A7').value='Khoảng thời gian (ETD): '+(data.from||'—')+'  đến  '+(data.to||'—')+'    •    Tổng: '+data.lotCount+' lô'; ws.getCell('A7').font={size:10,italic:true,color:{argb:'FF1A4B8C'}};
+
+    const headers=['STT','Job ID','Số Booking','Số Bill (MBL)','POL / ETD','POD','Vol','Type Cont','Carrier','Vessel / Voy','Cnee','Số tờ khai'];
+    const hRow=ws.getRow(8);
+    headers.forEach(function(h,i){
+      const c=hRow.getCell(i+1);
+      c.value=h; c.font={bold:true,size:10,color:{argb:NAVY}};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:GOLD}};
+      c.alignment={horizontal:'center',vertical:'middle',wrapText:true};
+      c.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
+    });
+    hRow.height=28;
+
+    data.rows.forEach(function(r,idx){
+      const row=ws.getRow(9+idx);
+      const vals=[idx+1,r.jobId,r.booking,r.bill,(r.pol||'')+(r.etd?('\n'+r.etd):''),r.pod,r.vol,r.typeCont,r.carrier,r.vesselVoy,r.cnee,r.tkhai];
+      vals.forEach(function(v,i){
+        const c=row.getCell(i+1);
+        c.value=v; c.font={size:9.5};
+        c.alignment={vertical:'middle',wrapText:true,horizontal:(i===0||i===6)?'center':'left'};
+        c.border={top:{style:'thin',color:{argb:'FFDDDDDD'}},left:{style:'thin',color:{argb:'FFDDDDDD'}},bottom:{style:'thin',color:{argb:'FFDDDDDD'}},right:{style:'thin',color:{argb:'FFDDDDDD'}}};
+        if(idx%2===1)c.fill={type:'pattern',pattern:'solid',fgColor:{argb:LIGHT}};
+      });
+    });
+
+    const widths=[5,14,15,18,15,16,6,10,14,18,26,18];
+    widths.forEach(function(w,i){ws.getColumn(i+1).width=w;});
+
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download='JobReport_'+(data.shipper||'All').replace(/[^A-Za-z0-9]/g,'_')+'_'+(data.from||'')+'_'+(data.to||'')+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel: '+data.rows.length+' dòng');
+    closeOv('jobReportOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+function _jobReportPdf(data,sp){
+  setLoading(true,'Đang tạo file PDF...');
+  _loadJsPdf(function(){
+    try{
+      const jsPDFCtor=window.jspdf.jsPDF;
+      const doc=new jsPDFCtor({unit:'pt',format:'a4',orientation:'landscape'});
+      _registerRobotoFont(doc);
+      doc.setFont('Roboto','normal');
+      const co=_coInfo();
+      const pageW=doc.internal.pageSize.getWidth();
+
+      doc.setFont('Roboto','bold'); doc.setFontSize(15); doc.setTextColor(15,30,46);
+      doc.text(co.name,pageW/2,36,{align:'center'});
+      doc.setFont('Roboto','normal'); doc.setFontSize(8); doc.setTextColor(100,100,100);
+      doc.text(co.addr+'  |  MST: '+co.mst,pageW/2,50,{align:'center'});
+      doc.setFont('Roboto','bold'); doc.setFontSize(13); doc.setTextColor(26,75,140);
+      doc.text('BÁO CÁO LÔ HÀNG — JOB REPORT',pageW/2,70,{align:'center'});
+
+      const shName=sp?(sp.fullname||data.shipper):(data.shipper||'Tất cả shipper');
+      doc.setFont('Roboto','bold'); doc.setFontSize(10); doc.setTextColor(0,0,0);
+      doc.text('Shipper: '+shName,40,92);
+      doc.setFont('Roboto','normal'); doc.setFontSize(8); doc.setTextColor(90,90,90);
+      let infoY=104;
+      if(sp&&sp.addr){doc.text('Địa chỉ: '+sp.addr,40,infoY);infoY+=11;}
+      if(sp&&sp.mst){doc.text('MST: '+sp.mst,40,infoY);infoY+=11;}
+      doc.setTextColor(26,75,140); doc.setFont('Roboto','normal'); doc.setFontSize(9);
+      doc.text('Khoảng thời gian (ETD): '+(data.from||'—')+' đến '+(data.to||'—')+'   •   Tổng: '+data.lotCount+' lô',40,infoY+2);
+
+      const head=[['STT','Job ID','Booking','Bill (MBL)','POL / ETD','POD','Vol','Type','Carrier','Vessel/Voy','Cnee','Tờ khai']];
+      const body=data.rows.map(function(r,i){
+        return [i+1,r.jobId,r.booking,r.bill,(r.pol||'')+(r.etd?('\n'+r.etd):''),r.pod,r.vol,r.typeCont,r.carrier,r.vesselVoy,r.cnee,r.tkhai];
+      });
+      doc.autoTable({
+        head:head, body:body, startY:infoY+14,
+        styles:{font:'Roboto',fontSize:7.5,cellPadding:3,overflow:'linebreak',lineColor:[221,221,221],lineWidth:.5},
+        headStyles:{font:'Roboto',fontStyle:'bold',fillColor:[245,197,24],textColor:[15,30,46],halign:'center',valign:'middle'},
+        alternateRowStyles:{fillColor:[242,246,252]},
+        columnStyles:{0:{halign:'center',cellWidth:24},6:{halign:'center',cellWidth:26},7:{cellWidth:38}},
+        margin:{left:30,right:30},
+        didDrawPage:function(dd){
+          doc.setFont('Roboto','normal'); doc.setFontSize(7); doc.setTextColor(150,150,150);
+          doc.text('COCO SEA — Job Report  •  '+new Date().toLocaleDateString('vi-VN'),40,doc.internal.pageSize.getHeight()-16);
+          doc.text('Trang '+doc.internal.getNumberOfPages(),pageW-60,doc.internal.pageSize.getHeight()-16);
+        }
+      });
+
+      doc.save('JobReport_'+(data.shipper||'All').replace(/[^A-Za-z0-9]/g,'_')+'_'+(data.from||'')+'_'+(data.to||'')+'.pdf');
+      toast('Đã xuất PDF: '+data.rows.length+' dòng');
+      closeOv('jobReportOv');
+    }catch(e){toast('Lỗi PDF: '+e.message,'error');}
+    setLoading(false);
+  });
 }
 
 // Đọc số tiền VND thành chữ tiếng Việt (dùng chung cho PDF Debit Note jsPDF)
