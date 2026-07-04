@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v246';
+window.APP_BUILD='v247';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6583,6 +6583,7 @@ function renderTcSoQuy(){
     <button class="btn pri" style="background:var(--green)" onclick="openTcVoucher('thu')"><i class="ti ti-plus"></i> Phiếu Thu</button>
     <button class="btn red" onclick="openTcVoucher('chi')"><i class="ti ti-minus"></i> Phiếu Chi</button>
     ${currentProfile?.role==='admin'?'<button class="btn" onclick="backfillCashBookFromHistory()" title="Quét toàn bộ lô hàng đã thanh toán nhưng chưa có giao dịch Sổ quỹ"><i class="ti ti-history"></i> Quét lịch sử</button>':''}
+    ${currentProfile?.role==='admin'?'<button class="btn" onclick="cleanDuplicateCashTx()" title="Dọn các giao dịch tự động bị trùng (cùng lô, cùng loại, cùng số tiền) — giữ bản mới nhất"><i class="ti ti-eraser"></i> Dọn trùng</button>':''}
   </div>
   <div class="table-card"><div class="table-wrap"><table>
     <thead><tr>
@@ -6631,6 +6632,35 @@ function renderTcChiKhac(){
     </table></div></div>
   </div>`;
 }
+// Dọn giao dịch Sổ quỹ TỰ ĐỘNG bị trùng: cùng lô (lotId) + cùng loại (thu/chi) + cùng số tiền
+// nhưng phát sinh nhiều bản (thường do đổi tài khoản hoặc quét lịch sử nhiều lần khiến bản cũ
+// account='cash' còn sót lại song song với bản mới account='bank:...'). Giữ lại bản MỚI NHẤT.
+async function cleanDuplicateCashTx(){
+  const all=(cache.cashTx||[]).filter(function(t){return t.autoFromPayment;});
+  const groups={};
+  all.forEach(function(t){
+    const key=[(t.lotRef&&t.lotRef.lotId)||'',t.type||'',Math.round(t.amount||0),(t.description||'').trim()].join('|');
+    (groups[key]=groups[key]||[]).push(t);
+  });
+  const toDelete=[];
+  Object.values(groups).forEach(function(arr){
+    if(arr.length<=1)return;
+    arr.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
+    for(let i=1;i<arr.length;i++)toDelete.push(arr[i]);
+  });
+  if(!toDelete.length){toast('Khong tim thay giao dich trung');return;}
+  if(!confirm('Tim thay '+toDelete.length+' giao dich tu dong bi trung.\nSe giu ban moi nhat moi nhom va xoa '+toDelete.length+' ban trung con lai.\n\nTiep tuc?'))return;
+  setLoading(true,'Dang don '+toDelete.length+' giao dich trung...');
+  try{
+    for(const t of toDelete){
+      await db.collection('cashTransactions').doc(t._id).delete();
+    }
+    toast('Da don '+toDelete.length+' giao dich trung');
+  }catch(e){toast('Loi: '+e.message,'error');}
+  setLoading(false);
+}
+window.cleanDuplicateCashTx=cleanDuplicateCashTx;
+
 async function delTcTransaction(id){
   if(!confirm('Xóa giao dịch này?'))return;
   setLoading(true);
@@ -8037,88 +8067,206 @@ function _tcLotCostVND(r){
   });
   return cost;
 }
-function renderTcBaoCao(){
-  if(!tcRptFrom||!tcRptTo){
-    const now=new Date();
-    tcRptTo=now.toISOString().slice(0,10);
-    const d=new Date(now); d.setMonth(d.getMonth()-2); d.setDate(1);
-    tcRptFrom=d.toISOString().slice(0,10);
+// State chọn kỳ báo cáo tài chính
+window._tcRptPeriod=window._tcRptPeriod||{mode:'month',year:new Date().getFullYear(),month:new Date().getMonth()+1,quarter:Math.floor(new Date().getMonth()/3)+1};
+
+// Tính khoảng ngày [from,to] của kỳ đang chọn
+function _tcPeriodRange(){
+  const p=window._tcRptPeriod;
+  const y=p.year;
+  let from,to;
+  if(p.mode==='month'){
+    from=y+'-'+String(p.month).padStart(2,'0')+'-01';
+    const last=new Date(y,p.month,0).getDate();
+    to=y+'-'+String(p.month).padStart(2,'0')+'-'+String(last).padStart(2,'0');
+  } else if(p.mode==='quarter'){
+    const sm=(p.quarter-1)*3+1, em=p.quarter*3;
+    from=y+'-'+String(sm).padStart(2,'0')+'-01';
+    const last=new Date(y,em,0).getDate();
+    to=y+'-'+String(em).padStart(2,'0')+'-'+String(last).padStart(2,'0');
+  } else { // year
+    from=y+'-01-01'; to=y+'-12-31';
   }
-  const allR=[...cache.xuat.map(function(r){return Object.assign({},r,{loai:'Xuất'});}),...cache.nhap.map(function(r){return Object.assign({},r,{loai:'Nhập'});})];
-  const shippers=[...new Set(allR.map(function(r){return r.shipper||r.supplier||'';}).filter(Boolean))].sort();
-  const filtered=allR.filter(function(r){
-    const sh=r.shipper||r.supplier||'';
-    return (!tcRptShipper||sh===tcRptShipper)&&(!tcRptFrom||!r.etd||r.etd>=tcRptFrom)&&(!tcRptTo||!r.etd||r.etd<=tcRptTo);
+  return {from:from,to:to};
+}
+function _tcPeriodLabel(){
+  const p=window._tcRptPeriod;
+  if(p.mode==='month')return 'Tháng '+p.month+'/'+p.year;
+  if(p.mode==='quarter')return 'Quý '+p.quarter+'/'+p.year;
+  return 'Năm '+p.year;
+}
+
+// Tổng số dư TẤT CẢ tài khoản (VND) tính đến CUỐI ngày 'dateStr' (bao gồm đầu kỳ cấu hình + mọi giao dịch <= dateStr)
+function _tcTotalBalanceUpTo(dateStr){
+  const roe=26390;
+  const accs=_tcAccountList();
+  let totalVND=0;
+  accs.forEach(function(a){
+    const ob=(window._tcOpeningBalances||{})[a.id]||{};
+    const obDate=ob.date||'';
+    // Đầu kỳ cấu hình (nếu obDate <= dateStr thì tính)
+    if(!obDate||obDate<=dateStr){
+      totalVND+=(ob.VND||0)+Math.round((ob.USD||0)*roe);
+    }
+    (cache.cashTx||[]).forEach(function(tx){
+      if(tx.account!==a.id)return;
+      if(!tx.date||tx.date>dateStr)return;
+      if(obDate&&tx.date<obDate)return;
+      const amtVND=(tx.currency||'VND')==='VND'?(tx.amount||0):Math.round((tx.amount||0)*roe);
+      totalVND+= tx.type==='thu'?amtVND:-amtVND;
+    });
+  });
+  return totalVND;
+}
+
+// Ngày liền trước 'dateStr' (yyyy-mm-dd)
+function _tcPrevDay(dateStr){
+  const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()-1);
+  return d.toISOString().slice(0,10);
+}
+
+function renderTcBaoCao(){
+  const p=window._tcRptPeriod;
+  const {from,to}=_tcPeriodRange();
+  const roe=26390;
+
+  // ── DÒNG TIỀN THỰC TẾ theo Sổ quỹ trong kỳ ──
+  const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to;});
+  let thuVND=0,chiVND=0;
+  const thuByCat={}, chiByCat={};
+  txInPeriod.forEach(function(t){
+    const amtVND=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);
+    if(t.type==='thu'){thuVND+=amtVND;const c=t.category||'Khác';thuByCat[c]=(thuByCat[c]||0)+amtVND;}
+    else{chiVND+=amtVND;const c=t.category||'Khác';chiByCat[c]=(chiByCat[c]||0)+amtVND;}
   });
 
-  const lotRows=filtered.map(function(r){
-    const thu=_tcLotRevenueVND(r);
-    const chi=_tcLotCostVND(r);
-    return {r:r,thu:thu,chi:chi,profit:thu-chi,margin:thu>0?Math.round((thu-chi)/thu*100):0};
-  }).sort(function(a,b){return (b.r.etd||'').localeCompare(a.r.etd||'');});
+  // Số dư đầu kỳ = tổng số dư đến hết ngày liền trước 'from'
+  const openingVND=_tcTotalBalanceUpTo(_tcPrevDay(from));
+  // Số dư cuối kỳ = đầu kỳ + thu - chi
+  const closingVND=openingVND+thuVND-chiVND;
 
-  const totalThu=lotRows.reduce(function(s,x){return s+x.thu;},0);
-  const totalChiLot=lotRows.reduce(function(s,x){return s+x.chi;},0);
+  // Dropdown chọn kỳ
+  const curY=new Date().getFullYear();
+  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-3+i;return '<option value="'+yy+'"'+(yy===p.year?' selected':'')+'>'+yy+'</option>';}).join('');
+  const monthOpts=Array.from({length:12},function(_,i){var mm=i+1;return '<option value="'+mm+'"'+(mm===p.month?' selected':'')+'>Tháng '+mm+'</option>';}).join('');
+  const quarterOpts=[1,2,3,4].map(function(qq){return '<option value="'+qq+'"'+(qq===p.quarter?' selected':'')+'>Quý '+qq+'</option>';}).join('');
 
-  // Chi phí khác: các Phiếu Chi KHÔNG gắn lô hàng, trong khoảng ETD lọc ở trên (dùng date của giao dịch)
-  const chiKhacList=(cache.cashTx||[]).filter(function(t){
-    return t.type==='chi'&&!t.lotRef&&(!tcRptFrom||!t.date||t.date>=tcRptFrom)&&(!tcRptTo||!t.date||t.date<=tcRptTo);
-  });
-  const chiKhacByCur={};
-  chiKhacList.forEach(function(t){const cur=t.currency||'VND';chiKhacByCur[cur]=(chiKhacByCur[cur]||0)+(t.amount||0);});
-  const roeDefault=26390;
-  let totalChiKhacVND=0;
-  Object.entries(chiKhacByCur).forEach(function(e){totalChiKhacVND+=e[0]==='VND'?e[1]:Math.round(e[1]*roeDefault);});
-
-  const totalChi=totalChiLot+totalChiKhacVND;
-  const totalProfit=totalThu-totalChi;
+  const catRow=function(obj,color){
+    const entries=Object.entries(obj).sort(function(a,b){return b[1]-a[1];});
+    if(!entries.length)return '<div style="font-size:11.5px;color:var(--text-tertiary);padding:6px 0">Không có</div>';
+    return entries.map(function(e){
+      return '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;border-bottom:1px dashed var(--border-light)"><span style="color:var(--text-secondary)">'+e[0]+'</span><strong style="color:'+color+'">'+e[1].toLocaleString()+'</strong></div>';
+    }).join('');
+  };
 
   return `
-  <div class="toolbar">
-    <select id="tcRptShipperSel" onchange="tcRptShipper=this.value;renderTcBody()" style="font-size:12px;flex:0 0 180px"><option value="">Tất cả Shipper/NCC</option>${shippers.map(function(s){return '<option'+(s===tcRptShipper?' selected':'')+'>'+s+'</option>';}).join('')}</select>
-    <label style="font-size:11.5px;color:var(--text-secondary)">ETD từ:</label>
-    <input type="date" value="${tcRptFrom}" onchange="tcRptFrom=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
-    <label style="font-size:11.5px;color:var(--text-secondary)">đến:</label>
-    <input type="date" value="${tcRptTo}" onchange="tcRptTo=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
-  </div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1.25rem">
-    <div style="flex:1;min-width:170px;padding:.85rem 1rem;background:var(--green-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Thu (DN có &amp; không hóa đơn)</div><div style="font-size:16px;font-weight:700;color:var(--green-dark)">${totalThu.toLocaleString()} VND</div></div>
-    <div style="flex:1;min-width:170px;padding:.85rem 1rem;background:var(--red-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Chi (Costing + Chi khác)</div><div style="font-size:16px;font-weight:700;color:var(--red-text)">${totalChi.toLocaleString()} VND</div></div>
-    <div style="flex:1;min-width:170px;padding:.85rem 1rem;background:var(--blue-bg);border-radius:10px"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Lãi / Lỗ</div><div style="font-size:16px;font-weight:700;color:${totalProfit>=0?'var(--green-dark)':'var(--red-text)'}">${totalProfit>=0?'+':''}${totalProfit.toLocaleString()} VND</div></div>
+  <div class="toolbar" style="align-items:center">
+    <div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">
+      ${['month','quarter','year'].map(function(m){
+        const lbl={month:'Tháng',quarter:'Quý',year:'Năm'}[m];
+        const active=p.mode===m;
+        return '<button onclick="window._tcRptPeriod.mode=\''+m+'\';renderTcBody()" style="padding:7px 16px;border:none;background:'+(active?'var(--green)':'transparent')+';color:'+(active?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12px;font-weight:'+(active?'700':'500')+';font-family:inherit">'+lbl+'</button>';
+      }).join('')}
+    </div>
+    ${p.mode==='month'?'<select onchange="window._tcRptPeriod.month=parseInt(this.value);renderTcBody()" style="font-size:12px">'+monthOpts+'</select>':''}
+    ${p.mode==='quarter'?'<select onchange="window._tcRptPeriod.quarter=parseInt(this.value);renderTcBody()" style="font-size:12px">'+quarterOpts+'</select>':''}
+    <select onchange="window._tcRptPeriod.year=parseInt(this.value);renderTcBody()" style="font-size:12px">${yearOpts}</select>
+    <div style="flex:1"></div>
+    <button class="btn" onclick="_tcExportBaoCao()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
   </div>
 
-  <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem">Báo cáo theo từng lô hàng (${lotRows.length})</div>
-  <div class="table-card" style="margin-bottom:1.25rem"><div class="table-wrap"><table>
+  <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin:0 0 1rem;display:flex;align-items:center;gap:8px"><i class="ti ti-report-money" style="color:var(--green)"></i> Báo cáo tài chính — ${_tcPeriodLabel()} <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">(${from} → ${to})</span></div>
+
+  <!-- Dòng tiền tổng quan -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:1.25rem">
+    <div style="padding:.9rem 1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid #64748b"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Quỹ đầu kỳ</div><div style="font-size:16px;font-weight:800;color:#334155">${openingVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
+    <div style="padding:.9rem 1rem;background:var(--green-bg);border-radius:10px;border-left:4px solid var(--green)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Thu trong kỳ</div><div style="font-size:16px;font-weight:800;color:var(--green-dark)">+${thuVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
+    <div style="padding:.9rem 1rem;background:var(--red-bg);border-radius:10px;border-left:4px solid var(--red)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Chi trong kỳ</div><div style="font-size:16px;font-weight:800;color:var(--red-text)">-${chiVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
+    <div style="padding:.9rem 1rem;background:var(--blue-bg);border-radius:10px;border-left:4px solid var(--blue)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Quỹ cuối kỳ</div><div style="font-size:16px;font-weight:800;color:${closingVND>=0?'var(--blue)':'var(--red-text)'}">${closingVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
+  </div>
+
+  <!-- Chênh lệch dòng tiền -->
+  <div style="padding:.75rem 1rem;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <span style="font-size:12.5px;color:var(--text-secondary)"><i class="ti ti-arrows-exchange"></i> Dòng tiền thuần trong kỳ (Thu − Chi)</span>
+    <strong style="font-size:15px;color:${(thuVND-chiVND)>=0?'var(--green-dark)':'var(--red-text)'}">${(thuVND-chiVND)>=0?'+':''}${(thuVND-chiVND).toLocaleString()} VND</strong>
+  </div>
+  <div style="font-size:11.5px;color:var(--text-tertiary);margin:-0.75rem 0 1.25rem;padding-left:2px"><i class="ti ti-info-circle"></i> Quỹ cuối kỳ của kỳ này sẽ là quỹ đầu kỳ của kỳ kế tiếp. Số liệu dựa trên giao dịch thực tế trong Sổ quỹ (đã gồm VAT).</div>
+
+  <!-- Chi tiết Thu / Chi theo danh mục -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:1.25rem">
+    <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem">
+      <div style="font-size:12px;font-weight:700;color:var(--green-dark);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between"><span><i class="ti ti-arrow-down-circle"></i> Thu theo danh mục</span><span>${thuVND.toLocaleString()}</span></div>
+      ${catRow(thuByCat,'var(--green-dark)')}
+    </div>
+    <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem">
+      <div style="font-size:12px;font-weight:700;color:var(--red-text);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between"><span><i class="ti ti-arrow-up-circle"></i> Chi theo danh mục</span><span>${chiVND.toLocaleString()}</span></div>
+      ${catRow(chiByCat,'var(--red-text)')}
+    </div>
+  </div>
+
+  ${_renderTcBaoCaoLots(from,to)}`;
+}
+window.renderTcBaoCao=renderTcBaoCao;
+
+// Bảng lãi/lỗ theo lô (theo ETD trong kỳ) — giữ lại như phần bổ sung
+function _renderTcBaoCaoLots(from,to){
+  const allR=[...cache.xuat.map(function(r){return Object.assign({},r,{loai:'Xuất'});}),...cache.nhap.map(function(r){return Object.assign({},r,{loai:'Nhập'});})];
+  const filtered=allR.filter(function(r){return r.etd&&r.etd>=from&&r.etd<=to;});
+  const lotRows=filtered.map(function(r){
+    const thu=_tcLotRevenueVND(r), chi=_tcLotCostVND(r);
+    return {r:r,thu:thu,chi:chi,profit:thu-chi,margin:thu>0?Math.round((thu-chi)/thu*100):0};
+  }).sort(function(a,b){return (b.r.etd||'').localeCompare(a.r.etd||'');});
+  const tThu=lotRows.reduce(function(s,x){return s+x.thu;},0);
+  const tChi=lotRows.reduce(function(s,x){return s+x.chi;},0);
+  const tProfit=tThu-tChi;
+  return `
+  <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between align-items:center"><span><i class="ti ti-package"></i> Lãi/lỗ theo lô hàng (ETD trong kỳ) — ${lotRows.length} lô</span></div>
+  <div class="table-card"><div class="table-wrap"><table>
     <thead><tr><th>Booking</th><th>Loại</th><th>ETD</th><th>Shipper/NCC</th><th style="text-align:right">Thu (VND)</th><th style="text-align:right">Chi (VND)</th><th style="text-align:right">Lãi/Lỗ</th><th style="text-align:center">Margin</th></tr></thead>
     <tbody>${lotRows.length?lotRows.map(function(x){
       const r=x.r;
       return '<tr>'
         +'<td style="font-weight:600"><button class="plink" data-id="'+r._id+'" data-tt="'+(r.loai==='Xuất'?'xuat':'nhap')+'" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0" onclick="openDetail(this.dataset.id,this.dataset.tt)">'+(r.bookingNo||r.jobNo||'—')+'</button></td>'
         +'<td><span class="bdg '+(r.loai==='Xuất'?'bdg-b':'bdg-a')+'">'+r.loai+'</span></td>'
-        +'<td>'+(r.etd||'—')+'</td>'
-        +'<td>'+(r.shipper||r.supplier||'—')+'</td>'
+        +'<td>'+(r.etd||'—')+'</td><td>'+(r.shipper||r.supplier||'—')+'</td>'
         +'<td style="text-align:right;color:var(--green)">'+x.thu.toLocaleString()+'</td>'
         +'<td style="text-align:right;color:var(--red)">'+x.chi.toLocaleString()+'</td>'
         +'<td style="text-align:right;font-weight:700;color:'+(x.profit>=0?'var(--green)':'var(--red)')+'">'+(x.profit>=0?'+':'')+x.profit.toLocaleString()+'</td>'
         +'<td style="text-align:center"><span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:'+(x.profit>=0?'var(--green-bg)':'rgba(220,53,69,.1)')+';color:'+(x.profit>=0?'var(--green-dark)':'var(--red-text)')+'">'+x.margin+'%</span></td>'
       +'</tr>';
-    }).join(''):'<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có lô hàng trong khoảng ETD đã chọn</td></tr>'}</tbody>
-  </table></div></div>
-
-  <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem">
-    <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.6rem;display:flex;align-items:center;justify-content:space-between">
-      <span><i class="ti ti-receipt-2"></i> Chi phí khác (không gắn lô hàng)</span>
-      <span style="color:var(--red);font-weight:700">${Object.entries(chiKhacByCur).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND'}</span>
-    </div>
-    ${chiKhacList.length?'<div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Danh mục</th><th>Đối tác</th><th>Remark</th><th style="text-align:right">Số tiền</th></tr></thead><tbody>'
-      +chiKhacList.map(function(t){
-        return '<tr><td>'+(t.date||'—')+'</td><td>'+(t.category||'—')+'</td><td>'+(t.partnerRef?'<span class="bdg bdg-purple">'+t.partnerRef+'</span>':'—')+'</td>'
-          +'<td style="color:var(--text-secondary);font-size:11.5px">'+(t.description||'—')+'</td>'
-          +'<td style="text-align:right;font-weight:700;color:var(--red)">'+_tcFmtMoney(t.amount,t.currency)+'</td></tr>';
-      }).join('')
-    +'</tbody></table></div>':'<div style="text-align:center;padding:1rem;color:var(--text-secondary);font-size:12px">Không có chi phí khác trong khoảng thời gian này</div>'}
-  </div>`;
+    }).join(''):'<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có lô hàng với ETD trong kỳ này</td></tr>'}</tbody>
+    ${lotRows.length?'<tfoot><tr style="background:var(--bg-secondary);font-weight:800"><td colspan="4" style="text-align:right">TỔNG</td><td style="text-align:right;color:var(--green)">'+tThu.toLocaleString()+'</td><td style="text-align:right;color:var(--red)">'+tChi.toLocaleString()+'</td><td style="text-align:right;color:'+(tProfit>=0?'var(--green-dark)':'var(--red-text)')+'">'+(tProfit>=0?'+':'')+tProfit.toLocaleString()+'</td><td></td></tr></tfoot>':''}
+  </table></div></div>`;
 }
+
+// Xuất Excel báo cáo tài chính theo kỳ
+function _tcExportBaoCao(){
+  const XLSX=window.XLSX; if(!XLSX){toast('Đang tải thư viện Excel','error');return;}
+  const {from,to}=_tcPeriodRange();
+  const roe=26390;
+  const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to;});
+  let thuVND=0,chiVND=0;
+  txInPeriod.forEach(function(t){const a=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);if(t.type==='thu')thuVND+=a;else chiVND+=a;});
+  const openingVND=_tcTotalBalanceUpTo(_tcPrevDay(from));
+  const closingVND=openingVND+thuVND-chiVND;
+
+  const ws1=[
+    ['BÁO CÁO TÀI CHÍNH',''],[_tcPeriodLabel(),from+' → '+to],['',''],
+    ['Quỹ đầu kỳ',openingVND],['Tổng Thu trong kỳ',thuVND],['Tổng Chi trong kỳ',chiVND],
+    ['Dòng tiền thuần',thuVND-chiVND],['Quỹ cuối kỳ',closingVND],['',''],
+    ['CHI TIẾT GIAO DỊCH',''],['Ngày','Loại','Danh mục','Diễn giải','Tài khoản','Số tiền','Tiền tệ']
+  ];
+  txInPeriod.sort(function(a,b){return (a.date||'').localeCompare(b.date||'');}).forEach(function(t){
+    ws1.push([t.date||'',t.type==='thu'?'Thu':'Chi',t.category||'',t.description||'',_tcAccountLabel(t.account),t.amount||0,t.currency||'VND']);
+  });
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ws1),'Bao cao tai chinh');
+  const p=window._tcRptPeriod;
+  const fname='BaoCaoTaiChinh_'+(p.mode==='month'?('T'+p.month):p.mode==='quarter'?('Q'+p.quarter):'Nam')+'_'+p.year+'.xlsx';
+  XLSX.writeFile(wb,fname);
+  toast('Đã xuất Excel báo cáo tài chính');
+}
+window._tcExportBaoCao=_tcExportBaoCao;
 
 
 
