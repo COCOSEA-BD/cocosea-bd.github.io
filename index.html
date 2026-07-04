@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v254';
+window.APP_BUILD='v255';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -13181,12 +13181,27 @@ function _costingReportData(){
   const lots=filtered.map(r=>{
     const svcs=r.svcs||{};
     const costItems=(r.costing||{}).items||[];
-    // Doanh thu chưa VAT
+    // Doanh thu chưa VAT + danh sách chi tiết (từ debit note — các dịch vụ có bán)
     let revVND=0;
+    const revDetails=[];
     Object.keys(svcs).forEach(k=>{
       const sv=svcs[k]; if(!sv||!sv.on||sv.invoice==='Waived')return;
       const amt=sv.amount||(sv.price||0)*(sv.qty||1);
-      revVND+=cv(amt, sv.cur||'USD');
+      if(!amt)return;
+      const vnd=cv(amt, sv.cur||'USD');
+      revVND+=vnd;
+      const svcMeta=(typeof SVCS!=='undefined')?SVCS.find(s=>s.key===k):null;
+      revDetails.push({
+        name:sv._name||(svcMeta?svcMeta.name:k),
+        party:sv.party||'',
+        qty:sv.qty||1,
+        unit:sv.svcUnit||'Cont',
+        price:sv.price||0,
+        cur:sv.cur||'USD',
+        vat:sv.vat||'0%',
+        invoice:sv.invoice||'',
+        amtVND:vnd
+      });
     });
     // Chi phí chưa VAT + danh sách chi tiết
     let costVND=0;
@@ -13210,7 +13225,7 @@ function _costingReportData(){
     return {
       booking:r.bookingNo||r.jobNo||'—', jobNo:r.jobNo||'', loai:r.loai, etd:r.etd||'',
       shipper:r.shipper||r.supplier||'', pod:r.pod||'', mblNo:r.mblNo||'',
-      revVND, costVND, profitVND, margin, costDetails
+      revVND, costVND, profitVND, margin, costDetails, revDetails
     };
   });
 
@@ -13311,6 +13326,24 @@ function exportCostingPdf(){
         doc.text('Loại: '+l.loai+'    ETD: '+(l.etd||'—')+'    POD: '+(l.pod||'—'),52,yy+38);
         doc.text('Shipper: '+(l.shipper||'—')+(l.mblNo?('    MBL: '+l.mblNo):''),52,yy+52);
         yy+=78;
+
+        // ─── Bảng DOANH THU chi tiết (từ Debit Note) ───
+        doc.setFont('Roboto','bold'); doc.setFontSize(10); doc.setTextColor(15,30,46);
+        doc.text('Chi tiết doanh thu (từ Debit Note — chưa VAT)',40,yy); yy+=8;
+        const rHead=[['STT','Khoản mục','Party','SL','ĐVT','Đơn giá','VAT','HĐ','Thành tiền (VND)']];
+        const rBody=l.revDetails.map((c,i)=>[i+1,c.name,c.party||'—',c.qty,c.unit,fmt(c.price)+' '+c.cur,c.vat||'0%',c.invoice||'—',fmt(c.amtVND)]);
+        if(!rBody.length)rBody.push([{content:'Chưa có doanh thu (debit note) cho lô này',colSpan:9,styles:{halign:'center',textColor:[150,150,150]}}]);
+        rBody.push([{content:'TỔNG DOANH THU',colSpan:8,styles:{halign:'right',fontStyle:'bold'}},{content:fmt(l.revVND),styles:{fontStyle:'bold'}}]);
+        doc.autoTable({
+          head:rHead, body:rBody, startY:yy+6,
+          styles:{font:'Roboto',fontSize:8,cellPadding:4,overflow:'linebreak',lineColor:[221,221,221],lineWidth:.5},
+          headStyles:{font:'Roboto',fontStyle:'bold',fillColor:[21,128,61],textColor:[255,255,255],halign:'center',valign:'middle'},
+          alternateRowStyles:{fillColor:[240,253,244]},
+          columnStyles:{0:{halign:'center',cellWidth:26},3:{halign:'center',cellWidth:30},4:{halign:'center',cellWidth:38},5:{halign:'right'},6:{halign:'center',cellWidth:36},7:{halign:'center',cellWidth:34},8:{halign:'right'}},
+          margin:{left:40,right:40},
+          didDrawPage:drawFooter
+        });
+        yy=doc.lastAutoTable.finalY+16;
 
         // Bảng chi phí chi tiết
         doc.setFont('Roboto','bold'); doc.setFontSize(10); doc.setTextColor(15,30,46);
