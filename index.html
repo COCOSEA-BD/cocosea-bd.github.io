@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v247';
+window.APP_BUILD='v248';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5987,13 +5987,17 @@ let tcVoucherDebt=null;  // khoản công nợ đã chọn trong popup {id,partn
 let tcVoucherPartner=''; // đối tác CRM đã chọn (dùng cho Phiếu Chi, đặc biệt khi không gắn lô hàng -> Chi Khác)
 
 function _tcAccountList(){
-  const accs=[{id:'cash',label:'Tiền mặt'}];
+  const accs=[];
   const raw=window._bankAccounts;
   let company=[],personal=[];
   if(Array.isArray(raw)){ company=raw; }
   else if(raw&&typeof raw==='object'){ company=raw.company||[]; personal=raw.personal||[]; }
   company.forEach(function(b){if(b&&b.account)accs.push({id:'bank:'+b.account,label:(b.beneficiary||b.bank||'TK ngân hàng')+' • '+b.account});});
   personal.forEach(function(b){if(b&&b.account)accs.push({id:'bank:'+b.account,label:(b.beneficiary||b.bank||'TK ngân hàng')+' • '+b.account});});
+  // Không dùng "Tiền mặt" nữa — mọi khoản thu/chi đều gắn 1 tài khoản ngân hàng.
+  // Nhưng nếu vẫn còn giao dịch CŨ gắn account='cash', hiển thị để không bị mất/ẩn tiền.
+  const hasLegacyCash=(cache.cashTx||[]).some(function(t){return t.account==='cash';});
+  if(hasLegacyCash)accs.push({id:'cash',label:'Tiền mặt (cũ)'});
   return accs;
 }
 function _tcAccountLabel(id){
@@ -8075,7 +8079,10 @@ function _tcPeriodRange(){
   const p=window._tcRptPeriod;
   const y=p.year;
   let from,to;
-  if(p.mode==='month'){
+  if(p.mode==='custom'){
+    from=p.customFrom||new Date().toISOString().slice(0,10);
+    to=p.customTo||new Date().toISOString().slice(0,10);
+  } else if(p.mode==='month'){
     from=y+'-'+String(p.month).padStart(2,'0')+'-01';
     const last=new Date(y,p.month,0).getDate();
     to=y+'-'+String(p.month).padStart(2,'0')+'-'+String(last).padStart(2,'0');
@@ -8091,9 +8098,27 @@ function _tcPeriodRange(){
 }
 function _tcPeriodLabel(){
   const p=window._tcRptPeriod;
+  if(p.mode==='custom'){const r=_tcPeriodRange();return 'Từ '+r.from+' đến '+r.to;}
   if(p.mode==='month')return 'Tháng '+p.month+'/'+p.year;
   if(p.mode==='quarter')return 'Quý '+p.quarter+'/'+p.year;
   return 'Năm '+p.year;
+}
+
+// Số dư 1 tài khoản (VND) đến hết ngày 'dateStr'
+function _tcAccountBalanceUpTo(accId,dateStr){
+  const roe=26390;
+  const ob=(window._tcOpeningBalances||{})[accId]||{};
+  const obDate=ob.date||'';
+  let vnd=0;
+  if(!obDate||obDate<=dateStr)vnd+=(ob.VND||0)+Math.round((ob.USD||0)*roe);
+  (cache.cashTx||[]).forEach(function(tx){
+    if(tx.account!==accId)return;
+    if(!tx.date||tx.date>dateStr)return;
+    if(obDate&&tx.date<obDate)return;
+    const amtVND=(tx.currency||'VND')==='VND'?(tx.amount||0):Math.round((tx.amount||0)*roe);
+    vnd+= tx.type==='thu'?amtVND:-amtVND;
+  });
+  return vnd;
 }
 
 // Tổng số dư TẤT CẢ tài khoản (VND) tính đến CUỐI ngày 'dateStr' (bao gồm đầu kỳ cấu hình + mọi giao dịch <= dateStr)
@@ -8123,6 +8148,75 @@ function _tcTotalBalanceUpTo(dateStr){
 function _tcPrevDay(dateStr){
   const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()-1);
   return d.toISOString().slice(0,10);
+}
+
+// Thống kê Thu/Chi theo TỪNG TÀI KHOẢN trong Sổ quỹ, trong khoảng [from,to]
+function _tcStatsByAccount(from,to){
+  const roe=26390;
+  const accs=_tcAccountList();
+  const map={};
+  accs.forEach(function(a){map[a.id]={label:a.label,thu:0,chi:0};});
+  (cache.cashTx||[]).forEach(function(t){
+    if(!t.date||t.date<from||t.date>to)return;
+    const acc=t.account||'(chưa gán)';
+    if(!map[acc])map[acc]={label:_tcAccountLabel(acc),thu:0,chi:0};
+    const amtVND=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);
+    if(t.type==='thu')map[acc].thu+=amtVND; else map[acc].chi+=amtVND;
+  });
+  return map;
+}
+
+// Tổng THU từ Invoice (Debit Note của shipper) theo trạng thái TT — dựa trên dnPayments của các lô có ETD trong kỳ
+// Trả về {paid, unpaid, total}
+function _tcInvoiceRevenueByStatus(from,to){
+  let paid=0,unpaid=0;
+  const allR=[...cache.xuat,...cache.nhap];
+  allR.forEach(function(r){
+    if(!r.etd||r.etd<from||r.etd>to)return;
+    const dnPm=r.dnPayments||{};
+    let hasDnData=false;
+    Object.values(dnPm).forEach(function(pe){
+      ['inv','noInv'].forEach(function(sec){
+        const p=pe&&pe[sec];
+        if(!p)return;
+        const amt=p.amount||0;
+        if(amt<=0)return;
+        hasDnData=true;
+        if(p.status==='paid')paid+=amt; else unpaid+=amt;
+      });
+    });
+    // Nếu lô chưa có dnPayments → tính doanh thu Invoice dự kiến là "chưa TT"
+    if(!hasDnData){
+      const rev=_tcLotRevenueVND(r);
+      if(rev>0)unpaid+=rev;
+    }
+  });
+  return {paid:paid,unpaid:unpaid,total:paid+unpaid};
+}
+
+// Tổng CHI (phải trả NCC) theo trạng thái TT — dựa trên svcs.apPaidStatus + costing items của các lô có ETD trong kỳ
+function _tcLotCostByStatus(from,to){
+  const roe=26390;
+  let paid=0,unpaid=0;
+  const allR=[...cache.xuat,...cache.nhap];
+  allR.forEach(function(r){
+    if(!r.etd||r.etd<from||r.etd>to)return;
+    const svcs=r.svcs||{};
+    Object.values(svcs).forEach(function(sv){
+      if(!sv.on||!sv.cost)return;
+      const base=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
+      const vat=parseFloat(sv.svcVatAmt)||0;
+      const amt=base+vat;
+      const amtVND=(sv.svcCur||sv.cur||'VND')==='VND'?amt:Math.round(amt*roe);
+      if(sv.apPaidStatus==='paid')paid+=amtVND; else unpaid+=amtVND;
+    });
+    ((r.costing||{}).items||[]).forEach(function(it){
+      const amt=it.amt||(it.price||0)*(it.qty||1)||0;
+      const amtVND=(it.cur||'VND')==='VND'?amt:Math.round(amt*roe);
+      if(it.apPaidStatus==='paid')paid+=amtVND; else unpaid+=amtVND;
+    });
+  });
+  return {paid:paid,unpaid:unpaid,total:paid+unpaid};
 }
 
 function renderTcBaoCao(){
@@ -8159,40 +8253,92 @@ function renderTcBaoCao(){
     }).join('');
   };
 
+  // Quỹ đầu kỳ theo TỪNG tài khoản (đến hết ngày liền trước 'from')
+  const prevDay=_tcPrevDay(from);
+  const accs=_tcAccountList();
+  const openingByAcc=accs.map(function(a){return {id:a.id,label:a.label,vnd:_tcAccountBalanceUpTo(a.id,prevDay)};});
+  // Thống kê thu/chi theo tài khoản trong kỳ
+  const statsByAcc=_tcStatsByAccount(from,to);
+  // Thu từ Invoice + Chi theo trạng thái TT
+  const invRev=_tcInvoiceRevenueByStatus(from,to);
+  const lotCost=_tcLotCostByStatus(from,to);
+
+  const money=function(n){return (n||0).toLocaleString();};
+  const tri=function(paid,unpaid,total,cPaid,cUnpaid){
+    return '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px">'
+      +'<div style="padding:8px 10px;background:var(--green-bg);border-radius:8px"><div style="font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Đã thanh toán</div><div style="font-size:14px;font-weight:800;color:var(--green-dark)">'+money(paid)+'</div></div>'
+      +'<div style="padding:8px 10px;background:rgba(234,179,8,.12);border-radius:8px"><div style="font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Chưa thanh toán</div><div style="font-size:14px;font-weight:800;color:#b45309">'+money(unpaid)+'</div></div>'
+      +'<div style="padding:8px 10px;background:var(--bg-secondary);border-radius:8px"><div style="font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Tổng cộng</div><div style="font-size:14px;font-weight:800;color:var(--text-primary)">'+money(total)+'</div></div>'
+    +'</div>';
+  };
+
   return `
-  <div class="toolbar" style="align-items:center">
+  <div class="toolbar" style="align-items:center;flex-wrap:wrap">
     <div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">
-      ${['month','quarter','year'].map(function(m){
-        const lbl={month:'Tháng',quarter:'Quý',year:'Năm'}[m];
+      ${['month','quarter','year','custom'].map(function(m){
+        const lbl={month:'Tháng',quarter:'Quý',year:'Năm',custom:'Tùy chọn'}[m];
         const active=p.mode===m;
-        return '<button onclick="window._tcRptPeriod.mode=\''+m+'\';renderTcBody()" style="padding:7px 16px;border:none;background:'+(active?'var(--green)':'transparent')+';color:'+(active?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12px;font-weight:'+(active?'700':'500')+';font-family:inherit">'+lbl+'</button>';
+        return '<button onclick="window._tcRptPeriod.mode=\''+m+'\';renderTcBody()" style="padding:7px 14px;border:none;background:'+(active?'var(--green)':'transparent')+';color:'+(active?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12px;font-weight:'+(active?'700':'500')+';font-family:inherit">'+lbl+'</button>';
       }).join('')}
     </div>
     ${p.mode==='month'?'<select onchange="window._tcRptPeriod.month=parseInt(this.value);renderTcBody()" style="font-size:12px">'+monthOpts+'</select>':''}
     ${p.mode==='quarter'?'<select onchange="window._tcRptPeriod.quarter=parseInt(this.value);renderTcBody()" style="font-size:12px">'+quarterOpts+'</select>':''}
-    <select onchange="window._tcRptPeriod.year=parseInt(this.value);renderTcBody()" style="font-size:12px">${yearOpts}</select>
+    ${p.mode!=='custom'?'<select onchange="window._tcRptPeriod.year=parseInt(this.value);renderTcBody()" style="font-size:12px">'+yearOpts+'</select>':''}
+    ${p.mode==='custom'?'<label style="font-size:11.5px;color:var(--text-secondary)">Từ:</label><input type="date" value="'+from+'" onchange="window._tcRptPeriod.customFrom=this.value;renderTcBody()" style="font-size:12px"/><label style="font-size:11.5px;color:var(--text-secondary)">đến:</label><input type="date" value="'+to+'" onchange="window._tcRptPeriod.customTo=this.value;renderTcBody()" style="font-size:12px"/>':''}
     <div style="flex:1"></div>
     <button class="btn" onclick="_tcExportBaoCao()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
   </div>
 
   <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin:0 0 1rem;display:flex;align-items:center;gap:8px"><i class="ti ti-report-money" style="color:var(--green)"></i> Báo cáo tài chính — ${_tcPeriodLabel()} <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">(${from} → ${to})</span></div>
 
-  <!-- Dòng tiền tổng quan -->
+  <!-- Dòng tiền tổng quan (Sổ quỹ thực tế) -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:1.25rem">
     <div style="padding:.9rem 1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid #64748b"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Quỹ đầu kỳ</div><div style="font-size:16px;font-weight:800;color:#334155">${openingVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
-    <div style="padding:.9rem 1rem;background:var(--green-bg);border-radius:10px;border-left:4px solid var(--green)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Thu trong kỳ</div><div style="font-size:16px;font-weight:800;color:var(--green-dark)">+${thuVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
-    <div style="padding:.9rem 1rem;background:var(--red-bg);border-radius:10px;border-left:4px solid var(--red)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Chi trong kỳ</div><div style="font-size:16px;font-weight:800;color:var(--red-text)">-${chiVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
+    <div style="padding:.9rem 1rem;background:var(--green-bg);border-radius:10px;border-left:4px solid var(--green)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Thu (Sổ quỹ)</div><div style="font-size:16px;font-weight:800;color:var(--green-dark)">+${thuVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
+    <div style="padding:.9rem 1rem;background:var(--red-bg);border-radius:10px;border-left:4px solid var(--red)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Chi (Sổ quỹ)</div><div style="font-size:16px;font-weight:800;color:var(--red-text)">-${chiVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
     <div style="padding:.9rem 1rem;background:var(--blue-bg);border-radius:10px;border-left:4px solid var(--blue)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Quỹ cuối kỳ</div><div style="font-size:16px;font-weight:800;color:${closingVND>=0?'var(--blue)':'var(--red-text)'}">${closingVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
   </div>
 
-  <!-- Chênh lệch dòng tiền -->
-  <div style="padding:.75rem 1rem;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-    <span style="font-size:12.5px;color:var(--text-secondary)"><i class="ti ti-arrows-exchange"></i> Dòng tiền thuần trong kỳ (Thu − Chi)</span>
-    <strong style="font-size:15px;color:${(thuVND-chiVND)>=0?'var(--green-dark)':'var(--red-text)'}">${(thuVND-chiVND)>=0?'+':''}${(thuVND-chiVND).toLocaleString()} VND</strong>
+  <!-- Quỹ đầu kỳ theo từng tài khoản -->
+  <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem;margin-bottom:1.25rem">
+    <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.6rem"><i class="ti ti-wallet"></i> Quỹ đầu kỳ theo tài khoản</div>
+    ${openingByAcc.length?openingByAcc.map(function(a){
+      return '<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px;border-bottom:1px dashed var(--border-light)"><span style="color:var(--text-secondary)"><i class="ti ti-building-bank" style="font-size:12px"></i> '+a.label+'</span><strong style="color:#334155">'+money(a.vnd)+' VND</strong></div>';
+    }).join(''):'<div style="font-size:11.5px;color:var(--text-tertiary);padding:6px 0">Chưa có tài khoản</div>'}
+    <div style="display:flex;justify-content:space-between;padding:8px 0 2px;font-size:13px;font-weight:800;border-top:2px solid var(--border-light);margin-top:4px"><span>TỔNG QUỸ ĐẦU KỲ</span><span style="color:#1a4b8c">${openingVND.toLocaleString()} VND</span></div>
   </div>
-  <div style="font-size:11.5px;color:var(--text-tertiary);margin:-0.75rem 0 1.25rem;padding-left:2px"><i class="ti ti-info-circle"></i> Quỹ cuối kỳ của kỳ này sẽ là quỹ đầu kỳ của kỳ kế tiếp. Số liệu dựa trên giao dịch thực tế trong Sổ quỹ (đã gồm VAT).</div>
 
-  <!-- Chi tiết Thu / Chi theo danh mục -->
+  <!-- Thu từ Shipper (Invoice) theo trạng thái -->
+  <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem;margin-bottom:1.25rem">
+    <div style="font-size:12px;font-weight:700;color:var(--green-dark);text-transform:uppercase;letter-spacing:.3px"><i class="ti ti-arrow-down-circle"></i> Tổng Thu từ Shipper (theo Invoice / Debit Note)</div>
+    ${tri(invRev.paid,invRev.unpaid,invRev.total)}
+  </div>
+
+  <!-- Tổng Chi các lô hàng theo trạng thái -->
+  <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem;margin-bottom:1.25rem">
+    <div style="font-size:12px;font-weight:700;color:var(--red-text);text-transform:uppercase;letter-spacing:.3px"><i class="ti ti-arrow-up-circle"></i> Tổng Chi các lô hàng (phải trả NCC — đã gồm VAT)</div>
+    ${tri(lotCost.paid,lotCost.unpaid,lotCost.total)}
+  </div>
+
+  <!-- Thống kê Thu/Chi Sổ quỹ theo tài khoản -->
+  <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem;margin-bottom:1.25rem">
+    <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.6rem"><i class="ti ti-building-bank"></i> Thu / Chi theo tài khoản (Sổ quỹ trong kỳ)</div>
+    <div class="table-wrap"><table style="width:100%">
+      <thead><tr><th style="text-align:left">Tài khoản</th><th style="text-align:right">Thu</th><th style="text-align:right">Chi</th><th style="text-align:right">Chênh lệch</th></tr></thead>
+      <tbody>${Object.values(statsByAcc).filter(function(a){return a.thu||a.chi;}).map(function(a){
+        const diff=a.thu-a.chi;
+        return '<tr><td style="font-weight:600">'+a.label+'</td>'
+          +'<td style="text-align:right;color:var(--green)">'+money(a.thu)+'</td>'
+          +'<td style="text-align:right;color:var(--red)">'+money(a.chi)+'</td>'
+          +'<td style="text-align:right;font-weight:700;color:'+(diff>=0?'var(--green-dark)':'var(--red-text)')+'">'+(diff>=0?'+':'')+money(diff)+'</td></tr>';
+      }).join('')||'<tr><td colspan="4" style="text-align:center;padding:1rem;color:var(--text-secondary)">Không có giao dịch trong kỳ</td></tr>'}</tbody>
+      <tfoot><tr style="background:var(--bg-secondary);font-weight:800"><td>TỔNG</td><td style="text-align:right;color:var(--green)">${money(thuVND)}</td><td style="text-align:right;color:var(--red)">${money(chiVND)}</td><td style="text-align:right;color:${(thuVND-chiVND)>=0?'var(--green-dark)':'var(--red-text)'}">${(thuVND-chiVND)>=0?'+':''}${money(thuVND-chiVND)}</td></tr></tfoot>
+    </table></div>
+  </div>
+
+  <div style="font-size:11.5px;color:var(--text-tertiary);margin:0 0 1.25rem;padding-left:2px"><i class="ti ti-info-circle"></i> Quỹ cuối kỳ của kỳ này sẽ là quỹ đầu kỳ của kỳ kế tiếp. Dòng tiền Sổ quỹ dựa trên giao dịch thực tế (đã gồm VAT). Thu từ Shipper và Chi các lô lấy theo số liệu Invoice/chi phí của các lô có ETD trong kỳ.</div>
+
+  <!-- Chi tiết Thu / Chi theo danh mục (Sổ quỹ) -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:1.25rem">
     <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem">
       <div style="font-size:12px;font-weight:700;color:var(--green-dark);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between"><span><i class="ti ti-arrow-down-circle"></i> Thu theo danh mục</span><span>${thuVND.toLocaleString()}</span></div>
