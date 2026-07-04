@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v248';
+window.APP_BUILD='v249';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6570,6 +6570,14 @@ function renderTcSoQuy(){
 
   const q=(g('tcSearch')?.value||'');
   let list=(cache.cashTx||[]).slice();
+  // Cảnh báo: giao dịch còn gắn "tiền mặt" (cash) — cần gán vào 1 tài khoản ngân hàng
+  const cashTxs=(cache.cashTx||[]).filter(function(t){return t.account==='cash'||!t.account;});
+  const cashWarnBanner=cashTxs.length?('<div style="margin-bottom:1rem;padding:.85rem 1.1rem;background:rgba(234,179,8,.12);border:1.5px solid #eab308;border-radius:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
+    +'<i class="ti ti-alert-triangle" style="font-size:22px;color:#b45309"></i>'
+    +'<div style="flex:1;min-width:200px"><div style="font-weight:700;font-size:13px;color:#92400e">Có '+cashTxs.length+' giao dịch chưa gán tài khoản ngân hàng</div>'
+    +'<div style="font-size:11.5px;color:#a16207;margin-top:2px">Hệ thống không dùng "Tiền mặt" nữa. Hãy gán các giao dịch này vào một tài khoản ngân hàng cụ thể.</div></div>'
+    +'<button class="btn pri" style="background:#b45309;border-color:#b45309" onclick="openAssignCashAccount()"><i class="ti ti-arrow-right"></i> Gán tài khoản ngay</button>'
+    +'</div>'):'';
   if(tcAccFilter) list=list.filter(function(t){return t.account===tcAccFilter;});
   if(tcTypeFilter) list=list.filter(function(t){return t.type===tcTypeFilter;});
   if(tcFrom) list=list.filter(function(t){return !t.date||t.date>=tcFrom;});
@@ -6578,6 +6586,7 @@ function renderTcSoQuy(){
 
   return `
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem">${balCards}</div>
+  ${cashWarnBanner}
   <div class="toolbar">
     <div class="search-wrap" style="flex:1;min-width:200px"><i class="ti ti-search"></i><input type="text" id="tcSearch" placeholder="Tìm diễn giải, danh mục, booking..." oninput="renderTcBody()"/></div>
     <select id="tcAccSel" onchange="tcAccFilter=this.value;renderTcBody()" style="font-size:12px;flex:0 0 200px"><option value="">Tất cả tài khoản</option>${accs.map(function(a){return '<option value="'+a.id+'"'+(tcAccFilter===a.id?' selected':'')+'>'+a.label+'</option>';}).join('')}</select>
@@ -6627,11 +6636,11 @@ function renderTcChiKhac(){
     <div class="table-card"><div class="table-wrap"><table>
       <thead><tr><th>Ngày</th><th>Danh mục</th><th>Đối tác</th><th>Diễn giải</th><th>Tài khoản</th><th style="text-align:right">Số tiền</th></tr></thead>
       <tbody>${list.map(function(t){
-        return '<tr><td>'+(t.date||'—')+'</td><td>'+(t.category||'—')+'</td>'
+        return '<tr onclick="editCashTx(\''+t._id+'\')" style="cursor:pointer" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'"><td>'+(t.date||'—')+'</td><td>'+(t.category||'—')+'</td>'
           +'<td>'+(t.partnerRef?'<span class="bdg bdg-purple">'+t.partnerRef+'</span>':'—')+'</td>'
           +'<td style="max-width:220px;white-space:normal">'+(t.description||'—')+'</td>'
           +'<td>'+_tcAccountLabel(t.account)+'</td>'
-          +'<td style="text-align:right;font-weight:700;color:var(--red)">'+_tcFmtMoney(t.amount,t.currency)+'</td></tr>';
+          +'<td style="text-align:right;font-weight:700;color:var(--red)">'+_tcFmtMoney(t.amount,t.currency)+' <i class="ti ti-edit" style="font-size:12px;color:var(--text-tertiary);margin-left:4px"></i></td></tr>';
       }).join('')}</tbody>
     </table></div></div>
   </div>`;
@@ -6664,6 +6673,123 @@ async function cleanDuplicateCashTx(){
   setLoading(false);
 }
 window.cleanDuplicateCashTx=cleanDuplicateCashTx;
+
+// Popup gán tài khoản ngân hàng cho các giao dịch còn ở "tiền mặt" (cash)
+function openAssignCashAccount(){
+  const cashTxs=(cache.cashTx||[]).filter(function(t){return t.account==='cash'||!t.account;});
+  if(!cashTxs.length){toast('Không còn giao dịch tiền mặt nào');return;}
+  const accs=_tcAccountList().filter(function(a){return a.id!=='cash';});
+  if(!accs.length){toast('Chưa có tài khoản ngân hàng nào. Thêm ở Cài đặt trước.','error');return;}
+  let ov=g('tcVoucherOv');
+  const accOpts=accs.map(function(a){return '<option value="'+a.id+'">'+a.label+'</option>';}).join('');
+  const rows=cashTxs.map(function(t,i){
+    return '<tr>'
+      +'<td style="padding:5px 7px;font-size:11.5px">'+(t.date||'—')+'</td>'
+      +'<td style="padding:5px 7px;font-size:11.5px"><span class="bdg '+(t.type==='thu'?'bdg-g':'bdg-r')+'">'+(t.type==='thu'?'Thu':'Chi')+'</span></td>'
+      +'<td style="padding:5px 7px;font-size:11.5px;max-width:200px;white-space:normal">'+(t.description||t.category||'—')+'</td>'
+      +'<td style="padding:5px 7px;font-size:11.5px;text-align:right;font-weight:600">'+_tcFmtMoney(t.amount,t.currency)+'</td>'
+      +'<td style="padding:5px 7px"><select class="assign-acc-sel" data-txid="'+t._id+'" style="font-size:11.5px;width:100%">'+accOpts+'</select></td>'
+    +'</tr>';
+  }).join('');
+  ov.innerHTML=`<div class="modal" style="max-width:720px;max-height:88vh;overflow-y:auto">
+    <div class="mhdr"><div><div class="mtitle"><i class="ti ti-arrow-right" style="margin-right:6px"></i>Gán tài khoản cho giao dịch tiền mặt</div><div class="msub">${cashTxs.length} giao dịch cần gán</div></div>
+    <div class="mhdr-btns"><button class="rac" onclick="closeOv('tcVoucherOv')"><i class="ti ti-x"></i></button></div></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:.75rem;padding:8px 12px;background:var(--bg-secondary);border-radius:8px">
+      <label style="font-size:12px;font-weight:600;color:var(--text-secondary)">Gán tất cả vào:</label>
+      <select id="assignAllAcc" style="font-size:12px">${accOpts}</select>
+      <button class="btn sm" onclick="_assignAllCashAcc()"><i class="ti ti-check"></i> Áp dụng cho tất cả</button>
+    </div>
+    <div class="table-wrap"><table style="width:100%"><thead><tr>
+      <th style="text-align:left;font-size:10.5px">Ngày</th><th style="text-align:left;font-size:10.5px">Loại</th><th style="text-align:left;font-size:10.5px">Diễn giải</th><th style="text-align:right;font-size:10.5px">Số tiền</th><th style="text-align:left;font-size:10.5px">Tài khoản</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="mftr"><button class="btn" onclick="closeOv('tcVoucherOv')">Hủy</button><button class="btn pri" onclick="_saveAssignCashAcc()"><i class="ti ti-device-floppy"></i> Lưu tất cả</button></div>
+  </div>`;
+  openOv('tcVoucherOv');
+}
+window.openAssignCashAccount=openAssignCashAccount;
+
+// Sửa 1 giao dịch Sổ quỹ (Chi Khác / bất kỳ). Popup cho chỉnh: ngày, tài khoản, số tiền, danh mục, đối tác, diễn giải.
+function editCashTx(txId){
+  const t=(cache.cashTx||[]).find(function(x){return x._id===txId;});
+  if(!t){toast('Không tìm thấy giao dịch','error');return;}
+  const accs=_tcAccountList();
+  const cats=(window._thuChiCategories||{})[t.type]||[];
+  const ov=g('tcVoucherOv');
+  ov.innerHTML=`<div class="modal" style="max-width:500px">
+    <div class="mhdr"><div><div class="mtitle" style="color:${t.type==='thu'?'var(--green)':'var(--red)'}"><i class="ti ti-edit" style="margin-right:6px"></i>Sửa giao dịch ${t.type==='thu'?'Thu':'Chi'}</div></div>
+    <div class="mhdr-btns"><button class="rac" onclick="closeOv('tcVoucherOv')"><i class="ti ti-x"></i></button></div></div>
+    <div class="fg">
+      <div class="fi"><label class="lbl">Ngày</label><input type="date" id="etx_date" value="${t.date||''}"/></div>
+      <div class="fi"><label class="lbl">Tài khoản</label><select id="etx_acc">${accs.map(function(a){return '<option value="'+a.id+'"'+(a.id===t.account?' selected':'')+'>'+a.label+'</option>';}).join('')}</select></div>
+      <div class="fi"><label class="lbl">Số tiền</label><input type="number" id="etx_amount" value="${t.amount||0}"/></div>
+      <div class="fi"><label class="lbl">Tiền tệ</label><select id="etx_cur"><option value="VND"${t.currency==='VND'?' selected':''}>VND</option><option value="USD"${t.currency==='USD'?' selected':''}>USD</option></select></div>
+      <div class="fi full"><label class="lbl">Danh mục</label><select id="etx_cat"><option value="">— Chọn —</option>${cats.map(function(c){return '<option'+(c===t.category?' selected':'')+'>'+c+'</option>';}).join('')}</select></div>
+      <div class="fi full"><label class="lbl">Đối tác</label><input type="text" id="etx_partner" value="${(t.partnerRef||'').replace(/"/g,'&quot;')}" list="etx_partnerList"/><datalist id="etx_partnerList">${Object.values(cache.partners).map(function(p){return '<option value="'+p.shortname.replace(/"/g,'&quot;')+'">';}).join('')}</datalist></div>
+      <div class="fi full"><label class="lbl">Diễn giải</label><textarea id="etx_desc" rows="2" style="font-size:12px;resize:vertical">${(t.description||'').replace(/</g,'&lt;')}</textarea></div>
+    </div>
+    <div class="mftr">
+      <button class="btn red" onclick="_delCashTxFromEdit('${txId}')" style="margin-right:auto"><i class="ti ti-trash"></i> Xóa</button>
+      <button class="btn" onclick="closeOv('tcVoucherOv')">Hủy</button>
+      <button class="btn pri" onclick="_saveCashTxEdit('${txId}')"><i class="ti ti-check"></i> Lưu</button>
+    </div>
+  </div>`;
+  openOv('tcVoucherOv');
+}
+window.editCashTx=editCashTx;
+
+async function _saveCashTxEdit(txId){
+  const amount=parseFloat(g('etx_amount')?.value);
+  if(!amount||amount<=0){toast('Nhập số tiền hợp lệ','error');return;}
+  const upd={
+    date:g('etx_date')?.value||'',
+    account:g('etx_acc')?.value||'',
+    amount:amount,
+    currency:g('etx_cur')?.value||'VND',
+    category:g('etx_cat')?.value||'',
+    partnerRef:(g('etx_partner')?.value||'').trim()||null,
+    description:g('etx_desc')?.value||'',
+    updatedAt:Date.now()
+  };
+  setLoading(true,'Đang lưu...');
+  try{
+    await db.collection('cashTransactions').doc(txId).update(upd);
+    toast('Đã cập nhật giao dịch');
+    closeOv('tcVoucherOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._saveCashTxEdit=_saveCashTxEdit;
+
+async function _delCashTxFromEdit(txId){
+  if(!confirm('Xóa giao dịch này khỏi Sổ quỹ?'))return;
+  setLoading(true);
+  try{await db.collection('cashTransactions').doc(txId).delete();toast('Đã xóa giao dịch');closeOv('tcVoucherOv');}
+  catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._delCashTxFromEdit=_delCashTxFromEdit;
+
+function _assignAllCashAcc(){
+  const val=g('assignAllAcc')?.value;
+  document.querySelectorAll('.assign-acc-sel').forEach(function(s){s.value=val;});
+}
+window._assignAllCashAcc=_assignAllCashAcc;
+
+async function _saveAssignCashAcc(){
+  const sels=Array.from(document.querySelectorAll('.assign-acc-sel'));
+  if(!sels.length)return;
+  setLoading(true,'Đang gán tài khoản cho '+sels.length+' giao dịch...');
+  try{
+    for(const s of sels){
+      const txId=s.dataset.txid, acc=s.value;
+      if(txId&&acc)await db.collection('cashTransactions').doc(txId).update({account:acc,updatedAt:Date.now()});
+    }
+    toast('Đã gán tài khoản cho '+sels.length+' giao dịch');
+    closeOv('tcVoucherOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._saveAssignCashAcc=_saveAssignCashAcc;
 
 async function delTcTransaction(id){
   if(!confirm('Xóa giao dịch này?'))return;
@@ -8245,11 +8371,12 @@ function renderTcBaoCao(){
   const monthOpts=Array.from({length:12},function(_,i){var mm=i+1;return '<option value="'+mm+'"'+(mm===p.month?' selected':'')+'>Tháng '+mm+'</option>';}).join('');
   const quarterOpts=[1,2,3,4].map(function(qq){return '<option value="'+qq+'"'+(qq===p.quarter?' selected':'')+'>Quý '+qq+'</option>';}).join('');
 
-  const catRow=function(obj,color){
+  const catRow=function(obj,color,type){
     const entries=Object.entries(obj).sort(function(a,b){return b[1]-a[1];});
     if(!entries.length)return '<div style="font-size:11.5px;color:var(--text-tertiary);padding:6px 0">Không có</div>';
     return entries.map(function(e){
-      return '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;border-bottom:1px dashed var(--border-light)"><span style="color:var(--text-secondary)">'+e[0]+'</span><strong style="color:'+color+'">'+e[1].toLocaleString()+'</strong></div>';
+      const catEsc=e[0].replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      return '<div onclick="_tcShowCategoryTx(\''+type+'\',\''+catEsc+'\',\''+from+'\',\''+to+'\')" style="display:flex;justify-content:space-between;padding:5px 0;font-size:12px;border-bottom:1px dashed var(--border-light);cursor:pointer" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'"><span style="color:var(--text-secondary)">'+e[0]+' <i class="ti ti-external-link" style="font-size:10px;color:var(--text-tertiary)"></i></span><strong style="color:'+color+'">'+e[1].toLocaleString()+'</strong></div>';
     }).join('');
   };
 
@@ -8284,7 +8411,7 @@ function renderTcBaoCao(){
     ${p.mode==='month'?'<select onchange="window._tcRptPeriod.month=parseInt(this.value);renderTcBody()" style="font-size:12px">'+monthOpts+'</select>':''}
     ${p.mode==='quarter'?'<select onchange="window._tcRptPeriod.quarter=parseInt(this.value);renderTcBody()" style="font-size:12px">'+quarterOpts+'</select>':''}
     ${p.mode!=='custom'?'<select onchange="window._tcRptPeriod.year=parseInt(this.value);renderTcBody()" style="font-size:12px">'+yearOpts+'</select>':''}
-    ${p.mode==='custom'?'<label style="font-size:11.5px;color:var(--text-secondary)">Từ:</label><input type="date" value="'+from+'" onchange="window._tcRptPeriod.customFrom=this.value;renderTcBody()" style="font-size:12px"/><label style="font-size:11.5px;color:var(--text-secondary)">đến:</label><input type="date" value="'+to+'" onchange="window._tcRptPeriod.customTo=this.value;renderTcBody()" style="font-size:12px"/>':''}
+    ${p.mode==='custom'?'<label style="font-size:11.5px;color:var(--text-secondary)">Từ:</label><input type="date" id="tcRptCustomFrom" value="'+from+'"/><label style="font-size:11.5px;color:var(--text-secondary)">đến:</label><input type="date" id="tcRptCustomTo" value="'+to+'"/><button class="btn pri" onclick="_tcApplyCustomRange()"><i class="ti ti-filter"></i> Lọc</button>':''}
     <div style="flex:1"></div>
     <button class="btn" onclick="_tcExportBaoCao()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
   </div>
@@ -8325,9 +8452,10 @@ function renderTcBaoCao(){
     <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.6rem"><i class="ti ti-building-bank"></i> Thu / Chi theo tài khoản (Sổ quỹ trong kỳ)</div>
     <div class="table-wrap"><table style="width:100%">
       <thead><tr><th style="text-align:left">Tài khoản</th><th style="text-align:right">Thu</th><th style="text-align:right">Chi</th><th style="text-align:right">Chênh lệch</th></tr></thead>
-      <tbody>${Object.values(statsByAcc).filter(function(a){return a.thu||a.chi;}).map(function(a){
+      <tbody>${Object.entries(statsByAcc).filter(function(e){return e[1].thu||e[1].chi;}).map(function(e){
+        const accId=e[0], a=e[1];
         const diff=a.thu-a.chi;
-        return '<tr><td style="font-weight:600">'+a.label+'</td>'
+        return '<tr onclick="_tcShowAccountTx(\''+accId.replace(/'/g,"\\'")+'\',\''+from+'\',\''+to+'\')" style="cursor:pointer" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'"><td style="font-weight:600">'+a.label+' <i class="ti ti-external-link" style="font-size:11px;color:var(--text-tertiary)"></i></td>'
           +'<td style="text-align:right;color:var(--green)">'+money(a.thu)+'</td>'
           +'<td style="text-align:right;color:var(--red)">'+money(a.chi)+'</td>'
           +'<td style="text-align:right;font-weight:700;color:'+(diff>=0?'var(--green-dark)':'var(--red-text)')+'">'+(diff>=0?'+':'')+money(diff)+'</td></tr>';
@@ -8342,17 +8470,77 @@ function renderTcBaoCao(){
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:1.25rem">
     <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem">
       <div style="font-size:12px;font-weight:700;color:var(--green-dark);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between"><span><i class="ti ti-arrow-down-circle"></i> Thu theo danh mục</span><span>${thuVND.toLocaleString()}</span></div>
-      ${catRow(thuByCat,'var(--green-dark)')}
+      ${catRow(thuByCat,'var(--green-dark)','thu')}
     </div>
     <div style="border:1px solid var(--border-light);border-radius:10px;padding:1rem 1.1rem">
       <div style="font-size:12px;font-weight:700;color:var(--red-text);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between"><span><i class="ti ti-arrow-up-circle"></i> Chi theo danh mục</span><span>${chiVND.toLocaleString()}</span></div>
-      ${catRow(chiByCat,'var(--red-text)')}
+      ${catRow(chiByCat,'var(--red-text)','chi')}
     </div>
   </div>
 
   ${_renderTcBaoCaoLots(from,to)}`;
 }
 window.renderTcBaoCao=renderTcBaoCao;
+
+// Áp dụng khoảng thời gian tùy chọn (chỉ render khi bấm nút Lọc)
+function _tcApplyCustomRange(){
+  const f=g('tcRptCustomFrom')?.value, t=g('tcRptCustomTo')?.value;
+  if(!f||!t){toast('Chọn đủ ngày bắt đầu và kết thúc','error');return;}
+  if(f>t){toast('Ngày bắt đầu phải trước ngày kết thúc','error');return;}
+  window._tcRptPeriod.customFrom=f;
+  window._tcRptPeriod.customTo=t;
+  renderTcBody();
+}
+window._tcApplyCustomRange=_tcApplyCustomRange;
+
+// Popup liệt kê giao dịch của 1 TÀI KHOẢN trong kỳ
+function _tcShowAccountTx(accId,from,to){
+  const txs=(cache.cashTx||[]).filter(function(t){return t.account===accId&&t.date&&t.date>=from&&t.date<=to;})
+    .sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+  _tcTxListPopup('Giao dịch — '+_tcAccountLabel(accId),from,to,txs,true);
+}
+window._tcShowAccountTx=_tcShowAccountTx;
+
+// Popup liệt kê giao dịch của 1 DANH MỤC (thu/chi) trong kỳ + lô hàng liên quan
+function _tcShowCategoryTx(type,cat,from,to){
+  const txs=(cache.cashTx||[]).filter(function(t){return t.type===type&&(t.category||'Khác')===cat&&t.date&&t.date>=from&&t.date<=to;})
+    .sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+  _tcTxListPopup((type==='thu'?'Thu':'Chi')+' — '+cat,from,to,txs,true);
+}
+window._tcShowCategoryTx=_tcShowCategoryTx;
+
+// Popup chung hiển thị danh sách giao dịch (kèm badge lô hàng bấm để mở chi tiết)
+function _tcTxListPopup(title,from,to,txs,showLot){
+  const ov=g('tcVoucherOv');
+  const roe=26390;
+  let totThu=0,totChi=0;
+  txs.forEach(function(t){const v=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);if(t.type==='thu')totThu+=v;else totChi+=v;});
+  const rows=txs.map(function(t){
+    const lotStr=t.lotRef?(t.lotRef.bookingNo||t.lotRef.jobNo||''):'';
+    const lotBadge=(showLot&&lotStr&&t.lotRef&&t.lotRef.lotId)
+      ? '<span class="bdg bdg-b" style="cursor:pointer;text-decoration:underline" onclick="closeOv(\'tcVoucherOv\');openDetail(\''+t.lotRef.lotId+'\',\''+(t.lotRef.tt||'xuat')+'\',\'invoice\')">'+lotStr+'</span>'
+      : (lotStr?'<span class="bdg bdg-b">'+lotStr+'</span>':'—');
+    return '<tr><td style="padding:5px 7px;font-size:11.5px">'+(t.date||'—')+'</td>'
+      +'<td style="padding:5px 7px"><span class="bdg '+(t.type==='thu'?'bdg-g':'bdg-r')+'">'+(t.type==='thu'?'Thu':'Chi')+'</span></td>'
+      +'<td style="padding:5px 7px;font-size:11.5px">'+(t.category||'—')+'</td>'
+      +'<td style="padding:5px 7px;font-size:11.5px;max-width:200px;white-space:normal">'+(t.description||'—')+'</td>'
+      +'<td style="padding:5px 7px;font-size:11.5px">'+lotBadge+'</td>'
+      +'<td style="padding:5px 7px;font-size:11.5px">'+_tcAccountLabel(t.account)+'</td>'
+      +'<td style="padding:5px 7px;text-align:right;font-weight:700;color:'+(t.type==='thu'?'var(--green)':'var(--red)')+'">'+(t.type==='thu'?'+':'-')+_tcFmtMoney(t.amount,t.currency)+'</td></tr>';
+  }).join('');
+  ov.innerHTML=`<div class="modal" style="max-width:820px;max-height:88vh;overflow-y:auto">
+    <div class="mhdr"><div><div class="mtitle"><i class="ti ti-list-details" style="margin-right:6px"></i>${title}</div><div class="msub">${from} → ${to} • ${txs.length} giao dịch</div></div>
+    <div class="mhdr-btns"><button class="rac" onclick="closeOv('tcVoucherOv')"><i class="ti ti-x"></i></button></div></div>
+    ${txs.length?`<div class="table-wrap"><table style="width:100%"><thead><tr>
+      <th style="text-align:left;font-size:10.5px">Ngày</th><th style="text-align:left;font-size:10.5px">Loại</th><th style="text-align:left;font-size:10.5px">Danh mục</th><th style="text-align:left;font-size:10.5px">Diễn giải</th><th style="text-align:left;font-size:10.5px">Lô hàng</th><th style="text-align:left;font-size:10.5px">Tài khoản</th><th style="text-align:right;font-size:10.5px">Số tiền</th>
+    </tr></thead><tbody>${rows}</tbody>
+    <tfoot><tr style="background:var(--bg-secondary);font-weight:800"><td colspan="6" style="text-align:right;padding:6px 7px">TỔNG (${totThu?'Thu '+totThu.toLocaleString():''}${totThu&&totChi?' / ':''}${totChi?'Chi '+totChi.toLocaleString():''})</td><td style="text-align:right;padding:6px 7px;color:${(totThu-totChi)>=0?'var(--green-dark)':'var(--red-text)'}">${(totThu-totChi)>=0?'+':''}${(totThu-totChi).toLocaleString()}</td></tr></tfoot>
+    </table></div>`:'<div style="padding:2rem;text-align:center;color:var(--text-secondary)">Không có giao dịch nào</div>'}
+    <div class="mftr"><button class="btn" onclick="closeOv('tcVoucherOv')">Đóng</button></div>
+  </div>`;
+  openOv('tcVoucherOv');
+}
+window._tcTxListPopup=_tcTxListPopup;
 
 // Bảng lãi/lỗ theo lô (theo ETD trong kỳ) — giữ lại như phần bổ sung
 function _renderTcBaoCaoLots(from,to){
@@ -8365,9 +8553,13 @@ function _renderTcBaoCaoLots(from,to){
   const tThu=lotRows.reduce(function(s,x){return s+x.thu;},0);
   const tChi=lotRows.reduce(function(s,x){return s+x.chi;},0);
   const tProfit=tThu-tChi;
+  const open=!!window._tcLotsExpanded;
   return `
-  <div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between align-items:center"><span><i class="ti ti-package"></i> Lãi/lỗ theo lô hàng (ETD trong kỳ) — ${lotRows.length} lô</span></div>
-  <div class="table-card"><div class="table-wrap"><table>
+  <div onclick="window._tcLotsExpanded=!window._tcLotsExpanded;renderTcBody()" style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.5rem;display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--bg-secondary);border-radius:8px">
+    <span><i class="ti ti-chevron-${open?'down':'right'}"></i> <i class="ti ti-package"></i> Lãi/lỗ theo lô hàng (ETD trong kỳ) — ${lotRows.length} lô</span>
+    <span style="font-size:12px;color:${tProfit>=0?'var(--green-dark)':'var(--red-text)'}">Lãi/lỗ: ${tProfit>=0?'+':''}${tProfit.toLocaleString()}</span>
+  </div>
+  ${open?`<div class="table-card"><div class="table-wrap"><table>
     <thead><tr><th>Booking</th><th>Loại</th><th>ETD</th><th>Shipper/NCC</th><th style="text-align:right">Thu (VND)</th><th style="text-align:right">Chi (VND)</th><th style="text-align:right">Lãi/Lỗ</th><th style="text-align:center">Margin</th></tr></thead>
     <tbody>${lotRows.length?lotRows.map(function(x){
       const r=x.r;
@@ -8382,7 +8574,7 @@ function _renderTcBaoCaoLots(from,to){
       +'</tr>';
     }).join(''):'<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--text-secondary)">Không có lô hàng với ETD trong kỳ này</td></tr>'}</tbody>
     ${lotRows.length?'<tfoot><tr style="background:var(--bg-secondary);font-weight:800"><td colspan="4" style="text-align:right">TỔNG</td><td style="text-align:right;color:var(--green)">'+tThu.toLocaleString()+'</td><td style="text-align:right;color:var(--red)">'+tChi.toLocaleString()+'</td><td style="text-align:right;color:'+(tProfit>=0?'var(--green-dark)':'var(--red-text)')+'">'+(tProfit>=0?'+':'')+tProfit.toLocaleString()+'</td><td></td></tr></tfoot>':''}
-  </table></div></div>`;
+  </table></div></div>`:''}`;
 }
 
 // Xuất Excel báo cáo tài chính theo kỳ
