@@ -538,7 +538,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v257';
+window.APP_BUILD='v258';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -8727,6 +8727,7 @@ window._tcExportBaoCao=_tcExportBaoCao;
 function renderPartners(){
   const pg=g('page-doi-tac');
   if(!can('managePartners')){pg.innerHTML=`<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền truy cập</div></div>`;return;}
+  window._crmDetailFullPage=false;
   const total=Object.keys(cache.partners).length;
   pg.innerHTML=`
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
@@ -8846,9 +8847,18 @@ window.renderCrmList=renderCrmList;
 function openPartnerView(name){
   if(!cache.partners[name]){toast('Chưa có thông tin: '+name,'error');return;}
   crmDetailKey=name; crmDetailTab='general';
+  window._crmDetailFullPage=true;
   renderCrmDetail();
-  openOv('crmDetailOv');
 }
+window.openPartnerView=openPartnerView;
+
+// Quay lại danh sách CRM từ trang chi tiết full-page
+function closeCrmDetailPage(){
+  window._crmDetailFullPage=false;
+  crmDetailKey=null;
+  renderPartners();
+}
+window.closeCrmDetailPage=closeCrmDetailPage;
 function openPartnerModal(name){
   partnerIdx=name; partnerIsNew=!name;
   const p=name?cache.partners[name]:{};
@@ -9023,6 +9033,7 @@ function _isEditingCrmDetail(){
 function renderCrmDetail(){
   const p=cache.partners[crmDetailKey]||{};
   const isSaLan=p.type==='salan';
+  const isShipper=p.type==='shipper';
   const tabs=isSaLan
     ?[{k:'general',label:'Thông tin',icon:'ti-info-circle'}]
     :[
@@ -9031,7 +9042,31 @@ function renderCrmDetail(){
       {k:'cnee',label:'Cnee',icon:'ti-package'},
       {k:'defsvc',label:'Dịch vụ mặc định',icon:'ti-list-check'},
     ];
-  if(isSaLan) crmDetailTab='general'; // reset về general cho sà lan
+  if(isShipper)tabs.push({k:'report',label:'Report',icon:'ti-chart-bar'});
+  if(isSaLan) crmDetailTab='general';
+
+  // ── FULL PAGE MODE: render vào trang CRM thay vì popup ──
+  if(window._crmDetailFullPage){
+    const pg=g('page-doi-tac'); if(!pg)return;
+    pg.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border-light)">
+      <button class="btn" onclick="closeCrmDetailPage()"><i class="ti ti-arrow-left"></i> Danh sách</button>
+      <div style="width:44px;height:44px;border-radius:10px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:var(--green);flex-shrink:0">${(p.shortname||'??').slice(0,2).toUpperCase()}</div>
+      <div style="flex:1">
+        <div style="font-size:18px;font-weight:700;color:var(--text-primary)">${p.shortname||crmDetailKey}</div>
+        <div style="font-size:12px;color:var(--text-secondary)">${p.fullname||'—'} &nbsp;•&nbsp; <span style="color:var(--green);font-weight:600">${CRM_TLABEL[p.type]||p.type||'—'}</span></div>
+      </div>
+      <button class="btn" onclick="openPartnerModal('${crmDetailKey.replace(/'/g,"\\'")}')"><i class="ti ti-edit"></i> Sửa</button>
+    </div>
+    <div style="display:flex;gap:3px;border-bottom:1px solid var(--border-light);margin-bottom:1.25rem;flex-wrap:wrap">
+      ${tabs.map(function(t){const active=crmDetailTab===t.k;return '<button onclick="switchCrmDetailTab(\''+t.k+'\')" style="display:flex;align-items:center;gap:6px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti '+t.icon+'" style="font-size:15px"></i>'+t.label+'</button>';}).join('')}
+    </div>
+    <div id="crmDetailBody"></div>`;
+    renderCrmDetailBody();
+    return;
+  }
+
+  // ── Fallback popup mode (giữ tương thích) ──
   g('crmDetailOv').innerHTML=`
   <div class="modal" style="max-width:820px;max-height:92vh;overflow-y:auto">
     <div class="mhdr">
@@ -9051,7 +9086,15 @@ function renderCrmDetail(){
   </div>`;
   renderCrmDetailBody();
 }
-function switchCrmDetailTab(tab){ crmDetailTab=tab; renderCrmDetail(); }
+function switchCrmDetailTab(tab){
+  crmDetailTab=tab;
+  if(window._crmDetailFullPage){
+    // Cập nhật trạng thái active của tab + render body (không dựng lại cả trang)
+    renderCrmDetail();
+  } else {
+    renderCrmDetail();
+  }
+}
 window.switchCrmDetailTab=switchCrmDetailTab;
 
 async function saveCrmSaLan(){
@@ -9093,7 +9136,145 @@ function renderCrmDetailBody(){
   else if(crmDetailTab==='contacts') body.innerHTML=renderCrmContactsTab(p);
   else if(crmDetailTab==='cnee') body.innerHTML=renderCrmCneeTab(p);
   else if(crmDetailTab==='defsvc') body.innerHTML=renderCrmDefSvcTab(p);
+  else if(crmDetailTab==='report'){ body.innerHTML=renderCrmReportTab(p); _crmReportAfterRender(); }
 }
+
+// ═══════════════════════════════════════════════════════════
+//  CRM — TAB REPORT: Phân tích kinh doanh theo shipper
+// ═══════════════════════════════════════════════════════════
+window._crmReportState=window._crmReportState||{from:'',to:'',dim:'pod'};
+
+function renderCrmReportTab(p){
+  const st=window._crmReportState;
+  // Mặc định khoảng thời gian: 6 tháng gần nhất nếu chưa chọn
+  if(!st.from||!st.to){
+    const now=new Date();
+    st.to=now.toISOString().slice(0,10);
+    const d=new Date(now); d.setMonth(d.getMonth()-6); d.setDate(1);
+    st.from=d.toISOString().slice(0,10);
+  }
+  return `
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:1.25rem;padding:10px 14px;background:var(--bg-secondary);border-radius:10px">
+    <label style="font-size:12px;font-weight:600;color:var(--text-secondary)"><i class="ti ti-calendar"></i> ETD từ:</label>
+    <input type="date" id="crmRpFrom" value="${st.from}" onchange="window._crmReportState.from=this.value;renderCrmDetailBody()" style="font-size:12px"/>
+    <label style="font-size:12px;color:var(--text-secondary)">đến:</label>
+    <input type="date" id="crmRpTo" value="${st.to}" onchange="window._crmReportState.to=this.value;renderCrmDetailBody()" style="font-size:12px"/>
+    <div style="flex:1"></div>
+    <div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">
+      ${[['pod','Theo POD'],['cnee','Theo Cnee']].map(function(d){
+        const active=st.dim===d[0];
+        return '<button onclick="window._crmReportState.dim=\''+d[0]+'\';renderCrmDetailBody()" style="padding:7px 14px;border:none;background:'+(active?'var(--green)':'transparent')+';color:'+(active?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12px;font-weight:'+(active?'700':'500')+';font-family:inherit">'+d[1]+'</button>';
+      }).join('')}
+    </div>
+  </div>
+  <div id="crmReportContent"></div>`;
+}
+window.renderCrmReportTab=renderCrmReportTab;
+
+function _crmReportData(){
+  const st=window._crmReportState;
+  const shipperKey=crmDetailKey;
+  const allR=[...cache.xuat.map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...cache.nhap.map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
+  const lots=allR.filter(function(r){
+    const sh=r.shipper||r.supplier||'';
+    if(sh!==shipperKey)return false;
+    if(st.from&&(r.etd||'')<st.from)return false;
+    if(st.to&&(r.etd||'')>st.to)return false;
+    return true;
+  });
+  // Tổng vol
+  let totalVol=0;
+  lots.forEach(function(r){ totalVol+=parseInt(r.vol)||0; });
+  // Nhóm theo dimension
+  const byDim={};
+  lots.forEach(function(r){
+    const key=(st.dim==='pod'?(r.pod||'(không rõ)'):(r.cnee||r.consignee||'(không rõ)'));
+    if(!byDim[key])byDim[key]={key:key,vol:0,lots:0};
+    byDim[key].vol+=parseInt(r.vol)||0;
+    byDim[key].lots+=1;
+  });
+  // Vol theo tháng (cho biểu đồ xu hướng)
+  const byMonth={};
+  lots.forEach(function(r){
+    if(!r.etd)return;
+    const mk=r.etd.slice(0,7); // YYYY-MM
+    byMonth[mk]=(byMonth[mk]||0)+(parseInt(r.vol)||0);
+  });
+  return {lots:lots,totalVol:totalVol,byDim:byDim,byMonth:byMonth,dim:st.dim};
+}
+
+function _crmReportAfterRender(){
+  const box=g('crmReportContent'); if(!box)return;
+  const data=_crmReportData();
+  if(!data.lots.length){
+    box.innerHTML='<div style="text-align:center;padding:3rem;color:var(--text-tertiary)"><i class="ti ti-chart-bar" style="font-size:44px;opacity:.25"></i><div style="margin-top:8px;font-size:13px">Không có lô hàng nào trong khoảng thời gian đã chọn</div></div>';
+    return;
+  }
+  const dimLabel=data.dim==='pod'?'POD':'Cnee';
+  const dimEntries=Object.values(data.byDim).sort(function(a,b){return b.vol-a.vol;});
+  const maxVol=Math.max.apply(null,dimEntries.map(function(e){return e.vol;}));
+
+  // ── KPI cards ──
+  const kpis=`
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:1.5rem">
+    <div style="padding:1rem 1.2rem;background:var(--green-bg);border-radius:12px;border-left:4px solid var(--green)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng lô hàng</div><div style="font-size:22px;font-weight:800;color:var(--green-dark)">${data.lots.length}</div></div>
+    <div style="padding:1rem 1.2rem;background:var(--blue-bg);border-radius:12px;border-left:4px solid var(--blue)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Vol (cont)</div><div style="font-size:22px;font-weight:800;color:var(--blue)">${data.totalVol}</div></div>
+    <div style="padding:1rem 1.2rem;background:var(--bg-secondary);border-radius:12px;border-left:4px solid #64748b"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Số ${dimLabel}</div><div style="font-size:22px;font-weight:800;color:#334155">${dimEntries.length}</div></div>
+  </div>`;
+
+  // ── Bar chart theo dimension (SVG) ──
+  const barColors=['#14B8A6','#2563eb','#f59e0b','#ec4899','#8b5cf6','#10b981','#ef4444','#06b6d4','#f97316','#6366f1'];
+  const barH=30, gap=12, chartW=560, labelW=150, valW=90;
+  const svgH=dimEntries.length*(barH+gap)+10;
+  let bars='';
+  dimEntries.forEach(function(e,i){
+    const y=i*(barH+gap)+5;
+    const w=maxVol>0?Math.round((e.vol/maxVol)*(chartW-labelW-valW)):0;
+    const color=barColors[i%barColors.length];
+    const pct=data.totalVol>0?Math.round(e.vol/data.totalVol*100):0;
+    bars+='<text x="0" y="'+(y+barH/2+4)+'" font-size="12" fill="#334155" font-weight="600">'+(e.key.length>20?e.key.slice(0,19)+'…':e.key)+'</text>'
+      +'<rect x="'+labelW+'" y="'+y+'" width="'+Math.max(w,2)+'" height="'+barH+'" rx="5" fill="'+color+'"/>'
+      +'<text x="'+(labelW+Math.max(w,2)+8)+'" y="'+(y+barH/2+4)+'" font-size="12" fill="#0f172a" font-weight="700">'+e.vol+' ('+pct+'%)</text>';
+  });
+  const barChart='<div style="border:1px solid var(--border-light);border-radius:12px;padding:1.2rem;margin-bottom:1.5rem;overflow-x:auto">'
+    +'<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:1rem"><i class="ti ti-chart-bar" style="color:var(--green)"></i> Vol theo '+dimLabel+'</div>'
+    +'<svg viewBox="0 0 '+chartW+' '+svgH+'" style="width:100%;max-width:'+chartW+'px;height:auto">'+bars+'</svg>'
+    +'</div>';
+
+  // ── Line/bar chart theo tháng (xu hướng) ──
+  const months=Object.keys(data.byMonth).sort();
+  const maxM=Math.max.apply(null,months.map(function(m){return data.byMonth[m];}))||1;
+  const mChartW=560, mChartH=180, mPad=30;
+  const mBarW=months.length>0?Math.min(50,(mChartW-mPad*2)/months.length-8):20;
+  let mBars='';
+  months.forEach(function(m,i){
+    const x=mPad+i*((mChartW-mPad*2)/Math.max(months.length,1))+4;
+    const h=Math.round((data.byMonth[m]/maxM)*(mChartH-40));
+    const y=mChartH-20-h;
+    mBars+='<rect x="'+x+'" y="'+y+'" width="'+mBarW+'" height="'+Math.max(h,2)+'" rx="4" fill="#2563eb"/>'
+      +'<text x="'+(x+mBarW/2)+'" y="'+(y-4)+'" font-size="10" fill="#0f172a" text-anchor="middle" font-weight="700">'+data.byMonth[m]+'</text>'
+      +'<text x="'+(x+mBarW/2)+'" y="'+(mChartH-6)+'" font-size="9" fill="#64748b" text-anchor="middle">'+m.slice(5)+'/'+m.slice(2,4)+'</text>';
+  });
+  const monthChart='<div style="border:1px solid var(--border-light);border-radius:12px;padding:1.2rem;margin-bottom:1.5rem;overflow-x:auto">'
+    +'<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:1rem"><i class="ti ti-trending-up" style="color:var(--blue)"></i> Xu hướng Vol theo tháng</div>'
+    +'<svg viewBox="0 0 '+mChartW+' '+mChartH+'" style="width:100%;max-width:'+mChartW+'px;height:auto">'+mBars+'</svg>'
+    +'</div>';
+
+  // ── Bảng chi tiết ──
+  const tableRows=dimEntries.map(function(e,i){
+    const pct=data.totalVol>0?Math.round(e.vol/data.totalVol*100):0;
+    return '<tr><td style="font-weight:600">'+e.key+'</td><td style="text-align:center">'+e.lots+'</td><td style="text-align:right;font-weight:700;color:var(--blue)">'+e.vol+'</td><td style="text-align:right">'+pct+'%</td></tr>';
+  }).join('');
+  const table='<div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden">'
+    +'<div style="font-size:13px;font-weight:700;color:var(--text-primary);padding:1rem 1.2rem 0"><i class="ti ti-table" style="color:var(--green)"></i> Chi tiết theo '+dimLabel+'</div>'
+    +'<div class="table-wrap" style="padding:.5rem 1rem 1rem"><table style="width:100%"><thead><tr><th style="text-align:left">'+dimLabel+'</th><th style="text-align:center">Số lô</th><th style="text-align:right">Vol</th><th style="text-align:right">Tỷ trọng</th></tr></thead>'
+    +'<tbody>'+tableRows+'</tbody>'
+    +'<tfoot><tr style="background:var(--bg-secondary);font-weight:800"><td>TỔNG</td><td style="text-align:center">'+data.lots.length+'</td><td style="text-align:right;color:var(--blue)">'+data.totalVol+'</td><td style="text-align:right">100%</td></tr></tfoot>'
+    +'</table></div></div>';
+
+  box.innerHTML=kpis+barChart+monthChart+table;
+}
+window._crmReportAfterRender=_crmReportAfterRender;
 
 // ── TAB: Dịch vụ mặc định cho shipper ──
 function renderCrmDefSvcTab(p){
