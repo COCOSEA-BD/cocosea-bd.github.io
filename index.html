@@ -570,7 +570,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v263';
+window.APP_BUILD='v264';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6636,6 +6636,16 @@ async function backfillCashBookFromHistory(){
 
 window.backfillCashBookFromHistory=backfillCashBookFromHistory;
 
+// Ô tìm kiếm Sổ quỹ: lưu query + render lại nhưng KHÔI PHỤC focus/con trỏ để gõ liên tục
+function _tcSearchInput(el){
+  window._tcSearchQ=el.value;
+  const pos=el.selectionStart;
+  renderTcBody();
+  const ne=g('tcSearch');
+  if(ne){ ne.focus(); try{ne.setSelectionRange(pos,pos);}catch(e){} }
+}
+window._tcSearchInput=_tcSearchInput;
+
 function renderTcSoQuy(){
   const accs=_tcAccountList();
   const balCards=accs.map(function(a){
@@ -6647,7 +6657,7 @@ function renderTcSoQuy(){
     +'</div>';
   }).join('');
 
-  const q=(g('tcSearch')?.value||'');
+  const q=(window._tcSearchQ||'');
   let list=(cache.cashTx||[]).slice();
   // Cảnh báo: giao dịch còn gắn "tiền mặt" (cash) — cần gán vào 1 tài khoản ngân hàng
   const cashTxs=(cache.cashTx||[]).filter(function(t){return t.account==='cash'||!t.account;});
@@ -6667,7 +6677,7 @@ function renderTcSoQuy(){
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem">${balCards}</div>
   ${cashWarnBanner}
   <div class="toolbar">
-    <div class="search-wrap" style="flex:1;min-width:200px"><i class="ti ti-search"></i><input type="text" id="tcSearch" placeholder="Tìm diễn giải, danh mục, booking..." oninput="renderTcBody()"/></div>
+    <div class="search-wrap" style="flex:1;min-width:200px"><i class="ti ti-search"></i><input type="text" id="tcSearch" placeholder="Tìm diễn giải, danh mục, booking..." value="${(window._tcSearchQ||'').replace(/"/g,'&quot;')}" oninput="_tcSearchInput(this)"/></div>
     <select id="tcAccSel" onchange="tcAccFilter=this.value;renderTcBody()" style="font-size:12px;flex:0 0 200px"><option value="">Tất cả tài khoản</option>${accs.map(function(a){return '<option value="'+a.id+'"'+(tcAccFilter===a.id?' selected':'')+'>'+a.label+'</option>';}).join('')}</select>
     <select id="tcTypeSel" onchange="tcTypeFilter=this.value;renderTcBody()" style="font-size:12px;flex:0 0 130px"><option value="">Thu &amp; Chi</option><option value="thu"${tcTypeFilter==='thu'?' selected':''}>Chỉ Thu</option><option value="chi"${tcTypeFilter==='chi'?' selected':''}>Chỉ Chi</option></select>
     <input type="date" id="tcFromSel" value="${tcFrom}" onchange="tcFrom=this.value;renderTcBody()" style="font-size:12px;flex:0 0 145px"/>
@@ -7352,7 +7362,7 @@ function renderTcApAuto(){
     // Thanh bộ lọc
     html+='<div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;margin-bottom:.75rem;padding:8px 12px;background:var(--bg-secondary);border-radius:8px;overflow-x:auto">'
       +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary);white-space:nowrap">NCC:</label>'
-      +'<select onchange="window._tcApFilter.supplier=this.value;renderTcBody()" style="font-size:12px;min-width:150px;flex:0 1 auto">'+supOpts+'</select>'
+      +'<select onchange="window._tcApFilter.supplier=this.value;renderTcBody()" style="font-size:12px;width:180px;flex:0 0 180px">'+supOpts+'</select>'
       +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary);white-space:nowrap">ETD từ:</label>'
       +'<input type="date" value="'+(fo.from||'')+'" onchange="window._tcApFilter.from=this.value;renderTcBody()" style="font-size:11.5px;width:135px;flex:0 0 135px;padding:5px 6px"/>'
       +'<label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">đến:</label>'
@@ -7598,10 +7608,10 @@ window.exportSupplierPdf=exportSupplierPdf;
 
 /* ── Popup chi tiết NCC: các lô hàng/khoản phí + trạng thái thanh toán + remark ── */
 let tcSupPartner=null;
-let tcSupFrom='', tcSupTo='', tcSupShipper='';
+let tcSupFrom='', tcSupTo='', tcSupShipper='', tcSupPaidFilter='';
 
 function openSupplierDetailPopup(partner){
-  tcSupPartner=partner; tcSupFrom=''; tcSupTo=''; tcSupShipper='';
+  tcSupPartner=partner; tcSupFrom=''; tcSupTo=''; tcSupShipper=''; tcSupPaidFilter='';
   window._supDetailFullPage=true;
   renderSupplierDetailPopup();
 }
@@ -7618,10 +7628,26 @@ window.closeSupplierDetailPage=closeSupplierDetailPage;
 function _tcSupplierDetailFilteredRows(){
   const s=_tcSupplierBreakdown().find(function(x){return x.partner===tcSupPartner;});
   if(!s)return [];
-  return s.lots.filter(function(l){
-    return (!tcSupFrom||!l.date||l.date>=tcSupFrom)&&(!tcSupTo||!l.date||l.date<=tcSupTo)&&(!tcSupShipper||l.shipper===tcSupShipper);
+  const filtered=s.lots.filter(function(l){
+    const okDate=(!tcSupFrom||!l.date||l.date>=tcSupFrom)&&(!tcSupTo||!l.date||l.date<=tcSupTo);
+    const okShipper=(!tcSupShipper||l.shipper===tcSupShipper);
+    const isPaid=l.paidStatus==='paid';
+    const okPaid=(!tcSupPaidFilter)||(tcSupPaidFilter==='paid'&&isPaid)||(tcSupPaidFilter==='unpaid'&&!isPaid);
+    return okDate&&okShipper&&okPaid;
   });
+  // Sắp xếp theo ETD nếu đang bật sort
+  if(window._apSortDir===1||window._apSortDir===-1){
+    filtered.sort(function(a,b){const av=a.date||'',bv=b.date||'';return window._apSortDir*(av<bv?-1:av>bv?1:0);});
+  }
+  return filtered;
 }
+
+// Đổi chiều sort ETD trong bảng phải trả NCC
+function _apToggleSort(){
+  window._apSortDir=(window._apSortDir===1)?-1:(window._apSortDir===-1?0:1);
+  renderSupplierDetailPopup();
+}
+window._apToggleSort=_apToggleSort;
 
 function renderSupplierDetailPopup(){
   const s0=_tcSupplierBreakdown().find(function(x){return x.partner===tcSupPartner;});
@@ -7659,6 +7685,8 @@ function renderSupplierDetailPopup(){
       <input type="date" value="${tcSupFrom}" onchange="tcSupFrom=this.value;renderSupplierDetailPopup()" style="font-size:11.5px;width:130px;flex:0 0 130px;padding:5px 6px"/>
       <label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">đến:</label>
       <input type="date" value="${tcSupTo}" onchange="tcSupTo=this.value;renderSupplierDetailPopup()" style="font-size:11.5px;width:130px;flex:0 0 130px;padding:5px 6px"/>
+      <label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">TT:</label>
+      <select onchange="tcSupPaidFilter=this.value;renderSupplierDetailPopup()" style="font-size:11.5px;width:140px;flex:0 0 140px"><option value="">Tất cả</option><option value="paid"${tcSupPaidFilter==='paid'?' selected':''}>Đã thanh toán</option><option value="unpaid"${tcSupPaidFilter==='unpaid'?' selected':''}>Chưa thanh toán</option></select>
       <div style="flex:1;min-width:8px"></div>
       <button onclick="_apExportExcel()" style="font-size:11px;padding:5px 11px;border-radius:6px;border:1.5px solid #0F6E56;background:#0F6E5610;color:#0F6E56;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:4px;white-space:nowrap;flex:0 0 auto"><i class="ti ti-file-spreadsheet" style="font-size:13px"></i> Excel</button>
       <button onclick="_apExportPdf()" style="font-size:11px;padding:5px 11px;border-radius:6px;border:1.5px solid #b91c1c;background:#b91c1c10;color:#b91c1c;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:4px;white-space:nowrap;flex:0 0 auto"><i class="ti ti-file-type-pdf" style="font-size:13px"></i> PDF</button>
@@ -7694,7 +7722,7 @@ function _renderSupplierDetailTable(rows,paidStr,totStr){
   const html=`<div class="table-card"><div class="table-wrap"><table>
       <thead><tr>
         <th><input type="checkbox" title="Chọn tất cả" onchange="_cnToggleAllAP(this,'${tcSupPartner.replace(/'/g,"\\'")}');_apRecalcSelected()"/></th>
-        <th>Lô hàng</th><th>Loại</th><th>Shipper</th><th>ETD</th><th>Tên chi phí</th><th style="text-align:right">Số tiền</th><th>Trạng thái thanh toán</th><th>Remark</th>
+        <th>Lô hàng</th><th>Loại</th><th>Shipper</th><th onclick="_apToggleSort()" style="cursor:pointer;white-space:nowrap" title="Sắp xếp theo ETD">ETD <span style="font-size:10px">${window._apSortDir===1?'▲':window._apSortDir===-1?'▼':'⇅'}</span></th><th>Tên chi phí</th><th style="text-align:right">Số tiền</th><th>Trạng thái thanh toán</th><th>Remark</th>
       </tr></thead>
       <tbody>${rows.length?rows.map(function(l){
         const _apRowData=JSON.stringify({
@@ -7769,20 +7797,20 @@ async function _apExportExcel(){
     ws.mergeCells('A2:H2'); ws.getCell('A2').value='CÔNG NỢ PHẢI TRẢ NHÀ CUNG CẤP'; ws.getCell('A2').font={bold:true,size:13,color:{argb:'FFB91C1C'}}; ws.getCell('A2').alignment={horizontal:'center'};
     ws.mergeCells('A3:H3'); ws.getCell('A3').value='NCC: '+(sp.fullname||tcSupPartner)+(sp.mst?('   MST: '+sp.mst):''); ws.getCell('A3').font={size:10};
     ws.mergeCells('A4:H4'); ws.getCell('A4').value='Khoảng ETD: '+(_fmtDMY(tcSupFrom)||'tất cả')+' → '+(_fmtDMY(tcSupTo)||'tất cả')+(tcSupShipper?('   •   Shipper: '+tcSupShipper):''); ws.getCell('A4').font={size:9,italic:true,color:{argb:'FF666666'}};
-    const headers=['STT','Lô hàng','Loại','Shipper','ETD','Tên chi phí','Số tiền','Trạng thái TT'];
+    const headers=['STT','Lô hàng','Loại','Shipper','ETD','Tên chi phí','Số tiền','Trạng thái TT','Ngày TT'];
     const hRow=ws.getRow(6);
     headers.forEach(function(h,i){const c=hRow.getCell(i+1);c.value=h;c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF0F1E2E'}};c.alignment={horizontal:'center',vertical:'middle'};c.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};});
     const totals={};
     rows.forEach(function(l,i){
       const row=ws.getRow(7+i);
-      const vals=[i+1,l.bookingNo||l.jobNo||'',l.tt==='xuat'?'Xuất':'Nhập',l.shipper||'',_fmtDMY(l.date),l.name,l.amt,l.paidStatus==='paid'?'Đã TT':'Chưa TT'];
+      const vals=[i+1,l.bookingNo||l.jobNo||'',l.tt==='xuat'?'Xuất':'Nhập',l.shipper||'',_fmtDMY(l.date),l.name,l.amt,l.paidStatus==='paid'?'Đã TT':'Chưa TT',l.paidStatus==='paid'?_fmtDMY(l.paidDate):''];
       vals.forEach(function(v,j){const c=row.getCell(j+1);c.value=v;c.font={size:9.5};c.alignment={vertical:'middle',horizontal:(j===0)?'center':(j===6?'right':'left')};c.border={top:{style:'thin',color:{argb:'FFDDDDDD'}},left:{style:'thin',color:{argb:'FFDDDDDD'}},bottom:{style:'thin',color:{argb:'FFDDDDDD'}},right:{style:'thin',color:{argb:'FFDDDDDD'}}};if(j===6)c.numFmt='#,##0';});
       totals[l.cur]=(totals[l.cur]||0)+l.amt;
     });
     const totRow=ws.getRow(7+rows.length);
     totRow.getCell(6).value='TỔNG'; totRow.getCell(6).font={bold:true}; totRow.getCell(6).alignment={horizontal:'right'};
     totRow.getCell(7).value=Object.values(totals).reduce(function(a,b){return a+b;},0); totRow.getCell(7).font={bold:true}; totRow.getCell(7).numFmt='#,##0'; totRow.getCell(7).alignment={horizontal:'right'};
-    [6,26,8,20,13,26,15,14].forEach(function(w,i){ws.getColumn(i+1).width=w;});
+    [6,26,8,20,13,26,15,14,13].forEach(function(w,i){ws.getColumn(i+1).width=w;});
     const buf=await wb.xlsx.writeBuffer();
     const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const url=URL.createObjectURL(blob);
@@ -7820,16 +7848,16 @@ function _apExportPdf(){
       let iy=104; if(sp.mst){doc.text('MST: '+sp.mst,40,iy);iy+=11;}
       doc.setTextColor(185,28,28); doc.setFontSize(9);
       doc.text('Khoảng ETD: '+(_fmtDMY(tcSupFrom)||'tất cả')+' → '+(_fmtDMY(tcSupTo)||'tất cả')+(tcSupShipper?('   •   Shipper: '+tcSupShipper):''),40,iy+2);
-      const head=[['STT','Lô hàng','Loại','Shipper','ETD','Tên chi phí','Số tiền','TT']];
+      const head=[['STT','Lô hàng','Loại','Shipper','ETD','Tên chi phí','Số tiền','TT','Ngày TT']];
       const totals={};
-      const body=rows.map(function(l,i){totals[l.cur]=(totals[l.cur]||0)+l.amt;return [i+1,l.bookingNo||l.jobNo||'',l.tt==='xuat'?'Xuất':'Nhập',l.shipper||'',_fmtDMY(l.date),l.name,fmt(l.amt)+' '+l.cur,l.paidStatus==='paid'?'Đã TT':'Chưa TT'];});
+      const body=rows.map(function(l,i){totals[l.cur]=(totals[l.cur]||0)+l.amt;return [i+1,l.bookingNo||l.jobNo||'',l.tt==='xuat'?'Xuất':'Nhập',l.shipper||'',_fmtDMY(l.date),l.name,fmt(l.amt)+' '+l.cur,l.paidStatus==='paid'?'Đã TT':'Chưa TT',l.paidStatus==='paid'?_fmtDMY(l.paidDate):''];});
       const totStr=Object.entries(totals).map(function(e){return fmt(e[1])+' '+e[0];}).join(' / ');
-      body.push([{content:'TỔNG',colSpan:6,styles:{halign:'right',fontStyle:'bold'}},{content:totStr,styles:{fontStyle:'bold'}},'']);
+      body.push([{content:'TỔNG',colSpan:6,styles:{halign:'right',fontStyle:'bold'}},{content:totStr,styles:{fontStyle:'bold'}},'','']);
       doc.autoTable({head:head,body:body,startY:iy+14,
         styles:{font:'Roboto',fontSize:8,cellPadding:3.5,overflow:'linebreak',lineColor:[221,221,221],lineWidth:.5},
         headStyles:{font:'Roboto',fontStyle:'bold',fillColor:[15,30,46],textColor:[255,255,255],halign:'center',valign:'middle'},
         alternateRowStyles:{fillColor:[247,250,252]},
-        columnStyles:{0:{halign:'center',cellWidth:26},2:{halign:'center',cellWidth:36},6:{halign:'right'},7:{halign:'center',cellWidth:44}},
+        columnStyles:{0:{halign:'center',cellWidth:26},2:{halign:'center',cellWidth:36},6:{halign:'right'},7:{halign:'center',cellWidth:40},8:{halign:'center',cellWidth:56}},
         margin:{left:40,right:40},
         didDrawPage:function(){doc.setFont('Roboto','normal');doc.setFontSize(7);doc.setTextColor(150,150,150);doc.text('COCO SEA — Công nợ phải trả  •  '+new Date().toLocaleDateString('vi-VN'),40,doc.internal.pageSize.getHeight()-16);}
       });
@@ -8853,7 +8881,7 @@ function _renderTcBaoCaoLots(from,to){
   const lotRows=filtered.map(function(r){
     const thu=_tcLotRevenueVND(r), chi=_tcLotCostVND(r);
     return {r:r,thu:thu,chi:chi,profit:thu-chi,margin:thu>0?Math.round((thu-chi)/thu*100):0};
-  }).sort(function(a,b){return (b.r.etd||'').localeCompare(a.r.etd||'');});
+  }).sort(function(a,b){const dir=(window._tcLotSortDir===1)?1:-1;const av=a.r.etd||'',bv=b.r.etd||'';return dir*(av<bv?-1:av>bv?1:0);});
   const tThu=lotRows.reduce(function(s,x){return s+x.thu;},0);
   const tChi=lotRows.reduce(function(s,x){return s+x.chi;},0);
   const tProfit=tThu-tChi;
@@ -8864,7 +8892,7 @@ function _renderTcBaoCaoLots(from,to){
     <span style="font-size:12px;color:${tProfit>=0?'var(--green-dark)':'var(--red-text)'}">Lãi/lỗ: ${tProfit>=0?'+':''}${tProfit.toLocaleString()}</span>
   </div>
   ${open?`<div class="table-card"><div class="table-wrap"><table>
-    <thead><tr><th>Booking</th><th>Loại</th><th>ETD</th><th>Shipper/NCC</th><th style="text-align:right">Thu (VND)</th><th style="text-align:right">Chi (VND)</th><th style="text-align:right">Lãi/Lỗ</th><th style="text-align:center">Margin</th></tr></thead>
+    <thead><tr><th>Booking</th><th>Loại</th><th onclick="window._tcLotSortDir=(window._tcLotSortDir===1?-1:1);renderTcBody()" style="cursor:pointer;white-space:nowrap" title="Sắp xếp theo ETD">ETD <span style="font-size:10px">${window._tcLotSortDir===1?'▲':'▼'}</span></th><th>Shipper/NCC</th><th style="text-align:right">Thu (VND)</th><th style="text-align:right">Chi (VND)</th><th style="text-align:right">Lãi/Lỗ</th><th style="text-align:center">Margin</th></tr></thead>
     <tbody>${lotRows.length?lotRows.map(function(x){
       const r=x.r;
       return '<tr>'
