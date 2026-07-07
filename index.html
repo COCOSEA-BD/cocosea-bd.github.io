@@ -403,6 +403,38 @@ function _ensureSvcInCatalog(svcs){
   });
 }
 window._ensureSvcInCatalog=_ensureSvcInCatalog;
+
+// Sắp xếp mảng dịch vụ theo thứ tự thủ công (orderArr = mảng key). Các key không có trong orderArr giữ nguyên thứ tự gốc, xếp sau.
+function _applySvcOrder(list,orderArr){
+  if(!orderArr||!orderArr.length)return list;
+  const idx=function(k){const i=orderArr.indexOf(k);return i<0?9999:i;};
+  return list.slice().sort(function(a,b){
+    const ia=idx(a.key), ib=idx(b.key);
+    if(ia!==ib)return ia-ib;
+    return 0; // giữ thứ tự tương đối gốc cho các key chưa được sắp
+  });
+}
+window._applySvcOrder=_applySvcOrder;
+
+// Di chuyển 1 dòng dịch vụ lên (-1) / xuống (+1) trong tab Invoice, lưu vào r.svcOrder rồi lưu Firestore.
+async function _invMoveSvc(svcKey,dir){
+  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r)return;
+  const svcs=r.svcs||{};
+  // Danh sách hiện tại theo thứ tự đang hiển thị
+  let ordered=_applySvcOrder(SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;}),r.svcOrder).map(function(s){return s.key;});
+  const i=ordered.indexOf(svcKey);
+  if(i<0)return;
+  const j=i+dir;
+  if(j<0||j>=ordered.length)return;
+  const tmp=ordered[i]; ordered[i]=ordered[j]; ordered[j]=tmp;
+  r.svcOrder=ordered;
+  // Lưu ngay (cập nhật UI trước cho mượt)
+  renderDetailPanel(r,detailTt);
+  try{ await fsSet(colName(detailTt),detailId,{svcOrder:ordered,updatedAt:Date.now()}); }
+  catch(e){ toast('Lỗi lưu thứ tự: '+e.message,'error'); }
+}
+window._invMoveSvc=_invMoveSvc;
 const CURRENCIES=['USD','VND','EUR','JPY','CNY','KRW'];
 const TASKS=[
   {key:'mbl',label:'Nhập MBL No'},{key:'cnee',label:'Nhập thông tin Cnee'},
@@ -538,7 +570,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v261';
+window.APP_BUILD='v262';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2391,7 +2423,9 @@ function renderDetailPanel(r,tt){
     else {
       const svcs=r.svcs||{};
       _ensureSvcInCatalog(svcs);
-      const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
+      let allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
+      // Áp dụng thứ tự sắp xếp thủ công (r.svcOrder) nếu có
+      allOn=_applySvcOrder(allOn,r.svcOrder);
       if(!allOn.length){
         bodyHtml='<div class="empty-state"><i class="ti ti-clipboard-list"></i>Chưa có dịch vụ. Vào tab Dịch vụ để chọn trước.</div>';
       } else {
@@ -2422,7 +2456,7 @@ function renderDetailPanel(r,tt){
               autoName2=s.name+(truckRoute2?' '+truckRoute2:'')+(truckNos2?', số xe '+truckNos2:'');
             }
           }
-          return '<tr><td style="'+tdS+';font-weight:500"><input type="text" id="invname_'+s.key+'" value="'+autoName2.replace(/"/g,'&quot;')+'" style="font-size:12px;font-weight:500;border:none;background:transparent;padding:0;outline:none;width:100%"/>'+(sv.desc?'<div style="font-size:10px;color:var(--text-secondary)">'+sv.desc+'</div>':'')+'</td>'
+          return '<tr><td style="'+tdS+';font-weight:500"><div style="display:flex;align-items:center;gap:4px"><span style="display:inline-flex;flex-direction:column;flex-shrink:0"><button onclick="_invMoveSvc(\''+s.key+'\',-1)" title="Lên" style="border:none;background:none;cursor:pointer;color:var(--text-tertiary);padding:0;line-height:.8;font-size:11px">▲</button><button onclick="_invMoveSvc(\''+s.key+'\',1)" title="Xuống" style="border:none;background:none;cursor:pointer;color:var(--text-tertiary);padding:0;line-height:.8;font-size:11px">▼</button></span><input type="text" id="invname_'+s.key+'" value="'+autoName2.replace(/"/g,'&quot;')+'" style="font-size:12px;font-weight:500;border:none;background:transparent;padding:0;outline:none;width:100%"/></div>'+(sv.desc?'<div style="font-size:10px;color:var(--text-secondary)">'+sv.desc+'</div>':'')+'</td>'
             +'<td style="'+tdS+';text-align:right;font-weight:600">'+(sv.price||0).toLocaleString()+'</td>'
             +'<td style="'+tdS+'"><strong>'+(sv.cur||'USD')+'</strong></td>'
             +'<td style="'+tdS+';text-align:right">'+(sv.qty||1)+'</td>'
@@ -4044,7 +4078,7 @@ function openInvoice(id, tt, tempR){
   const svcsYes=SVCS.filter(s=>svcs[s.key]?.on && (svcs[s.key]?.invoice||'Yes')==='Yes');
   const svcsNo=SVCS.filter(s=>svcs[s.key]?.on && svcs[s.key]?.invoice==='No');
   const activeSvcs=[...svcsYes,...svcsNo]; // combined for ROE calc
-  const allActiveSvcs=SVCS.filter(s=>svcs[s.key]?.on); // for summary
+  const allActiveSvcs=_applySvcOrder(SVCS.filter(s=>svcs[s.key]?.on),r.svcOrder); // for summary
 
   const shipperName=r.shipper||r.supplier||'';
   const sp=cache.partners[shipperName]||{};
@@ -7622,9 +7656,9 @@ function renderSupplierDetailPopup(){
       <label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">Shipper:</label>
       <select onchange="tcSupShipper=this.value;renderSupplierDetailPopup()" style="font-size:12px;width:auto;flex:0 0 160px"><option value="">Tất cả</option>${shippers.map(function(s){return '<option'+(s===tcSupShipper?' selected':'')+'>'+s+'</option>';}).join('')}</select>
       <label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">ETD từ:</label>
-      <input type="date" value="${tcSupFrom}" onchange="tcSupFrom=this.value;renderSupplierDetailPopup()" style="font-size:12px;width:auto;flex:0 0 140px"/>
+      <input type="date" value="${tcSupFrom}" onchange="tcSupFrom=this.value;renderSupplierDetailPopup()" style="font-size:11.5px;width:130px;flex:0 0 130px;padding:5px 6px"/>
       <label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">đến:</label>
-      <input type="date" value="${tcSupTo}" onchange="tcSupTo=this.value;renderSupplierDetailPopup()" style="font-size:12px;width:auto;flex:0 0 140px"/>
+      <input type="date" value="${tcSupTo}" onchange="tcSupTo=this.value;renderSupplierDetailPopup()" style="font-size:11.5px;width:130px;flex:0 0 130px;padding:5px 6px"/>
       <div style="flex:1;min-width:8px"></div>
       <button onclick="_apExportExcel()" style="font-size:11px;padding:5px 11px;border-radius:6px;border:1.5px solid #0F6E56;background:#0F6E5610;color:#0F6E56;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:4px;white-space:nowrap;flex:0 0 auto"><i class="ti ti-file-spreadsheet" style="font-size:13px"></i> Excel</button>
       <button onclick="_apExportPdf()" style="font-size:11px;padding:5px 11px;border-radius:6px;border:1.5px solid #b91c1c;background:#b91c1c10;color:#b91c1c;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:4px;white-space:nowrap;flex:0 0 auto"><i class="ti ti-file-type-pdf" style="font-size:13px"></i> PDF</button>
@@ -8439,12 +8473,14 @@ function _tcPeriodLabel(){
 // Số dư 1 tài khoản (VND) đến hết ngày 'dateStr'.
 // periodStart (tùy chọn): nếu số dư đầu kỳ cấu hình rơi vào ĐÚNG ngày bắt đầu kỳ (obDate<=periodStart)
 // thì vẫn tính vào (dùng khi tính "quỹ đầu kỳ" — tránh mất số dư khi obDate = 01/01 của năm đang xem).
-function _tcAccountBalanceUpTo(accId,dateStr,periodStart){
+function _tcAccountBalanceUpTo(accId,dateStr,obCutoffArg){
   const roe=26390;
   const ob=(window._tcOpeningBalances||{})[accId]||{};
   const obDate=ob.date||'';
-  const obCutoff=periodStart||dateStr;
+  const obCutoff=obCutoffArg||dateStr;
   let vnd=0;
+  // Số dư đầu kỳ cấu hình được tính nếu ngày của nó <= obCutoff.
+  // (obCutoff thường = ngày cuối kỳ báo cáo, để số dư khởi tạo nhập trong kỳ vẫn được tính vào quỹ đầu kỳ.)
   if(!obDate||obDate<=obCutoff)vnd+=(ob.VND||0)+Math.round((ob.USD||0)*roe);
   (cache.cashTx||[]).forEach(function(tx){
     if(tx.account!==accId)return;
@@ -8456,13 +8492,12 @@ function _tcAccountBalanceUpTo(accId,dateStr,periodStart){
   return vnd;
 }
 
-// Tổng số dư TẤT CẢ tài khoản (VND) tính đến CUỐI ngày 'dateStr'. periodStart: xem chú thích trên.
-function _tcTotalBalanceUpTo(dateStr,periodStart){
-  const roe=26390;
+// Tổng số dư TẤT CẢ tài khoản (VND) tính đến CUỐI ngày 'dateStr'. obCutoff: xem chú thích trên.
+function _tcTotalBalanceUpTo(dateStr,obCutoff){
   const accs=_tcAccountList();
   let totalVND=0;
   accs.forEach(function(a){
-    totalVND+=_tcAccountBalanceUpTo(a.id,dateStr,periodStart);
+    totalVND+=_tcAccountBalanceUpTo(a.id,dateStr,obCutoff);
   });
   return totalVND;
 }
@@ -8558,7 +8593,7 @@ function renderTcBaoCao(){
   });
 
   // Số dư đầu kỳ = tổng số dư đến hết ngày liền trước 'from'
-  const openingVND=_tcTotalBalanceUpTo(_tcPrevDay(from),from);
+  const openingVND=_tcTotalBalanceUpTo(_tcPrevDay(from),to);
   // Số dư cuối kỳ = đầu kỳ + thu - chi
   const closingVND=openingVND+thuVND-chiVND;
 
@@ -8580,7 +8615,7 @@ function renderTcBaoCao(){
   // Quỹ đầu kỳ theo TỪNG tài khoản (đến hết ngày liền trước 'from')
   const prevDay=_tcPrevDay(from);
   const accs=_tcAccountList();
-  const openingByAcc=accs.map(function(a){return {id:a.id,label:a.label,vnd:_tcAccountBalanceUpTo(a.id,prevDay,from)};});
+  const openingByAcc=accs.map(function(a){return {id:a.id,label:a.label,vnd:_tcAccountBalanceUpTo(a.id,prevDay,to)};});
   // Thống kê thu/chi theo tài khoản trong kỳ
   const statsByAcc=_tcStatsByAccount(from,to);
   // Thu từ Invoice + Chi theo trạng thái TT
@@ -8854,7 +8889,7 @@ function _tcExportBaoCao(){
   const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to;});
   let thuVND=0,chiVND=0;
   txInPeriod.forEach(function(t){const a=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);if(t.type==='thu')thuVND+=a;else chiVND+=a;});
-  const openingVND=_tcTotalBalanceUpTo(_tcPrevDay(from),from);
+  const openingVND=_tcTotalBalanceUpTo(_tcPrevDay(from),to);
   const closingVND=openingVND+thuVND-chiVND;
 
   const ws1=[
@@ -10713,7 +10748,7 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
 
     // CHARGE DETAIL
     const roe=parseFloat(g('roeInput')?.value)||26390;
-    const allActiveSvcs=SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;});
+    const allActiveSvcs=_applySvcOrder(SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;}),r.svcOrder);
     function svcMatchParty(s){ const p=(svcs[s.key]&&svcs[s.key].party||'').trim(); if(!currentParty)return true; return p===currentParty; }
     const svcsYes=allActiveSvcs.filter(function(s){return (svcs[s.key].invoice||'Yes')==='Yes'&&svcMatchParty(s);});
     const svcsNo=allActiveSvcs.filter(function(s){return svcs[s.key].invoice==='No'&&svcMatchParty(s);});
