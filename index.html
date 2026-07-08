@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v266';
+window.APP_BUILD='v268';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1638,7 +1638,13 @@ function renderLotTable(tt){
           return`<td style="max-width:160px;vertical-align:top"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${bkDisplay}</button>${urgDot}${mblLine}</td>`;
         }
         if(c.k==='status'){
-          const ocfSv=(r.svcs||{}).ocf;
+          const svcsR=r.svcs||{};
+          // Tìm dịch vụ OCF: ưu tiên key='ocf'; nếu không có, tìm key nào có code OCF trong danh mục SVCS
+          let ocfSv=svcsR.ocf;
+          if(!ocfSv){
+            const ocfDef=SVCS.find(function(sx){return (sx.code||'').toUpperCase()==='OCF';});
+            if(ocfDef)ocfSv=svcsR[ocfDef.key];
+          }
           let ocfBadge='';
           if(ocfSv&&ocfSv.on){
             const ost=_ocfStatusInfo(ocfSv);
@@ -2635,7 +2641,7 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
             return`<div style="position:relative;margin-bottom:16px">
               <div style="position:absolute;left:-26px;top:1px;width:20px;height:20px;border-radius:50%;background:${col};display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 3px var(--bg-primary)"><i class="ti ${ic}" style="font-size:11px;color:#fff"></i></div>
               <div style="font-size:12.5px;color:var(--text-primary);font-weight:600">${ev.action||''}</div>
-              ${ev.detail?`<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px">${ev.detail}</div>`:''}
+              ${ev.detail?`<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px;white-space:pre-line;line-height:1.5">${ev.detail.replace(/</g,'&lt;')}</div>`:''}
               <div style="font-size:10.5px;color:var(--text-tertiary);margin-top:3px;display:flex;align-items:center;gap:5px"><i class="ti ti-user" style="font-size:10px"></i>${ev.user||'—'}<span style="opacity:.5">·</span>${dateStr} ${timeStr}</div>
             </div>`;
           }).join('')}
@@ -3479,7 +3485,7 @@ async function saveDetailSvc(){
     const descEl=g('sd_'+s.key);
     const desc=descEl?descEl.value:(prev.desc||'');
     const showPrice=can('fillPrice')||can('viewCost');
-    const isOcf=(s.key==='ocf');
+    const isOcf=(s.key==='ocf')||((s.code||'').toUpperCase()==='OCF');
     // Only update price fields if user has permission to see them — RIÊNG OCF: doc/cus cũng được điền cost + chọn NCC
     const cost=(showPrice||isOcf)?(parseFloat(g('scost_'+s.key)?.value)||0):(prev.cost||0);
     const svcQty=showPrice?(parseFloat(g('sqty_'+s.key)?.value)||1):(prev.svcQty||1);
@@ -3512,6 +3518,23 @@ async function saveDetailSvc(){
   // không để merge:true của Firestore tự khôi phục. Dùng FieldValue.delete() cho từng key đã bỏ.
   const removedKeys=Object.keys(existing).filter(function(k){return !(k in svcs);});
   const updatePayload={svcs:svcs,updatedAt:Date.now(),updatedBy:currentUser.email};
+  // Xây dựng diff CHI TIẾT các thay đổi dịch vụ (bật/tắt, đổi giá, đổi NCC, xóa) để ghi rõ vào Lịch sử
+  const svcDiffLines=[];
+  Object.keys(svcs).forEach(function(k){
+    const nw=svcs[k]; const pv=existing[k];
+    const svcMeta=SVCS.find(function(s){return s.key===k;});
+    const svcName=nw._name||(svcMeta?svcMeta.name:k);
+    if(!pv){ if(nw.on)svcDiffLines.push('+ Thêm dịch vụ: '+svcName); return; }
+    if(!!pv.on!==!!nw.on)svcDiffLines.push((nw.on?'Bật':'Tắt')+' dịch vụ: '+svcName);
+    if((parseFloat(pv.cost)||0)!==(parseFloat(nw.cost)||0))svcDiffLines.push(svcName+' — Đơn giá: '+((parseFloat(pv.cost)||0).toLocaleString())+' → '+((parseFloat(nw.cost)||0).toLocaleString())+' '+(nw.svcCur||''));
+    if((pv.svcSupplier||'')!==(nw.svcSupplier||''))svcDiffLines.push(svcName+' — NCC: '+(pv.svcSupplier||'(trống)')+' → '+(nw.svcSupplier||'(trống)'));
+  });
+  removedKeys.forEach(function(k){
+    const svcMeta=SVCS.find(function(s){return s.key===k;});
+    const pv=existing[k]||{};
+    svcDiffLines.push('- Xóa dịch vụ: '+(pv._name||(svcMeta?svcMeta.name:k)));
+  });
+  const svcDetailText=svcDiffLines.length?svcDiffLines.join('\n'):'Lưu lại (không có thay đổi)';
   setLoading(true,'Đang lưu...');
   try{
     await fsSet(colName(detailTt),detailId,updatePayload);
@@ -3522,7 +3545,7 @@ async function saveDetailSvc(){
       await db.collection(colName(detailTt)).doc(detailId).update(delMap);
     }
     toast('Đã lưu dịch vụ');
-    logLotEvent(detailId,detailTt,'svc','Cập nhật dịch vụ');
+    logLotEvent(detailId,detailTt,'svc','Cập nhật dịch vụ',svcDetailText);
     // Cập nhật cache NGAY (listener Firestore là async) để re-render không bị khôi phục dịch vụ đã xóa
     const ci=cache[detailTt].findIndex(x=>x._id===detailId);
     if(ci>=0){ cache[detailTt][ci].svcs=svcs; }
@@ -3964,10 +3987,29 @@ async function saveLot(){
   if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; if(!rec.jobNo) rec.jobNo=getNextJobNo(rec.loaiHang||'XK - Xuất khẩu'); }
   const docId=lotIdx||genId();
   const isNew=!lotIdx;
+  // Xây dựng diff chi tiết CÁC TRƯỜNG ĐÃ THAY ĐỔI (so với existing) để ghi vào Lịch sử —
+  // giúp biết rõ user đã sửa thông tin gì, không chỉ ghi chung chung "Cập nhật thông tin lô hàng".
+  const diffLines=[];
+  if(!isNew&&existing){
+    const cols2=currentTab==='xuat'?XCOLS:NCOLS;
+    cols2.forEach(function(c){
+      if(!c.k||c.k.charAt(0)==='_')return; // bỏ qua rowStart/rowEnd/bookingBlock marker
+      const ov=(existing[c.k]!=null?existing[c.k]:'')+''; const nv=(rec[c.k]!=null?rec[c.k]:'')+'';
+      if(ov===nv)return;
+      const lbl=c.l||c.k;
+      const shorten=function(v){v=v.trim();return v.length>40?v.slice(0,40)+'…':(v||'(trống)');};
+      diffLines.push(lbl+': '+shorten(ov)+' → '+shorten(nv));
+    });
+    // Booking (multi-booking) thay đổi
+    if(JSON.stringify(existing.bookings||[])!==JSON.stringify(rec.bookings||[])){
+      diffLines.push('Booking: đã cập nhật danh sách booking ('+(rec.bookings||[]).length+' booking)');
+    }
+  }
+  const detailText=isNew?'':(diffLines.length?diffLines.join('\n'):'Lưu lại (không có trường nào thay đổi)');
   setLoading(true,'Đang lưu...');
   try {
     await fsSet(colName(currentTab), docId, rec);
-    logLotEvent(docId,currentTab,isNew?'create':'update',isNew?'Tạo lô hàng mới':'Cập nhật thông tin lô hàng',isNew?'':'Sửa thông tin chung (booking, vessel, cảng, đối tác...)');
+    logLotEvent(docId,currentTab,isNew?'create':'update',isNew?'Tạo lô hàng mới':'Cập nhật thông tin lô hàng',detailText);
     toast('Đã lưu lô hàng');
     closeOv('lotOv');
   } catch(e){ toast('Lỗi: '+e.message,'error'); }
@@ -4566,12 +4608,14 @@ function svcRowHTML(s, sv){
   const codeCell=`<span style="position:relative;display:block"><datalist id="${dlId}">${datalistOpts}</datalist><input type="text" id="scode_${s.key}" value="${curCode}" list="${dlId}" maxlength="10" title="Mã dịch vụ — gõ code để tìm nhanh" style="font-size:11px;font-weight:700;color:var(--blue);background:rgba(26,75,140,.07);border:1px solid rgba(26,75,140,.2);border-radius:4px;padding:2px 4px;width:100%;cursor:pointer;text-align:center;box-sizing:border-box;transition:width .15s" onfocus="this.dataset.prev=this.value;this.value='';this.style.width='160px'" onblur="var v=this.value.trim();if(!v){this.value=this.dataset.prev||'';this.style.width='100%';}else{this.style.width='100%';switchSvcCodeByCode('${s.key}',v)}" onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault()}"/></span>`;
   if(!showPrice){
     // ── Nhánh đặc biệt cho OCF: cho phép doc/cus điền giá (cost), chọn NCC, và tick "Request Payment" ──
-    if(s.key==='ocf'){
+    // Nhận diện theo CODE "OCF" (không chỉ key='ocf') để bắt cả dịch vụ custom đã có từ trước với code OCF.
+    const isOcfSvc=(s.key==='ocf')||((s.code||'').toUpperCase()==='OCF');
+    if(isOcfSvc){
       const ocfSt=_ocfStatusInfo(sv);
       return`<div style="display:grid;grid-template-columns:22px 58px 1fr 90px 130px 120px 120px 26px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1.5px solid rgba(37,99,235,.25)" id="srow_${s.key}">
         <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
         ${codeCell}
-        <div style="display:flex;align-items:center;gap:3px;min-width:0"><span style="font-size:12.5px;font-weight:${sv.on?600:400}">${s.name}</span></div>
+        <div style="display:flex;align-items:center;gap:3px;min-width:0"><span style="font-size:12.5px;font-weight:${sv.on?600:400}">${sv._name||s.name}</span></div>
         <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" title="Đơn giá (cước NCC)"/>
         <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px" title="Chọn NCC">${supplierOpts}</select>
         <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--text-secondary);cursor:${sv.ocfConfirmed?'not-allowed':'pointer'}">
@@ -4596,7 +4640,7 @@ function svcRowHTML(s, sv){
   const amtNum=cost&&qty?parseFloat(cost)*parseFloat(qty):0;
   const svcVatAmt=sv.svcVatAmt||0;
   const totalWithVat=amtNum>0?(amtNum+svcVatAmt):0;
-  const isOcfRow=(s.key==='ocf');
+  const isOcfRow=(s.key==='ocf')||((s.code||'').toUpperCase()==='OCF');
   const ocfStAdmin=isOcfRow?_ocfStatusInfo(sv):null;
   const isAdmin=(currentProfile?.role==='admin');
   const ocfClickable=isOcfRow&&isAdmin&&sv.reqPayment&&!sv.ocfConfirmed;
@@ -6029,11 +6073,21 @@ function runDebtReport(){
           const sp3=cache.partners[sh2]||{};
           const partyKeys=_getPartyKeys(r,sh2,sp3);
           const ps=_dnPayStatusSplit(r,rowTotalVND,rowTotalNoVND,partyKeys);
-          const yesOk=ps.inv!=='Chưa thanh toán';
-          const noOk=ps.noInv!=='Chưa thanh toán';
-          const hasAny=ps.inv!=='—'||ps.noInv!=='—';
-          const allPaid=yesOk&&noOk;
-          return '<td style="'+tdS+';font-weight:600;color:'+(allPaid?'var(--green)':'var(--red)')+'">'+(hasAny?(allPaid?'Đã TT':'Chưa TT'):'—')+'</td>';
+          const yesApplicable=ps.inv!=='—';
+          const noApplicable=ps.noInv!=='—';
+          const yesOk=yesApplicable&&ps.inv==='Đã thanh toán';
+          const noOk=noApplicable&&ps.noInv==='Đã thanh toán';
+          const totalApplicable=(yesApplicable?1:0)+(noApplicable?1:0);
+          const paidCount=(yesOk?1:0)+(noOk?1:0);
+          // Lưu số tiền đã thanh toán thực tế của dòng này lên chính object r — để phần tổng kết
+          // (grandPaidVND) TÁI SỬ DỤNG giá trị này thay vì tính lại, đảm bảo LUÔN khớp với badge hiển thị.
+          r._arRowPaidVND=(yesOk?rowTotalVND:0)+(noOk?rowTotalNoVND:0);
+          let badgeLabel,badgeColor;
+          if(totalApplicable===0){badgeLabel='—';badgeColor='var(--text-tertiary)';}
+          else if(paidCount===totalApplicable){badgeLabel='Đã TT';badgeColor='var(--green)';}
+          else if(paidCount===0){badgeLabel='Chưa TT';badgeColor='var(--red)';}
+          else {badgeLabel='Một phần ('+paidCount+'/'+totalApplicable+')';badgeColor='#b45309';}
+          return '<td style="'+tdS+';font-weight:600;color:'+badgeColor+'">'+badgeLabel+'</td>';
         })()
         +'</tr>';
     }).join('');
@@ -6075,35 +6129,12 @@ function runDebtReport(){
     });
   });
   const grandAllVND=grandVND+grandNoVND;
-  // Tổng đã thanh toán và còn lại — DÙNG ĐÚNG logic trạng thái (_dnPayStatusSplit) + số tiền
-  // thực tế của từng dòng (rowTotalVND/rowTotalNoVND), KHÔNG dùng field .amount đã lưu vì
-  // field này có thể bị lệch/cũ khiến box "Đã thanh toán" không khớp với badge từng dòng.
+  // Tổng đã thanh toán và còn lại — TÁI SỬ DỤNG r._arRowPaidVND đã tính CHÍNH XÁC ở từng dòng
+  // (khi build bảng chi tiết theo shipper ở trên) để đảm bảo LUÔN khớp 100% với badge "Trạng thái TT"
+  // hiển thị ở từng dòng — không tính lại bằng logic riêng (nguồn gây lệch số trước đây).
   let grandPaidVND=0;
   filtered.forEach(function(r){
-    const svcs=r.svcs||{};
-    const sh2=r.shipper||r.supplier||'';
-    const sp3=cache.partners[sh2]||{};
-    function partyOk2(sv){
-      if(!filterShipper)return true;
-      const svParty=(sv.party||'').trim();
-      return !svParty||svParty===sh2||svParty===(sp3.fullname||'')||svParty===(sp3.enName||'')||svParty===(sp3.enShort||'');
-    }
-    const invSvcs2=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice!=='Waived'&&e[1].invoice!=='No'&&partyOk2(e[1]);});
-    const invSvcsNo2=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice==='No'&&partyOk2(e[1]);});
-    let rTotVND=0; invSvcs2.forEach(function(e){const sv=e[1];const base=_amtVND(sv,r);const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;rTotVND+=Math.round(base*(1+vr/100));});
-    let rTotNoVND=0; invSvcsNo2.forEach(function(e){rTotNoVND+=_amtVND(e[1],r);});
-    // Lấy party keys của shipper đang xem để lọc đúng trạng thái TT
-    let partyKeys2=null;
-    if(filterShipper){
-      const dnPm=r.dnPayments||{};
-      const m=Object.keys(dnPm).filter(function(k){return _partyMatchesShipper(k,sh2,sp3);});
-      const leg=Object.keys(r.dnPayStatus||{}).filter(function(k){return _partyMatchesShipper(k,sh2,sp3);});
-      const all=[...new Set([...m,...leg])];
-      if(all.length)partyKeys2=all;
-    }
-    const ps=_dnPayStatusSplit(r,rTotVND,rTotNoVND,partyKeys2);
-    if(ps.inv==='Đã thanh toán')grandPaidVND+=rTotVND;
-    if(ps.noInv==='Đã thanh toán')grandPaidVND+=rTotNoVND;
+    grandPaidVND+=r._arRowPaidVND||0;
   });
   const grandRemainVND=Math.max(0,grandAllVND-grandPaidVND);
   function _sumBox(label,val,color,bg,bd){return '<div style="flex:1;min-width:180px;padding:.65rem 1rem;background:'+bg+';border:1px solid '+bd+';border-radius:8px"><div style="font-size:11px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">'+label+'</div><div style="font-size:14px"><strong style="color:'+color+'">'+val.toLocaleString()+' VND</strong></div></div>';}
