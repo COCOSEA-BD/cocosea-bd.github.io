@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v269';
+window.APP_BUILD='v270';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -8341,12 +8341,20 @@ async function savePayStatusDetail(){
       const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
       if(ci>=0){cache[detailTt][ci].dnPayments=dnPm;}
       // Đồng bộ dnPayStatus (legacy) để báo cáo công nợ đọc được
+      // QUAN TRỌNG: chỉ coi là 'paid' khi CẢ 2 phần (nếu tồn tại) đều CÓ status RÕ RÀNG = 'paid'.
+      // Trước đây: !p.inv.status (chưa từng thao tác) bị coi là "OK" một cách vô tình → khiến
+      // dnPayStatus báo 'paid' dù phần Có HĐ CHƯA TỪNG được đánh dấu — đây là NGUỒN GỐC lỗi
+      // khiến báo cáo công nợ hiển thị "Đã TT" sai khi mới chỉ thanh toán 1 phần.
       const legacySync={};
       Object.keys(dnPm).forEach(function(party){
         const p=dnPm[party]||{};
-        const invOk=!p.inv||!p.inv.status||p.inv.status==='paid';
-        const noInvOk=!p.noInv||!p.noInv.status||p.noInv.status==='paid';
-        legacySync[party]=(invOk&&noInvOk)?'paid':'unpaid';
+        const invTouched=!!(p.inv&&p.inv.status);
+        const noInvTouched=!!(p.noInv&&p.noInv.status);
+        const invOk=!invTouched||p.inv.status==='paid'; // chỉ "OK" nếu chưa từng có phần này HOẶC đã paid rõ ràng
+        const noInvOk=!noInvTouched||p.noInv.status==='paid';
+        // Chỉ đánh dấu 'paid' khi CÓ ÍT NHẤT 1 phần đã thực sự paid VÀ không phần nào đang unpaid rõ ràng
+        const anyPaid=(invTouched&&p.inv.status==='paid')||(noInvTouched&&p.noInv.status==='paid');
+        legacySync[party]=(invOk&&noInvOk&&anyPaid)?'paid':'unpaid';
       });
       await fsSet(colName(detailTt),detailId,{dnPayStatus:legacySync});
       if(ci>=0)cache[detailTt][ci].dnPayStatus=legacySync;
@@ -18809,8 +18817,17 @@ function _computeArRowStatus(r, filterShipper, sh, sp){
   let invPaidAll=true, noInvPaidAll=true, hasInvRecord=false, hasNoInvRecord=false;
   partyKeysUsed.forEach(function(pk){
     const pmd=dnPm[pk];
-    if(pmd&&pmd.inv&&pmd.inv.status){ hasInvRecord=true; if(pmd.inv.status!=='paid')invPaidAll=false; }
-    else if(legacyPay[pk]){ hasInvRecord=true; if(legacyPay[pk]!=='paid')invPaidAll=false; }
+    if(pmd&&pmd.inv&&pmd.inv.status){
+      // Có bản ghi RÕ RÀNG cho phần Có HĐ trong dnPayments mới — dùng trực tiếp, tin cậy tuyệt đối.
+      hasInvRecord=true; if(pmd.inv.status!=='paid')invPaidAll=false;
+    } else if(!pmd&&legacyPay[pk]){
+      // CHỈ dùng field dnPayStatus (legacy) khi lô này CHƯA TỪNG có cấu trúc dnPayments mới cho
+      // party này (pmd hoàn toàn không tồn tại) — ví dụ lô cũ trước khi có tách Có HĐ/Không HĐ.
+      // KHÔNG dùng legacy nếu pmd đã tồn tại nhưng .inv rỗng/chưa thao tác, vì field legacy có thể
+      // đã bị đồng bộ sai trong quá khứ (coi "chưa thao tác" là "OK") — nguồn gốc lỗi báo "Đã TT"
+      // sai khi mới chỉ thanh toán 1 phần.
+      hasInvRecord=true; if(legacyPay[pk]!=='paid')invPaidAll=false;
+    }
     if(pmd&&pmd.noInv&&pmd.noInv.status){ hasNoInvRecord=true; if(pmd.noInv.status!=='paid')noInvPaidAll=false; }
   });
   return {invPaid:hasInvRecord&&invPaidAll, noInvPaid:hasNoInvRecord&&noInvPaidAll};
