@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v272';
+window.APP_BUILD='v274';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -15408,26 +15408,28 @@ function _dmContTypeGroups(d){
   return Object.keys(groups).map(function(t){return {type:t,count:groups[t]};});
 }
 
-// Bảng hàng hóa cho "INV theo cont": Quantity = số lượng cont theo loại (VD 10x40HQ),
-// Unit Price = USD/[loại cont], dòng TOTAL hiển thị Total N.W (tổng trọng lượng tịnh, KGS).
+// Bảng hàng hóa cho "INV theo cont": tách RIÊNG 2 cột —
+// (1) Số lượng cont theo loại (VD "10x40HQ"), (2) Quantity = Total N.W (KGS).
+// Unit Price = USD/[loại cont]. Dòng TOTAL: cột Quantity hiển thị tổng N.W, cột Số lượng cont để trống.
 function _dmGoodsTableByCont(d){
   const specLines=(d.specs||'').split('\n').map(function(s){return s.trim();}).filter(Boolean).join('<br>');
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
   const groups=_dmContTypeGroups(d);
-  const qtyLabel=groups.length?groups.map(function(g){return g.count+'x'+g.type;}).join(' + '):(d.conts.length+' CONT');
+  const contQtyLabel=groups.length?groups.map(function(g){return g.count+'x'+g.type;}).join(' + '):(d.conts.length+' CONT');
   const priceTypeLabel=groups.length===1?groups[0].type:'CONT';
   const totalConts=d.conts.length;
   const amount=Math.round(totalConts*d.unitPrice*100)/100;
   return '<table class="gt" style="width:100%;margin-top:6px">'
     +'<thead><tr>'
-    +'<th class="c" style="width:24%">NAME<br>OF GOODS</th>'
-    +'<th class="c" style="width:30%">Specifications</th>'
+    +'<th class="c" style="width:20%">NAME<br>OF GOODS</th>'
+    +'<th class="c" style="width:26%">Specifications</th>'
+    +'<th class="c">&nbsp;</th>'
     +'<th class="c">Quantity</th>'
     +'<th class="c">UNIT PRICE(USD/'+priceTypeLabel+')<br>'+d.priceLabel+' '+d.pod+'</th>'
     +'<th class="c">AMOUNT<br>(USD)</th>'
     +'</tr></thead><tbody>'
-    +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+qtyLabel+'</td><td class="c">'+d.unitPrice+'</td><td class="r">'+f2(amount)+'</td></tr>'
-    +'</tbody><tfoot><tr><td colspan="2" class="c b">TOTAL</td><td class="c b">'+f2(d.totalNW)+' KGS</td><td></td><td class="r b">'+f2(amount)+'</td></tr></tfoot>'
+    +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+contQtyLabel+'</td><td class="c">'+f2(d.totalNW)+' KGS</td><td class="c">'+d.unitPrice+'</td><td class="r">'+f2(amount)+'</td></tr>'
+    +'</tbody><tfoot><tr><td colspan="3" class="c b">TOTAL</td><td class="c b">'+f2(d.totalNW)+' KGS</td><td></td><td class="r b">'+f2(amount)+'</td></tr></tfoot>'
     +'</table>';
 }
 
@@ -18987,13 +18989,24 @@ function _cnOpenBulkPopup(cfg){
   // Bảng từng lô
   const rowsHtml=cfg.rows.map(function(r,i){
     const sugAmt=isAR?(r.amtAll||0):(r.amt||0);
+    // AR: nếu lô có CẢ HAI phần Có HĐ và Không HĐ, cho chọn rõ phần nào cần đánh dấu TT
+    // — tránh lỗi đánh dấu nhầm CẢ 2 khi người dùng chỉ định thanh toán 1 phần.
+    const hasBoth=isAR&&(r.amtYes||0)>0&&(r.amtNo||0)>0;
+    const sectionSelect=hasBoth?(
+      '<select id="blk_section_'+i+'" onchange="_blkSectionChange('+i+')" style="font-size:11px;width:100%;margin-top:4px;border:1.5px solid #b45309;color:#b45309;font-weight:600">'
+      +'<option value="both">Cả 2 phần</option>'
+      +'<option value="inv">Chỉ Có HĐ ('+(r.amtYes||0).toLocaleString()+' đ)</option>'
+      +'<option value="noinv">Chỉ Không HĐ ('+(r.amtNo||0).toLocaleString()+' đ)</option>'
+      +'</select>'
+    ):'';
     return '<tr>'
       +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px">'
         +'<input type="checkbox" checked id="blk_chk_'+i+'" style="margin-right:5px;cursor:pointer"/>'
         +'<strong style="color:var(--blue)">'+(r.booking||r.bookingNo||r.svcKey||'—')+'</strong>'
+        +sectionSelect
       +'</td>'
       +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light)">'
-        +'<input type="number" id="blk_amt_'+i+'" value="'+sugAmt+'" placeholder="Số tiền VND" min="0" style="width:130px;font-size:12px"/>'
+        +'<input type="number" id="blk_amt_'+i+'" data-all="'+sugAmt+'" data-yes="'+(r.amtYes||0)+'" data-no="'+(r.amtNo||0)+'" value="'+sugAmt+'" placeholder="Số tiền VND" min="0" style="width:130px;font-size:12px"/>'
       +'</td>'
       +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light)">'
         +'<input type="date" id="blk_date_'+i+'" class="blk-date-row" style="font-size:12px"/>'
@@ -19083,6 +19096,18 @@ function _blkSyncBanks(){
 window._blkSyncBanks=_blkSyncBanks;
 
 // Lưu bulk payment
+// Khi đổi lựa chọn "phần thanh toán" (Cả 2 / Chỉ Có HĐ / Chỉ Không HĐ) cho 1 dòng bulk AR,
+// tự cập nhật số tiền gợi ý tương ứng.
+function _blkSectionChange(i){
+  const sel=g('blk_section_'+i); const amtEl=g('blk_amt_'+i);
+  if(!sel||!amtEl)return;
+  const v=sel.value;
+  if(v==='inv')amtEl.value=amtEl.dataset.yes||0;
+  else if(v==='noinv')amtEl.value=amtEl.dataset.no||0;
+  else amtEl.value=amtEl.dataset.all||0;
+}
+window._blkSectionChange=_blkSectionChange;
+
 async function _cnSaveBulkPay(){
   const cfg=window._cnBulkCfg; if(!cfg)return;
   const isAR=cfg.mode==='ar';
@@ -19112,10 +19137,14 @@ async function _cnSaveBulkPay(){
         const partyKeys=Object.keys(dnPm).filter(function(k){return _partyMatchesShipper(k,sh,sp);});
         // Nếu chưa có party nào trong dnPayments, dùng shipper shortname làm key
         const usedKeys=partyKeys.length?partyKeys:[sh];
+        // Đọc lựa chọn "phần thanh toán" của dòng này (nếu có ô chọn — chỉ hiện khi lô có cả 2 phần)
+        const sectionSel=g('blk_section_'+i)?.value||'both';
+        const payInv=(sectionSel==='both'||sectionSel==='inv');
+        const payNoInv=(sectionSel==='both'||sectionSel==='noinv');
         let changed=false;
         for(const pk of usedKeys){
           if(!dnPm[pk])dnPm[pk]={};
-          if(row.amtYes>0){
+          if(payInv&&row.amtYes>0){
             if(!dnPm[pk].inv)dnPm[pk].inv={};
             dnPm[pk].inv.status=status; dnPm[pk].inv.date=date; dnPm[pk].inv.bank=bank;
             if(amount>0)dnPm[pk].inv.amount=amount;
@@ -19128,7 +19157,7 @@ async function _cnSaveBulkPay(){
             if(txId)dnPm[pk].inv.cashTxId=txId;
             changed=true;
           }
-          if(row.amtNo>0){
+          if(payNoInv&&row.amtNo>0){
             if(!dnPm[pk].noInv)dnPm[pk].noInv={};
             dnPm[pk].noInv.status=status; dnPm[pk].noInv.date=date; dnPm[pk].noInv.bank=bank;
             if(amount>0)dnPm[pk].noInv.amount=amount;
