@@ -362,6 +362,7 @@ function loadBankAccounts(){
    CONSTANTS
 ───────────────────────────────────────────── */
 let SVCS=[
+  {key:'ocf',name:'OCF - Cước vận tải biển',code:'OCF',default:false},
   {key:'freight',name:'Cước vận tải QT',code:'FRE',default:false},{key:'customs',name:'Thông quan',code:'CUS',default:false},
   {key:'quarantine',name:'Kiểm dịch',code:'QUA',default:false},{key:'co',name:'C/O',code:'COO',default:false},
   {key:'fumi',name:'Fumi',code:'FUM',default:false},{key:'stuffing',name:'Đóng hàng tại bãi',code:'STU',default:false},
@@ -386,7 +387,7 @@ function genSvcCode(name, existing){
 window.genSvcCode=genSvcCode;
 
 // Tên gốc của các dịch vụ built-in (để khôi phục liên kết cho lô CŨ nếu danh mục bị đổi/xóa)
-const _BUILTIN_SVC_NAMES={freight:'Cước vận tải QT',customs:'Thông quan',quarantine:'Kiểm dịch',co:'C/O',fumi:'Fumi',stuffing:'Đóng hàng tại bãi',trucking:'Trucking',ddl:'DDL',docfee:'Phí chứng từ xuất khẩu'};
+const _BUILTIN_SVC_NAMES={ocf:'OCF - Cước vận tải biển',freight:'Cước vận tải QT',customs:'Thông quan',quarantine:'Kiểm dịch',co:'C/O',fumi:'Fumi',stuffing:'Đóng hàng tại bãi',trucking:'Trucking',ddl:'DDL',docfee:'Phí chứng từ xuất khẩu'};
 window._BUILTIN_SVC_NAMES=_BUILTIN_SVC_NAMES;
 
 // Đảm bảo mọi dịch vụ ĐANG CÓ DỮ LIỆU trong lô đều tồn tại trong SVCS để các tab (Fill giá/Costing/Invoice) hiển thị đúng.
@@ -570,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v265';
+window.APP_BUILD='v266';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1636,7 +1637,15 @@ function renderLotTable(tt){
           const mblLine=r.mblNo?`<div style="font-size:12.5px;font-weight:600;color:#1a4b8c;margin-top:2px;white-space:nowrap"><i class="ti ti-hash" style="font-size:10px"></i> ${r.mblNo}</div>`:'';
           return`<td style="max-width:160px;vertical-align:top"><button class="plink" style="font-weight:600;white-space:normal;word-break:break-word;text-align:left;line-height:1.4" onclick="openDetail('${r._id}','${tt}')">${bkDisplay}</button>${urgDot}${mblLine}</td>`;
         }
-        if(c.k==='status') return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span></td>`;
+        if(c.k==='status'){
+          const ocfSv=(r.svcs||{}).ocf;
+          let ocfBadge='';
+          if(ocfSv&&ocfSv.on){
+            const ost=_ocfStatusInfo(ocfSv);
+            if(ost.key)ocfBadge='<div style="margin-top:3px"><span onclick="event.stopPropagation();openDetail(\''+r._id+'\',\''+tt+'\',\'svc\')" style="cursor:pointer;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px;background:'+ost.bg+';color:'+ost.color+';white-space:nowrap" title="OCF — bấm để vào tab Dịch vụ">OCF: '+ost.label+'</span></div>';
+          }
+          return`<td><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>${ocfBadge}</td>`;
+        }
         if(c.k==='typeCont'){const tc=r[c.k]||'';const isRf=tc.includes('R');return`<td>${tc?`<span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;background:${isRf?'rgba(66,153,225,.12)':'rgba(72,187,120,.1)'};color:${isRf?'#2b6cb0':'#276749'}">${tc}</span>`:'—'}</td>`;}
         if(c.k==='vstStatus'){
           if(!r.vstEnabled) return`<td style="text-align:center"><button class="btn sm" onclick="openVstPopup('${r._id}','${tt}')" style="font-size:11px;opacity:.6">+VST</button></td>`;
@@ -3466,22 +3475,28 @@ async function saveDetailSvc(){
   SVCS.forEach(s=>{
     const tg=g('tg_'+s.key);if(!tg)return;
     const on=tg.classList.contains('on');
-    const desc=g('sd_'+s.key)?.value||'';
     const prev=existing[s.key]||{};
+    const descEl=g('sd_'+s.key);
+    const desc=descEl?descEl.value:(prev.desc||'');
     const showPrice=can('fillPrice')||can('viewCost');
-    // Only update price fields if user has permission to see them
-    const cost=showPrice?(parseFloat(g('scost_'+s.key)?.value)||0):(prev.cost||0);
+    const isOcf=(s.key==='ocf');
+    // Only update price fields if user has permission to see them — RIÊNG OCF: doc/cus cũng được điền cost + chọn NCC
+    const cost=(showPrice||isOcf)?(parseFloat(g('scost_'+s.key)?.value)||0):(prev.cost||0);
     const svcQty=showPrice?(parseFloat(g('sqty_'+s.key)?.value)||1):(prev.svcQty||1);
     const svcUnit=showPrice?(g('svcunit_'+s.key)?.value||'Cont'):(prev.svcUnit||'Cont');
     const svcCur=showPrice?(g('svcur_'+s.key)?.value||'USD'):(prev.svcCur||'USD');
-    const svcSupplier=showPrice?(g('ssup_'+s.key)?.value||''):(prev.svcSupplier||'');
+    const svcSupplier=(showPrice||isOcf)?(g('ssup_'+s.key)?.value||''):(prev.svcSupplier||'');
     const apPaidStatus=showPrice?(g('sstatus_'+s.key)?.value||'unpaid'):(prev.apPaidStatus||'unpaid');
     const apPaidDate=showPrice?(g('spaiddate_'+s.key)?.value||''):(prev.apPaidDate||'');
     const apPaidBank=showPrice?(g('spaidbank_'+s.key)?.value||''):(prev.apPaidBank||'');
     const apRemark=showPrice?(g('sremark_'+s.key)?.value||''):(prev.apRemark||'');
     const finish=g('sfin_'+s.key)?.checked||false;
     const svcVatAmt=parseFloat(g('svvatamt_'+s.key)?.value)||0;
-    svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,svcVatAmt,apPaidStatus,apPaidDate,apPaidBank,apRemark,finish,
+    // OCF — trạng thái request payment (doc/cus tick) & confirmed (chỉ đổi qua _ocfConfirm, giữ nguyên khi lưu form)
+    const reqPaymentEl=g('sreqpay_'+s.key);
+    const reqPayment=reqPaymentEl?reqPaymentEl.checked:(prev.reqPayment||false);
+    const ocfConfirmed=prev.ocfConfirmed||false;
+    svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,svcVatAmt,apPaidStatus,apPaidDate,apPaidBank,apRemark,finish,reqPayment,ocfConfirmed,
       price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',
       vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0,
       party:prev.party||'',                    // giữ lại party từ tab Fill giá
@@ -4493,6 +4508,38 @@ function calcSvcAmt(key){
   const totEl=g('stamt_'+key); if(totEl)totEl.textContent=amt>0?(amt+vatAmt).toLocaleString():'—';
 }
 
+// ═══ OCF (Cước vận tải biển) — quy trình duyệt thanh toán riêng ═══
+// Trạng thái: '' (chưa) → 'Request Payment' (doc/cus tick sau khi điền giá) → 'Confirmed' (admin xác nhận) → 'Payment Done' (đã thanh toán + đã confirm)
+function _ocfStatusInfo(sv){
+  sv=sv||{};
+  if(sv.ocfConfirmed&&sv.apPaidStatus==='paid')return{label:'Payment Done',bg:'rgba(40,167,69,.13)',color:'var(--green)',key:'done'};
+  if(sv.ocfConfirmed)return{label:'Confirmed',bg:'rgba(37,99,235,.1)',color:'#2563eb',key:'confirmed'};
+  if(sv.reqPayment)return{label:'Request Payment',bg:'rgba(234,179,8,.15)',color:'#b45309',key:'requested'};
+  return{label:'—',bg:'transparent',color:'var(--text-tertiary)',key:''};
+}
+window._ocfStatusInfo=_ocfStatusInfo;
+
+// Admin bấm vào badge "Request Payment" để chuyển sang "Confirmed"
+async function _ocfConfirm(tt,id,key){
+  if(currentProfile?.role!=='admin'){toast('Chỉ Admin được xác nhận (Confirm)','error');return;}
+  const r=cache[tt]&&cache[tt].find(function(x){return x._id===id;});
+  if(!r)return;
+  const svcs=r.svcs||{};
+  const sv=svcs[key];
+  if(!sv||!sv.reqPayment){toast('Dịch vụ chưa được request payment','error');return;}
+  if(sv.ocfConfirmed){toast('Đã confirm rồi');return;}
+  sv.ocfConfirmed=true;
+  setLoading(true,'Đang xác nhận...');
+  try{
+    await fsSet(colName(tt),id,{svcs:svcs,updatedAt:Date.now()});
+    toast('Đã Confirm — chờ thanh toán');
+    if(typeof detailId!=='undefined'&&detailId===id)renderDetailPanel(r,tt);
+    if(typeof renderLotTable==='function')renderLotTable(tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._ocfConfirm=_ocfConfirm;
+
 function svcRowHTML(s, sv){
   sv=sv||{on:false,desc:''};
   const isCustom=s.custom||false;
@@ -4518,6 +4565,22 @@ function svcRowHTML(s, sv){
   }).join('');
   const codeCell=`<span style="position:relative;display:block"><datalist id="${dlId}">${datalistOpts}</datalist><input type="text" id="scode_${s.key}" value="${curCode}" list="${dlId}" maxlength="10" title="Mã dịch vụ — gõ code để tìm nhanh" style="font-size:11px;font-weight:700;color:var(--blue);background:rgba(26,75,140,.07);border:1px solid rgba(26,75,140,.2);border-radius:4px;padding:2px 4px;width:100%;cursor:pointer;text-align:center;box-sizing:border-box;transition:width .15s" onfocus="this.dataset.prev=this.value;this.value='';this.style.width='160px'" onblur="var v=this.value.trim();if(!v){this.value=this.dataset.prev||'';this.style.width='100%';}else{this.style.width='100%';switchSvcCodeByCode('${s.key}',v)}" onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault()}"/></span>`;
   if(!showPrice){
+    // ── Nhánh đặc biệt cho OCF: cho phép doc/cus điền giá (cost), chọn NCC, và tick "Request Payment" ──
+    if(s.key==='ocf'){
+      const ocfSt=_ocfStatusInfo(sv);
+      return`<div style="display:grid;grid-template-columns:22px 58px 1fr 90px 130px 120px 120px 26px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1.5px solid rgba(37,99,235,.25)" id="srow_${s.key}">
+        <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
+        ${codeCell}
+        <div style="display:flex;align-items:center;gap:3px;min-width:0"><span style="font-size:12.5px;font-weight:${sv.on?600:400}">${s.name}</span></div>
+        <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" title="Đơn giá (cước NCC)"/>
+        <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px" title="Chọn NCC">${supplierOpts}</select>
+        <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--text-secondary);cursor:${sv.ocfConfirmed?'not-allowed':'pointer'}">
+          <input type="checkbox" id="sreqpay_${s.key}" ${sv.reqPayment?'checked':''} ${(sv.on&&!sv.ocfConfirmed)?'':'disabled'} style="width:14px;height:14px;cursor:pointer"/> Request Payment
+        </label>
+        <span style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:${ocfSt.bg};color:${ocfSt.color};white-space:nowrap;text-align:center">${ocfSt.label}</span>
+        <div style="display:flex;justify-content:flex-end">${isCustom?`<button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>`:''}</div>
+      </div>`;
+    }
     return`<div style="display:grid;grid-template-columns:22px 58px 1fr 1fr 26px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
       <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
       ${codeCell}
@@ -4533,7 +4596,14 @@ function svcRowHTML(s, sv){
   const amtNum=cost&&qty?parseFloat(cost)*parseFloat(qty):0;
   const svcVatAmt=sv.svcVatAmt||0;
   const totalWithVat=amtNum>0?(amtNum+svcVatAmt):0;
-  return`<div style="display:grid;grid-template-columns:22px 58px 200px 90px 60px 56px 85px 90px 90px 46px 120px 82px 110px 40px 52px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
+  const isOcfRow=(s.key==='ocf');
+  const ocfStAdmin=isOcfRow?_ocfStatusInfo(sv):null;
+  const isAdmin=(currentProfile?.role==='admin');
+  const ocfClickable=isOcfRow&&isAdmin&&sv.reqPayment&&!sv.ocfConfirmed;
+  const gridCols=isOcfRow
+    ?'22px 58px 170px 90px 60px 56px 85px 90px 90px 46px 110px 100px 110px 82px 100px 40px 52px'
+    :'22px 58px 200px 90px 60px 56px 85px 90px 90px 46px 120px 82px 110px 40px 52px';
+  return`<div style="display:grid;grid-template-columns:${gridCols};gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:${isOcfRow?'1.5px solid rgba(37,99,235,.25)':'1px solid var(--border-light)'}" id="srow_${s.key}">
     <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
     ${codeCell}
     <div style="display:flex;align-items:center;gap:3px;min-width:0">
@@ -4547,6 +4617,10 @@ function svcRowHTML(s, sv){
     <span id="stamt_${s.key}" style="font-size:11.5px;font-weight:700;color:var(--red);text-align:right">${totalWithVat>0?totalWithVat.toLocaleString():'—'}</span>
     <select id="svcur_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${curOpts}</select>
     <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
+    ${isOcfRow?`<label style="display:flex;align-items:center;gap:3px;font-size:9.5px;color:var(--text-secondary);cursor:${sv.ocfConfirmed?'not-allowed':'pointer'}" title="Request Payment">
+      <input type="checkbox" id="sreqpay_${s.key}" ${sv.reqPayment?'checked':''} ${(sv.on&&!sv.ocfConfirmed)?'':'disabled'} style="width:13px;height:13px;cursor:pointer"/> Req.Pay
+    </label>
+    <span onclick="${ocfClickable?`_ocfConfirm('${detailTt}','${detailId}','${s.key}')`:''}" style="font-size:9.5px;font-weight:700;padding:3px 6px;border-radius:5px;background:${ocfStAdmin.bg};color:${ocfStAdmin.color};white-space:nowrap;text-align:center;${ocfClickable?'cursor:pointer;text-decoration:underline':''}" title="${ocfClickable?'Click để Confirm':''}">${ocfStAdmin.label}</span>`:''}
     <div style="display:flex;align-items:center">
       <input type="hidden" id="sstatus_${s.key}" value="${sv.apPaidStatus||'unpaid'}"/>
       <input type="hidden" id="spaiddate_${s.key}" value="${sv.apPaidDate||''}"/>
