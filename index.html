@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v275';
+window.APP_BUILD='v276';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1355,13 +1355,14 @@ function goTab(t){
     g('detailPanel').classList.remove('open');
     g('detailBackdrop').classList.remove('open');
   }
-  ['xuat','nhap','deadline','thu-chi','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings','trucking-report','scy-report'].forEach(id=>{
+  ['xuat','notes','nhap','deadline','thu-chi','doi-tac','vessel','cocoquote','contract','users','docs','costing-report','ocean','quote','settings','trucking-report','scy-report'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
     g('sb-'+id)?.classList.toggle('active',id===t);
   });
-  const titles={'xuat':'Shipment List','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','thu-chi':'Quản lý thu chi','doi-tac':'CRM','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
+  const titles={'xuat':'Shipment List','notes':'Ghi chú','nhap':'Nhập khẩu','deadline':'Nhắc nhở deadline','thu-chi':'Quản lý thu chi','doi-tac':'CRM','vessel':'Vessel tool','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
   g('pageTitle').textContent=titles[t]||t;
   if(t==='xuat'||t==='nhap') renderLot(t);
+  if(t==='notes') renderNotesPage();
   if(t==='deadline') renderDeadline();
   if(t==='thu-chi') renderThuChi();
   if(t==='doi-tac') renderPartners();
@@ -9828,19 +9829,22 @@ window.saveCrmContacts=saveCrmContacts;
 // ── TAB: Cnee (tận dụng lại hệ thống Cnee editor đã có sẵn — mở qua popup riêng) ──
 function renderCrmCneeTab(p){
   const cnees=p.cnees||[];
-  let html='<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:.75rem">Danh sách Consignee thường giao dịch với '+(p.shortname||crmDetailKey)+'.</div>';
+  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">'
+    +'<div style="font-size:11.5px;color:var(--text-secondary)">Danh sách Consignee thường giao dịch với '+(p.shortname||crmDetailKey)+'. Click vào 1 Cnee để sửa nhanh.</div>'
+    +'<button class="btn pri" onclick="openCneeEditorAddNew(\''+crmDetailKey.replace(/'/g,"\\'")+'\')" style="flex-shrink:0"><i class="ti ti-plus"></i> Thêm Cnee</button>'
+  +'</div>';
   if(!cnees.length){
-    html+='<div style="padding:1.5rem;text-align:center;color:var(--text-tertiary);font-size:12px;border:1px dashed var(--border-light);border-radius:10px"><i class="ti ti-package-off" style="font-size:22px;display:block;margin-bottom:6px"></i>Chưa có Cnee nào.</div>';
+    html+='<div style="padding:1.5rem;text-align:center;color:var(--text-tertiary);font-size:12px;border:1px dashed var(--border-light);border-radius:10px"><i class="ti ti-package-off" style="font-size:22px;display:block;margin-bottom:6px"></i>Chưa có Cnee nào. Bấm "Thêm Cnee" ở trên để tạo mới.</div>';
   } else {
-    html+='<div style="display:flex;flex-direction:column;gap:6px">'+cnees.map(function(c){
-      return '<div style="padding:10px 12px;border:1px solid var(--border-light);border-radius:8px;background:var(--bg-primary)">'
-        +'<div style="font-size:12.5px;font-weight:700">'+(c.name||'(chưa có tên)')+'</div>'
+    html+='<div style="display:flex;flex-direction:column;gap:6px">'+cnees.map(function(c,i){
+      return '<div onclick="openCneeEditor(\''+crmDetailKey.replace(/'/g,"\\'")+'\','+i+')" style="padding:10px 12px;border:1px solid var(--border-light);border-radius:8px;background:var(--bg-primary);cursor:pointer;display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'var(--bg-primary)\'">'
+        +'<div style="min-width:0"><div style="font-size:12.5px;font-weight:700">'+(c.name||'(chưa có tên)')+'</div>'
         +(c.addr?'<div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">'+c.addr+'</div>':'')
-        +'<div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">'+[c.pic,c.tel,c.email].filter(Boolean).join(' • ')+'</div>'
+        +'<div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">'+[c.pic,c.tel,c.email].filter(Boolean).join(' • ')+'</div></div>'
+        +'<i class="ti ti-edit" style="color:var(--text-tertiary);flex-shrink:0;margin-left:8px"></i>'
       +'</div>';
     }).join('')+'</div>';
   }
-  html+='<div class="mftr"><button class="btn pri" onclick="openCneeEditor(\''+crmDetailKey+'\')"><i class="ti ti-edit"></i> Quản lý Cnee</button></div>';
   return html;
 }
 
@@ -10380,6 +10384,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
     <div class="sb-divider"></div>
     <div class="sb-section">Hàng hóa</div>
     <button class="sb-item" id="sb-xuat" onclick="goTab('xuat')"><i class="ti ti-arrow-up-right"></i> Shipment List</button>
+    <button class="sb-item" id="sb-notes" onclick="goTab('notes')"><i class="ti ti-notes"></i> Ghi chú</button>
     <div class="sb-section" style="margin-top:.4rem">Vận hành</div>
     <button class="sb-item" id="sb-deadline" onclick="goTab('deadline')"><i class="ti ti-checklist"></i> Tiến độ công việc<span class="sb-badge" id="deadlineBadge" style="display:none">0</span></button>
     <button class="sb-item" id="sb-thu-chi" onclick="goTab('thu-chi')"><i class="ti ti-cash"></i> Quản lý thu chi</button>
@@ -10419,6 +10424,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
     </div>
     <div class="content">
       <div id="page-xuat"></div>
+      <div id="page-notes" style="display:none"></div>
       <div id="page-nhap" style="display:none"></div>
       <div id="page-deadline" style="display:none"></div>
       <div id="page-cong-no" style="display:none"></div>
@@ -11180,6 +11186,244 @@ async function saveSecuritySettings(){
 }
 window.saveSecuritySettings=saveSecuritySettings;
 
+// ═══════════════════════════════════════════════════════════
+//  GHI CHÚ (Notes) — Ghi chú chung (admin tạo, mọi người xem) +
+//  Ghi chú riêng (mỗi user tự quản lý, chỉ mình thấy)
+// ═══════════════════════════════════════════════════════════
+window._notesTab=window._notesTab||'shared';
+window._sharedNotes=window._sharedNotes||[];
+window._personalNotes=window._personalNotes||[];
+window._notesEditingId=null; // id đang sửa (dùng chung cho cả 2 loại, phân biệt bằng _notesEditingScope)
+window._notesEditingScope=null;
+
+function _notesSanitizeEmail(email){ return (email||'').replace(/[^a-zA-Z0-9]/g,'_'); }
+
+function loadSharedNotes(cb){
+  db.collection('_config').doc('sharedNotes').get().then(function(snap){
+    window._sharedNotes=snap.exists?(snap.data().items||[]):[];
+    if(cb)cb();
+    if(g('notesSharedList'))renderNotesSharedList();
+  }).catch(function(){window._sharedNotes=[];if(cb)cb();});
+}
+function loadPersonalNotes(cb){
+  const docId=_notesSanitizeEmail(currentUser?.email);
+  if(!docId){window._personalNotes=[];if(cb)cb();return;}
+  db.collection('personalNotes').doc(docId).get().then(function(snap){
+    window._personalNotes=snap.exists?(snap.data().items||[]):[];
+    if(cb)cb();
+    if(g('notesPersonalList'))renderNotesPersonalList();
+  }).catch(function(){window._personalNotes=[];if(cb)cb();});
+}
+
+function renderNotesPage(){
+  const pg=g('page-notes'); if(!pg)return;
+  pg.innerHTML=`
+  <div style="font-weight:700;font-size:15px;margin-bottom:.25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-notes" style="font-size:19px;color:#7c3aed"></i>Ghi chú</div>
+  <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1.1rem">Ghi chú chung cho cả team và ghi chú cá nhân để hỗ trợ công việc hàng ngày.</div>
+  <div style="display:inline-flex;border:1px solid var(--border-light);border-radius:9px;overflow:hidden;margin-bottom:1.25rem">
+    <button onclick="window._notesTab='shared';renderNotesPage()" style="padding:9px 18px;border:none;background:${window._notesTab==='shared'?'#7c3aed':'transparent'};color:${window._notesTab==='shared'?'#fff':'var(--text-secondary)'};cursor:pointer;font-size:13px;font-weight:${window._notesTab==='shared'?'700':'500'};font-family:inherit;display:flex;align-items:center;gap:6px"><i class="ti ti-users"></i> Ghi chú chung</button>
+    <button onclick="window._notesTab='personal';renderNotesPage()" style="padding:9px 18px;border:none;background:${window._notesTab==='personal'?'#7c3aed':'transparent'};color:${window._notesTab==='personal'?'#fff':'var(--text-secondary)'};cursor:pointer;font-size:13px;font-weight:${window._notesTab==='personal'?'700':'500'};font-family:inherit;display:flex;align-items:center;gap:6px"><i class="ti ti-lock"></i> Ghi chú riêng</button>
+  </div>
+  <div id="notesBody"></div>`;
+  if(window._notesTab==='shared'){ renderNotesSharedTab(); loadSharedNotes(); }
+  else { renderNotesPersonalTab(); loadPersonalNotes(); }
+}
+window.renderNotesPage=renderNotesPage;
+
+// ═══ GHI CHÚ CHUNG (shared, admin-only tạo/sửa/xóa) ═══
+function renderNotesSharedTab(){
+  const body=g('notesBody'); if(!body)return;
+  const isAdmin=(currentProfile?.role==='admin');
+  body.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <div style="font-size:12px;color:var(--text-secondary)"><i class="ti ti-eye"></i> Hiển thị với tất cả mọi người${isAdmin?'':' • chỉ Admin mới tạo/sửa được'}</div>
+      ${isAdmin?'<button class="btn pri" onclick="openNoteEditor(\'shared\')" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-plus"></i> Thêm ghi chú chung</button>':''}
+    </div>
+    <div id="notesSharedList"></div>
+
+    <div style="margin-top:1.75rem;padding-top:1.25rem;border-top:1px solid var(--border-light)">
+      <div style="font-size:12.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.75rem"><i class="ti ti-settings-2"></i> Thông tin dùng chung khác</div>
+      <div class="table-card" style="margin-bottom:.75rem">
+        <div onclick="_notesToggleBox('ntcargo')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer;border-radius:10px" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
+          <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti ti-box" style="font-size:15px"></i>Danh sách Tên hàng</div>
+          <i class="ti ti-chevron-${(window._settingsOpen&&window._settingsOpen.ntcargo)?'down':'right'}" style="font-size:13px;color:var(--text-tertiary)"></i>
+        </div>
+        <div id="ntBox_ntcargo" style="display:${(window._settingsOpen&&window._settingsOpen.ntcargo)?'block':'none'};padding:0 1.1rem 1rem">
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Mỗi tên hàng gồm: Tên (VN), Tên tiếng Anh, và Specifications (dùng cho Document Maker).</div>
+          <div id="cargoNamesList"></div>
+          <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" onclick="addCargoNameRow()"><i class="ti ti-plus"></i> Thêm tên hàng</button>
+            ${isAdmin?'<button class="btn pri" onclick="saveCargoNames()"><i class="ti ti-check"></i> Lưu danh sách tên hàng</button>':''}
+          </div>
+        </div>
+      </div>
+      <div class="table-card">
+        <div onclick="_notesToggleBox('ntacct')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer;border-radius:10px" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
+          <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti ti-key" style="font-size:15px"></i>Thông tin tài khoản đăng nhập</div>
+          <i class="ti ti-chevron-${(window._settingsOpen&&window._settingsOpen.ntacct)?'down':'right'}" style="font-size:13px;color:var(--text-tertiary)"></i>
+        </div>
+        <div id="ntBox_ntacct" style="display:${(window._settingsOpen&&window._settingsOpen.ntacct)?'block':'none'};padding:0 1.1rem 1rem">
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Lưu thông tin đăng nhập Ecosys, PQS và ghi chú khác theo từng Shipper.</div>
+          <div id="acctInfoList"></div>
+          <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" onclick="addAcctInfoRow()"><i class="ti ti-plus"></i> Thêm dòng</button>
+            ${isAdmin?'<button class="btn pri" onclick="saveAcctInfo()"><i class="ti ti-check"></i> Lưu thông tin tài khoản</button>':''}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  window._settingsOpen=window._settingsOpen||{};
+  if(typeof renderCargoNamesList==='function')renderCargoNamesList();
+  if(typeof loadAcctInfo==='function')loadAcctInfo(); else if(typeof renderAcctInfoList==='function')renderAcctInfoList();
+  renderNotesSharedList();
+}
+
+// Toggle riêng cho 2 box "Danh sách Tên hàng" / "Thông tin tài khoản" trong trang Ghi chú
+// (không dùng _stgToggle vì ID không khớp — chỉ cần đổi trạng thái + hiện/ẩn trực tiếp)
+function _notesToggleBox(key){
+  window._settingsOpen=window._settingsOpen||{};
+  window._settingsOpen[key]=!window._settingsOpen[key];
+  renderNotesSharedTab();
+}
+window._notesToggleBox=_notesToggleBox;
+
+function renderNotesSharedList(){
+  const box=g('notesSharedList'); if(!box)return;
+  const isAdmin=(currentProfile?.role==='admin');
+  const items=(window._sharedNotes||[]).slice().sort(function(a,b){return (b.updatedAt||0)-(a.updatedAt||0);});
+  if(!items.length){
+    box.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:10px"><i class="ti ti-notes-off" style="font-size:26px;display:block;margin-bottom:6px"></i>Chưa có ghi chú chung nào.</div>';
+    return;
+  }
+  box.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">'+items.map(function(n){
+    return `<div style="border:1px solid var(--border-light);border-radius:12px;padding:1rem 1.1rem;background:linear-gradient(180deg,rgba(124,58,237,.04),transparent);position:relative">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+        <div style="font-size:13.5px;font-weight:700;color:var(--text-primary);word-break:break-word">${(n.title||'(không tiêu đề)').replace(/</g,'&lt;')}</div>
+        ${isAdmin?`<div style="display:flex;gap:2px;flex-shrink:0"><button class="rac" onclick="openNoteEditor('shared','${n.id}')" title="Sửa" style="font-size:12px"><i class="ti ti-edit"></i></button><button class="rac red" onclick="deleteNote('shared','${n.id}')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></div>`:''}
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);white-space:pre-line;line-height:1.6;margin-bottom:8px">${(n.content||'').replace(/</g,'&lt;')}</div>
+      <div style="font-size:10px;color:var(--text-tertiary);border-top:1px solid var(--border-light);padding-top:6px">${(n.createdBy||'').split('@')[0]} • ${n.updatedAt?new Date(n.updatedAt).toLocaleDateString('vi-VN'):''}</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+// ═══ GHI CHÚ RIÊNG (personal, mỗi user tự quản lý) ═══
+function renderNotesPersonalTab(){
+  const body=g('notesBody'); if(!body)return;
+  body.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:.75rem;flex-wrap:wrap">
+      <div class="search-wrap" style="flex:1;min-width:200px;max-width:320px"><i class="ti ti-search"></i><input type="text" id="notesPersonalSearch" placeholder="Tìm ghi chú..." oninput="renderNotesPersonalList()"/></div>
+      <button class="btn pri" onclick="openNoteEditor('personal')" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-plus"></i> Thêm ghi chú</button>
+    </div>
+    <div id="notesPersonalList"></div>`;
+}
+
+function renderNotesPersonalList(){
+  const box=g('notesPersonalList'); if(!box)return;
+  const q=(g('notesPersonalSearch')?.value||'').toLowerCase().trim();
+  let items=(window._personalNotes||[]).slice().sort(function(a,b){return (b.updatedAt||0)-(a.updatedAt||0);});
+  if(q)items=items.filter(function(n){return (n.title||'').toLowerCase().includes(q)||(n.content||'').toLowerCase().includes(q);});
+  if(!items.length){
+    box.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:10px"><i class="ti ti-notes-off" style="font-size:26px;display:block;margin-bottom:6px"></i>'+(q?'Không tìm thấy ghi chú phù hợp':'Chưa có ghi chú nào. Bấm "Thêm ghi chú" để tạo mới.')+'</div>';
+    return;
+  }
+  box.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">'+items.map(function(n){
+    return `<div style="border:1px solid var(--border-light);border-radius:12px;padding:1rem 1.1rem;background:var(--bg-primary)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+        <div style="font-size:13.5px;font-weight:700;color:var(--text-primary);word-break:break-word">${(n.title||'(không tiêu đề)').replace(/</g,'&lt;')}</div>
+        <div style="display:flex;gap:2px;flex-shrink:0"><button class="rac" onclick="openNoteEditor('personal','${n.id}')" title="Sửa" style="font-size:12px"><i class="ti ti-edit"></i></button><button class="rac red" onclick="deleteNote('personal','${n.id}')" title="Xóa" style="font-size:12px"><i class="ti ti-trash"></i></button></div>
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);white-space:pre-line;line-height:1.6;margin-bottom:8px">${(n.content||'').replace(/</g,'&lt;')}</div>
+      <div style="font-size:10px;color:var(--text-tertiary);border-top:1px solid var(--border-light);padding-top:6px">${n.updatedAt?new Date(n.updatedAt).toLocaleDateString('vi-VN')+' '+new Date(n.updatedAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}):''}</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+// ═══ Popup thêm/sửa 1 ghi chú (dùng chung cho shared + personal) ═══
+function openNoteEditor(scope,id){
+  window._notesEditingScope=scope; window._notesEditingId=id||null;
+  const list=scope==='shared'?window._sharedNotes:window._personalNotes;
+  const n=id?(list.find(function(x){return x.id===id;})||{}):{};
+  let ov=g('noteEditorOv');
+  if(!ov){ov=document.createElement('div');ov.id='noteEditorOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML=`<div class="modal" style="max-width:520px">
+    <div class="mhdr"><div><div class="mtitle" style="color:#7c3aed"><i class="ti ti-notes" style="margin-right:6px"></i>${id?'Sửa ghi chú':'Ghi chú mới'}${scope==='shared'?' (chung)':' (riêng)'}</div></div>
+    <div class="mhdr-btns"><button class="rac" onclick="closeOv('noteEditorOv')"><i class="ti ti-x"></i></button></div></div>
+    <div class="fg">
+      <div class="fi full"><label class="lbl">Tiêu đề</label><input type="text" id="note_title" value="${(n.title||'').replace(/"/g,'&quot;')}" placeholder="VD: Quy trình khai Eport, Lưu ý khi book LINDA..."/></div>
+      <div class="fi full"><label class="lbl">Nội dung</label><textarea id="note_content" rows="8" style="font-size:13px;resize:vertical;line-height:1.6" placeholder="Nội dung ghi chú...">${(n.content||'').replace(/</g,'&lt;')}</textarea></div>
+    </div>
+    <div class="mftr">
+      ${id?'<button class="btn red" onclick="deleteNote(\''+scope+'\',\''+id+'\')" style="margin-right:auto"><i class="ti ti-trash"></i> Xóa</button>':''}
+      <button class="btn" onclick="closeOv('noteEditorOv')">Hủy</button>
+      <button class="btn pri" onclick="saveNoteEditor()" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-check"></i> Lưu</button>
+    </div>
+  </div>`;
+  openOv('noteEditorOv');
+  setTimeout(function(){g('note_title')?.focus();},50);
+}
+window.openNoteEditor=openNoteEditor;
+
+async function saveNoteEditor(){
+  const title=g('note_title')?.value.trim()||'';
+  const content=g('note_content')?.value.trim()||'';
+  if(!title&&!content){toast('Nhập tiêu đề hoặc nội dung','error');return;}
+  const scope=window._notesEditingScope, id=window._notesEditingId;
+  const isNew=!id;
+  const newId=id||('n_'+Date.now()+'_'+Math.random().toString(36).slice(2,7));
+  setLoading(true,'Đang lưu ghi chú...');
+  try{
+    if(scope==='shared'){
+      if(currentProfile?.role!=='admin'){toast('Chỉ Admin được tạo/sửa ghi chú chung','error');setLoading(false);return;}
+      const list=(window._sharedNotes||[]).slice();
+      const idx=list.findIndex(function(x){return x.id===newId;});
+      const rec={id:newId,title,content,updatedAt:Date.now(),createdBy:isNew?currentUser.email:(list[idx]?.createdBy||currentUser.email),createdAt:isNew?Date.now():(list[idx]?.createdAt||Date.now())};
+      if(idx>=0)list[idx]=rec; else list.push(rec);
+      await db.collection('_config').doc('sharedNotes').set({items:list},{merge:true});
+      window._sharedNotes=list;
+      renderNotesSharedList();
+    } else {
+      const docId=_notesSanitizeEmail(currentUser?.email);
+      const list=(window._personalNotes||[]).slice();
+      const idx=list.findIndex(function(x){return x.id===newId;});
+      const rec={id:newId,title,content,updatedAt:Date.now(),createdAt:isNew?Date.now():(list[idx]?.createdAt||Date.now())};
+      if(idx>=0)list[idx]=rec; else list.push(rec);
+      await db.collection('personalNotes').doc(docId).set({items:list,owner:currentUser.email},{merge:true});
+      window._personalNotes=list;
+      renderNotesPersonalList();
+    }
+    toast('Đã lưu ghi chú');
+    closeOv('noteEditorOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveNoteEditor=saveNoteEditor;
+
+async function deleteNote(scope,id){
+  if(!confirm('Xóa ghi chú này?'))return;
+  setLoading(true,'Đang xóa...');
+  try{
+    if(scope==='shared'){
+      if(currentProfile?.role!=='admin'){toast('Chỉ Admin được xóa ghi chú chung','error');setLoading(false);return;}
+      const list=(window._sharedNotes||[]).filter(function(x){return x.id!==id;});
+      await db.collection('_config').doc('sharedNotes').set({items:list},{merge:true});
+      window._sharedNotes=list;
+      renderNotesSharedList();
+    } else {
+      const docId=_notesSanitizeEmail(currentUser?.email);
+      const list=(window._personalNotes||[]).filter(function(x){return x.id!==id;});
+      await db.collection('personalNotes').doc(docId).set({items:list,owner:currentUser.email},{merge:true});
+      window._personalNotes=list;
+      renderNotesPersonalList();
+    }
+    toast('Đã xóa ghi chú');
+    closeOv('noteEditorOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.deleteNote=deleteNote;
+
 function renderSettings(){
   const pg=g('page-settings');
   _svcCatDraft=null;
@@ -11232,11 +11476,9 @@ function renderSettings(){
       '<div style="font-size:12px;color:var(--text-secondary)">Tạo số Job ID và Debit Note cho tất cả lô hàng cũ chưa có (chỉ cần chạy 1 lần).</div>'
     )
 
-    +stgBox('cargo','ti-box','Danh sách Tên hàng',
-      '<button class="btn" onclick="addCargoNameRow()"><i class="ti ti-plus"></i> Thêm tên hàng</button>'
-      +'<button class="btn pri" onclick="saveCargoNames()"><i class="ti ti-check"></i> Lưu danh sách tên hàng</button>',
-      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Mỗi tên hàng gồm: Tên (VN), Tên tiếng Anh, và Specifications (dùng cho Document Maker).</div>'
-      +'<div id="cargoNamesList"></div>'
+    +stgBox('cargo','ti-box','Danh sách Tên hàng (đã chuyển sang trang Ghi chú)',
+      '<button class="btn pri" onclick="goTab(\'notes\')" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-arrow-right"></i> Đi tới trang Ghi chú</button>',
+      '<div style="font-size:12px;color:var(--text-secondary)">Mục "Danh sách Tên hàng" đã được chuyển sang trang <b>Ghi chú</b> (tab Ghi chú chung) để dễ quản lý cùng các thông tin dùng chung khác.</div>'
     )
 
     +stgBox('svc','ti-list-details','Danh mục dịch vụ',
@@ -11248,11 +11490,9 @@ function renderSettings(){
       +'<div id="svcCatList"></div>'
     )
 
-    +stgBox('acct','ti-key','Thông tin tài khoản đăng nhập',
-      '<button class="btn" onclick="addAcctInfoRow()"><i class="ti ti-plus"></i> Thêm dòng</button>'
-      +'<button class="btn pri" onclick="saveAcctInfo()"><i class="ti ti-check"></i> Lưu thông tin tài khoản</button>',
-      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Lưu thông tin đăng nhập Ecosys, PQS và ghi chú khác theo từng Shipper.</div>'
-      +'<div id="acctInfoList"></div>'
+    +stgBox('acct','ti-key','Thông tin tài khoản đăng nhập (đã chuyển sang trang Ghi chú)',
+      '<button class="btn pri" onclick="goTab(\'notes\')" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-arrow-right"></i> Đi tới trang Ghi chú</button>',
+      '<div style="font-size:12px;color:var(--text-secondary)">Mục "Thông tin tài khoản đăng nhập" đã được chuyển sang trang <b>Ghi chú</b> (tab Ghi chú chung) để dễ quản lý cùng các thông tin dùng chung khác.</div>'
     )
 
     +stgBox('bank','ti-building-bank','Tài khoản ngân hàng',
@@ -11561,14 +11801,25 @@ let _cneeShipperKey=null;
 let _cneeList=[];
 let _cneeEditIdx=-1;
 
-async function openCneeEditor(shipperKey){
+async function openCneeEditor(shipperKey,editIdx){
   _cneeShipperKey=shipperKey;
   const p=cache.partners[shipperKey]||{};
   _cneeList=JSON.parse(JSON.stringify(p.cnees||[]));
-  _cneeEditIdx=-1;
+  _cneeEditIdx=(editIdx!=null&&editIdx>=0&&editIdx<_cneeList.length)?editIdx:-1;
   renderCneeModal();
   openOv('cneeOv');
 }
+// Mở popup Cnee và tạo luôn 1 Cnee mới để nhập ngay (dùng cho nút "+ Thêm Cnee" trong tab Cnee)
+async function openCneeEditorAddNew(shipperKey){
+  _cneeShipperKey=shipperKey;
+  const p=cache.partners[shipperKey]||{};
+  _cneeList=JSON.parse(JSON.stringify(p.cnees||[]));
+  _cneeList.push({name:'',addr:'',pic:'',tel:'',email:'',usci:''});
+  _cneeEditIdx=_cneeList.length-1;
+  renderCneeModal();
+  openOv('cneeOv');
+}
+window.openCneeEditorAddNew=openCneeEditorAddNew;
 
 function renderCneeModal(){
   const p=cache.partners[_cneeShipperKey]||{};
