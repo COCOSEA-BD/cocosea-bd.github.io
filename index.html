@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v271';
+window.APP_BUILD='v272';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -15022,6 +15022,7 @@ function renderDocMaker(){
 <div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:.75rem">
     <button class="btn" id="dmBtnInv" onclick="dmExport('INV')" disabled style="opacity:.4"><i class="ti ti-file-invoice"></i> INVOICE</button>
+    <button class="btn" id="dmBtnInvCont" onclick="dmExport('INV_CONT')" disabled style="opacity:.4;color:#7c3aed;border-color:#7c3aed"><i class="ti ti-container"></i> INV THEO CONT</button>
     <button class="btn" id="dmBtnPkl" onclick="dmExport('PKL')" disabled style="opacity:.4"><i class="ti ti-package"></i> PACKING LIST</button>
     <button class="btn" id="dmBtnCont" onclick="dmExport('CONTRACT')" disabled style="opacity:.4"><i class="ti ti-file-contract"></i> CONTRACT</button>
     <button class="btn" id="dmBtnInvTk" onclick="dmExport('INV_TK')" disabled style="opacity:.4"><i class="ti ti-receipt-2"></i> INV T.KHAI</button>
@@ -15321,7 +15322,7 @@ function dmPreview(){
   const d=dmGetData();
   if(!d){toast('Chưa chọn lô hàng','error');return;}
   if(!d.sName){toast('Shipper chưa có tên tiếng Anh — vào Đối tác để nhập','error');return;}
-  ['dmBtnInv','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
+  ['dmBtnInv','dmBtnInvCont','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
   g('dmPreviewBox').innerHTML=
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">'
@@ -15395,6 +15396,45 @@ function _dmGoodsTable(d){
 function _dmSign(d){
   const stampImg=d.sStamp?'<div style="margin-top:4px"><img src="'+d.sStamp+'" style="max-width:196px;max-height:138px;object-fit:contain"/></div>':'<div style="height:80px"></div>';
   return '<div style="margin-top:24px;text-align:right"><div class="b">'+(d.sShort||d.sName)+'</div>'+stampImg+'</div>';
+}
+
+// Nhóm container theo TYPE (VD: 40HQ) để build nhãn "10x40HQ"
+function _dmContTypeGroups(d){
+  const groups={};
+  (d.conts||[]).forEach(function(c){
+    const t=(c.type||'').toUpperCase()||'CONT';
+    groups[t]=(groups[t]||0)+1;
+  });
+  return Object.keys(groups).map(function(t){return {type:t,count:groups[t]};});
+}
+
+// Bảng hàng hóa cho "INV theo cont": Quantity = số lượng cont theo loại (VD 10x40HQ),
+// Unit Price = USD/[loại cont], dòng TOTAL hiển thị Total N.W (tổng trọng lượng tịnh, KGS).
+function _dmGoodsTableByCont(d){
+  const specLines=(d.specs||'').split('\n').map(function(s){return s.trim();}).filter(Boolean).join('<br>');
+  const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
+  const groups=_dmContTypeGroups(d);
+  const qtyLabel=groups.length?groups.map(function(g){return g.count+'x'+g.type;}).join(' + '):(d.conts.length+' CONT');
+  const priceTypeLabel=groups.length===1?groups[0].type:'CONT';
+  const totalConts=d.conts.length;
+  const amount=Math.round(totalConts*d.unitPrice*100)/100;
+  return '<table class="gt" style="width:100%;margin-top:6px">'
+    +'<thead><tr>'
+    +'<th class="c" style="width:24%">NAME<br>OF GOODS</th>'
+    +'<th class="c" style="width:30%">Specifications</th>'
+    +'<th class="c">Quantity</th>'
+    +'<th class="c">UNIT PRICE(USD/'+priceTypeLabel+')<br>'+d.priceLabel+' '+d.pod+'</th>'
+    +'<th class="c">AMOUNT<br>(USD)</th>'
+    +'</tr></thead><tbody>'
+    +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+qtyLabel+'</td><td class="c">'+d.unitPrice+'</td><td class="r">'+f2(amount)+'</td></tr>'
+    +'</tbody><tfoot><tr><td colspan="2" class="c b">TOTAL</td><td class="c b">'+f2(d.totalNW)+' KGS</td><td></td><td class="r b">'+f2(amount)+'</td></tr></tfoot>'
+    +'</table>';
+}
+
+function _dmInvoiceByCont(d){
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+_dmCSS()+'<title>INVOICE '+d.invoiceNo+'</title></head><body>'
+    +_dmTop(d)+'<div class="title">COMMERCIAL INVOICE</div>'+_dmDocNos(d,true)
+    +_dmParties(d)+_dmShipInfo(d)+_dmBank(d)+_dmGoodsTableByCont(d)+_dmSign(d)+'</body></html>';
 }
 
 function _dmInvoice(d){
@@ -18096,16 +18136,16 @@ function dmExport(type){
   if(!d){toast('Chưa có dữ liệu','error');return;}
   const bill=_dmBill(d), cnee=_dmCneeName(d);
   // Tên file 1 chứng từ = Loại chứng từ + số bill + tên Cnee
-  const typeLabel={'INV':'Invoice','PKL':'PackingList','CONTRACT':'Contract','INV_TK':'InvoiceToKhai','SI':'SI'};
+  const typeLabel={'INV':'Invoice','INV_CONT':'InvoiceByCont','PKL':'PackingList','CONTRACT':'Contract','INV_TK':'InvoiceToKhai','SI':'SI'};
   function fname(t){return [typeLabel[t]||t,_dmSafe(bill),_dmSafe(cnee)].filter(Boolean).join('_');}
-  const map={'INV':[_dmInvoice(d),fname('INV')],'PKL':[_dmPKL2(d),fname('PKL')],'CONTRACT':[_dmContract(d),fname('CONTRACT')],'INV_TK':[_dmInvTK(d),fname('INV_TK')],'SI':[_dmSI(d),fname('SI')]};
+  const map={'INV':[_dmInvoice(d),fname('INV')],'INV_CONT':[_dmInvoiceByCont(d),fname('INV_CONT')],'PKL':[_dmPKL2(d),fname('PKL')],'CONTRACT':[_dmContract(d),fname('CONTRACT')],'INV_TK':[_dmInvTK(d),fname('INV_TK')],'SI':[_dmSI(d),fname('SI')]};
   const entry=map[type];if(!entry)return;
   const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
   w.document.write(entry[0]);w.document.close();w.focus();w.document.title=entry[1];
   setTimeout(function(){w.print();},600);
   toast('Đã mở: '+entry[1]+' — Ctrl+P → Save as PDF');
   // Auto-save a copy to the lot's Document tab
-  const typeMap={'INV':'invoice','PKL':'pkl','CONTRACT':'contract','INV_TK':'invoice','SI':'si'};
+  const typeMap={'INV':'invoice','INV_CONT':'invoice','PKL':'pkl','CONTRACT':'contract','INV_TK':'invoice','SI':'si'};
   saveDocToLot(typeMap[type]||type.toLowerCase(), entry[0], entry[1]);
 }
 
@@ -18117,6 +18157,7 @@ function dmMergePdf(){
     +'<div class="mhdr"><div class="mtitle"><i class="ti ti-files" style="margin-right:6px"></i>Gộp chứng từ thành 1 PDF</div><button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="fg"><div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Chọn các chứng từ cần gộp (theo thứ tự):</div>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="INV" checked style="width:16px;height:16px"/> <i class="ti ti-file-invoice"></i> Invoice</label>'
+    +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="INV_CONT" style="width:16px;height:16px"/> <i class="ti ti-container"></i> Invoice theo Cont</label>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="PKL" checked style="width:16px;height:16px"/> <i class="ti ti-package"></i> Packing List</label>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="CONTRACT" style="width:16px;height:16px"/> <i class="ti ti-file-contract"></i> Contract</label>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="INV_TK" style="width:16px;height:16px"/> <i class="ti ti-receipt-2"></i> INV Tờ khai</label>'
@@ -18131,7 +18172,7 @@ function dmDoMerge(){
   const chosen=Array.from(document.querySelectorAll('.mergeChk:checked')).map(function(x){return x.value;});
   if(!chosen.length){toast('Chọn ít nhất 1 chứng từ','error');return;}
   closeOv('combineOv');
-  const builders={'INV':_dmInvoice,'PKL':_dmPKL2,'CONTRACT':_dmContract,'INV_TK':_dmInvTK,'SI':_dmSI};
+  const builders={'INV':_dmInvoice,'INV_CONT':_dmInvoiceByCont,'PKL':_dmPKL2,'CONTRACT':_dmContract,'INV_TK':_dmInvTK,'SI':_dmSI};
   // Extract <body> inner from each doc + collect their <style>, put each on its own page
   function extractParts(html){
     const styleMatch=html.match(/<style[\s\S]*?<\/style>/gi)||[];
