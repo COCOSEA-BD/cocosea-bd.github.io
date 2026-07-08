@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v268';
+window.APP_BUILD='v269';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6071,12 +6071,11 @@ function runDebtReport(){
         +(function(){
           const sh2=r.shipper||r.supplier||'';
           const sp3=cache.partners[sh2]||{};
-          const partyKeys=_getPartyKeys(r,sh2,sp3);
-          const ps=_dnPayStatusSplit(r,rowTotalVND,rowTotalNoVND,partyKeys);
-          const yesApplicable=ps.inv!=='—';
-          const noApplicable=ps.noInv!=='—';
-          const yesOk=yesApplicable&&ps.inv==='Đã thanh toán';
-          const noOk=noApplicable&&ps.noInv==='Đã thanh toán';
+          const st=_computeArRowStatus(r,filterShipper,sh2,sp3);
+          const yesApplicable=rowTotalVND>0;
+          const noApplicable=rowTotalNoVND>0;
+          const yesOk=yesApplicable&&st.invPaid;
+          const noOk=noApplicable&&st.noInvPaid;
           const totalApplicable=(yesApplicable?1:0)+(noApplicable?1:0);
           const paidCount=(yesOk?1:0)+(noOk?1:0);
           // Lưu số tiền đã thanh toán thực tế của dòng này lên chính object r — để phần tổng kết
@@ -6086,7 +6085,10 @@ function runDebtReport(){
           if(totalApplicable===0){badgeLabel='—';badgeColor='var(--text-tertiary)';}
           else if(paidCount===totalApplicable){badgeLabel='Đã TT';badgeColor='var(--green)';}
           else if(paidCount===0){badgeLabel='Chưa TT';badgeColor='var(--red)';}
-          else {badgeLabel='Một phần ('+paidCount+'/'+totalApplicable+')';badgeColor='#b45309';}
+          else {
+            const paidAmt=r._arRowPaidVND;
+            badgeLabel='Một phần — '+paidAmt.toLocaleString()+' đ';badgeColor='#b45309';
+          }
           return '<td style="'+tdS+';font-weight:600;color:'+badgeColor+'">'+badgeLabel+'</td>';
         })()
         +'</tr>';
@@ -18785,6 +18787,35 @@ async function logLotEvent(lotId, tt, type, action, detail){
   }
 }
 window.logLotEvent=logLotEvent;
+
+// Tính trạng thái thanh toán (Có HĐ / Không HĐ) của 1 lô hàng theo shipper đang xem —
+// dùng CHÍNH XÁC cùng cách nhóm party như tab Invoice (sv.party||'(Không party)') để tra
+// đúng key trong r.dnPayments, KHÔNG dò theo tên shipper qua _partyMatchesShipper trên các
+// KEY của dnPayments (cách cũ có thể lệch nếu key thực tế khác các biến thể tên shipper).
+function _computeArRowStatus(r, filterShipper, sh, sp){
+  const svcs=r.svcs||{};
+  const dnPm=r.dnPayments||{};
+  const legacyPay=r.dnPayStatus||{};
+  const partyKeysUsed=new Set();
+  Object.values(svcs).forEach(function(sv){
+    if(!sv||!sv.on||sv.invoice==='Waived')return;
+    const svParty=(sv.party||'').trim();
+    if(filterShipper){
+      const belongs=!svParty||svParty===sh||svParty===(sp.fullname||'')||svParty===(sp.enName||'')||svParty===(sp.enShort||'')||svParty===(sp.shortname||'');
+      if(!belongs)return;
+    }
+    partyKeysUsed.add(svParty||'(Không party)');
+  });
+  let invPaidAll=true, noInvPaidAll=true, hasInvRecord=false, hasNoInvRecord=false;
+  partyKeysUsed.forEach(function(pk){
+    const pmd=dnPm[pk];
+    if(pmd&&pmd.inv&&pmd.inv.status){ hasInvRecord=true; if(pmd.inv.status!=='paid')invPaidAll=false; }
+    else if(legacyPay[pk]){ hasInvRecord=true; if(legacyPay[pk]!=='paid')invPaidAll=false; }
+    if(pmd&&pmd.noInv&&pmd.noInv.status){ hasNoInvRecord=true; if(pmd.noInv.status!=='paid')noInvPaidAll=false; }
+  });
+  return {invPaid:hasInvRecord&&invPaidAll, noInvPaid:hasNoInvRecord&&noInvPaidAll};
+}
+window._computeArRowStatus=_computeArRowStatus;
 
 function _dnPayStatusSplit(r, totalYesVND, totalNoVND, partyKeys){
   // partyKeys: mảng các key party cần kiểm tra (khi lô có nhiều party, lọc đúng bên đang xem)
