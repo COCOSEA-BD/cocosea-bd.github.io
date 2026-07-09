@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v283';
+window.APP_BUILD='v284';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1432,26 +1432,32 @@ function renderLot(tt){
   const done=rows.filter(r=>r.status==='Đã giao'||r.status==='Đã nhận').length;
   const transit=rows.filter(r=>r.status==='Đang vận chuyển').length;
   const tasksDone=rows.filter(r=>r.tasks&&TASKS.every(t=>r.tasks[t.key])).length;
-  const vstNeed=rows.filter(r=>r.vstEnabled&&!r.vstConfirmed).length;
+  // "Chờ xử lý" = các lô CHƯA ĐƯỢC KHÓA (còn có thể chỉnh sửa/xử lý tiếp)
+  const pendingCount=rows.filter(r=>!r.locked).length;
+  // "Trạng thái VST" = các lô CHƯA vô sổ tàu, tính theo ETD (đã tới/qua ngày ETD mà vẫn chưa VST)
+  const todayStr0=new Date().toISOString().slice(0,10);
+  const vstNeed=rows.filter(r=>r.vstEnabled&&!r.vstConfirmed&&r.etd&&r.etd<=todayStr0).length;
   const pg=g(tt==='xuat'&&g('xuat-list-view')?'xuat-list-view':'page-'+tt);
   pg.innerHTML=`
-  <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:12px">
-    <div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:9px 14px;display:flex;align-items:center;position:relative;overflow:hidden;gap:22px">
+  <div style="display:grid;grid-template-columns:1fr 1fr 3fr;gap:10px;margin-bottom:12px">
+    <div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:9px 12px;position:relative;overflow:hidden">
       <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green)"></div>
-      <div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-tertiary);font-weight:600">Tổng lô hàng</div><div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--text-primary)">${rows.length}</div></div>
-      <div style="width:1px;align-self:stretch;background:var(--border-light)"></div>
-      <div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-tertiary);font-weight:600">Chờ xử lý</div><div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--gold-dark)">${rows.length-done}</div></div>
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-tertiary);font-weight:600">Tổng lô hàng</div><div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--text-primary)">${rows.length}</div>
+    </div>
+    <div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:9px 12px;position:relative;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--gold)"></div>
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-tertiary);font-weight:600">Chờ xử lý</div><div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--gold-dark)">${pendingCount}</div>
     </div>
     <div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:9px 14px;position:relative;overflow:hidden">
       <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--coral)"></div>
       <div style="display:flex;align-items:center;gap:10px">
         <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-tertiary);font-weight:600;white-space:nowrap">Trạng thái VST</div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--text-primary);white-space:nowrap">${vstNeed} <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần VST</span></div>
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--text-primary);white-space:nowrap">${vstNeed} <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần VST (tính từ ETD)</span></div>
         <div id="vstWarnBar_${tt}" style="flex:1;min-width:0"></div>
       </div>
     </div>
   </div>
-  <div class="stats-grid">
+  <div class="stats-grid" style="display:none">
     <div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;padding:.4rem 0;width:100%">
       <div class="search-wrap" style="flex:2 1 0;min-width:160px"><i class="ti ti-user"></i><input type="text" id="sfShipper_${tt}" placeholder="Shipper..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
       <div class="search-wrap" style="flex:2 1 0;min-width:160px"><i class="ti ti-ship"></i><input type="text" id="sfCarrier_${tt}" placeholder="Carrier..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
@@ -1462,7 +1468,6 @@ function renderLot(tt){
   </div>
   <div class="toolbar">
     <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Số Cont..." oninput="renderLotTable('${tt}')"/></div>
-    <button class="btn sm" id="sortBtn_${tt}" onclick="toggleSort('${tt}')" title="Sắp xếp theo ETD" style="font-size:12px;white-space:nowrap"><i class="ti ti-arrows-sort"></i> ETD <span id="sortDir_${tt}">↑</span></button>
     <select id="fst_${tt}" style="width:140px" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả trạng thái</option>
       <option>Đang xử lý</option><option>Đã nhập info</option>
@@ -1478,8 +1483,6 @@ function renderLot(tt){
       <input type="date" id="etdTo_${tt}" value="${getDefaultEtdTo()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
       <button class="btn sm" onclick="clearEtdFilter('${tt}')" title="Tất cả"><i class="ti ti-calendar-off"></i></button>
     </div>
-    <button class="btn" onclick="openJobReport('${tt}')" style="color:#1a4b8c;border-color:#1a4b8c"><i class="ti ti-report"></i> Job Report</button>
-    <button class="btn" onclick="exportExcel('${tt}')" ${can('export')?'':'disabled'}><i class="ti ti-file-spreadsheet"></i> Excel</button>
     <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}><i class="ti ti-plus"></i> Thêm lô hàng</button>
   </div>
   <div class="sync-bar"><i class="ti ti-wifi"></i> Đang đồng bộ realtime với Firestore — mọi thay đổi cập nhật ngay cho tất cả người dùng</div>
@@ -1635,7 +1638,8 @@ function renderLotTable(tt){
 
   thEl.innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>{
     if(c.k==='etd'){
-      return `<th style="color:#1a4b8c;font-weight:800;font-size:11.5px;padding:8px 9px;text-align:center;white-space:nowrap;letter-spacing:.3px;background:rgba(59,130,246,.22);border-left:2px solid rgba(59,130,246,.5);border-right:2px solid rgba(59,130,246,.5)">${c.l}</th>`;
+      const dir=sortState[tt]&&sortState[tt].dir===1?'↑':'↓';
+      return `<th onclick="toggleSort('${tt}')" style="cursor:pointer;color:#1a4b8c;font-weight:800;font-size:11.5px;padding:8px 9px;text-align:center;white-space:nowrap;letter-spacing:.3px;background:rgba(59,130,246,.22);border-left:2px solid rgba(59,130,246,.5);border-right:2px solid rgba(59,130,246,.5)" title="Bấm để đổi thứ tự sắp xếp ETD">${c.l} <span id="sortDir_${tt}">${dir}</span></th>`;
     }
     return `<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`;
   }).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
@@ -1719,7 +1723,8 @@ function renderLotTable(tt){
           if(!val) return`<td>—</td>`;
           const pt=partnersRef[val];
           const sn=pt&&(pt.shortname||pt.name||'');
-          return`<td style="max-width:150px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:#1a4b8c" title="${val}">${sn||val}</div></td>`;
+          const hasPartner=!!pt;
+          return`<td style="max-width:150px"><div onclick="${hasPartner?`event.stopPropagation();_gotoPartnerFromList('${val.replace(/'/g,"\\'")}')`:''}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:#1a4b8c${hasPartner?';cursor:pointer;text-decoration:underline':''}" title="${hasPartner?'Mở CRM: '+val:val}">${sn||val}</div></td>`;
         }
         return`<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r[c.k]||'—'}</td>`;
       }).join('')
@@ -9290,6 +9295,13 @@ function renderCrmList(){
   </div>`;
 }
 window.renderCrmList=renderCrmList;
+// Bấm tên Shipper/Carrier trong bảng Shipment List → chuyển sang CRM và mở thẳng chi tiết partner đó
+function _gotoPartnerFromList(name){
+  goTab('doi-tac');
+  setTimeout(function(){ openPartnerView(name); },60);
+}
+window._gotoPartnerFromList=_gotoPartnerFromList;
+
 function openPartnerView(name){
   if(!cache.partners[name]){toast('Chưa có thông tin: '+name,'error');return;}
   crmDetailKey=name; crmDetailTab='general';
@@ -10247,7 +10259,7 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .login-logo-ic{width:42px;height:42px;background:var(--green);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:21px}
 /* LAYOUT */
 .shell{display:flex;min-height:100vh}
-.sidebar{width:230px;flex-shrink:0;background:var(--ink);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto}
+.sidebar{width:230px;flex-shrink:0;background:var(--ink);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;overflow-y:auto;z-index:60}
 .sidebar::before{content:"";position:absolute;left:19px;top:76px;bottom:70px;width:1px;background-image:linear-gradient(var(--gold) 40%, transparent 0);background-size:1px 6px;background-repeat:repeat-y;opacity:.55;pointer-events:none}
 .sb-logo{display:flex;align-items:center;gap:10px;padding:1.3rem 1rem 1rem}
 .sb-logo-ic{width:34px;height:34px;background:var(--green);border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;font-family:var(--font-disp);font-weight:700}
@@ -10268,7 +10280,11 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .sidebar .ua{background:linear-gradient(135deg,#14B8A6,#0F766E)!important;color:#fff!important}
 .sb-footer .user-row>div>div:nth-child(2){color:#5B7185!important}
 html{background:var(--ink)}
-.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-tertiary)}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-track{background:var(--bg-tertiary)}
+::-webkit-scrollbar-thumb{background:#c9c7bd;border-radius:6px;border:2px solid var(--bg-tertiary)}
+::-webkit-scrollbar-thumb:hover{background:#b0aea3}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-tertiary);margin-left:230px}
 .topbar{background:#0F1E2E;border-bottom:1px solid rgba(255,255,255,.06);padding:.6rem 1.5rem;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:10}
 .topbar #pageTitle{color:#fff}
 .topbar .theme-btn{color:#cbd5e1}
@@ -16222,12 +16238,15 @@ function renderSaleSupport(){
     {t:'quote',icon:'ti-file-dollar',title:'Quotation',desc:'Tạo và quản lý báo giá gửi khách hàng',color:'var(--green)'},
     {t:'ocean',icon:'ti-anchor',title:'Ocean Freight',desc:'Bảng giá cước biển theo tuyến, hãng tàu',color:'#1a4b8c'},
     {t:'cocoquote',icon:'ti-calculator',title:'Coconut Tool',desc:'Báo giá Xơ dừa / Mụn dừa',color:'var(--gold-dark)'},
+    {action:"openJobReport('xuat')",icon:'ti-report',title:'Job Report',desc:'Báo cáo lô hàng theo shipper & khoảng thời gian',color:'var(--coral-dark,#C1553E)'},
+    {action:"exportExcel('xuat')",icon:'ti-file-spreadsheet',title:'Xuất Excel',desc:'Xuất danh sách lô hàng (Xuất khẩu) ra Excel',color:'#0F6E56'},
   ];
   pg.innerHTML='<div style="font-weight:700;font-size:15px;margin-bottom:.25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-briefcase" style="font-size:19px;color:var(--gold-dark)"></i>Sale Support</div>'
-    +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:1.25rem">Công cụ hỗ trợ báo giá và bán hàng — chọn 1 mục bên dưới để bắt đầu.</div>'
+    +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:1.25rem">Công cụ hỗ trợ báo giá, bán hàng và báo cáo — chọn 1 mục bên dưới để bắt đầu.</div>'
     +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">'
     +cards.map(function(c){
-      return '<div onclick="goTab(\''+c.t+'\')" style="border:1px solid var(--border-light);border-radius:12px;padding:1.4rem 1.3rem;cursor:pointer;background:var(--bg-primary)" onmouseover="this.style.borderColor=\''+c.color+'\'" onmouseout="this.style.borderColor=\'var(--border-light)\'">'
+      const onclick=c.action||("goTab('"+c.t+"')");
+      return '<div onclick="'+onclick+'" style="border:1px solid var(--border-light);border-radius:12px;padding:1.4rem 1.3rem;cursor:pointer;background:var(--bg-primary)" onmouseover="this.style.borderColor=\''+c.color+'\'" onmouseout="this.style.borderColor=\'var(--border-light)\'">'
         +'<div style="width:42px;height:42px;border-radius:10px;background:'+c.color+'18;display:flex;align-items:center;justify-content:center;margin-bottom:.9rem"><i class="ti '+c.icon+'" style="font-size:20px;color:'+c.color+'"></i></div>'
         +'<div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px">'+c.title+'</div>'
         +'<div style="font-size:11.5px;color:var(--text-secondary)">'+c.desc+'</div>'
