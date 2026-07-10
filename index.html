@@ -79,6 +79,117 @@ const DEFAULT_CHI_CATS=['Chi phí vận hành','Mặt bằng','Lương nhân vi�
 window._thuChiCategories={thu:DEFAULT_THU_CATS.slice(),chi:DEFAULT_CHI_CATS.slice()};
 
 // Load bank accounts from Firestore
+// Nạp danh mục Cảng/ICD do admin tự thêm (Cài đặt → Danh mục Các cảng và ICD).
+// Hợp nhất TRỰC TIẾP vào PORTS_BY_COUNTRY / PORTS / PORT_COUNTRIES / ICD_LIST (mutate tại chỗ)
+// để MỌI nơi trong app đang dùng các biến này (dropdown POL/POD, ICD, Full Return...) đều tự
+// động thấy cảng/ICD mới mà KHÔNG cần sửa từng chỗ sử dụng riêng lẻ.
+function loadPortsIcds(cb){
+  db.collection('_config').doc('portsIcds').get().then(function(snap){
+    const data=snap.exists?snap.data():{};
+    window._customPorts=data.customPorts||[]; // [{country,name}]
+    window._customIcds=data.customIcds||[];   // [name,...]
+    window._customPorts.forEach(function(p){
+      if(!p||!p.name)return;
+      if(!PORTS_BY_COUNTRY[p.country])PORTS_BY_COUNTRY[p.country]=[];
+      if(PORTS_BY_COUNTRY[p.country].indexOf(p.name)<0)PORTS_BY_COUNTRY[p.country].push(p.name);
+      if(PORTS.indexOf(p.name)<0)PORTS.push(p.name);
+      if(PORT_COUNTRIES.indexOf(p.country)<0)PORT_COUNTRIES.push(p.country);
+    });
+    window._customIcds.forEach(function(name){
+      if(name&&ICD_LIST.indexOf(name)<0)ICD_LIST.push(name);
+    });
+    if(cb)cb();
+  }).catch(function(){window._customPorts=[];window._customIcds=[];if(cb)cb();});
+}
+
+// Render nội dung mục "Danh mục Các cảng và ICD" trong Cài đặt: liệt kê đầy đủ cảng theo
+// từng quốc gia + danh sách ICD, kèm form thêm cảng/ICD mới.
+function _renderPortsIcdSettingsContent(){
+  const countries=Object.keys(PORTS_BY_COUNTRY).sort();
+  const portsHtml=countries.map(function(ctr){
+    const list=PORTS_BY_COUNTRY[ctr]||[];
+    if(!list.length)return'';
+    return '<div style="margin-bottom:8px"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:3px">'+ctr+' <span style="font-weight:400;color:var(--text-tertiary)">('+list.length+')</span></div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+list.map(function(p){
+        return '<span style="font-size:10.5px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'+p+'</span>';
+      }).join('')+'</div></div>';
+  }).join('');
+  const icdHtml='<div style="display:flex;flex-wrap:wrap;gap:5px">'+ICD_LIST.map(function(i){
+    return '<span style="font-size:10.5px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'+i+'</span>';
+  }).join('')+'</div>';
+  return '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Danh sách cảng (POL/POD) và ICD dùng chung cho toàn bộ app — thêm mới tại đây sẽ có ngay ở mọi dropdown liên quan (Chi tiết lô hàng, Cont/Seal, Full Return...).</div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:8px">'
+      +'<input type="text" id="newPortName" placeholder="Tên cảng mới (VD: Vinh, VN)" style="font-size:12px;flex:1 1 200px"/>'
+      +'<input type="text" id="newPortCountry" placeholder="Quốc gia (VD: Vietnam)" list="portCountryList" style="font-size:12px;flex:1 1 160px"/>'
+      +'<datalist id="portCountryList">'+countries.map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'">';}).join('')+'</datalist>'
+      +'<button class="btn pri" onclick="addNewPort()"><i class="ti ti-plus"></i> Thêm cảng</button>'
+    +'</div>'
+    +'<div style="max-height:340px;overflow-y:auto;padding:2px 4px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:1rem" id="portsListBox">'+portsHtml+'</div>'
+    +'<div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:.5rem">Danh sách ICD ('+ICD_LIST.length+')</div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.75rem;padding:.75rem;background:var(--bg-secondary);border-radius:8px">'
+      +'<input type="text" id="newIcdName" placeholder="Tên ICD mới (VD: ICD Bình Dương)" style="font-size:12px;flex:1"/>'
+      +'<button class="btn pri" onclick="addNewIcd()"><i class="ti ti-plus"></i> Thêm ICD</button>'
+    +'</div>'
+    +'<div style="max-height:200px;overflow-y:auto;padding:2px 4px;border:1px solid var(--border-light);border-radius:8px" id="icdListBox">'+icdHtml+'</div>';
+}
+window._renderPortsIcdSettingsContent=_renderPortsIcdSettingsContent;
+
+async function _savePortsIcdConfig(){
+  await db.collection('_config').doc('portsIcds').set({customPorts:window._customPorts||[],customIcds:window._customIcds||[]});
+}
+
+async function addNewPort(){
+  const name=(g('newPortName')?.value||'').trim();
+  const country=(g('newPortCountry')?.value||'').trim();
+  if(!name||!country){toast('Nhập đủ tên cảng và quốc gia','error');return;}
+  if(PORTS.indexOf(name)>=0){toast('Cảng này đã có trong danh sách','error');return;}
+  setLoading(true,'Đang thêm cảng...');
+  try{
+    window._customPorts=window._customPorts||[];
+    window._customPorts.push({country:country,name:name});
+    if(!PORTS_BY_COUNTRY[country])PORTS_BY_COUNTRY[country]=[];
+    PORTS_BY_COUNTRY[country].push(name);
+    PORTS.push(name);
+    if(PORT_COUNTRIES.indexOf(country)<0)PORT_COUNTRIES.push(country);
+    await _savePortsIcdConfig();
+    toast('Đã thêm cảng: '+name);
+    g('newPortName').value=''; g('newPortCountry').value='';
+    const box=g('portsListBox'); if(box)box.innerHTML=(function(){
+      const countries=Object.keys(PORTS_BY_COUNTRY).sort();
+      return countries.map(function(ctr){
+        const list=PORTS_BY_COUNTRY[ctr]||[];
+        if(!list.length)return'';
+        return '<div style="margin-bottom:8px"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:3px">'+ctr+' <span style="font-weight:400;color:var(--text-tertiary)">('+list.length+')</span></div>'
+          +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+list.map(function(p){
+            return '<span style="font-size:10.5px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'+p+'</span>';
+          }).join('')+'</div></div>';
+      }).join('');
+    })();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.addNewPort=addNewPort;
+
+async function addNewIcd(){
+  const name=(g('newIcdName')?.value||'').trim();
+  if(!name){toast('Nhập tên ICD','error');return;}
+  if(ICD_LIST.indexOf(name)>=0){toast('ICD này đã có trong danh sách','error');return;}
+  setLoading(true,'Đang thêm ICD...');
+  try{
+    window._customIcds=window._customIcds||[];
+    window._customIcds.push(name);
+    ICD_LIST.push(name);
+    await _savePortsIcdConfig();
+    toast('Đã thêm ICD: '+name);
+    g('newIcdName').value='';
+    const box=g('icdListBox'); if(box)box.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:5px">'+ICD_LIST.map(function(i){
+      return '<span style="font-size:10.5px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'+i+'</span>';
+    }).join('')+'</div>';
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.addNewIcd=addNewIcd;
+
 function loadCargoNames(){
   db.collection('_config').doc('cargoNames').get().then(function(snap){
     let names=snap.exists?(snap.data().names||[]):[];
@@ -571,7 +682,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v287';
+window.APP_BUILD='v288';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1097,6 +1208,7 @@ function startListeners(){
   function _bootRestOfApp(){
     loadBankAccounts();
     loadCargoNames();
+    loadPortsIcds();
     loadServices();
     if(typeof loadWarehouses==='function')loadWarehouses();
     if(typeof loadCocoQuote==='function'&&can('manageUsers'))loadCocoQuote();
@@ -11631,11 +11743,6 @@ function renderSettings(){
       '<div style="font-size:12px;color:var(--text-secondary)">Tạo số Job ID và Debit Note cho tất cả lô hàng cũ chưa có (chỉ cần chạy 1 lần).</div>'
     )
 
-    +stgBox('cargo','ti-box','Danh sách Tên hàng (đã chuyển sang trang Ghi chú)',
-      '<button class="btn pri" onclick="goTab(\'notes\')" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-arrow-right"></i> Đi tới trang Ghi chú</button>',
-      '<div style="font-size:12px;color:var(--text-secondary)">Mục "Danh sách Tên hàng" đã được chuyển sang trang <b>COCO NOTES</b> (tab Ghi chú chung) để dễ quản lý cùng các thông tin dùng chung khác.</div>'
-    )
-
     +stgBox('svc','ti-list-details','Danh mục dịch vụ',
       '<button class="btn" onclick="addSvcCatRow()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>'
       +'<button class="btn" onclick="scanOrphanSvcs()"><i class="ti ti-refresh"></i> Quét & đồng bộ lô cũ</button>'
@@ -11645,9 +11752,9 @@ function renderSettings(){
       +'<div id="svcCatList"></div>'
     )
 
-    +stgBox('acct','ti-key','Thông tin tài khoản đăng nhập (đã chuyển sang trang Ghi chú)',
-      '<button class="btn pri" onclick="goTab(\'notes\')" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-arrow-right"></i> Đi tới trang Ghi chú</button>',
-      '<div style="font-size:12px;color:var(--text-secondary)">Mục "Thông tin tài khoản đăng nhập" đã được chuyển sang trang <b>COCO NOTES</b> (tab Ghi chú chung) để dễ quản lý cùng các thông tin dùng chung khác.</div>'
+    +stgBox('ports','ti-anchor','Danh mục Các cảng và ICD',
+      '',
+      _renderPortsIcdSettingsContent()
     )
 
     +stgBox('bank','ti-building-bank','Tài khoản ngân hàng',
