@@ -571,7 +571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v285';
+window.APP_BUILD='v286';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -861,15 +861,23 @@ auth.onAuthStateChanged(async (user) => {
 });
 
 async function doLogin(){
-  const email = g('loginEmail').value.trim();
+  const input = g('loginEmail').value.trim();
   const pass  = g('loginPass').value;
-  if(!email||!pass){ toast('Vui lòng nhập email và mật khẩu','error'); return; }
+  if(!input||!pass){ toast('Vui lòng nhập email/tên đăng nhập và mật khẩu','error'); return; }
   setLoading(true,'Đang đăng nhập...');
   try {
+    let email=input;
+    // Nếu không phải định dạng email → coi là USERNAME, tra cứu email tương ứng trước khi đăng nhập
+    if(!input.includes('@')){
+      const uname=input.toLowerCase();
+      const snap=await db.collection('usernameMap').doc(uname).get();
+      if(!snap.exists){ setLoading(false); toast('Không tìm thấy tên đăng nhập "'+input+'"','error'); return; }
+      email=snap.data().email;
+    }
     await auth.signInWithEmailAndPassword(email, pass);
   } catch(e) {
     setLoading(false);
-    toast('Email hoặc mật khẩu không đúng','error');
+    toast('Tài khoản hoặc mật khẩu không đúng','error');
   }
 }
 
@@ -1687,7 +1695,7 @@ function renderLotTable(tt){
         if(c.k==='volType'){
           const tc=r.typeCont||''; const isRf=tc.includes('R');
           const label=(r.vol?r.vol+'x':'')+(tc||'—');
-          return`<td style="text-align:center"><span style="display:inline-block;padding:3px 8px;border-radius:5px;font-size:11.5px;font-weight:700;background:${isRf?'rgba(66,153,225,.12)':'var(--green-bg)'};color:${isRf?'#2b6cb0':'var(--green-dark)'}">${label}</span></td>`;
+          return`<td style="text-align:center"><span class="bdg" style="background:${isRf?'rgba(66,153,225,.12)':'var(--green-bg)'};color:${isRf?'#2b6cb0':'var(--green-dark)'}">${label}</span></td>`;
         }
         if(c.k==='route'){
           const hasRoute=r.pol||r.pod;
@@ -1705,7 +1713,7 @@ function renderLotTable(tt){
         if(c.k==='vstStatus'){
           if(!r.vstEnabled) return`<td style="text-align:center"><button class="btn sm" onclick="openVstPopup('${r._id}','${tt}')" style="font-size:11px;opacity:.6">+VST</button></td>`;
           const confirmed=r.vstConfirmed;
-          return`<td style="text-align:center"><button class="bdg ${confirmed?'bdg-g':'bdg-r'}" onclick="openVstPopup('${r._id}','${tt}')" style="cursor:pointer;border:none;font-weight:700">${confirmed?'Đã VST':'Chưa VST'}</button></td>`;
+          return`<td style="text-align:center"><button class="bdg ${confirmed?'bdg-g':'bdg-r'}" onclick="openVstPopup('${r._id}','${tt}')" style="cursor:pointer;font-weight:700">${confirmed?'Đã VST':'Chưa VST'}</button></td>`;
         }
         // ── ETD / ETA (gộp, không còn POL/POD — đã chuyển sang cột Route)
         if(c.k==='etd'){
@@ -10177,6 +10185,7 @@ function openUserEdit(idx){
   g('userEditTitle').textContent=idx!==null?'Chỉnh sửa: '+(u.name||u.email):'Thêm người dùng mới';
   g('userEditFields').innerHTML=`
     <div class="fi full"><label class="lbl">Email (dùng để đăng nhập)</label><input type="email" id="uf_email" value="${u.email||''}" ${idx!==null?'readonly':''}/></div>
+    <div class="fi"><label class="lbl">Tên đăng nhập (không bắt buộc)</label><input type="text" id="uf_username" value="${u.username||''}" placeholder="VD: nguyenvana" style="text-transform:lowercase"/></div>
     <div class="fi"><label class="lbl">Họ và tên</label><input type="text" id="uf_name" value="${u.name||''}"/></div>
     <div class="fi"><label class="lbl">Avatar (2 ký tự)</label><input type="text" id="uf_av" value="${u.avatar||''}" maxlength="2"/></div>
     <div class="fi"><label class="lbl">Vai trò</label><select id="uf_role"><option value="admin"${(u.role||'viewer')==='admin'?' selected':''}>Admin</option><option value="operator"${u.role==='operator'?' selected':''}>Operator</option><option value="accountant"${u.role==='accountant'?' selected':''}>Accountant</option><option value="doc"${u.role==='doc'?' selected':''}>Doc</option><option value="cus"${u.role==='cus'?' selected':''}>Cus</option><option value="viewer"${(u.role||'viewer')==='viewer'?' selected':''}>Viewer</option></select></div>
@@ -10193,10 +10202,16 @@ function openUserEdit(idx){
 }
 async function saveUser(){
   const name=g('uf_name').value.trim(); const email=g('uf_email').value.trim();
+  const username=(g('uf_username')?.value||'').trim().toLowerCase().replace(/[^a-z0-9_.]/g,'');
   const role=g('uf_role').value; const av=g('uf_av').value.slice(0,2).toUpperCase()||name.slice(0,2).toUpperCase()||'??';
   const emailSignature=g('uf_sig')?.value||'';
   if(!email){toast('Nhập email','error');return;}
   if(!name){toast('Nhập họ tên','error');return;}
+  // Nếu có đặt username, kiểm tra không trùng với user khác
+  if(username){
+    const dup=(cache.users||[]).find(function(x){return (x.username||'').toLowerCase()===username&&x.email!==email;});
+    if(dup){toast('Tên đăng nhập "'+username+'" đã được dùng bởi '+dup.email,'error');return;}
+  }
   setLoading(true,'Đang tạo người dùng...');
   try {
     let uid=null;
@@ -10220,13 +10235,20 @@ async function saveUser(){
       }
       // Step 2: Save profile to Firestore using UID as document ID (most reliable)
       const docId=uid||email.replace(/\./g,'_');
-      await fsSet('users', docId, {uid,email,name,role,avatar:av,emailSignature,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
+      await fsSet('users', docId, {uid,email,name,username,role,avatar:av,emailSignature,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
+      if(username)await db.collection('usernameMap').doc(username).set({email:email,updatedAt:Date.now()});
       toast('Đã tạo người dùng: '+email+' ('+ROLES[role].label+')');
     } else {
       // Editing existing user
       const u=cache.users[userEditIdx];
       const docId=u._docId||u.uid||u.email.replace(/\./g,'_');
-      await fsSet('users', docId, {email,name,role,avatar:av,emailSignature,updatedAt:Date.now(),updatedBy:currentUser?.email||''});
+      await fsSet('users', docId, {email,name,username,role,avatar:av,emailSignature,updatedAt:Date.now(),updatedBy:currentUser?.email||''});
+      // Đồng bộ usernameMap: nếu username thay đổi, xóa mapping cũ và ghi mapping mới
+      const oldUsername=(u.username||'').toLowerCase();
+      if(oldUsername&&oldUsername!==username){
+        try{await db.collection('usernameMap').doc(oldUsername).delete();}catch(e){}
+      }
+      if(username)await db.collection('usernameMap').doc(username).set({email:email,updatedAt:Date.now()});
       toast('Đã cập nhật: '+name);
     }
     closeOv('userEditOv');
@@ -10465,6 +10487,10 @@ body.xuat-lotmode #dpanelTabbar{display:none!important;}
 #xuat-lot-view.active{display:block;}
 #xuat-list-view{display:block;overflow-y:auto;}
 #xuat-tabbar-wrap{background:#f1f3f5;border-bottom:2px solid #ced4da;box-shadow:0 2px 8px rgba(0,0,0,.08);}
+/* Chỉ bù margin khi tab-bar CÒN Ở body (trạng thái ban đầu, trước khi JS dời vào .main) —
+   một khi JS đã insertBefore nó vào bên trong page-xuat (bên trong .main), selector này
+   không còn khớp nữa nên KHÔNG bị lệch đôi. Tránh vệt màu sai lúc app vừa tải/chuyển tab. */
+body>#xuat-tabbar-wrap{margin-left:230px}
 body.xuat-lotmode #dpanelTabbar{display:none!important;}
 body.xuat-lotmode #xuat-list-view{display:none!important;}
 </style>
@@ -10493,7 +10519,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
     <div style="font-size:14px;font-weight:600;margin-bottom:.25rem">Đăng nhập</div>
     <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1.25rem">Sử dụng tài khoản được cấp bởi Admin</div>
     <div style="display:flex;flex-direction:column;gap:10px">
-      <div class="fi"><label class="lbl">Email</label><input type="email" id="loginEmail" placeholder="email@company.vn" onkeydown="if(event.key==='Enter')g('loginPass').focus()"/></div>
+      <div class="fi"><label class="lbl">Email hoặc Tên đăng nhập</label><input type="text" id="loginEmail" placeholder="email@company.vn hoặc tên đăng nhập" onkeydown="if(event.key==='Enter')g('loginPass').focus()"/></div>
       <div class="fi"><label class="lbl">Mật khẩu</label><input type="password" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"/></div>
       <button class="btn pri" style="justify-content:center;margin-top:.25rem" onclick="doLogin()"><i class="ti ti-login"></i> Đăng nhập</button>
     </div>
