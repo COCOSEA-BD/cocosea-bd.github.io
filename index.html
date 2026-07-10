@@ -682,7 +682,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v289';
+window.APP_BUILD='v290';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1591,9 +1591,9 @@ function renderLot(tt){
   <div class="toolbar">
     <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Số Cont..." oninput="renderLotTable('${tt}')"/></div>
     <select id="fst_${tt}" style="width:140px" onchange="renderLotTable('${tt}')">
-      <option value="">Tất cả trạng thái</option>
-      <option>Đang xử lý</option><option>Đã nhập info</option>
-      <option>Đã lên debit</option><option>Đang vận chuyển</option><option>${tt==='xuat'?'Đã giao':'Đã nhận'}</option>
+      <option value="">Tất cả</option>
+      <option value="locked">Đã khóa</option>
+      <option value="unlocked">Chưa khóa</option>
     </select>
     <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);flex-shrink:0">
       <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,14)" style="font-size:11px;padding:3px 8px">-2wk</button>
@@ -1722,7 +1722,8 @@ function renderLotTable(tt){
   // ── Filter tối ưu: short-circuit sớm, không dùng Object.values() cho search
   const sortDir=(sortState[tt]||{dir:1}).dir;
   const rows=(cache[tt]||[]).filter(r=>{
-    if(fs&&r.status!==fs)return false;
+    if(fs==='locked'&&!r.locked)return false;
+    if(fs==='unlocked'&&r.locked)return false;
     if(etdFrom&&r.etd&&r.etd<etdFrom)return false;
     if(etdTo&&r.etd&&r.etd>etdTo)return false;
     if(sfShipper&&!(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper))return false;
@@ -2272,17 +2273,6 @@ function renderDetailPanel(r,tt){
   else if(detailTab==='svc'){
     // Restore custom svcs
     const svcs=r.svcs||{};
-    // Nếu lô chưa có dịch vụ nào → tự thêm các dịch vụ mặc định (default) để hiển thị ngay
-    // (phòng trường hợp seeding lúc tạo lô bị lỡ do SVCS/loadServices chưa kịp tải)
-    if(Object.keys(svcs).length===0){
-      const _volDef=parseInt(r.vol)||1;
-      SVCS.forEach(function(s){
-        if(s.default){
-          svcs[s.key]={on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:_volDef,svcUnit:'Cont',svcCur:'VND'};
-          svcs[s.key]._name=s.name; if(s.code)svcs[s.key]._code=s.code;
-        }
-      });
-    }
     _ensureSvcInCatalog(svcs);
     bodyHtml=`${ (can('fillPrice')||can('viewCost')) ? '<div style="display:grid;grid-template-columns:22px 58px 200px 90px 60px 56px 85px 90px 90px 46px 120px 82px 110px 40px 52px;gap:6px;padding:4px 8px;margin-bottom:4px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div style="text-align:center">Code</div><div style="text-align:center">Dịch vụ</div><div style="text-align:center">Đơn giá</div><div style="text-align:center">SL</div><div style="text-align:center">ĐV</div><div style="text-align:center">Thành tiền</div><div style="text-align:center;color:#e07000">VAT Amt</div><div style="text-align:center;color:var(--red)">Total (VAT)</div><div style="text-align:center">Curr</div><div style="text-align:center">NCC</div><div style="text-align:center">TT TT</div><div style="text-align:center">Remark</div><div style="text-align:center">Fin</div><div></div></div>' : '<div style="display:grid;grid-template-columns:22px 1fr 1fr 26px;gap:8px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div></div></div>'}
     <div id="detailSvcGrid">${SVCS.filter(s=>svcs[s.key]!==undefined).map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')||'<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ. Bấm "Thêm dịch vụ" để chọn từ danh mục.</div>'}</div>
@@ -4100,19 +4090,15 @@ async function saveLot(){
     rec.vol=String(bookings.reduce((s,b)=>s+(parseInt(b.vol)||0),0)); // total vol
     rec.typeCont=bookings[0].typeCont||rec.typeCont||'40HC';
   }
-  // Lô MỚI: seed dịch vụ mặc định (default toàn hệ thống + mặc định riêng của shipper).
+  // Lô MỚI: seed dịch vụ mặc định — CHỈ theo cấu hình riêng của từng Shipper
+  // (CRM › Dịch vụ mặc định), KHÔNG còn tự động thêm theo cờ "default" toàn hệ thống nữa
+  // (cờ default cũ khiến các dịch vụ như Sà lan/Phí công nhân đóng hàng luôn tự xuất hiện
+  // ở MỌI lô hàng mới bất kể shipper có cấu hình hay không — đã bỏ).
   // svcQty mặc định = TỔNG VOL của lô (đã tính ở trên), đơn vị Cont.
   if(!existing){
     const _volDef=parseInt(rec.vol)||1;
     const _mkSvc=function(sdef){return {on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:_volDef,svcUnit:'Cont',svcCur:'VND'};};
-    // 1) Dịch vụ default toàn hệ thống
-    SVCS.forEach(function(s){
-      if(s.default && !rec.svcs[s.key]){
-        rec.svcs[s.key]=_mkSvc(s);
-        if(s.custom)rec.svcs[s.key]._name=s.name;
-      }
-    });
-    // 2) Dịch vụ mặc định riêng của shipper (CRM › Dịch vụ mặc định)
+    // Dịch vụ mặc định riêng của shipper (CRM › Dịch vụ mặc định)
     const _shipperKey=rec.shipper||rec.supplier||'';
     const _sp=cache.partners[_shipperKey]||{};
     (_sp.defaultSvcs||[]).forEach(function(sk){
@@ -10593,8 +10579,6 @@ tr:hover td{background:var(--bg-secondary)}
 /* THEME BTN */
 .theme-btn{background:none;border:1px solid var(--border-light);border-radius:var(--radius-md);padding:5px 8px;cursor:pointer;color:var(--text-secondary);font-size:16px;display:flex;align-items:center}
 .theme-btn:hover{background:var(--bg-secondary)}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-thumb{background:var(--border-light);border-radius:3px}
 
 /* Xuat lot mode: hide dpanel lot-switching tabs (xuat tabbar handles it) */
 body.xuat-lotmode #dpanelTabbar{display:none!important;}
