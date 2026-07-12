@@ -688,7 +688,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v292';
+window.APP_BUILD='v293';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1447,6 +1447,73 @@ function updateSidebar(){
 /* ─────────────────────────────────────────────
    NAVIGATION
 ───────────────────────────────────────────── */
+// ═══════════════════════════════════════════════════════════
+//  MODULE TAB STRIP — mỗi module đã mở (Shipment List, CRM, Finance...) hiện thành
+//  1 tab ở đầu trang (giống tab trình duyệt). Chuyển qua lại bằng Shift+←/→.
+// ═══════════════════════════════════════════════════════════
+window._moduleTabs=window._moduleTabs||[]; // [{key,label}]
+const MODULE_TAB_ICONS={xuat:'ti-arrow-up-right',notes:'ti-notes',docs:'ti-file-certificate',deadline:'ti-checklist','thu-chi':'ti-cash','doi-tac':'ti-building',vessel:'ti-ship',salesupport:'ti-briefcase','trucking-report':'ti-truck','scy-report':'ti-package',users:'ti-users',settings:'ti-settings','costing-report':'ti-calculator',contract:'ti-file-contract',ocean:'ti-anchor',quote:'ti-file-dollar',cocoquote:'ti-calculator',nhap:'ti-arrow-down-left'};
+const MODULE_TAB_PINNED='xuat'; // tab luôn có mặt, không đóng được (giống "Home")
+
+function _addOrActivateModuleTab(key,label){
+  let tabs=window._moduleTabs;
+  if(!tabs.find(function(x){return x.key===key;})){
+    tabs.push({key:key,label:label});
+  }
+  window._activeModuleTab=key;
+  _renderModuleTabStrip();
+}
+
+function _renderModuleTabStrip(){
+  const box=g('moduleTabStrip'); if(!box)return;
+  const tabs=window._moduleTabs;
+  const active=window._activeModuleTab;
+  box.innerHTML=tabs.map(function(tb){
+    const isActive=tb.key===active;
+    const icon=MODULE_TAB_ICONS[tb.key]||'ti-file';
+    const closable=tb.key!==MODULE_TAB_PINNED;
+    return '<div onclick="goTab(\''+tb.key+'\')" style="display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:7px;cursor:pointer;font-size:12.5px;font-weight:'+(isActive?'700':'500')+';background:'+(isActive?'rgba(255,255,255,.12)':'transparent')+';color:'+(isActive?'#fff':'#B9C6D0')+';white-space:nowrap;flex-shrink:0" onmouseover="if(!'+isActive+')this.style.background=\'rgba(255,255,255,.06)\'" onmouseout="if(!'+isActive+')this.style.background=\'transparent\'">'
+      +'<i class="ti '+icon+'" style="font-size:14px;'+(isActive?'color:var(--gold)':'')+'"></i>'
+      +'<span style="max-width:150px;overflow:hidden;text-overflow:ellipsis">'+tb.label+'</span>'
+      +(closable?'<i class="ti ti-x" style="font-size:12px;opacity:.6;margin-left:2px" onclick="event.stopPropagation();closeModuleTab(\''+tb.key+'\')"></i>':'')
+    +'</div>';
+  }).join('');
+}
+window._renderModuleTabStrip=_renderModuleTabStrip;
+
+function closeModuleTab(key){
+  if(key===MODULE_TAB_PINNED)return;
+  const tabs=window._moduleTabs;
+  const idx=tabs.findIndex(function(x){return x.key===key;});
+  if(idx<0)return;
+  tabs.splice(idx,1);
+  if(window._activeModuleTab===key){
+    // Chuyển sang tab liền kề (ưu tiên tab bên trái), hoặc về Shipment List nếu hết tab
+    const next=tabs[idx-1]||tabs[idx]||tabs[0]||{key:MODULE_TAB_PINNED};
+    goTab(next.key);
+  } else {
+    _renderModuleTabStrip();
+  }
+}
+window.closeModuleTab=closeModuleTab;
+
+// Phím tắt Shift+← / Shift+→ để chuyển qua lại giữa các tab module đang mở
+document.addEventListener('keydown',function(e){
+  if(!e.shiftKey)return;
+  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;
+  // Bỏ qua nếu đang gõ trong input/textarea (tránh xung đột chọn văn bản)
+  const tag=(document.activeElement&&document.activeElement.tagName||'').toLowerCase();
+  if(tag==='input'||tag==='textarea'||tag==='select')return;
+  const tabs=window._moduleTabs; if(!tabs||tabs.length<2)return;
+  const curIdx=tabs.findIndex(function(x){return x.key===window._activeModuleTab;});
+  if(curIdx<0)return;
+  let nextIdx=e.key==='ArrowLeft'?curIdx-1:curIdx+1;
+  if(nextIdx<0)nextIdx=tabs.length-1;
+  if(nextIdx>=tabs.length)nextIdx=0;
+  e.preventDefault();
+  goTab(tabs[nextIdx].key);
+});
+
 function goTab(t){
   currentTab=t;
   // ── Xuat tab bar: show/hide + body class
@@ -1486,7 +1553,7 @@ function goTab(t){
   document.querySelectorAll('.sb-item').forEach(function(el){el.classList.remove('active');});
   g('sb-'+activeSb)?.classList.add('active');
   const titles={'xuat':'Shipment List','notes':'COCO NOTES','nhap':'Nhập khẩu','deadline':'Task Progress','thu-chi':'Finance','doi-tac':'CRM','vessel':'Vessel tool','salesupport':'Sale Support','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation'};
-  g('pageTitle').textContent=titles[t]||t;
+  _addOrActivateModuleTab(t,titles[t]||t);
   if(t==='xuat'||t==='nhap') renderLot(t);
   if(t==='notes') renderNotesPage();
   if(t==='deadline') renderDeadline();
@@ -2670,7 +2737,7 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
             +buildDnPartyRows(r,svcs)
           +'</div>'
           +'<div style="display:flex;justify-content:flex-end;gap:8px">'
-            +'<button class="btn" onclick="refreshInvoiceTab()" title="Tải lại dữ liệu mới nhất từ các tab khác (Dịch vụ, Fill giá...)"><i class="ti ti-refresh"></i> Làm mới</button>'
+            +'<button class="btn" onclick="refreshInvoiceTab()" title="Tải lại dữ liệu mới nhất từ các tab khác (Dịch vụ, Fill giá...)"><i class="ti ti-refresh"></i> Refresh</button>'
             +'<button class="btn pri" onclick="saveInvoiceSettings()"><i class="ti ti-device-floppy"></i> Lưu</button>'
           +'</div>';
       }
@@ -4103,7 +4170,7 @@ async function saveLot(){
   // svcQty mặc định = TỔNG VOL của lô (đã tính ở trên), đơn vị Cont.
   if(!existing){
     const _volDef=parseInt(rec.vol)||1;
-    const _mkSvc=function(sdef){return {on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:1,amount:0,cost:0,svcQty:_volDef,svcUnit:'Cont',svcCur:'VND'};};
+    const _mkSvc=function(sdef){return {on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:_volDef,amount:0,cost:0,svcQty:_volDef,svcUnit:'Cont',svcCur:'VND'};};
     // Dịch vụ mặc định riêng của shipper (CRM › Dịch vụ mặc định)
     const _shipperKey=rec.shipper||rec.supplier||'';
     const _sp=cache.partners[_shipperKey]||{};
@@ -4855,7 +4922,7 @@ function svcRowHTML(s, sv){
       <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer"/></div>
       <div style="display:flex;justify-content:flex-end;gap:3px">
         ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)" title="Xem Debit Note"><i class="ti ti-file-check"></i></button>`:`<label class="rac" style="cursor:pointer;font-size:13px;color:var(--text-secondary)" title="Upload Debit Note"><i class="ti ti-upload"></i><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleSvcDnUpload(this,'${s.key}')"/></label>`}
-        ${isCustom?`<button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>`:''}
+        <button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>
       </div>
       <label style="display:flex;align-items:center;justify-content:center;gap:3px;font-size:9px;color:var(--text-secondary);cursor:${sv.ocfConfirmed?'not-allowed':'pointer'}" title="Request Payment (OCF)">
         <input type="checkbox" id="sreqpay_${s.key}" ${sv.reqPayment?'checked':''} ${(sv.on&&!sv.ocfConfirmed)?'':'disabled'} style="width:13px;height:13px;cursor:pointer"/> Req.Pay
@@ -6497,12 +6564,16 @@ function renderThuChi(){
     <div style="font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px"><i class="ti ti-wallet" style="color:var(--green)"></i>Finance</div>
     <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">Sổ quỹ tiền mặt/ngân hàng, công nợ, danh mục và báo cáo tài chính</div>
   </div>
-  <div style="display:flex;gap:6px;margin-bottom:1.1rem;border-bottom:1px solid var(--border-light)">
-    ${tabs.map(function(t){const active=tcTab===t.k;const onclick=t.external?"goTab('costing-report')":"switchTcTab('"+t.k+"')";return '<button onclick="'+onclick+'" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti '+t.icon+'" style="font-size:15px"></i>'+t.label+'</button>';}).join('')}
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:1.1rem;border-bottom:1px solid var(--border-light)">
+    <div style="display:flex;gap:6px;overflow-x:auto">
+    ${tabs.map(function(t){const active=tcTab===t.k;const onclick=t.external?"goTab('costing-report')":"switchTcTab('"+t.k+"')";return '<button onclick="'+onclick+'" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit;white-space:nowrap"><i class="ti '+t.icon+'" style="font-size:15px"></i>'+t.label+'</button>';}).join('')}
+    </div>
+    <button class="btn sm" onclick="renderTcBody()" title="Tải lại dữ liệu mới nhất cho tab đang xem" style="flex-shrink:0;margin-bottom:6px"><i class="ti ti-refresh"></i> Refresh</button>
   </div>
   <div id="tcBody"></div>`;
   renderTcBody();
 }
+window.renderThuChi=renderThuChi;
 function switchTcTab(t){ tcTab=t; renderThuChi(); }
 window.switchTcTab=switchTcTab;
 
@@ -10421,7 +10492,7 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 ::-webkit-scrollbar-thumb:hover{background:#4d6780}
 .main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-tertiary);height:100vh;overflow-y:auto}
 .topbar{background:#0F1E2E;border-bottom:1px solid rgba(255,255,255,.06);padding:.6rem 1.5rem;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:10}
-.topbar #pageTitle{color:#fff}
+#moduleTabStrip::-webkit-scrollbar{height:0}
 .topbar .theme-btn{color:#cbd5e1}
 .topbar .theme-btn:hover{color:#fff;background:rgba(255,255,255,.08)}
 .content{padding:1.25rem 1.5rem;flex:1}
@@ -10675,8 +10746,8 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 
   <div class="main">
     <div class="topbar">
-      <div style="font-size:14px;font-weight:600" id="pageTitle">Xuất khẩu</div>
-      <div style="display:flex;align-items:center;gap:8px">
+      <div id="moduleTabStrip" style="display:flex;gap:4px;align-items:center;flex:1;min-width:0;overflow-x:auto"></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
         <span style="font-size:11px;color:var(--green);display:flex;align-items:center;gap:4px"><i class="ti ti-wifi" style="font-size:14px"></i> Realtime</span>
         <button class="theme-btn" onclick="toggleTheme()"><i class="ti ti-sun-moon" id="themeIcon"></i></button>
         <button class="btn sm red" onclick="doLogout()"><i class="ti ti-logout"></i> Đăng xuất</button>
