@@ -660,6 +660,7 @@ function xuatSwitchTab(id){
     // Render lot detail inline into xuat-lot-view (no slide animation!)
     detailId=lt.id; detailTt=lt.tt; detailTab=lt.dpTab||'info';
     const r=(cache[lt.tt]||[]).find(x=>x._id===lt.id)||{};
+    window._detailEditSnapshot={id:lt.id,tt:lt.tt,updatedAt:r.updatedAt||0};
     // Xóa Document Maker khỏi _openTabs - xuat tab bar quản lý lot tabs
     _openTabs=_openTabs.filter(x=>x.type!=='docmaker');
     _xPanelEl=lotV;
@@ -700,7 +701,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v305';
+window.APP_BUILD='v307';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1227,6 +1228,7 @@ function startListeners(){
     loadBankAccounts();
     loadCargoNames();
     loadPortsIcds();
+    loadMarketShippers();
     loadServices();
     if(typeof loadWarehouses==='function')loadWarehouses();
     if(typeof loadCocoQuote==='function'&&can('manageUsers'))loadCocoQuote();
@@ -1556,11 +1558,11 @@ function goTab(t){
     g('detailPanel').classList.remove('open');
     g('detailBackdrop').classList.remove('open');
   }
-  ['xuat','notes','nhap','deadline','thu-chi','doi-tac','vessel','salesupport','cocoquote','contract','users','docs','ocean','quote','settings','trucking-report','scy-report'].forEach(id=>{
+  ['xuat','notes','nhap','deadline','thu-chi','doi-tac','vessel','salesupport','cocoquote','contract','marketdata','users','docs','ocean','quote','settings','trucking-report','scy-report'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
   });
   // Highlight đúng mục sidebar cha cho các trang đã gộp (Costing→Finance, Contract→CRM, Ocean/Quote/Coconut→Sale Support)
-  const sbParent={'contract':'doi-tac','ocean':'salesupport','quote':'salesupport','cocoquote':'salesupport'};
+  const sbParent={'contract':'doi-tac','marketdata':'doi-tac','ocean':'salesupport','quote':'salesupport','cocoquote':'salesupport'};
   const activeSb=sbParent[t]||t;
   document.querySelectorAll('.sb-item').forEach(function(el){el.classList.remove('active');});
   g('sb-'+activeSb)?.classList.add('active');
@@ -1575,6 +1577,7 @@ function goTab(t){
   if(t==='salesupport') renderSaleSupport();
   if(t==='cocoquote'){ renderCocoQuote(); _injectBackBtn('page-cocoquote','Sale Support','salesupport'); }
   if(t==='contract'){ renderContractTool(); _injectBackBtn('page-contract','CRM','doi-tac'); }
+  if(t==='marketdata'){ renderMarketData(); _injectBackBtn('page-marketdata','CRM','doi-tac'); }
   if(t==='users') renderUsers();
   if(t==='docs'){ window._dmScopeLot=null; renderDocMaker(); }
   if(t==='trucking-report') renderTruckingReport();
@@ -2090,6 +2093,8 @@ function openDetail(id, tt, startTab){
   } else if(startTab){ t.tab=startTab; }
   _activeTabKey=key;
   detailId=id; detailTt=tt; detailTab=startTab||t.tab;
+  // Snapshot updatedAt lúc mở — dùng để phát hiện xung đột khi lưu tab Dịch vụ/Cont-Seal...
+  window._detailEditSnapshot={id:id,tt:tt,updatedAt:r.updatedAt||0};
   renderDpanelTabs();
   renderDetailPanel(r,tt);
   g('detailPanel').classList.add('open');
@@ -3856,6 +3861,21 @@ async function saveDetailSvc(){
     svcDiffLines.push('- Xóa dịch vụ: '+(pv._name||(svcMeta?svcMeta.name:k)));
   });
   const svcDetailText=svcDiffLines.length?svcDiffLines.join('\n'):'Lưu lại (không có thay đổi)';
+  // Kiểm tra xung đột: lô này có bị người khác cập nhật kể từ lúc mở tab không?
+  if(window._detailEditSnapshot && window._detailEditSnapshot.id===detailId){
+    try{
+      const freshSnap=await db.collection(colName(detailTt)).doc(detailId).get();
+      if(freshSnap.exists){
+        const freshData=freshSnap.data();
+        if((freshData.updatedAt||0)>window._detailEditSnapshot.updatedAt){
+          const who=freshData.updatedBy||'người khác';
+          const when=new Date(freshData.updatedAt).toLocaleString('vi-VN');
+          const proceed=confirm('⚠️ XUNG ĐỘT DỮ LIỆU\n\nLô hàng này đã được "'+who+'" cập nhật lúc '+when+' — SAU KHI bạn mở tab này.\n\nNếu tiếp tục lưu, thay đổi của "'+who+'" ở CÙNG các trường bạn vừa sửa có thể bị ghi đè.\n\nBấm OK để vẫn LƯU, hoặc Cancel để HỦY và mở lại lô hàng.');
+          if(!proceed){ toast('Đã hủy lưu — vui lòng mở lại lô hàng','error'); return; }
+        }
+      }
+    }catch(e){}
+  }
   setLoading(true,'Đang lưu...');
   try{
     await fsSet(colName(detailTt),detailId,updatePayload);
@@ -3940,6 +3960,9 @@ function openLot(id, tt){
   lotIdx=id; currentTab=tt;
   const cols=tt==='xuat'?XCOLS:NCOLS;
   const r=id?cache[tt].find(x=>x._id===id)||{}:{};
+  // Ghi lại thời điểm cập nhật cuối cùng lúc MỞ form — dùng để phát hiện xung đột: nếu lúc
+  // LƯU mà updatedAt trên Firestore đã khác (người khác vừa sửa), sẽ cảnh báo trước khi ghi đè.
+  window._lotEditSnapshot=id?{id:id,tt:tt,updatedAt:r.updatedAt||0}:null;
   g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'Shipment List':'nhập khẩu');
   g('lotSub').textContent=id?(r.bookingNo||''):'';
   const pC=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname);
@@ -4323,6 +4346,32 @@ async function saveLot(){
     }
   }
   const detailText=isNew?'':(diffLines.length?diffLines.join('\n'):'Lưu lại (không có trường nào thay đổi)');
+  // ─ Kiểm tra XUNG ĐỘT: lô này có bị người khác cập nhật kể từ lúc mở form không? ─
+  // Đọc TRỰC TIẾP từ Firestore (không dùng cache local) để chắc chắn thấy đúng thay đổi mới nhất,
+  // kể cả khi listener realtime của máy này chưa kịp đồng bộ.
+  if(!isNew && window._lotEditSnapshot && window._lotEditSnapshot.id===docId){
+    try{
+      const freshSnap=await db.collection(colName(currentTab)).doc(docId).get();
+      if(freshSnap.exists){
+        const freshData=freshSnap.data();
+        const freshUpdatedAt=freshData.updatedAt||0;
+        if(freshUpdatedAt>window._lotEditSnapshot.updatedAt){
+          const who=freshData.updatedBy||'người khác';
+          const when=new Date(freshUpdatedAt).toLocaleString('vi-VN');
+          const proceed=confirm(
+            '⚠️ XUNG ĐỘT DỮ LIỆU\n\n'+
+            'Lô hàng này đã được "'+who+'" cập nhật lúc '+when+' — SAU KHI bạn mở form này.\n\n'+
+            'Nếu tiếp tục lưu, thay đổi của "'+who+'" có thể bị GHI ĐÈ mất.\n\n'+
+            'Bấm OK để vẫn LƯU ĐÈ (không khuyến khích), hoặc Cancel để HỦY và tải lại lô hàng mới nhất.'
+          );
+          if(!proceed){
+            toast('Đã hủy lưu — vui lòng mở lại lô hàng để lấy dữ liệu mới nhất','error');
+            return;
+          }
+        }
+      }
+    }catch(e){ /* Nếu kiểm tra xung đột lỗi (VD mất mạng tạm thời) — vẫn cho lưu bình thường, không chặn */ }
+  }
   setLoading(true,'Đang lưu...');
   try {
     await fsSet(colName(currentTab), docId, rec);
@@ -9475,6 +9524,7 @@ function renderPartners(){
       +'</button>';
     }).join('')}
     <button onclick="goTab('contract')" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--text-secondary);font-family:inherit"><i class="ti ti-file-contract" style="font-size:15px"></i>Contract List</button>
+    <button onclick="goTab('marketdata')" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--text-secondary);font-family:inherit"><i class="ti ti-chart-bar" style="font-size:15px"></i>Market Data</button>
   </div>
   <div id="crmListWrap">
     <div class="search-wrap" style="max-width:320px;margin-bottom:.75rem"><i class="ti ti-search"></i><input type="text" id="crmSearch" placeholder="Tìm theo tên, email..." oninput="renderCrmList()"/></div>
@@ -10855,6 +10905,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
       <div id="page-salesupport" style="display:none"></div>
       <div id="page-cocoquote" style="display:none"></div>
       <div id="page-contract" style="display:none"></div>
+      <div id="page-marketdata" style="display:none"></div>
       <div id="page-users" style="display:none"></div>
       <div id="page-docs" style="display:none"></div>
       <div id="page-costing-report" style="display:none"></div>
@@ -11811,6 +11862,293 @@ function scanOversizedDocs(){
     +'</div>';
 }
 window.scanOversizedDocs=scanOversizedDocs;
+
+// ═══════════════════════════════════════════════════════════
+//  MARKET DATA — Import dữ liệu thị trường từ file Excel hải quan (HS 1404/5305...)
+//  Phân loại Mụn dừa / Xơ dừa / Khác theo từ khóa trong Tên hàng, khớp với CRM hiện có
+//  qua MST (ưu tiên) hoặc tên công ty (dự phòng) để đánh dấu Active/New.
+// ═══════════════════════════════════════════════════════════
+window._marketShippers=window._marketShippers||[];
+
+function loadMarketShippers(cb){
+  db.collection('marketShippers').get().then(function(snap){
+    window._marketShippers=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+    if(cb)cb();
+  }).catch(function(){window._marketShippers=[];if(cb)cb();});
+}
+
+function _classifyCocoProduct(tenHang){
+  const s=(tenHang||'').toLowerCase();
+  const hasMun=/mụn dừa|mun dua|coco ?peat|coir pellet|coir block|coir brick|coir disc/.test(s);
+  const hasXo=/xơ dừa|xo dua|chỉ xơ|chi xo|coir fiber|coco fiber|coir mat|coir yarn/.test(s);
+  if(hasMun)return 'munDua';
+  if(hasXo)return 'xoDua';
+  return 'khac';
+}
+window._classifyCocoProduct=_classifyCocoProduct;
+
+function _normCompanyName(s){
+  return (s||'').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/đ/g,'d')
+    .replace(/[^a-z0-9]/g,'');
+}
+
+function _matchShipperToPartner(companyName, mst){
+  const partners=cache.partners||{};
+  const mstTrim=(mst||'').toString().trim();
+  if(mstTrim){
+    for(const key in partners){
+      const p=partners[key];
+      if(p.type==='shipper' && (p.mst||'').toString().trim()===mstTrim){
+        return {key:key, method:'mst'};
+      }
+    }
+  }
+  const normName=_normCompanyName(companyName);
+  if(normName){
+    for(const key in partners){
+      const p=partners[key];
+      if(p.type!=='shipper')continue;
+      const pn=_normCompanyName(p.fullname||p.enName||key);
+      if(pn && (pn===normName))return {key:key, method:'name'};
+    }
+    for(const key in partners){
+      const p=partners[key];
+      if(p.type!=='shipper')continue;
+      const pn=_normCompanyName(p.fullname||p.enName||key);
+      if(pn && pn.length>6 && (pn.includes(normName)||normName.includes(pn)))return {key:key, method:'name~'};
+    }
+  }
+  return {key:null, method:null};
+}
+window._matchShipperToPartner=_matchShipperToPartner;
+
+async function _processMarketExcelFiles(fileList){
+  const XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải thư viện Excel, thử lại sau vài giây','error');return [];}
+  const aggregated={};
+  for(let i=0;i<fileList.length;i++){
+    const file=fileList[i];
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+    const srcName=file.name.replace(/\.[^.]+$/,'');
+    rows.forEach(function(row){
+      const companyName=(row['Tên Cty xuất khẩu']||'').toString().trim();
+      if(!companyName)return;
+      const mst=(row['MST Cty xuất khẩu']||'').toString().trim();
+      const cnee=(row['Tên Cty nhập khẩu']||'').toString().trim();
+      const tenHang=row['Tên hàng']||'';
+      const usd=parseFloat(row['Trị giá USD'])||0;
+      const cat=_classifyCocoProduct(tenHang);
+      const key=mst||('__name__'+_normCompanyName(companyName));
+      if(!aggregated[key]){
+        aggregated[key]={companyName:companyName,mst:mst,usdMunDua:0,usdXoDua:0,usdKhac:0,usdTotal:0,rowCountMunDua:0,rowCountXoDua:0,rowCountKhac:0,cneesMap:{},sourceFiles:{}};
+      }
+      const a=aggregated[key];
+      if(companyName.length>a.companyName.length)a.companyName=companyName;
+      if(mst&&!a.mst)a.mst=mst;
+      a.usdTotal+=usd;
+      if(cat==='munDua'){a.usdMunDua+=usd;a.rowCountMunDua++;}
+      else if(cat==='xoDua'){a.usdXoDua+=usd;a.rowCountXoDua++;}
+      else {a.usdKhac+=usd;a.rowCountKhac++;}
+      if(cnee)a.cneesMap[cnee]=(a.cneesMap[cnee]||0)+usd;
+      a.sourceFiles[srcName]=true;
+    });
+  }
+  const round2=function(n){return Math.round(n*100)/100;};
+  return Object.values(aggregated).map(function(a){
+    const cnees=Object.entries(a.cneesMap).map(function(e){return {name:e[0],usd:round2(e[1])};}).sort(function(x,y){return y.usd-x.usd;});
+    const match=_matchShipperToPartner(a.companyName,a.mst);
+    return {
+      companyName:a.companyName, mst:a.mst,
+      usdMunDua:round2(a.usdMunDua), usdXoDua:round2(a.usdXoDua), usdKhac:round2(a.usdKhac), usdTotal:round2(a.usdTotal),
+      rowCountMunDua:a.rowCountMunDua, rowCountXoDua:a.rowCountXoDua, rowCountKhac:a.rowCountKhac,
+      cnees:cnees, sourceFiles:Object.keys(a.sourceFiles),
+      status: match.key?'active':'new', matchedPartnerKey: match.key, matchMethod: match.method
+    };
+  }).sort(function(x,y){return y.usdTotal-x.usdTotal;});
+}
+window._processMarketExcelFiles=_processMarketExcelFiles;
+
+window._mdFilter=window._mdFilter||{status:'',cat:''};
+function renderMarketData(){
+  const pg=g('page-marketdata'); if(!pg)return;
+  const rows=window._marketShippers||[];
+  const f=window._mdFilter;
+  const filtered=rows.filter(function(r){
+    if(f.status&&r.status!==f.status)return false;
+    if(f.cat==='mun'&&!(r.usdMunDua>0))return false;
+    if(f.cat==='xo'&&!(r.usdXoDua>0))return false;
+    return true;
+  }).sort(function(a,b){return (b.usdTotal||0)-(a.usdTotal||0);});
+  const totalActive=rows.filter(function(r){return r.status==='active';}).length;
+  const totalNew=rows.filter(function(r){return r.status==='new';}).length;
+  const money=function(n){return '$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0});};
+  pg.innerHTML=`
+  <div style="font-weight:700;font-size:15px;margin-bottom:.25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-chart-bar" style="font-size:19px;color:var(--green)"></i>Market Data — Dữ liệu thị trường Mụn dừa / Xơ dừa</div>
+  <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1rem">Nhập từ dữ liệu hải quan (Excel theo HS code) để nắm toàn cảnh thị trường: ai đang xuất, sản lượng (USD), khách hàng của họ.</div>
+
+  <div style="display:flex;gap:10px;margin-bottom:1.1rem;flex-wrap:wrap">
+    <div style="padding:.75rem 1.1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid var(--green)"><div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase">Đã Active</div><div style="font-size:17px;font-weight:800;color:var(--green-dark)">${totalActive}</div></div>
+    <div style="padding:.75rem 1.1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid var(--gold)"><div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase">New (chưa trong CRM)</div><div style="font-size:17px;font-weight:800;color:var(--gold-dark)">${totalNew}</div></div>
+    <div style="padding:.75rem 1.1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid #1a4b8c"><div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase">Tổng shipper thị trường</div><div style="font-size:17px;font-weight:800;color:#1a4b8c">${rows.length}</div></div>
+    <div style="flex:1"></div>
+    <button class="btn pri" onclick="openMarketImportPopup()"><i class="ti ti-upload"></i> Import Excel Hải quan</button>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+    <select onchange="window._mdFilter.status=this.value;renderMarketData()" style="width:170px">
+      <option value="">Tất cả trạng thái</option>
+      <option value="active" ${f.status==='active'?'selected':''}>Active</option>
+      <option value="new" ${f.status==='new'?'selected':''}>New</option>
+    </select>
+    <select onchange="window._mdFilter.cat=this.value;renderMarketData()" style="width:170px">
+      <option value="">Tất cả mặt hàng</option>
+      <option value="mun" ${f.cat==='mun'?'selected':''}>Có Mụn dừa</option>
+      <option value="xo" ${f.cat==='xo'?'selected':''}>Có Xơ dừa</option>
+    </select>
+  </div>
+
+  ${!rows.length?'<div style="padding:2.5rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:12px"><i class="ti ti-database-off" style="font-size:30px;display:block;margin-bottom:8px"></i>Chưa có dữ liệu thị trường — bấm "Import Excel Hải quan" để bắt đầu.</div>':
+  '<div class="table-card"><div class="table-wrap"><table>'
+    +'<thead><tr><th>Trạng thái</th><th>Shipper (theo hải quan)</th><th>MST</th><th style="text-align:right">Mụn dừa (USD)</th><th style="text-align:right">Xơ dừa (USD)</th><th style="text-align:right">Khác (USD)</th><th style="text-align:right">Tổng (USD)</th><th>Top Cnee</th><th></th></tr></thead>'
+    +'<tbody>'+filtered.map(function(r){
+      const topCnee=(r.cnees||[]).slice(0,2).map(function(c){return c.name;}).join(', ')||'—';
+      return '<tr>'
+        +'<td>'+(r.status==='active'?'<span class="bdg bdg-g">Active</span>':'<span class="bdg bdg-a">New</span>')+'</td>'
+        +'<td style="font-weight:600;cursor:pointer" onclick="openMarketShipperDetail(\''+r._id+'\')">'+r.companyName+(r.matchMethod?' <i class="ti ti-'+(r.matchMethod==='mst'?'fingerprint':'text-caption')+'" title="Khớp theo '+(r.matchMethod==='mst'?'MST':'tên')+'" style="font-size:11px;color:var(--text-tertiary)"></i>':'')+'</td>'
+        +'<td style="font-size:11.5px;color:var(--text-secondary)">'+(r.mst||'—')+'</td>'
+        +'<td style="text-align:right;color:'+(r.usdMunDua>0?'var(--green-dark)':'var(--text-tertiary)')+'">'+(r.usdMunDua>0?money(r.usdMunDua):'—')+'</td>'
+        +'<td style="text-align:right;color:'+(r.usdXoDua>0?'#1a4b8c':'var(--text-tertiary)')+'">'+(r.usdXoDua>0?money(r.usdXoDua):'—')+'</td>'
+        +'<td style="text-align:right;color:var(--text-tertiary)">'+(r.usdKhac>0?money(r.usdKhac):'—')+'</td>'
+        +'<td style="text-align:right;font-weight:700">'+money(r.usdTotal)+'</td>'
+        +'<td style="font-size:11px;color:var(--text-secondary);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(r.cnees||[]).map(function(c){return c.name;}).join(', ')+'">'+topCnee+'</td>'
+        +'<td><button class="btn sm" onclick="event.stopPropagation();_mdToggleStatus(\''+r._id+'\')">'+(r.status==='active'?'→ New':'→ Active')+'</button></td>'
+      +'</tr>';
+    }).join('')+'</tbody>'
+  +'</table></div></div>'}`;
+}
+window.renderMarketData=renderMarketData;
+
+async function _mdToggleStatus(id){
+  const r=(window._marketShippers||[]).find(function(x){return x._id===id;});
+  if(!r)return;
+  const newStatus=r.status==='active'?'new':'active';
+  try{
+    await db.collection('marketShippers').doc(id).update({status:newStatus,matchMethod:newStatus==='active'?'manual':null,updatedAt:Date.now()});
+    r.status=newStatus;
+    if(newStatus==='new')r.matchedPartnerKey=null;
+    renderMarketData();
+    toast('Đã chuyển sang '+(newStatus==='active'?'Active':'New'));
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+}
+window._mdToggleStatus=_mdToggleStatus;
+
+function openMarketShipperDetail(id){
+  const r=(window._marketShippers||[]).find(function(x){return x._id===id;});
+  if(!r)return;
+  const money=function(n){return '$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0});};
+  let ov=g('mdDetailOv');
+  if(!ov){ov=document.createElement('div');ov.id='mdDetailOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:560px">'
+    +'<div class="mhdr"><div><div class="mtitle">'+r.companyName+'</div><div class="msub">MST: '+(r.mst||'—')+' • '+(r.status==='active'?'Active':'New')+'</div></div><button class="rac" onclick="closeOv(\'mdDetailOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div style="padding:1rem 1.25rem">'
+      +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:1rem">'
+        +'<div style="padding:.6rem;background:var(--bg-secondary);border-radius:8px;text-align:center"><div style="font-size:10px;color:var(--text-secondary)">Mụn dừa</div><div style="font-weight:700;color:var(--green-dark)">'+money(r.usdMunDua)+'</div></div>'
+        +'<div style="padding:.6rem;background:var(--bg-secondary);border-radius:8px;text-align:center"><div style="font-size:10px;color:var(--text-secondary)">Xơ dừa</div><div style="font-weight:700;color:#1a4b8c">'+money(r.usdXoDua)+'</div></div>'
+        +'<div style="padding:.6rem;background:var(--bg-secondary);border-radius:8px;text-align:center"><div style="font-size:10px;color:var(--text-secondary)">Khác</div><div style="font-weight:700;color:var(--text-tertiary)">'+money(r.usdKhac)+'</div></div>'
+      +'</div>'
+      +'<div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:.5rem">Danh sách Cnee (khách hàng của shipper này)</div>'
+      +'<div style="max-height:280px;overflow-y:auto">'+(r.cnees||[]).map(function(c){
+        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border-light);font-size:12.5px"><span>'+c.name+'</span><strong>'+money(c.usd)+'</strong></div>';
+      }).join('')+'</div>'
+      +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:.75rem">Nguồn: '+(r.sourceFiles||[]).join(', ')+'</div>'
+    +'</div>'
+    +'<div class="mftr">'+(r.status==='active'?('<div style="font-size:11.5px;color:var(--text-secondary);margin-right:auto">Đã khớp CRM: <strong>'+(r.matchedPartnerKey||'—')+'</strong></div>'):'')+'<button class="btn" onclick="closeOv(\'mdDetailOv\')">Đóng</button></div>'
+  +'</div>';
+  openOv('mdDetailOv');
+}
+window.openMarketShipperDetail=openMarketShipperDetail;
+
+// ═══ Popup Import: chọn file → xem trước → xác nhận lưu ═══
+window._mdPreviewData=[];
+function openMarketImportPopup(){
+  let ov=g('mdImportOv');
+  if(!ov){ov=document.createElement('div');ov.id='mdImportOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:960px">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-upload" style="margin-right:6px"></i>Import dữ liệu thị trường từ Excel Hải quan</div>'
+    +'<div class="msub">Chọn 1 hoặc nhiều file Excel (mỗi file 1 mã HS) — VD: 1404_X_T6_2026.xlsx, 5305_X_T6_2026.xlsx</div></div>'
+    +'<button class="rac" onclick="closeOv(\'mdImportOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div style="padding:1rem 1.25rem">'
+      +'<input type="file" id="mdFileInput" multiple accept=".xlsx,.xls" style="margin-bottom:.75rem"/>'
+      +'<button class="btn pri" onclick="_mdRunPreview()" style="margin-left:8px"><i class="ti ti-eye"></i> Xem trước</button>'
+      +'<div id="mdPreviewWrap" style="margin-top:1rem"></div>'
+    +'</div>'
+    +'<div class="mftr" id="mdImportFooter"><button class="btn" onclick="closeOv(\'mdImportOv\')">Hủy</button></div>'
+  +'</div>';
+  openOv('mdImportOv');
+}
+window.openMarketImportPopup=openMarketImportPopup;
+
+async function _mdRunPreview(){
+  const input=g('mdFileInput');
+  const files=input&&input.files;
+  if(!files||!files.length){toast('Chọn ít nhất 1 file Excel','error');return;}
+  setLoading(true,'Đang đọc và phân tích file Excel...');
+  try{
+    const data=await _processMarketExcelFiles(files);
+    window._mdPreviewData=data;
+    const wrap=g('mdPreviewWrap');
+    const money=function(n){return '$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0});};
+    const nActive=data.filter(function(d){return d.status==='active';}).length;
+    const nNew=data.length-nActive;
+    wrap.innerHTML='<div style="font-size:12.5px;margin-bottom:.6rem"><b>'+data.length+'</b> shipper được tổng hợp — <span style="color:var(--green-dark);font-weight:700">'+nActive+' Active</span> (khớp CRM hiện có), <span style="color:var(--gold-dark);font-weight:700">'+nNew+' New</span> (chưa có trong CRM).</div>'
+      +'<div style="max-height:400px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px"><table style="width:100%;font-size:12px">'
+      +'<thead style="position:sticky;top:0;background:var(--bg-secondary)"><tr><th style="padding:6px 10px;text-align:left">Trạng thái</th><th style="padding:6px 10px;text-align:left">Shipper</th><th style="padding:6px 10px;text-align:left">MST</th><th style="padding:6px 10px;text-align:right">Mụn dừa</th><th style="padding:6px 10px;text-align:right">Xơ dừa</th><th style="padding:6px 10px;text-align:right">Khác</th><th style="padding:6px 10px;text-align:right">Tổng USD</th></tr></thead>'
+      +'<tbody>'+data.map(function(d){
+        return '<tr style="border-top:1px solid var(--border-light)">'
+          +'<td style="padding:6px 10px">'+(d.status==='active'?'<span class="bdg bdg-g">Active</span>':'<span class="bdg bdg-a">New</span>')+(d.matchMethod?' <span style="font-size:10px;color:var(--text-tertiary)">('+(d.matchMethod==='mst'?'MST':'tên')+')</span>':'')+'</td>'
+          +'<td style="padding:6px 10px;font-weight:600">'+d.companyName+'</td>'
+          +'<td style="padding:6px 10px;color:var(--text-secondary)">'+(d.mst||'—')+'</td>'
+          +'<td style="padding:6px 10px;text-align:right">'+(d.usdMunDua>0?money(d.usdMunDua):'—')+'</td>'
+          +'<td style="padding:6px 10px;text-align:right">'+(d.usdXoDua>0?money(d.usdXoDua):'—')+'</td>'
+          +'<td style="padding:6px 10px;text-align:right;color:var(--text-tertiary)">'+(d.usdKhac>0?money(d.usdKhac):'—')+'</td>'
+          +'<td style="padding:6px 10px;text-align:right;font-weight:700">'+money(d.usdTotal)+'</td>'
+        +'</tr>';
+      }).join('')+'</tbody></table></div>';
+    g('mdImportFooter').innerHTML='<button class="btn" onclick="closeOv(\'mdImportOv\')">Hủy</button><button class="btn pri" onclick="_mdConfirmImport()"><i class="ti ti-check"></i> Xác nhận Import ('+data.length+' shipper)</button>';
+  }catch(e){toast('Lỗi đọc file: '+e.message,'error');}
+  setLoading(false);
+}
+window._mdRunPreview=_mdRunPreview;
+
+async function _mdConfirmImport(){
+  const data=window._mdPreviewData||[];
+  if(!data.length){toast('Không có dữ liệu để import','error');return;}
+  setLoading(true,'Đang lưu '+data.length+' shipper...');
+  try{
+    const batchSize=400; // giới hạn Firestore batch 500 — chừa an toàn
+    for(let i=0;i<data.length;i+=batchSize){
+      const batch=db.batch();
+      data.slice(i,i+batchSize).forEach(function(d){
+        const docId=(d.mst||_normCompanyName(d.companyName)).slice(0,120)||('md_'+Date.now()+Math.random().toString(36).slice(2,6));
+        const ref=db.collection('marketShippers').doc(docId);
+        batch.set(ref,Object.assign({},d,{importedAt:Date.now(),updatedAt:Date.now()}),{merge:true});
+      });
+      await batch.commit();
+    }
+    toast('Đã import '+data.length+' shipper vào Market Data');
+    closeOv('mdImportOv');
+    loadMarketShippers(function(){renderMarketData();});
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._mdConfirmImport=_mdConfirmImport;
 
 function _notesToggleBox(key){
   window._settingsOpen=window._settingsOpen||{};
