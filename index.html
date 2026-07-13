@@ -700,7 +700,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v303';
+window.APP_BUILD='v304';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1692,37 +1692,44 @@ async function saveBillStatus(){
 }
 window.saveBillStatus=saveBillStatus;
 
-function renderLot(tt){
-  const rows=cache[tt];
-  const done=rows.filter(r=>r.status==='Đã giao'||r.status==='Đã nhận').length;
-  const transit=rows.filter(r=>r.status==='Đang vận chuyển').length;
-  const tasksDone=rows.filter(r=>r.tasks&&TASKS.every(t=>r.tasks[t.key])).length;
-  // "Chờ xử lý" = các lô CHƯA ĐƯỢC KHÓA (còn có thể chỉnh sửa/xử lý tiếp)
+// Tính và hiển thị 3 ô KPI (Tổng lô hàng / Chờ xử lý / Trạng thái VST) khi bấm nút "Disp" —
+// tách khỏi renderLot() để không phải tính lại mỗi lần bảng render (giúp thao tác mượt hơn),
+// chỉ tính khi người dùng thật sự cần xem số liệu.
+function computeShipmentKpis(tt){
+  const rows=cache[tt]||[];
   const pendingCount=rows.filter(r=>!r.locked).length;
-  // "Trạng thái VST" = các lô CHƯA vô sổ tàu (mọi ETD, không giới hạn chỉ ETD<=hôm nay —
-  // giới hạn chặt trước đây khiến số hiển thị sai thành 0 dù còn nhiều lô thực sự cần VST).
-  // Sắp xếp theo ETD gần nhất để ưu tiên hiển thị đúng thứ tự khẩn cấp.
+  // "Trạng thái VST" = các lô đã bật theo dõi VST nhưng chưa xác nhận (mọi ETD)
   const vstPending=rows.filter(r=>r.vstEnabled&&!r.vstConfirmed).sort((a,b)=>(a.etd||'').localeCompare(b.etd||''));
   const vstNeed=vstPending.length;
+  const elTotal=g('kpiTotal_'+tt), elPending=g('kpiPending_'+tt), elVst=g('kpiVst_'+tt);
+  if(elTotal){elTotal.textContent=rows.length;elTotal.style.color='var(--text-primary)';}
+  if(elPending){elPending.textContent=pendingCount;elPending.style.color='var(--gold-dark)';}
+  if(elVst){elVst.innerHTML=vstNeed+' <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần VST</span>';elVst.style.color='var(--text-primary)';}
+}
+window.computeShipmentKpis=computeShipmentKpis;
+
+function renderLot(tt){
+  const rows=cache[tt];
   const pg=g(tt==='xuat'&&g('xuat-list-view')?'xuat-list-view':'page-'+tt);
   pg.innerHTML=`
-  <div style="display:grid;grid-template-columns:140px 140px 1fr;gap:10px;margin-bottom:12px">
+  <div style="display:grid;grid-template-columns:140px 140px 1fr auto;gap:10px;margin-bottom:12px;align-items:stretch">
     <div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:8px 10px;position:relative;overflow:hidden">
       <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green)"></div>
-      <div style="font-size:9px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-tertiary);font-weight:600;white-space:nowrap">Tổng lô hàng</div><div style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:600;color:var(--text-primary)">${rows.length}</div>
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-tertiary);font-weight:600;white-space:nowrap">Tổng lô hàng</div><div id="kpiTotal_${tt}" style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:600;color:var(--text-tertiary)">—</div>
     </div>
     <div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:8px 10px;position:relative;overflow:hidden">
       <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--gold)"></div>
-      <div style="font-size:9px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-tertiary);font-weight:600;white-space:nowrap">Chờ xử lý</div><div style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:600;color:var(--gold-dark)">${pendingCount}</div>
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-tertiary);font-weight:600;white-space:nowrap">Chờ xử lý</div><div id="kpiPending_${tt}" style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:600;color:var(--text-tertiary)">—</div>
     </div>
     <div style="background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:9px 14px;position:relative;overflow:hidden">
       <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--coral)"></div>
       <div style="display:flex;align-items:center;gap:10px">
         <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-tertiary);font-weight:600;white-space:nowrap">Trạng thái VST</div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--text-primary);white-space:nowrap">${vstNeed} <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần VST</span></div>
+        <div id="kpiVst_${tt}" style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;color:var(--text-tertiary);white-space:nowrap">— <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần VST</span></div>
         <div id="vstWarnBar_${tt}" style="flex:1;min-width:0"></div>
       </div>
     </div>
+    <button class="btn pri" onclick="computeShipmentKpis('${tt}')" title="Tải lại và tính toán lại 3 ô thống kê bên trái" style="flex-shrink:0"><i class="ti ti-refresh"></i> Refresh</button>
   </div>
   <div class="stats-grid" style="display:none">
     <div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;padding:.4rem 0;width:100%">
@@ -1761,6 +1768,7 @@ function renderLot(tt){
   </div>`;
   renderLotTable(tt);
   renderVstWarning(tt);
+  computeShipmentKpis(tt);
   _startVstWarnAutoRefresh(tt);
 }
 
@@ -10555,13 +10563,13 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .sb-logo>div>div:last-child{color:#64748B!important}
 .sb-divider{height:1px;background:rgba(255,255,255,.07);margin:.4rem .75rem}
 .sb-section{padding:.7rem .9rem .35rem .95rem;font-size:10px;font-weight:700;color:#5E7383;text-transform:uppercase;letter-spacing:.8px}
-.sb-item{display:flex;align-items:center;gap:10px;padding:8px 11px;margin:1px .5rem;border-radius:8px;cursor:pointer;color:#B9C6D0;font-size:12.5px;border:none;background:transparent;width:calc(100% - 1rem);text-align:left;position:relative;transition:all .15s}
-.sb-item:hover{background:var(--ink-2);color:#E4EAEE}
-.sb-item.active{background:var(--ink-3);color:#fff;font-weight:600}
-.sb-item.active::before{content:"";position:absolute;left:-.5rem;top:50%;transform:translateY(-50%);width:3px;height:18px;background:var(--gold);border-radius:0 3px 3px 0}
+.sb-item{display:flex;align-items:center;gap:10px;padding:8px 11px;margin:2px .5rem;border-radius:10px;cursor:pointer;color:#B9C6D0;font-size:12.5px;border:1.5px dashed rgba(255,255,255,.14);background:transparent;width:calc(100% - 1rem);text-align:left;position:relative;transition:all .15s;transform:rotate(-.5deg)}
+.sb-item:hover{background:var(--ink-2);color:#E4EAEE;border-color:rgba(201,154,60,.4)}
+.sb-item.active{background:var(--ink-3);color:#fff;font-weight:600;border-color:var(--gold)}
+.sb-item.active::before{content:"";position:absolute;left:-.5rem;top:50%;transform:translateY(-50%) rotate(.5deg);width:3px;height:18px;background:var(--gold);border-radius:0 3px 3px 0}
 .sb-item.active .ti{color:var(--gold)}
 .sb-item .ti{font-size:16px;width:18px;text-align:center;flex-shrink:0}
-.sb-badge{margin-left:auto;background:var(--coral);color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:20px}
+.sb-badge{margin-left:auto;background:var(--coral);color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:20px;border:1.5px dashed rgba(255,255,255,.55);font-family:var(--font-disp)}
 .sb-footer{margin-top:auto;padding:.75rem .5rem;border-top:1px solid rgba(255,255,255,.07)}
 .user-row{display:flex;align-items:center;gap:8px;padding:8px;border-radius:10px;cursor:default}
 .user-row>div>div:first-child{color:#F1F5F9!important}
