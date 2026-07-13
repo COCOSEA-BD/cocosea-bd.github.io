@@ -698,7 +698,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v297';
+window.APP_BUILD='v298';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1629,6 +1629,67 @@ function getDeadlineAlerts(){
 /* ─────────────────────────────────────────────
    LOT LIST
 ───────────────────────────────────────────── */
+// ═══ Hold Bill / Released Telex — chỉ áp dụng cho job Xuất khẩu (Job ID bắt đầu bằng XK) ═══
+function _billStatusInfo(r){
+  if(r.billStatus==='released')return{label:'Released Telex'+(r.billReleaseDate?' · '+fd(r.billReleaseDate):''),bg:'var(--green-bg)',color:'var(--green-dark)'};
+  if(r.billStatus==='hold')return{label:'Hold Bill',bg:'var(--coral-bg,#FBEAE5)',color:'var(--coral-dark,#8C3B29)'};
+  return{label:'— Bill —',bg:'var(--gray-bg)',color:'var(--gray-text)'};
+}
+window._billStatusInfo=_billStatusInfo;
+
+function openBillStatusPopup(id,tt){
+  const r=cache[tt]&&cache[tt].find(function(x){return x._id===id;});
+  if(!r)return;
+  window._billStatusCtx={id:id,tt:tt};
+  window._billStatusChoice=r.billStatus||'hold';
+  let ov=g('billStatusOv');
+  if(!ov){ov=document.createElement('div');ov.id='billStatusOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML=`<div class="modal" style="max-width:400px">
+    <div class="mhdr"><div><div class="mtitle"><i class="ti ti-file-text" style="margin-right:6px"></i>Trạng thái Bill — ${r.jobNo||''}</div></div>
+    <div class="mhdr-btns"><button class="rac" onclick="closeOv('billStatusOv')"><i class="ti ti-x"></i></button></div></div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin:0 0 1rem">
+      <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1.5px solid var(--border-light);border-radius:8px;cursor:pointer" id="billChoiceLbl_hold" onclick="_billStatusChoose('hold')">
+        <input type="radio" name="billChoice" value="hold" ${(!r.billStatus||r.billStatus==='hold')?'checked':''} style="width:16px;height:16px"/>
+        <div><div style="font-weight:700;font-size:13px;color:var(--coral-dark,#8C3B29)">Hold Bill</div><div style="font-size:11px;color:var(--text-secondary)">Chưa release, giữ Bill</div></div>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1.5px solid var(--border-light);border-radius:8px;cursor:pointer" id="billChoiceLbl_released" onclick="_billStatusChoose('released')">
+        <input type="radio" name="billChoice" value="released" ${r.billStatus==='released'?'checked':''} style="width:16px;height:16px"/>
+        <div><div style="font-weight:700;font-size:13px;color:var(--green-dark)">Released Telex</div><div style="font-size:11px;color:var(--text-secondary)">Đã release bằng Telex Release</div></div>
+      </label>
+      <div id="billReleaseDateWrap" style="display:${r.billStatus==='released'?'block':'none'}">
+        <label class="lbl">Ngày Release</label>
+        <input type="date" id="billReleaseDate" value="${r.billReleaseDate||new Date().toISOString().slice(0,10)}" style="width:100%"/>
+      </div>
+    </div>
+    <div class="mftr"><button class="btn" onclick="closeOv('billStatusOv')">Hủy</button><button class="btn pri" onclick="saveBillStatus()"><i class="ti ti-check"></i> Lưu</button></div>
+  </div>`;
+  openOv('billStatusOv');
+}
+window.openBillStatusPopup=openBillStatusPopup;
+
+function _billStatusChoose(v){
+  window._billStatusChoice=v;
+  g('billChoiceLbl_hold').style.borderColor=v==='hold'?'var(--coral-dark,#8C3B29)':'var(--border-light)';
+  g('billChoiceLbl_released').style.borderColor=v==='released'?'var(--green-dark)':'var(--border-light)';
+  g('billReleaseDateWrap').style.display=v==='released'?'block':'none';
+}
+window._billStatusChoose=_billStatusChoose;
+
+async function saveBillStatus(){
+  const ctx=window._billStatusCtx; if(!ctx)return;
+  const choice=window._billStatusChoice||'hold';
+  const releaseDate=choice==='released'?(g('billReleaseDate')?.value||''):'';
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(ctx.tt),ctx.id,{billStatus:choice,billReleaseDate:releaseDate,updatedAt:Date.now()});
+    toast('Đã cập nhật trạng thái Bill');
+    closeOv('billStatusOv');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveBillStatus=saveBillStatus;
+
 function renderLot(tt){
   const rows=cache[tt];
   const done=rows.filter(r=>r.status==='Đã giao'||r.status==='Đã nhận').length;
@@ -1887,7 +1948,13 @@ function renderLotTable(tt){
             const ost=_ocfStatusInfo(ocfSv);
             if(ost.key)ocfBadge='<div style="margin-top:3px"><span onclick="event.stopPropagation();openDetail(\''+r._id+'\',\''+tt+'\',\'svc\')" style="cursor:pointer;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px;background:'+ost.bg+';color:'+ost.color+';white-space:nowrap" title="OCF — bấm để vào tab Dịch vụ">OCF: '+ost.label+'</span></div>';
           }
-          return`<td style="text-align:center"><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>${ocfBadge}</td>`;
+          // Dòng Hold Bill / Released Telex — CHỈ hiện với job dạng XK (Xuất khẩu)
+          let billBadge='';
+          if((r.jobNo||'').toUpperCase().startsWith('XK')){
+            const bst=_billStatusInfo(r);
+            billBadge='<div style="margin-top:3px"><span class="bdg" onclick="event.stopPropagation();openBillStatusPopup(\''+r._id+'\',\''+tt+'\')" style="cursor:pointer;background:'+bst.bg+';color:'+bst.color+'" title="Bấm để đổi trạng thái Bill">'+bst.label+'</span></div>';
+          }
+          return`<td style="text-align:center"><span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>${ocfBadge}${billBadge}</td>`;
         }
         if(c.k==='volType'){
           const tc=r.typeCont||''; const isRf=tc.includes('R');
