@@ -20,6 +20,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 <script>
 // Load XLSX with multiple CDN fallbacks
 (function(){
@@ -77,6 +78,7 @@ if(!window.PDFLib){
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
+const storage = firebase.storage();
 
 // Default bank accounts (admin can edit in Firestore _config/banks)
 window._bankAccounts=[
@@ -698,7 +700,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v299';
+window.APP_BUILD='v300';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11689,6 +11691,94 @@ function renderNotesSharedTab(){
 
 // Toggle riêng cho 2 box "Danh sách Tên hàng" / "Thông tin tài khoản" trong trang Ghi chú
 // (không dùng _stgToggle vì ID không khớp — chỉ cần đổi trạng thái + hiện/ẩn trực tiếp)
+// ═══ Khắc phục document Firestore vượt giới hạn 1MB (do dữ liệu base64 cũ) ═══
+// Dùng update() với FieldValue.delete() CHỈ xóa field lớn — write này làm document NHỎ ĐI
+// nên vẫn được Firestore chấp nhận dù document hiện đang vượt giới hạn (write khiến nó
+// nhỏ lại thì luôn được phép, chỉ write khiến nó lớn hơn/giữ nguyên mới bị chặn).
+async function repairOversizedDoc(){
+  if(currentProfile?.role!=='admin'){toast('Chỉ Admin được dùng công cụ này','error');return;}
+  const tt=g('docrepairTt')?.value||'xuat';
+  const id=(g('docrepairId')?.value||'').trim();
+  if(!id){toast('Nhập ID document','error');return;}
+  const col=tt==='xuat'?'lots_xuat':'lots_nhap';
+  const resBox=g('docrepairResult');
+  setLoading(true,'Đang kiểm tra document...');
+  try{
+    const snap=await db.collection(col).doc(id).get();
+    if(!snap.exists){toast('Không tìm thấy document này','error');setLoading(false);return;}
+    const data=snap.data();
+    const delMap={};
+    let foundCount=0; let foundBytes=0;
+    const svcs=data.svcs||{};
+    Object.keys(svcs).forEach(function(k){
+      if(svcs[k]&&svcs[k].dnData){
+        foundBytes+=(svcs[k].dnData.length||0);
+        delMap['svcs.'+k+'.dnData']=firebase.firestore.FieldValue.delete();
+        foundCount++;
+      }
+    });
+    (data.savedDocs||[]).forEach(function(dc,i){
+      if(dc&&dc.fileData){foundBytes+=(dc.fileData.length||0);}
+    });
+    if((data.savedDocs||[]).some(function(dc){return dc&&dc.fileData;})){
+      // savedDocs là mảng — phải viết lại toàn bộ mảng đã xóa fileData (Firestore không xóa theo path trong mảng)
+      const cleanedDocs=(data.savedDocs||[]).map(function(dc){
+        if(dc&&dc.fileData){const c=Object.assign({},dc); delete c.fileData; c._removedNote='File cũ (base64) đã bị dọn do vượt giới hạn document — vui lòng upload lại.'; return c;}
+        return dc;
+      });
+      delMap['savedDocs']=cleanedDocs;
+      foundCount++;
+    }
+    if(foundCount===0){
+      resBox.innerHTML='<div style="color:var(--green)"><i class="ti ti-check"></i> Document này không có dữ liệu base64 cũ — không cần dọn.</div>';
+      setLoading(false); return;
+    }
+    await db.collection(col).doc(id).update(delMap);
+    resBox.innerHTML='<div style="color:var(--green);font-weight:600"><i class="ti ti-check"></i> Đã dọn '+foundCount+' trường dữ liệu lớn (~'+Math.round(foundBytes/1024)+' KB). Document đã có thể lưu lại bình thường. Vui lòng vào lô hàng này để upload lại các file Debit Note/chứng từ đã mất.</div>';
+    toast('Đã khắc phục document');
+  }catch(e){
+    resBox.innerHTML='<div style="color:var(--red)"><i class="ti ti-x"></i> Lỗi: '+e.message+'</div>';
+    toast('Lỗi: '+e.message,'error');
+  }
+  setLoading(false);
+}
+window.repairOversizedDoc=repairOversizedDoc;
+
+// Quét cache hiện có (đã tải về client) để tìm các lô còn dữ liệu base64 cũ — cảnh báo sớm
+// trước khi chúng cũng vượt giới hạn 1MB. Đây là quét trên dữ liệu ĐÃ TẢI, không phải toàn bộ
+// Firestore (Firestore không hỗ trợ query theo kích thước field), nên chỉ mang tính tham khảo
+// cho các lô người dùng đang thao tác gần đây.
+function scanOversizedDocs(){
+  const resBox=g('docrepairResult');
+  resBox.innerHTML='<div style="color:var(--text-secondary)">Đang quét...</div>';
+  const found=[];
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      let bytes=0; let hasOld=false;
+      const svcs=r.svcs||{};
+      Object.keys(svcs).forEach(function(k){ if(svcs[k]&&svcs[k].dnData){bytes+=svcs[k].dnData.length;hasOld=true;} });
+      (r.savedDocs||[]).forEach(function(dc){ if(dc&&dc.fileData){bytes+=dc.fileData.length;hasOld=true;} });
+      if(hasOld)found.push({id:r._id,tt:tt,jobNo:r.jobNo||r.bookingNo||r._id,bytes:bytes});
+    });
+  });
+  found.sort(function(a,b){return b.bytes-a.bytes;});
+  if(!found.length){
+    resBox.innerHTML='<div style="color:var(--green)"><i class="ti ti-check"></i> Không tìm thấy lô nào (trong dữ liệu đã tải) còn dữ liệu base64 cũ.</div>';
+    return;
+  }
+  resBox.innerHTML='<div style="margin-bottom:6px;font-weight:600">Tìm thấy '+found.length+' lô còn dữ liệu base64 cũ (chỉ tính trong dữ liệu đã tải về, có thể chưa đủ toàn bộ):</div>'
+    +'<div style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto">'
+    +found.map(function(f){
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--bg-secondary);border-radius:6px">'
+        +'<span>'+f.jobNo+' <span style="color:var(--text-tertiary)">('+(f.tt==='xuat'?'XK':'NK')+' · '+f.id+')</span></span>'
+        +'<span style="display:flex;align-items:center;gap:8px"><b style="color:'+(f.bytes>800000?'var(--red)':'var(--gold-dark)')+'">~'+Math.round(f.bytes/1024)+' KB</b>'
+        +'<button class="btn sm" onclick="g(\'docrepairTt\').value=\''+f.tt+'\';g(\'docrepairId\').value=\''+f.id+'\';repairOversizedDoc()">Dọn ngay</button></span>'
+      +'</div>';
+    }).join('')
+    +'</div>';
+}
+window.scanOversizedDocs=scanOversizedDocs;
+
 function _notesToggleBox(key){
   window._settingsOpen=window._settingsOpen||{};
   window._settingsOpen[key]=!window._settingsOpen[key];
@@ -11914,6 +12004,20 @@ function renderSettings(){
     +stgBox('ports','ti-anchor','Danh mục Các cảng và ICD',
       '',
       _renderPortsIcdSettingsContent()
+    )
+
+    +stgBox('docrepair','ti-alert-triangle','Khắc phục Document quá giới hạn (1MB)',
+      '',
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Firestore giới hạn cứng <b>1MB/document</b>. Các file Debit Note/chứng từ upload <b>trước bản sửa lỗi</b> được lưu trực tiếp dạng base64 trong document, có thể khiến lô hàng vượt giới hạn và <b>không lưu được gì nữa</b> (kể cả đổi trạng thái thanh toán). Từ bản này, file upload mới đã chuyển sang Firebase Storage (nhẹ hơn nhiều). Công cụ dưới đây dọn dữ liệu base64 CŨ khỏi 1 lô cụ thể để mở khóa lại — sau khi dọn, cần <b>upload lại</b> các file Debit Note/chứng từ của lô đó (đường link cũ sẽ mất, do dữ liệu base64 gây lỗi đã bị xóa).</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:.75rem">'
+        +'<select id="docrepairTt" style="width:120px"><option value="xuat">Xuất khẩu</option><option value="nhap">Nhập khẩu</option></select>'
+        +'<input type="text" id="docrepairId" placeholder="ID document (VD: mq4jkgnwy8yr — copy từ thông báo lỗi)" style="flex:1;min-width:260px"/>'
+        +'<button class="btn pri" onclick="repairOversizedDoc()"><i class="ti ti-tool"></i> Dọn & Khắc phục</button>'
+      +'</div>'
+      +'<div style="display:flex;gap:8px;margin-bottom:.75rem">'
+        +'<button class="btn" onclick="scanOversizedDocs()"><i class="ti ti-search"></i> Quét toàn bộ lô có nguy cơ (dữ liệu base64 cũ)</button>'
+      +'</div>'
+      +'<div id="docrepairResult" style="font-size:12px"></div>'
     )
 
     +stgBox('bank','ti-building-bank','Tài khoản ngân hàng',
@@ -12743,32 +12847,42 @@ function handleDnUpload(input, id, tt){
 
 
 // Upload Debit Note cho TỪNG dịch vụ (lưu base64 trong svc, ≤2MB)
-function handleSvcDnUpload(input, svcKey){
+// Upload 1 file lên Firebase Storage, trả về download URL — dùng thay cho việc nhúng
+// base64 trực tiếp vào document Firestore (từng gây lỗi vượt giới hạn 1MB/document).
+function _uploadFileToStorage(file, path){
+  return new Promise(function(resolve,reject){
+    const ref=storage.ref().child(path);
+    const task=ref.put(file);
+    task.on('state_changed', null, function(err){reject(err);}, function(){
+      ref.getDownloadURL().then(resolve).catch(reject);
+    });
+  });
+}
+window._uploadFileToStorage=_uploadFileToStorage;
+
+async function handleSvcDnUpload(input, svcKey){
   const file=input.files[0];
   if(!file)return;
-  if(file.size>2*1024*1024){toast('File quá lớn (max 2MB cho mỗi dịch vụ)','error');return;}
+  if(file.size>8*1024*1024){toast('File quá lớn (max 8MB cho mỗi dịch vụ)','error');return;}
   const r=cache[detailTt].find(x=>x._id===detailId);
   if(!r){toast('Không tìm thấy lô hàng','error');return;}
   if(r.locked){toast('Lô hàng đã khóa','error');return;}
   setLoading(true,'Đang upload Debit Note...');
-  const fr=new FileReader();
-  fr.onload=function(){
+  try{
+    const path='dn-uploads/'+detailTt+'/'+detailId+'/'+svcKey+'_'+Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+    const url=await _uploadFileToStorage(file, path);
     const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
     if(!svcs[svcKey])svcs[svcKey]={on:true};
     svcs[svcKey].dnFile=file.name;
-    svcs[svcKey].dnData=fr.result;
+    svcs[svcKey].dnUrl=url;      // Lưu URL Storage (nhẹ) — KHÔNG còn base64
+    delete svcs[svcKey].dnData;  // Dọn dữ liệu base64 cũ (nếu có) khi upload lại
     svcs[svcKey].dnAt=Date.now();
-    fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email})
-      .then(function(){
-        toast('Đã upload Debit Note: '+file.name);
-        const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
-        renderDetailPanel(fresh,detailTt);
-      })
-      .catch(function(e){toast('Lỗi: '+e.message,'error');})
-      .finally(function(){setLoading(false);});
-  };
-  fr.onerror=function(){setLoading(false);toast('Đọc file thất bại','error');};
-  fr.readAsDataURL(file);
+    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã upload Debit Note: '+file.name);
+    const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
+    renderDetailPanel(fresh,detailTt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
 }
 window.handleSvcDnUpload=handleSvcDnUpload;
 
@@ -12776,16 +12890,17 @@ window.handleSvcDnUpload=handleSvcDnUpload;
 function viewSvcDn(svcKey){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const sv=(r.svcs||{})[svcKey]||{};
-  if(!sv.dnData){toast('Chưa có Debit Note','error');return;}
+  const src=sv.dnUrl||sv.dnData; // ưu tiên URL Storage mới, fallback base64 cũ (file upload trước khi sửa)
+  if(!src){toast('Chưa có Debit Note','error');return;}
+  if(sv.dnUrl){ window.open(sv.dnUrl,'_blank'); return; } // URL Storage: mở thẳng, trình duyệt tự xử lý xem/tải
   const w=window.open('','_blank');
   if(!w){toast('Trình duyệt chặn popup','error');return;}
-  if((sv.dnData||'').indexOf('application/pdf')>=0||(sv.dnFile||'').toLowerCase().endsWith('.pdf')){
-    w.document.write('<iframe src="'+sv.dnData+'" style="width:100%;height:100%;border:none"></iframe>');
-  } else if((sv.dnData||'').indexOf('image/')>=0){
-    w.document.write('<img src="'+sv.dnData+'" style="max-width:100%"/>');
+  if((src||'').indexOf('application/pdf')>=0||(sv.dnFile||'').toLowerCase().endsWith('.pdf')){
+    w.document.write('<iframe src="'+src+'" style="width:100%;height:100%;border:none"></iframe>');
+  } else if((src||'').indexOf('image/')>=0){
+    w.document.write('<img src="'+src+'" style="max-width:100%"/>');
   } else {
-    // download (xlsx etc.)
-    const a=w.document.createElement('a');a.href=sv.dnData;a.download=sv.dnFile||'debit-note';a.click();
+    const a=w.document.createElement('a');a.href=src;a.download=sv.dnFile||'debit-note';a.click();
   }
 }
 window.viewSvcDn=viewSvcDn;
@@ -16358,21 +16473,17 @@ async function doUploadDoc(){
   const file=fileEl&&fileEl.files&&fileEl.files[0];
   if(type==='other'&&!otherLabel){toast('Vui lòng ghi rõ loại chứng từ','error');return;}
   if(!file){toast('Vui lòng chọn file','error');return;}
-  if(file.size>4*1024*1024){toast('File quá lớn (>4MB). Vui lòng chọn file nhỏ hơn.','error');return;}
+  if(file.size>15*1024*1024){toast('File quá lớn (>15MB). Vui lòng chọn file nhỏ hơn.','error');return;}
   setLoading(true,'Đang upload...');
   try{
-    const fileData=await new Promise(function(res,rej){
-      const fr=new FileReader();
-      fr.onload=function(){res(fr.result);};
-      fr.onerror=function(){rej(new Error('Đọc file thất bại'));};
-      fr.readAsDataURL(file);
-    });
-    const savedDocs=(r.savedDocs||[]).slice();
     const docId='doc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    const path='lot-docs/'+detailTt+'/'+detailId+'/'+docId+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+    const fileUrl=await _uploadFileToStorage(file, path);
+    const savedDocs=(r.savedDocs||[]).slice();
     savedDocs.push({
       id:docId, type:type, typeLabel:_docTypeLabel(type,otherLabel),
       name:_docTypeLabel(type,otherLabel)+(docNo?' - '+docNo:''),
-      docNo:docNo, isUpload:true, fileData:fileData, fileName:file.name, mimeType:file.type||'application/octet-stream',
+      docNo:docNo, isUpload:true, fileUrl:fileUrl, fileName:file.name, mimeType:file.type||'application/octet-stream',
       createdAt:Date.now(), createdBy:currentUser.email
     });
     await fsSet(detailTt==='xuat'?'lots_xuat':'lots_nhap',detailId,{savedDocs});
@@ -16389,7 +16500,9 @@ window.doUploadDoc=doUploadDoc;
 function viewUploadedDoc(docId){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const doc=(r.savedDocs||[]).find(function(d){return d.id===docId;});
-  if(!doc||!doc.fileData){toast('Không tìm thấy file','error');return;}
+  if(!doc||(!doc.fileUrl&&!doc.fileData)){toast('Không tìm thấy file','error');return;}
+  if(doc.fileUrl){ window.open(doc.fileUrl,'_blank'); return; } // URL Storage mới
+  // Fallback: file cũ còn lưu base64 (upload trước khi sửa hệ thống)
   const a=document.createElement('a');
   a.href=doc.fileData; a.download=doc.fileName||(doc.name+'.pdf');
   a.target='_blank';
