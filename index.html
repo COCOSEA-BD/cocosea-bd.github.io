@@ -700,7 +700,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v300';
+window.APP_BUILD='v301';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11717,20 +11717,36 @@ async function repairOversizedDoc(){
         foundCount++;
       }
     });
-    (data.savedDocs||[]).forEach(function(dc,i){
-      if(dc&&dc.fileData){foundBytes+=(dc.fileData.length||0);}
-    });
-    if((data.savedDocs||[]).some(function(dc){return dc&&dc.fileData;})){
-      // savedDocs là mảng — phải viết lại toàn bộ mảng đã xóa fileData (Firestore không xóa theo path trong mảng)
-      const cleanedDocs=(data.savedDocs||[]).map(function(dc){
+    let savedDocsArr=(data.savedDocs||[]).slice();
+    let savedDocsChanged=false;
+    // 1) Xóa base64 fileData cũ (file upload trước khi chuyển sang Storage)
+    (savedDocsArr||[]).forEach(function(dc){ if(dc&&dc.fileData){foundBytes+=(dc.fileData.length||0);} });
+    if(savedDocsArr.some(function(dc){return dc&&dc.fileData;})){
+      savedDocsArr=savedDocsArr.map(function(dc){
         if(dc&&dc.fileData){const c=Object.assign({},dc); delete c.fileData; c._removedNote='File cũ (base64) đã bị dọn do vượt giới hạn document — vui lòng upload lại.'; return c;}
         return dc;
       });
-      delMap['savedDocs']=cleanedDocs;
-      foundCount++;
+      savedDocsChanged=true; foundCount++;
     }
+    // 2) Dọn chứng từ TRÙNG LOẠI do Document Maker cộng dồn (mỗi lần xuất lại trước đây đều
+    //    thêm mới thay vì thay thế) — chỉ giữ lại bản MỚI NHẤT của mỗi type, đây thường là
+    //    nguồn phình to LỚN NHẤT vì mỗi bản là 1 file HTML đầy đủ.
+    const byType={};
+    savedDocsArr.forEach(function(dc){
+      if(!dc||!dc.type)return;
+      if(!byType[dc.type]||((dc.createdAt||0)>(byType[dc.type].createdAt||0)))byType[dc.type]=dc;
+      if(dc.html)foundBytes+=(dc.html.length||0);
+    });
+    const typeCounts={};
+    savedDocsArr.forEach(function(dc){ if(dc&&dc.type)typeCounts[dc.type]=(typeCounts[dc.type]||0)+1; });
+    const hasDupType=Object.keys(typeCounts).some(function(t){return typeCounts[t]>1;});
+    if(hasDupType){
+      savedDocsArr=Object.values(byType); // mỗi type chỉ còn đúng 1 bản (mới nhất)
+      savedDocsChanged=true; foundCount++;
+    }
+    if(savedDocsChanged){ delMap['savedDocs']=savedDocsArr; }
     if(foundCount===0){
-      resBox.innerHTML='<div style="color:var(--green)"><i class="ti ti-check"></i> Document này không có dữ liệu base64 cũ — không cần dọn.</div>';
+      resBox.innerHTML='<div style="color:var(--green)"><i class="ti ti-check"></i> Document này không có dữ liệu cũ/trùng lặp cần dọn.</div>';
       setLoading(false); return;
     }
     await db.collection(col).doc(id).update(delMap);
@@ -11754,23 +11770,29 @@ function scanOversizedDocs(){
   const found=[];
   ['xuat','nhap'].forEach(function(tt){
     (cache[tt]||[]).forEach(function(r){
-      let bytes=0; let hasOld=false;
+      let bytes=0; let hasOld=false; let dupTypes=0;
       const svcs=r.svcs||{};
       Object.keys(svcs).forEach(function(k){ if(svcs[k]&&svcs[k].dnData){bytes+=svcs[k].dnData.length;hasOld=true;} });
-      (r.savedDocs||[]).forEach(function(dc){ if(dc&&dc.fileData){bytes+=dc.fileData.length;hasOld=true;} });
-      if(hasOld)found.push({id:r._id,tt:tt,jobNo:r.jobNo||r.bookingNo||r._id,bytes:bytes});
+      const typeCounts={};
+      (r.savedDocs||[]).forEach(function(dc){
+        if(dc&&dc.fileData){bytes+=dc.fileData.length;hasOld=true;}
+        if(dc&&dc.html)bytes+=dc.html.length;
+        if(dc&&dc.type)typeCounts[dc.type]=(typeCounts[dc.type]||0)+1;
+      });
+      Object.keys(typeCounts).forEach(function(t){ if(typeCounts[t]>1){hasOld=true;dupTypes+=typeCounts[t]-1;} });
+      if(hasOld)found.push({id:r._id,tt:tt,jobNo:r.jobNo||r.bookingNo||r._id,bytes:bytes,dupTypes:dupTypes});
     });
   });
   found.sort(function(a,b){return b.bytes-a.bytes;});
   if(!found.length){
-    resBox.innerHTML='<div style="color:var(--green)"><i class="ti ti-check"></i> Không tìm thấy lô nào (trong dữ liệu đã tải) còn dữ liệu base64 cũ.</div>';
+    resBox.innerHTML='<div style="color:var(--green)"><i class="ti ti-check"></i> Không tìm thấy lô nào (trong dữ liệu đã tải) còn dữ liệu cũ/trùng lặp.</div>';
     return;
   }
-  resBox.innerHTML='<div style="margin-bottom:6px;font-weight:600">Tìm thấy '+found.length+' lô còn dữ liệu base64 cũ (chỉ tính trong dữ liệu đã tải về, có thể chưa đủ toàn bộ):</div>'
+  resBox.innerHTML='<div style="margin-bottom:6px;font-weight:600">Tìm thấy '+found.length+' lô còn dữ liệu base64 cũ hoặc chứng từ trùng loại (chỉ tính trong dữ liệu đã tải về, có thể chưa đủ toàn bộ):</div>'
     +'<div style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto">'
     +found.map(function(f){
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--bg-secondary);border-radius:6px">'
-        +'<span>'+f.jobNo+' <span style="color:var(--text-tertiary)">('+(f.tt==='xuat'?'XK':'NK')+' · '+f.id+')</span></span>'
+        +'<span>'+f.jobNo+' <span style="color:var(--text-tertiary)">('+(f.tt==='xuat'?'XK':'NK')+' · '+f.id+')'+(f.dupTypes?' · '+f.dupTypes+' bản trùng loại':'')+'</span></span>'
         +'<span style="display:flex;align-items:center;gap:8px"><b style="color:'+(f.bytes>800000?'var(--red)':'var(--gold-dark)')+'">~'+Math.round(f.bytes/1024)+' KB</b>'
         +'<button class="btn sm" onclick="g(\'docrepairTt\').value=\''+f.tt+'\';g(\'docrepairId\').value=\''+f.id+'\';repairOversizedDoc()">Dọn ngay</button></span>'
       +'</div>';
@@ -16369,15 +16391,26 @@ async function saveDocToLot(type, html, name){
   if(!_dmLot){toast('Chưa chọn lô hàng','error');return;}
   const tt=_dmLot._tt, id=_dmLot._id;
   const r=cache[tt].find(x=>x._id===id)||{};
-  const savedDocs=(r.savedDocs||[]).slice();
+  let savedDocs=(r.savedDocs||[]).slice();
+  // Mỗi LOẠI chứng từ (type) chỉ giữ 1 bản — nếu đã có bản cũ cùng loại, hỏi xác nhận
+  // trước khi xóa thay bằng bản mới. Đây là nguyên nhân chính khiến document lô hàng
+  // phình to vượt giới hạn 1MB của Firestore (mỗi lần xuất lại chứng từ trước đây đều
+  // CỘNG THÊM một bản HTML đầy đủ, không thay thế bản cũ).
+  const oldOnes=savedDocs.filter(function(d){return d.type===type;});
+  if(oldOnes.length){
+    const oldNames=oldOnes.map(function(d){return d.name||d.type;}).join(', ');
+    const ok=confirm('Đã có chứng từ loại này được lưu trước đó ('+oldNames+').\n\nLưu bản mới sẽ XÓA bản cũ (mỗi loại chứng từ chỉ giữ 1 bản để tránh lô hàng bị quá nặng).\n\nTiếp tục lưu và xóa bản cũ?');
+    if(!ok){toast('Đã hủy lưu chứng từ (bản cũ vẫn được giữ)');return;}
+    savedDocs=savedDocs.filter(function(d){return d.type!==type;});
+  }
   const docId='doc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
   savedDocs.push({id:docId,type:type,name:name||'',html:html,createdAt:Date.now(),createdBy:currentUser.email});
   setLoading(true,'Đang lưu chứng từ...');
   try{
     await fsSet(tt==='xuat'?'lots_xuat':'lots_nhap',id,{savedDocs});
     const arr=cache[tt]||[];const ci=arr.findIndex(x=>x._id===id);if(ci>=0)arr[ci].savedDocs=savedDocs;
-    toast('Đã lưu chứng từ vào lô hàng');
-    logLotEvent(id,tt,'doc','Lưu chứng từ: '+(name||type||''));
+    toast(oldOnes.length?'Đã thay thế chứng từ cũ bằng bản mới':'Đã lưu chứng từ vào lô hàng');
+    logLotEvent(id,tt,'doc',(oldOnes.length?'Thay thế chứng từ: ':'Lưu chứng từ: ')+(name||type||''));
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
