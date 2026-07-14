@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v319';
+window.APP_BUILD='v320';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2572,9 +2572,9 @@ function renderDetailPanel(r,tt){
     bodyHtml=`${ (can('fillPrice')||can('viewCost')) ? '<div style="display:grid;grid-template-columns:22px 58px 200px 90px 60px 56px 85px 90px 90px 46px 120px 82px 110px 40px 52px;gap:6px;padding:4px 8px;margin-bottom:4px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div style="text-align:center">Code</div><div style="text-align:center">Dịch vụ</div><div style="text-align:center">Đơn giá</div><div style="text-align:center">SL</div><div style="text-align:center">ĐV</div><div style="text-align:center">Thành tiền</div><div style="text-align:center;color:#e07000">VAT Amt</div><div style="text-align:center;color:var(--red)">Total (VAT)</div><div style="text-align:center">Curr</div><div style="text-align:center">NCC</div><div style="text-align:center">TT TT</div><div style="text-align:center">Remark</div><div style="text-align:center">Fin</div><div></div></div>' : '<div style="display:grid;grid-template-columns:22px 1fr 1fr 26px;gap:8px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div></div></div>'}
     <div id="detailSvcGrid">${SVCS.filter(s=>svcs[s.key]!==undefined).map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')||'<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ. Bấm "Thêm dịch vụ" để chọn từ danh mục.</div>'}</div>
 
-    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
-
+      <button class="rac" onclick="_svcTabRefresh()" title="Tải lại SL theo Vol mới nhất từ tab Chi tiết" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button>
     </div>
     <div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailSvc()"><i class="ti ti-check"></i> Lưu dịch vụ</button></div>`;
   }
@@ -2900,16 +2900,21 @@ function renderDetailPanel(r,tt){
         const truckRoute2=truckRows2.length&&truckRows2[0].route?truckRows2[0].route:'từ Vĩnh Long đến Hồ Chí Minh';
         const rows=allOn.filter(function(s){return (svcs[s.key]?.invoice||'Yes')!=='Waived';}).map(function(s){
           const sv=svcs[s.key]||{};
-          const isOcf2=(s.key==='ocf');
+          // OCF (code mới) và Freight (code cũ) đều là cước vận tải biển — luôn VAT 0%
+          const isOceanFreight2=(s.key==='ocf'||s.key==='freight');
           const invType=sv.invoice||'Yes';
-          // Smart VAT default: OCF luôn 0%, invoice=No=0%, invoice=Yes=8%
-          const smartVat=isOcf2?'0%':(invType==='No'?'0%':'8%');
-          const vatValue=sv.vat||smartVat;
+          // Smart VAT default: cước tàu luôn 0%, invoice=No=0%, invoice=Yes=8%
+          const smartVat=isOceanFreight2?'0%':(invType==='No'?'0%':'8%');
+          let vatValue=sv.vat||smartVat;
+          // FIX: nếu VAT đã lưu trước đó là 0% nhưng Invoice hiện tại là Yes (và không phải cước
+          // tàu) — coi đây là giá trị mặc định cũ chưa theo kịp trạng thái Invoice hiện tại (VD do
+          // đổi Invoice=Yes từ tab Fill giá chứ không phải từ chính tab Invoice) — tự nâng lên 8%.
+          if(!isOceanFreight2 && invType==='Yes' && vatValue==='0%') vatValue='8%';
           const vatOpts=['0%','8%','10%'].map(function(v){return '<option'+(v===vatValue?' selected':'')+'>'+v+'</option>';}).join('');
           const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===invType?' selected':'')+'>'+v+'</option>';}).join('');
           const amt=sv.amount||(sv.price||0)*(sv.qty||1);
           const amtVnd2=(sv.cur&&sv.cur!=='VND')?Math.round(amt*roe2):Math.round(amt);
-          const vatRate2=parseFloat((sv.vat||'0%').replace('%',''))||0;
+          const vatRate2=parseFloat(vatValue.replace('%',''))||0;
           const vatAmtVnd2=vatRate2>0?Math.round(amtVnd2*vatRate2/100):0;
           let autoName2=sv.customName||s.name;
           if(!sv.customName){
@@ -3133,6 +3138,20 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
   renderDpanelTabs();
 }
 
+// Vẽ lại toàn bộ lưới dịch vụ (tab Dịch vụ) — lấy đúng Vol mới nhất từ tab Chi tiết cho các dòng
+// SL CHƯA từng được sửa tay (sv.svcQty chưa lưu riêng); dòng nào đã chỉnh SL riêng thì giữ nguyên.
+function _svcTabRefresh(){
+  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  const svcs=r.svcs||{};
+  _ensureSvcInCatalog(svcs);
+  const grid=g('detailSvcGrid');
+  if(!grid)return;
+  grid.innerHTML=SVCS.filter(function(s){return svcs[s.key]!==undefined;}).map(function(s){return svcRowHTML(s,svcs[s.key]||{on:false,desc:''});}).join('')||'<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ. Bấm "Thêm dịch vụ" để chọn từ danh mục.</div>';
+  toast('Đã tải lại SL theo Vol mới nhất từ tab Chi tiết');
+}
+window._svcTabRefresh=_svcTabRefresh;
+
 function addCustomSvcDetail(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   // Hiển thị TẤT CẢ dịch vụ — cho phép add nhiều lần
@@ -3330,8 +3349,8 @@ function refreshInvPreview(){
 // Tự động set VAT khi đổi Invoice type
 function _autoInvVat(svcKey, invType){
   const vatEl=g('invvat_'+svcKey); if(!vatEl)return;
-  const isOcf=(svcKey==='ocf');
-  if(isOcf){ vatEl.value='0%'; return; }
+  const isOceanFreight=(svcKey==='ocf'||svcKey==='freight');
+  if(isOceanFreight){ vatEl.value='0%'; return; }
   if(invType==='No'||invType==='Waived'){ vatEl.value='0%'; }
   else if(invType==='Yes'&&vatEl.value==='0%'){ vatEl.value='8%'; } // chỉ set nếu đang là 0% (chưa chỉnh tay)
 }
