@@ -701,7 +701,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v310';
+window.APP_BUILD='v312';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11887,9 +11887,55 @@ function loadMarketTransactions(cb){
 }
 window.loadMarketTransactions=loadMarketTransactions;
 
+// Chuẩn hóa số tờ khai để so khớp linh hoạt (bỏ khoảng trắng, ký tự phụ, chỉ giữ số+chữ)
+function _normTkhai(s){
+  return (s||'').toString().trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+}
+window._normTkhai=_normTkhai;
+
+// Lấy toàn bộ lô hàng + số tờ khai đã ghi nhận trong CocoFlow của 1 shipper (theo CRM key) —
+// dùng để đối chiếu với dữ liệu hải quan (Market Data), biết shipper này đi qua CocoSea bao nhiêu.
+function _getCocoSeaDataForShipper(partnerKey){
+  const lots=(cache.xuat||[]).filter(function(r){return (r.shipper||r.supplier||'')===partnerKey;});
+  const tkhaiSet={};
+  lots.forEach(function(r){
+    const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||''}];
+    bookings.forEach(function(bk){
+      const bkKey=(bk.bookingNo||'').replace(/[^a-zA-Z0-9]/g,'_');
+      const bkData=(r.bookingConts||{})[bkKey]||{};
+      const pushTk=function(arr){if(Array.isArray(arr))arr.forEach(function(t){const s=_normTkhai(t&&t.sotk);if(s)tkhaiSet[s]=true;});};
+      if(bkData.tkhaiList&&bkData.tkhaiList.some(function(t){return (t&&t.sotk||'').trim();})){
+        pushTk(bkData.tkhaiList);
+      } else {
+        pushTk(r.tkhaiList);
+        const legacy=_normTkhai(r.soTkhai);
+        if(legacy)tkhaiSet[legacy]=true;
+      }
+    });
+  });
+  return {lots:lots, tkhaiSet:tkhaiSet, lotCount:lots.length};
+}
+window._getCocoSeaDataForShipper=_getCocoSeaDataForShipper;
+
 function _mdEscHtml(s){
   return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// Phân loại mặt hàng theo HS 4-số (chính xác hơn dựa tên hàng):
+//   5305 = xơ dừa/dừa nguyên liệu dệt (coir fiber)
+//   1404 = sản phẩm thực vật khác — gồm mụn dừa (coco peat), vỏ dừa; tinh chỉnh thêm bằng tên hàng
+//   HS khác → 'khac'. Nếu không có HS thì fallback về phân loại theo tên hàng.
+function _classifyByHs4(hs4, tenHang){
+  if(hs4==='5305')return 'xoDua';
+  if(hs4==='1404'){
+    const s=(tenHang||'').toLowerCase();
+    if(/xơ dừa|xo dua|coir fiber|coco fiber/.test(s))return 'xoDua';
+    return 'munDua'; // mặc định nhóm 1404 là mụn dừa (coco peat) / vỏ dừa
+  }
+  if(!hs4)return _classifyCocoProduct(tenHang); // không có HS → dựa tên hàng
+  return 'khac';
+}
+window._classifyByHs4=_classifyByHs4;
 
 function _classifyCocoProduct(tenHang){
   const s=(tenHang||'').toLowerCase();
@@ -11965,6 +12011,8 @@ async function _processMarketExcelFiles(fileList){
   if(!XLSX){toast('Đang tải thư viện Excel, thử lại sau vài giây','error');return {shippers:[],rawRows:[]};}
   const aggregated={};
   const rawRows=[];
+  const seenDeclarations={}; // đối chiếu chống trùng: khóa = số tờ khai + tên hàng + USD
+  let dupSkipped=0;
   for(let i=0;i<fileList.length;i++){
     const file=fileList[i];
     const buf=await file.arrayBuffer();
@@ -11972,7 +12020,15 @@ async function _processMarketExcelFiles(fileList){
     const ws=wb.Sheets[wb.SheetNames[0]];
     const rows=XLSX.utils.sheet_to_json(ws,{defval:''});
     const srcName=file.name.replace(/\.[^.]+$/,'');
-    rows.forEach(function(row){
+    rows.forEach(function(rawRow){
+      // FIX QUAN TRỌNG: nhiều cột số liệu trong file hải quan có khoảng trắng ẩn ở đầu/cuối
+      // tên cột (VD ' Trị giá USD ' thay vì 'Trị giá USD') — pandas tự strip nên không thấy
+      // khi kiểm tra bằng Python, nhưng SheetJS (thư viện đang dùng ở đây) giữ nguyên, khiến
+      // row['Trị giá USD'] trả về undefined → luôn tính ra 0. Chuẩn hóa lại toàn bộ key trước
+      // khi đọc để không phụ thuộc vào việc file có khoảng trắng thừa hay không.
+      const row={};
+      for(const k in rawRow){ row[k.trim()]=rawRow[k]; }
+
       const companyName=(row['Tên Cty xuất khẩu']||'').toString().trim();
       if(!companyName)return;
       const mst=_normalizeMST(row['MST Cty xuất khẩu']||'');
@@ -11982,18 +12038,42 @@ async function _processMarketExcelFiles(fileList){
       const donViTinh=row['Đơn vị tính']||'';
       const soLuong=parseFloat(row['Số Lượng'])||0;
       const qtyTons=_qtyToTons(donViTinh,soLuong);
-      const cat=_classifyCocoProduct(tenHang);
+      const hsRaw=(row['HS code']||'').toString().trim();
+      const hs4=hsRaw.replace(/[^0-9]/g,'').slice(0,4); // 4 số đầu HS để phân nhóm mặt hàng
+      const cat=_classifyByHs4(hs4,tenHang);
+      const soToKhai=(row['Số tờ khai']||'').toString().trim();
+      // ĐỐI CHIẾU SỐ TỜ KHAI (cột Y) chống trùng: 1 tờ khai có thể có nhiều dòng hàng khác nhau,
+      // nên khóa trùng = số tờ khai + tên hàng + trị giá USD. Trùng cả 3 → coi là dòng lặp, bỏ qua.
+      if(soToKhai){
+        const dupKey=soToKhai+'|'+(tenHang||'').trim()+'|'+usd;
+        if(seenDeclarations[dupKey]){dupSkipped++;return;}
+        seenDeclarations[dupKey]=true;
+      }
+      // Chuẩn hóa NGÀY về chuỗi 'yyyy-mm-dd'. QUAN TRỌNG: cột "Ngày" trong file hải quan là
+      // SERIAL NGÀY ĐẦY ĐỦ theo chuẩn Excel (VD 46174 = 2026-06-01), KHÔNG PHẢI "ngày trong
+      // tháng" như tên cột gây hiểu lầm ban đầu — ghép trực tiếp với Năm/Tháng sẽ ra ngày sai
+      // (VD "2026-06-46175"). Phải dùng XLSX.SSF.parse_date_code để giải mã đúng.
+      let ngayStr='';
+      const ngayRaw=row['Ngày'];
+      if(typeof ngayRaw==='number' && ngayRaw>0){
+        const dc=XLSX.SSF.parse_date_code(ngayRaw);
+        if(dc)ngayStr=dc.y+'-'+String(dc.m).padStart(2,'0')+'-'+String(dc.d).padStart(2,'0');
+      } else if(ngayRaw instanceof Date){
+        ngayStr=ngayRaw.getUTCFullYear()+'-'+String(ngayRaw.getUTCMonth()+1).padStart(2,'0')+'-'+String(ngayRaw.getUTCDate()).padStart(2,'0');
+      } else if(ngayRaw){
+        ngayStr=ngayRaw.toString();
+      }
       const key=mst||('__name__'+_normCompanyName(companyName));
 
       // Lưu ĐẦY ĐỦ dòng gốc (giữ nguyên toàn bộ thông tin như file Excel) để có thể tra cứu chi tiết
       rawRows.push({
-        mst:mst, companyName:companyName, cnee:cnee, hsCode:row['HS code']||'', tenHang:tenHang,
+        mst:mst, companyName:companyName, cnee:cnee, hsCode:hsRaw, hs4:hs4, tenHang:tenHang,
         category:cat, donViTinh:donViTinh, soLuong:soLuong, qtyTons:qtyTons,
         donGiaNguyenTe:parseFloat(row['Đơn giá Nguyên tệ'])||0, donGiaUSD:parseFloat(row['Đơn giá khai báo(USD)'])||0,
-        triGiaUSD:usd, nguyenTe:row['Nguyên tệ']||'', tyGiaNguyenTe:parseFloat(row['Tỷ giá nguyên tệ'])||0, tyGiaUSD:parseFloat(row['Tỷ giá USD'])||0,
-        dieuKienGiaoHang:row['Điều kiện giao hàng']||'', phuongTien:row['Phương tiện vận chuyển']||'',
-        nuocNhap:row['Tên nước nhập khẩu']||'', ngay:row['Ngày']instanceof Date?row['Ngày'].toISOString().slice(0,10):(row['Ngày']||''),
-        soToKhai:row['Số tờ khai']||'', soHopDong:row['Số hợp đồng']||'',
+        triGiaUSD:usd, nguyenTe:(row['Nguyên tệ']||'').toString(), tyGiaNguyenTe:parseFloat(row['Tỷ giá nguyên tệ'])||0, tyGiaUSD:parseFloat(row['Tỷ giá USD'])||0,
+        dieuKienGiaoHang:(row['Điều kiện giao hàng']||'').toString(), phuongTien:(row['Phương tiện vận chuyển']||'').toString(),
+        nuocNhap:(row['Tên nước nhập khẩu']||'').toString(), ngay:ngayStr,
+        soToKhai:soToKhai, soHopDong:(row['Số hợp đồng']||'').toString(),
         sourceFile:srcName
       });
 
@@ -12002,7 +12082,7 @@ async function _processMarketExcelFiles(fileList){
           usdMunDua:0,usdXoDua:0,usdKhac:0,usdTotal:0,
           tanMunDua:0,tanXoDua:0,tanKhac:0,tanTotal:0,
           rowCountMunDua:0,rowCountXoDua:0,rowCountKhac:0,nonWeightRowCount:0,
-          unitsMap:{}, cneesMap:{},sourceFiles:{}};
+          unitsMap:{}, hs4Map:{}, cneesMap:{},sourceFiles:{}};
       }
       const a=aggregated[key];
       if(companyName.length>a.companyName.length)a.companyName=companyName;
@@ -12012,6 +12092,8 @@ async function _processMarketExcelFiles(fileList){
       if(!qtyTons && donViTinh)a.nonWeightRowCount++;
       // Gom số lượng theo TỪNG đơn vị gốc (kể cả Tấn/Kg) để có thể liệt kê riêng: VD "12 Túi, 3 Container"
       if(donViTinh){a.unitsMap[donViTinh]=(a.unitsMap[donViTinh]||0)+soLuong;}
+      // Gom USD theo HS 4-số để so sánh thị trường theo nhóm HS
+      if(hs4){if(!a.hs4Map[hs4])a.hs4Map[hs4]={usd:0,tan:0};a.hs4Map[hs4].usd+=usd;a.hs4Map[hs4].tan+=qtyTons;}
       if(cat==='munDua'){a.usdMunDua+=usd;a.tanMunDua+=qtyTons;a.rowCountMunDua++;}
       else if(cat==='xoDua'){a.usdXoDua+=usd;a.tanXoDua+=qtyTons;a.rowCountXoDua++;}
       else {a.usdKhac+=usd;a.tanKhac+=qtyTons;a.rowCountKhac++;}
@@ -12023,17 +12105,18 @@ async function _processMarketExcelFiles(fileList){
   const shippers=Object.values(aggregated).map(function(a){
     const cnees=Object.entries(a.cneesMap).map(function(e){return {name:e[0],usd:round2(e[1])};}).sort(function(x,y){return y.usd-x.usd;});
     const units=Object.entries(a.unitsMap).map(function(e){return {unit:e[0],qty:round2(e[1])};}).sort(function(x,y){return y.qty-x.qty;});
+    const hs4List=Object.entries(a.hs4Map||{}).map(function(e){return {hs4:e[0],usd:round2(e[1].usd),tan:round2(e[1].tan)};}).sort(function(x,y){return y.usd-x.usd;});
     const match=_matchShipperToPartner(a.companyName,a.mst);
     return {
       companyName:a.companyName, mst:a.mst,
       usdMunDua:round2(a.usdMunDua), usdXoDua:round2(a.usdXoDua), usdKhac:round2(a.usdKhac), usdTotal:round2(a.usdTotal),
       tanMunDua:round2(a.tanMunDua), tanXoDua:round2(a.tanXoDua), tanKhac:round2(a.tanKhac), tanTotal:round2(a.tanTotal),
       rowCountMunDua:a.rowCountMunDua, rowCountXoDua:a.rowCountXoDua, rowCountKhac:a.rowCountKhac, nonWeightRowCount:a.nonWeightRowCount,
-      units:units, cnees:cnees, sourceFiles:Object.keys(a.sourceFiles),
+      units:units, hs4List:hs4List, cnees:cnees, sourceFiles:Object.keys(a.sourceFiles),
       status: match.key?'active':'new', matchedPartnerKey: match.key, matchMethod: match.method
     };
   }).sort(function(x,y){return y.usdTotal-x.usdTotal;});
-  return {shippers:shippers, rawRows:rawRows};
+  return {shippers:shippers, rawRows:rawRows, dupSkipped:dupSkipped};
 }
 window._processMarketExcelFiles=_processMarketExcelFiles;
 
@@ -12086,6 +12169,8 @@ function _renderMarketListView(){
     <div style="padding:.75rem 1.1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid var(--gold)"><div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase">New (chưa trong CRM)</div><div style="font-size:17px;font-weight:800;color:var(--gold-dark)">${totalNew}</div></div>
     <div style="padding:.75rem 1.1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid #1a4b8c"><div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase">Tổng shipper thị trường</div><div style="font-size:17px;font-weight:800;color:#1a4b8c">${rows.length}</div></div>
     <div style="flex:1"></div>
+    <button class="btn red" onclick="_mdDeleteAll()" title="Xóa toàn bộ shipper + giao dịch để import lại từ đầu"><i class="ti ti-trash"></i> Xóa tất cả</button>
+    <button class="btn" onclick="_mdCleanDuplicates()" title="Gộp các shipper bị trùng MST (9 số vs 10 số) từ dữ liệu import cũ"><i class="ti ti-versions"></i> Dọn trùng</button>
     <button class="btn pri" onclick="openMarketImportPopup()"><i class="ti ti-upload"></i> Import Excel Hải quan</button>
   </div>
 
@@ -12119,6 +12204,37 @@ function _renderMarketListView(){
 }
 window._renderMarketListView=_renderMarketListView;
 
+// Xóa TOÀN BỘ dữ liệu Market Data (marketShippers + marketTransactions) để import lại từ đầu.
+async function _mdDeleteAll(){
+  if(currentProfile?.role!=='admin'){toast('Chỉ Admin được dùng công cụ này','error');return;}
+  const nShip=(window._marketShippers||[]).length;
+  const nTx=(window._marketTransactions||[]).length;
+  if(!confirm('XÓA TOÀN BỘ dữ liệu Market Data?\n\n- '+nShip+' shipper\n- '+nTx+' giao dịch\n\nHành động này KHÔNG THỂ hoàn tác. Chỉ nên dùng khi muốn làm sạch để import lại từ đầu.'))return;
+  if(!confirm('Xác nhận LẦN CUỐI: xóa sạch '+nShip+' shipper + '+nTx+' giao dịch?'))return;
+  setLoading(true,'Đang xóa toàn bộ dữ liệu Market Data...');
+  try{
+    const batchSize=400;
+    const shipSnap=await db.collection('marketShippers').get();
+    for(let i=0;i<shipSnap.docs.length;i+=batchSize){
+      const batch=db.batch();
+      shipSnap.docs.slice(i,i+batchSize).forEach(function(d){batch.delete(d.ref);});
+      await batch.commit();
+    }
+    const txSnap=await db.collection('marketTransactions').get();
+    for(let i=0;i<txSnap.docs.length;i+=batchSize){
+      const batch=db.batch();
+      txSnap.docs.slice(i,i+batchSize).forEach(function(d){batch.delete(d.ref);});
+      await batch.commit();
+    }
+    window._marketShippers=[];
+    window._marketTransactions=[];
+    toast('Đã xóa toàn bộ dữ liệu Market Data — sẵn sàng import lại');
+    renderMarketData();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._mdDeleteAll=_mdDeleteAll;
+
 // Nút refresh: tải lại toàn bộ dữ liệu Market từ Firestore rồi vẽ lại
 function _mdRefresh(){
   setLoading(true,'Đang tải lại dữ liệu thị trường...');
@@ -12132,16 +12248,70 @@ function _mdRefresh(){
 }
 window._mdRefresh=_mdRefresh;
 
-// ═══ Tab "Market" — so sánh các shipper theo mặt hàng + chỉ số đã chọn ═══
-window._mktCompare={cat:'munDua',metric:'usd',chart:'bar'};
+// Dọn shipper trùng: dữ liệu import cũ có thể tạo 2 doc cho cùng 1 công ty do MST chưa chuẩn hóa
+// (VD '317740853' 9 số và '0317740853' 10 số). Hàm này gộp về 1 doc theo MST chuẩn hóa, cộng dồn
+// số liệu, rồi xóa các doc trùng dư thừa.
+async function _mdCleanDuplicates(){
+  if(currentProfile?.role!=='admin'){toast('Chỉ Admin được dùng công cụ này','error');return;}
+  const rows=window._marketShippers||[];
+  // Nhóm theo MST đã chuẩn hóa (hoặc theo tên nếu không có MST)
+  const groups={};
+  rows.forEach(function(r){
+    const kk=r.mst?_normalizeMST(r.mst):('__name__'+_normCompanyName(r.companyName));
+    (groups[kk]=groups[kk]||[]).push(r);
+  });
+  const dupGroups=Object.entries(groups).filter(function(e){return e[1].length>1;});
+  if(!dupGroups.length){toast('Không tìm thấy shipper trùng lặp');return;}
+  if(!confirm('Tìm thấy '+dupGroups.length+' nhóm shipper bị trùng. Gộp lại thành 1 và xóa bản dư? (nên chạy 1 lần sau khi import bằng bản cũ)'))return;
+  setLoading(true,'Đang gộp shipper trùng...');
+  try{
+    for(const [kk,list] of dupGroups){
+      // Chọn bản GIỮ LẠI = bản có MST 10 số (chuẩn), nếu không có thì bản đầu
+      list.sort(function(a,b){return (b.mst||'').length-(a.mst||'').length;});
+      const keep=list[0];
+      const normMst=keep.mst?_normalizeMST(keep.mst):'';
+      // Cộng dồn số liệu từ các bản trùng vào bản giữ
+      const merged=Object.assign({},keep);
+      merged.mst=normMst||keep.mst;
+      ['usdMunDua','usdXoDua','usdKhac','usdTotal','tanMunDua','tanXoDua','tanKhac','tanTotal','rowCountMunDua','rowCountXoDua','rowCountKhac','nonWeightRowCount'].forEach(function(f){
+        merged[f]=list.reduce(function(s,r){return s+(r[f]||0);},0);
+      });
+      // Gộp Cnee (cộng usd theo tên)
+      const cneeMap={};
+      list.forEach(function(r){(r.cnees||[]).forEach(function(c){cneeMap[c.name]=(cneeMap[c.name]||0)+(c.usd||0);});});
+      merged.cnees=Object.entries(cneeMap).map(function(e){return {name:e[0],usd:Math.round(e[1]*100)/100};}).sort(function(x,y){return y.usd-x.usd;});
+      // Ghi bản gộp vào doc theo MST chuẩn hóa; xóa các doc cũ khác id
+      const newId=(normMst||_normCompanyName(keep.companyName)).slice(0,120);
+      const batch=db.batch();
+      batch.set(db.collection('marketShippers').doc(newId),Object.assign({},merged,{updatedAt:Date.now()}));
+      list.forEach(function(r){ if(r._id!==newId)batch.delete(db.collection('marketShippers').doc(r._id)); });
+      await batch.commit();
+    }
+    toast('Đã gộp '+dupGroups.length+' nhóm shipper trùng');
+    _mdRefresh();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._mdCleanDuplicates=_mdCleanDuplicates;
+
+// ═══ Tab "Market" — so sánh các shipper theo HS 4-số + chỉ số đã chọn ═══
+window._mktCompare={hs:'all',metric:'usd',chart:'bar'};
 function _renderMarketCompare(){
   const pg=g('mdViewBody'); if(!pg)return;
   const st=window._mktCompare;
   const rows=window._marketShippers||[];
-  const catKey=st.cat; // 'munDua'|'xoDua'|'khac'|'total'
+  // Tập hợp tất cả HS 4-số có trong dữ liệu để dựng dropdown
+  const hsSet={};
+  rows.forEach(function(r){(r.hs4List||[]).forEach(function(h){hsSet[h.hs4]=true;});});
+  const hsOptions=Object.keys(hsSet).sort();
+  const HS_LABEL={'5305':'5305 — Xơ dừa (coir)','1404':'1404 — Mụn dừa / vỏ dừa'};
+  const hsPick=st.hs||'all';
+  // Giá trị của mỗi shipper theo HS đã chọn (hoặc tổng tất cả HS)
   const valKey=function(r){
-    const f2=catKey==='total'?(st.metric==='usd'?'usdTotal':'tanTotal'):(st.metric==='usd'?'usd'+catKey.charAt(0).toUpperCase()+catKey.slice(1):'tan'+catKey.charAt(0).toUpperCase()+catKey.slice(1));
-    return r[f2]||0;
+    if(hsPick==='all')return st.metric==='usd'?(r.usdTotal||0):(r.tanTotal||0);
+    const hit=(r.hs4List||[]).find(function(h){return h.hs4===hsPick;});
+    if(!hit)return 0;
+    return st.metric==='usd'?(hit.usd||0):(hit.tan||0);
   };
   const data=rows.map(function(r){return {label:r.companyName,value:valKey(r),status:r.status,id:r._id};})
     .filter(function(d){return d.value>0;})
@@ -12149,15 +12319,21 @@ function _renderMarketCompare(){
   const totalVal=data.reduce(function(s,d){return s+d.value;},0);
   const fmt=function(n){return st.metric==='usd'?('$'+n.toLocaleString(undefined,{maximumFractionDigits:0})):(n.toLocaleString(undefined,{maximumFractionDigits:1})+' T');};
 
-  pg.innerHTML='<div style="font-weight:700;font-size:14px;margin-bottom:.75rem">So sánh thị trường — chọn mặt hàng và chỉ số để xếp hạng shipper</div>'
+  pg.innerHTML='<div style="font-weight:700;font-size:14px;margin-bottom:.75rem">So sánh thị trường — chọn nhóm HS (4 số đầu) và chỉ số để xếp hạng shipper</div>'
     +'<div style="display:flex;gap:8px;margin-bottom:1.1rem;flex-wrap:wrap">'
-      +'<select onchange="window._mktCompare.cat=this.value;_renderMarketCompare()" style="width:170px">'
-        +'<option value="munDua" '+(catKey==='munDua'?'selected':'')+'>Mụn dừa</option>'
-        +'<option value="xoDua" '+(catKey==='xoDua'?'selected':'')+'>Xơ dừa</option>'
-        +'<option value="khac" '+(catKey==='khac'?'selected':'')+'>Khác</option>'
-        +'<option value="total" '+(catKey==='total'?'selected':'')+'>Tất cả mặt hàng</option>'
+      +'<select onchange="window._mktCompare.hs=this.value;_renderMarketCompare()" style="width:220px">'
+        +'<option value="all" '+(hsPick==='all'?'selected':'')+'>Tất cả nhóm HS</option>'
+        +hsOptions.map(function(h){return '<option value="'+h+'" '+(hsPick===h?'selected':'')+'>'+(HS_LABEL[h]||('HS '+h))+'</option>';}).join('')
       +'</select>'
       +'<div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
+        +'<button onclick="window._mktCompare.metric=\'usd\';_renderMarketCompare()" style="padding:7px 14px;border:none;background:'+(st.metric==='usd'?'var(--green)':'transparent')+';color:'+(st.metric==='usd'?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12.5px;font-weight:600">Trị giá (USD)</button>'
+        +'<button onclick="window._mktCompare.metric=\'tan\';_renderMarketCompare()" style="padding:7px 14px;border:none;background:'+(st.metric==='tan'?'var(--green)':'transparent')+';color:'+(st.metric==='tan'?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12.5px;font-weight:600">Số lượng (Tấn)</button>'
+      +'</div>'
+      +'<div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
+        +'<button onclick="window._mktCompare.chart=\'bar\';_renderMarketCompare()" title="Biểu đồ cột" style="padding:7px 12px;border:none;background:'+(st.chart==='bar'?'var(--bg-secondary)':'transparent')+';cursor:pointer"><i class="ti ti-chart-bar"></i></button>'
+        +'<button onclick="window._mktCompare.chart=\'pie\';_renderMarketCompare()" title="Biểu đồ tròn" style="padding:7px 12px;border:none;background:'+(st.chart==='pie'?'var(--bg-secondary)':'transparent')+';cursor:pointer"><i class="ti ti-chart-pie"></i></button>'
+      +'</div>'
+    +'</div>'
         +'<button onclick="window._mktCompare.metric=\'usd\';_renderMarketCompare()" style="padding:7px 14px;border:none;background:'+(st.metric==='usd'?'var(--green)':'transparent')+';color:'+(st.metric==='usd'?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12.5px;font-weight:600">Trị giá (USD)</button>'
         +'<button onclick="window._mktCompare.metric=\'tan\';_renderMarketCompare()" style="padding:7px 14px;border:none;background:'+(st.metric==='tan'?'var(--green)':'transparent')+';color:'+(st.metric==='tan'?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12.5px;font-weight:600">Số lượng (Tấn)</button>'
       +'</div>'
@@ -12266,7 +12442,34 @@ function _renderMarketDetailPage(){
   const isUsd=metric==='usd';
   const fmtV=function(n){return isUsd?('$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0})):((n||0).toLocaleString(undefined,{maximumFractionDigits:2})+' Tấn');};
   const txs=(window._marketTransactions||[]).filter(function(t){return r.mst?_normalizeMST(t.mst)===r.mst:_normCompanyName(t.companyName)===_normCompanyName(r.companyName);})
-    .sort(function(a,b){return (b.ngay||'').localeCompare(a.ngay||'');});
+    .sort(function(a,b){return String(b.ngay||'').localeCompare(String(a.ngay||''));});
+
+  // ═══ Đối chiếu với CocoFlow (chỉ áp dụng cho shipper đã Active — đã khớp CRM) ═══
+  // So khớp theo SỐ TỜ KHAI giữa dữ liệu hải quan (Market) và các lô đã làm qua CocoSea,
+  // để biết shipper này tổng cộng đi bao nhiêu lô ngoài thị trường, và bao nhiêu trong đó
+  // thực sự đi qua CocoSea.
+  let cocoBlock='';
+  let cocoTkhaiSet=null;
+  if(r.status==='active' && r.matchedPartnerKey){
+    const coco=_getCocoSeaDataForShipper(r.matchedPartnerKey);
+    cocoTkhaiSet=coco.tkhaiSet;
+    const marketDeclSet={};
+    txs.forEach(function(t){const nk=_normTkhai(t.soToKhai);if(nk)marketDeclSet[nk]=true;});
+    const marketDeclCount=Object.keys(marketDeclSet).length;
+    let matchedCount=0;
+    Object.keys(marketDeclSet).forEach(function(nk){if(coco.tkhaiSet[nk])matchedCount++;});
+    const pct=marketDeclCount?Math.round(matchedCount/marketDeclCount*100):0;
+    cocoBlock='<div style="margin-bottom:1.25rem;padding:1rem 1.1rem;background:linear-gradient(135deg,var(--green-bg),var(--bg-secondary));border-radius:12px;border:1px solid var(--green)">'
+      +'<div style="font-size:11.5px;font-weight:700;color:var(--green-dark);text-transform:uppercase;margin-bottom:.6rem;display:flex;align-items:center;gap:6px"><i class="ti ti-building-warehouse"></i> Đối chiếu với dữ liệu CocoFlow (theo Số tờ khai)</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'
+        +'<div><div style="font-size:10px;color:var(--text-secondary)">Tổng lô tại CocoSea</div><div style="font-size:18px;font-weight:800">'+coco.lotCount+'</div></div>'
+        +'<div><div style="font-size:10px;color:var(--text-secondary)">Tổng tờ khai (thị trường)</div><div style="font-size:18px;font-weight:800">'+marketDeclCount+'</div></div>'
+        +'<div><div style="font-size:10px;color:var(--text-secondary)">Khớp qua CocoSea</div><div style="font-size:18px;font-weight:800;color:var(--green-dark)">'+matchedCount+' <span style="font-size:12px;font-weight:600">('+pct+'%)</span></div></div>'
+        +'<div><div style="font-size:10px;color:var(--text-secondary)">Qua đơn vị khác</div><div style="font-size:18px;font-weight:800;color:var(--gold-dark)">'+(marketDeclCount-matchedCount)+'</div></div>'
+      +'</div>'
+      +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:.6rem">Khớp theo Số tờ khai (đã chuẩn hóa bỏ ký tự phụ) giữa dữ liệu hải quan và các lô đã làm tại CocoSea cho đối tác <b>'+_mdEscHtml(r.matchedPartnerKey)+'</b>. Nếu số liệu chưa khớp đúng, kiểm tra lại Số tờ khai đã nhập trong tab Cont/Seal của các lô liên quan.</div>'
+    +'</div>';
+  }
   // Xác định các mặt hàng shipper đang đi
   const catsActive=[];
   if(r.usdMunDua>0)catsActive.push('<span class="bdg bdg-g">Mụn dừa</span>');
@@ -12287,6 +12490,8 @@ function _renderMarketDetailPage(){
     </div>
     <button class="btn sm" onclick="_mdToggleStatus('${r._id}')">${r.status==='active'?'Chuyển → New':'Chuyển → Active'}</button>
   </div>
+
+  ${cocoBlock}
 
   <div style="display:flex;gap:8px;margin-bottom:1rem;align-items:center">
     <span style="font-size:11.5px;color:var(--text-secondary)">Sản lượng xem theo:</span>
@@ -12315,10 +12520,11 @@ function _renderMarketDetailPage(){
     <div>
       <div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:.5rem">Toàn bộ giao dịch (${txs.length} dòng — dữ liệu gốc)</div>
       <div class="table-card"><div class="table-wrap" style="max-height:420px;overflow-y:auto"><table style="font-size:11.5px">
-        <thead><tr><th>Ngày</th><th>Mặt hàng</th><th>Cnee</th><th style="text-align:right">SL</th><th>ĐV</th><th style="text-align:right">USD</th></tr></thead>
+        <thead><tr><th>Ngày</th><th>Mặt hàng</th><th>Cnee</th><th style="text-align:right">SL</th><th>ĐV</th><th style="text-align:right">USD</th>${cocoTkhaiSet?'<th style="text-align:center">CocoSea</th>':''}</tr></thead>
         <tbody>${txs.length?txs.map(function(t){
           const catLabel=t.category==='munDua'?'Mụn dừa':(t.category==='xoDua'?'Xơ dừa':'Khác');
           const catColor=t.category==='munDua'?'var(--green-dark)':(t.category==='xoDua'?'#1a4b8c':'var(--text-tertiary)');
+          const isCoco=cocoTkhaiSet && cocoTkhaiSet[_normTkhai(t.soToKhai)];
           return '<tr>'
             +'<td style="white-space:nowrap">'+(t.ngay||'—')+'</td>'
             +'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_mdEscHtml(t.tenHang)+'"><span style="color:'+catColor+';font-weight:600">['+catLabel+']</span> '+_mdEscHtml((t.tenHang||'').slice(0,50))+'</td>'
@@ -12326,8 +12532,9 @@ function _renderMarketDetailPage(){
             +'<td style="text-align:right;white-space:nowrap">'+(t.soLuong||0).toLocaleString()+'</td>'
             +'<td style="white-space:nowrap">'+_mdEscHtml(t.donViTinh)+'</td>'
             +'<td style="text-align:right;font-weight:600;white-space:nowrap">$'+(t.triGiaUSD||0).toLocaleString(undefined,{maximumFractionDigits:0})+'</td>'
+            +(cocoTkhaiSet?('<td style="text-align:center">'+(isCoco?'<i class="ti ti-check" style="color:var(--green-dark);font-weight:800" title="Khớp lô tại CocoSea"></i>':'<span style="color:var(--text-tertiary)">—</span>')+'</td>'):'')
           +'</tr>';
-        }).join(''):'<tr><td colspan=6 style="text-align:center;color:var(--text-tertiary);padding:1rem">Chưa có dữ liệu giao dịch chi tiết. Nếu shipper này import từ bản cũ, hãy Import lại file Excel.</td></tr>'}</tbody>
+        }).join(''):'<tr><td colspan=7 style="text-align:center;color:var(--text-tertiary);padding:1rem">Chưa có dữ liệu giao dịch chi tiết. Nếu shipper này import từ bản cũ, hãy Import lại file Excel.</td></tr>'}</tbody>
       </table></div></div>
     </div>
   </div>
@@ -12372,7 +12579,7 @@ async function _mdRunPreview(){
     const money=function(n){return '$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0});};
     const nActive=data.filter(function(d){return d.status==='active';}).length;
     const nNew=data.length-nActive;
-    wrap.innerHTML='<div style="font-size:12.5px;margin-bottom:.6rem"><b>'+data.length+'</b> shipper được tổng hợp (từ <b>'+result.rawRows.length+'</b> dòng giao dịch gốc) — <span style="color:var(--green-dark);font-weight:700">'+nActive+' Active</span> (khớp CRM hiện có), <span style="color:var(--gold-dark);font-weight:700">'+nNew+' New</span> (chưa có trong CRM).</div>'
+    wrap.innerHTML='<div style="font-size:12.5px;margin-bottom:.6rem"><b>'+data.length+'</b> shipper được tổng hợp (từ <b>'+result.rawRows.length+'</b> dòng giao dịch gốc'+(result.dupSkipped?', đã bỏ <b>'+result.dupSkipped+'</b> dòng trùng theo số tờ khai':'')+') — <span style="color:var(--green-dark);font-weight:700">'+nActive+' Active</span> (khớp CRM hiện có), <span style="color:var(--gold-dark);font-weight:700">'+nNew+' New</span> (chưa có trong CRM).</div>'
       +'<div style="max-height:400px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px"><table style="width:100%;font-size:12px">'
       +'<thead style="position:sticky;top:0;background:var(--bg-secondary)"><tr><th style="padding:6px 10px;text-align:left">Trạng thái</th><th style="padding:6px 10px;text-align:left">Shipper</th><th style="padding:6px 10px;text-align:left">MST</th><th style="padding:6px 10px;text-align:right">Mụn dừa</th><th style="padding:6px 10px;text-align:right">Xơ dừa</th><th style="padding:6px 10px;text-align:right">Khác</th><th style="padding:6px 10px;text-align:right">Tổng USD</th><th style="padding:6px 10px;text-align:right">Tổng Tấn</th></tr></thead>'
       +'<tbody>'+data.map(function(d){
