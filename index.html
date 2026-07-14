@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v314';
+window.APP_BUILD='v315';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1435,7 +1435,6 @@ function startListeners(){
     const uCalTasks = db.collection('calendarTasks').onSnapshot(function(snap){
       cache.calTasks = snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
       if(window._notesTab==='calendar' && g('page-notes') && g('page-notes').style.display!=='none') renderCalendarTab();
-      if(window._calRemindersReady) _calCheckReminders();
     },function(){});
     listeners.push(uCalTasks);
 
@@ -11847,7 +11846,6 @@ window._calState = window._calState || { view:'month', cursor:new Date(), search
 
 const CAL_PRIORITY={ urgent:{label:'Khẩn cấp',color:'#DC2626'}, high:{label:'Cao',color:'#F59E0B'}, normal:{label:'Bình thường',color:'#2563EB'} };
 const CAL_STATUS={ todo:{label:'Chưa làm',color:'#64748B'}, inprogress:{label:'Đang làm',color:'#0E7C7B'}, done:{label:'Hoàn thành',color:'#16A34A'}, cancelled:{label:'Đã hủy',color:'#94A3B8'} };
-const CAL_REMINDER_OPTS=[{v:'none',l:'Không nhắc'},{v:'5m',l:'5 phút trước'},{v:'15m',l:'15 phút trước'},{v:'30m',l:'30 phút trước'},{v:'1h',l:'1 giờ trước'},{v:'1d',l:'1 ngày trước'}];
 const CAL_MONTH_LABELS=['Th1','Th2','Th3','Th4','Th5','Th6','Th7','Th8','Th9','Th10','Th11','Th12'];
 const CAL_DOW=['T2','T3','T4','T5','T6','T7','CN'];
 
@@ -11882,6 +11880,21 @@ function _calFilteredTasks(){
 function _calTasksForDate(dateStr){
   return _calFilteredTasks().filter(function(t){return t.date===dateStr;}).sort(function(a,b){return (a.startTime||'').localeCompare(b.startTime||'');});
 }
+
+// Lấy danh sách Tàu/Chuyến có ETD = ngày đã cho, kèm số lô hàng tương ứng (cả Xuất & Nhập)
+function _calVesselsForDate(dateStr){
+  const groups={}, order=[];
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      if(r.etd!==dateStr || !r.vessel)return;
+      const key=r.vessel+'|'+(r.voy||'');
+      if(!groups[key]){ groups[key]={vessel:r.vessel,voy:r.voy||'',lots:[]}; order.push(key); }
+      groups[key].lots.push({id:r._id,tt:tt,jobNo:r.jobNo||r.bookingNo||'',shipper:r.shipper||r.supplier||'',pol:r.pol||'',pod:r.pod||''});
+    });
+  });
+  return order.map(function(k){return groups[k];});
+}
+
 function _calDashboardStats(){
   const all=cache.calTasks||[], today=_calToday();
   const ws=_calWeekStart(new Date()), we=new Date(ws); we.setDate(we.getDate()+6);
@@ -11898,10 +11911,17 @@ function _calDashboardStats(){
   return s;
 }
 
+// Nút Refresh: buộc vẽ lại toàn bộ lịch ngay lập tức bằng dữ liệu mới nhất đang có trong bộ nhớ
+// (dữ liệu đã tự đồng bộ realtime qua Firestore listener — nút này chủ yếu để người dùng chủ
+// động xác nhận đã thấy bản mới nhất, và vẽ lại phòng khi giao diện bị treo/chưa cập nhật).
+function _calRefresh(){
+  toast('Đã tải lại dữ liệu Lịch');
+  renderCalendarTab();
+}
+window._calRefresh=_calRefresh;
+
 function renderCalendarTab(){
   const body=g('notesBody'); if(!body)return;
-  window._calRemindersReady=true;
-  _calStartReminderInterval();
   body.innerHTML='<div id="calDashCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:1rem"></div>'
     +'<div id="calToolbar" style="margin-bottom:1rem"></div>'
     +'<div id="calViewBody" style="position:relative"></div>'
@@ -11975,6 +11995,7 @@ function _calRenderToolbar(){
       +'<div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
         +['month','week','day'].map(function(v){var l={month:'Tháng',week:'Tuần',day:'Ngày'}[v];return '<button onclick="_calSetView(\''+v+'\')" style="padding:7px 14px;border:none;background:'+(st.view===v?'var(--green)':'transparent')+';color:'+(st.view===v?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12.5px;font-weight:600">'+l+'</button>';}).join('')
       +'</div>'
+      +'<button class="rac" onclick="_calRefresh()" title="Tải lại dữ liệu mới nhất" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button>'
       +'<button class="rac" onclick="_calExportMenu(event)" title="Xuất dữ liệu" style="width:34px;height:34px"><i class="ti ti-download"></i></button>'
     +'</div>'
     +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
@@ -12017,6 +12038,7 @@ function _calRenderMonth(){
     const isToday=dateStr===todayStr;
     const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
     const tasks=_calTasksForDate(dateStr);
+    const vessels=_calVesselsForDate(dateStr);
     const showTasks=tasks.slice(0,3);
     const more=tasks.length-showTasks.length;
     cells+='<div class="cal-daycell" ondragover="event.preventDefault()" ondrop="_calOnDrop(event,\''+dateStr+'\')" onclick="openCalDayModal(\''+dateStr+'\')" style="min-height:96px;border:1px solid var(--border-light);padding:5px 6px;cursor:pointer;background:'+(isToday?'var(--green-bg)':(inMonth?'var(--bg-primary)':'var(--bg-secondary)'))+';opacity:'+(inMonth?'1':'.55')+';position:relative;transition:background .1s" onmouseover="this.style.background=\''+(isToday?'var(--green-bg)':'var(--bg-secondary)')+'\'" onmouseout="this.style.background=\''+(isToday?'var(--green-bg)':(inMonth?'var(--bg-primary)':'var(--bg-secondary)'))+'\'">'
@@ -12025,6 +12047,9 @@ function _calRenderMonth(){
         +(lunar?'<div style="font-size:9.5px;color:'+(lunar.holiday?'var(--coral)':'var(--text-tertiary)')+';font-weight:'+(lunar.holiday?'700':'400')+';text-align:right" title="'+(lunar.holiday||'')+'">'+lunar.lunarStr+'</div>':'')
       +'</div>'
       +(lunar&&lunar.holiday?'<div style="font-size:9px;color:var(--coral);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+_calEsc(lunar.holiday)+'">🎉 '+_calEsc(lunar.holiday)+'</div>':'')
+      +(vessels.length?'<div style="margin-top:1px;display:flex;flex-direction:column;gap:1.5px">'+vessels.map(function(v,vi){
+        return '<div onclick="event.stopPropagation();openCalVesselPopup(\''+dateStr+'\','+vi+')" style="font-size:9.5px;padding:1.5px 5px;border-radius:4px;background:var(--ink);color:#fff;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" title="ETD '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô hàng, bấm để xem"><i class="ti ti-anchor" style="font-size:9px"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' ('+v.lots.length+')</div>';
+      }).join('')+'</div>':'')
       +'<div style="margin-top:2px;display:flex;flex-direction:column;gap:1.5px">'
         +showTasks.map(function(t){
           return '<div draggable="true" ondragstart="_calOnDragStart(event,\''+t._id+'\')" onclick="event.stopPropagation();openCalTaskModal(\''+t._id+'\')" style="font-size:10px;padding:1.5px 5px;border-radius:4px;background:'+_calTaskColor(t)+'22;color:'+_calTaskColor(t)+';font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:grab" title="'+_calEsc(t.title)+'">■ '+_calEsc(t.title)+'</div>';
@@ -12034,7 +12059,7 @@ function _calRenderMonth(){
     +'</div>';
   }
   host.innerHTML='<div style="display:grid;grid-template-columns:repeat(7,1fr);border:1px solid var(--border-light);border-bottom:none">'
-    +CAL_DOW.map(function(d){return '<div style="padding:6px;text-align:center;font-size:11px;font-weight:700;color:var(--text-secondary);background:var(--bg-secondary);border-bottom:1px solid var(--border-light)">'+d+'</div>';}).join('')
+    +CAL_DOW.map(function(d){return '<div style="padding:6px;text-align:center;font-size:11px;font-weight:700;color:#fff;background:var(--ink);border-bottom:1px solid var(--border-light)">'+d+'</div>';}).join('')
     +'</div>'
     +'<div style="display:grid;grid-template-columns:repeat(7,1fr)">'+cells+'</div>';
 }
@@ -12047,6 +12072,30 @@ async function _calOnDrop(e,dateStr){
   catch(err){ toast('Lỗi: '+err.message,'error'); }
 }
 window._calOnDrop=_calOnDrop;
+
+// Popup danh sách lô hàng ứng với 1 Tàu/Chuyến có ETD = ngày đã click
+function openCalVesselPopup(dateStr, idx){
+  const groups=_calVesselsForDate(dateStr);
+  const v=groups[idx]; if(!v)return;
+  let ov=g('calVesselOv');
+  if(!ov){ov=document.createElement('div');ov.id='calVesselOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:600px">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-anchor" style="margin-right:6px"></i>'+_calEsc(v.vessel)+(v.voy?' — Chuyến '+_calEsc(v.voy):'')+'</div>'
+    +'<div class="msub">ETD '+dateStr.split('-').reverse().join('/')+' • '+v.lots.length+' lô hàng</div></div><button class="rac" onclick="closeOv(\'calVesselOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div style="padding:1rem 1.25rem;max-height:60vh;overflow-y:auto">'
+      +v.lots.map(function(l){
+        return '<div onclick="closeOv(\'calVesselOv\');openDetail(\''+l.id+'\',\''+l.tt+'\')" style="padding:8px 10px;border-radius:8px;background:var(--bg-secondary);margin-bottom:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px">'
+          +'<div><b>'+_calEsc(l.jobNo)+'</b><div style="font-size:11px;color:var(--text-secondary)">'+_calEsc(l.shipper)+'</div></div>'
+          +'<div style="font-size:11px;color:var(--text-tertiary);text-align:right;white-space:nowrap">'+_calEsc(l.pol)+' → '+_calEsc(l.pod)+'<div><span style="background:'+(l.tt==='xuat'?'var(--green)':'var(--blue)')+';color:#fff;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700">'+(l.tt==='xuat'?'XUẤT':'NHẬP')+'</span></div></div>'
+        +'</div>';
+      }).join('')
+    +'</div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'calVesselOv\')">Đóng</button></div>'
+  +'</div>';
+  openOv('calVesselOv');
+}
+window.openCalVesselPopup=openCalVesselPopup;
 
 // ── VIEW: TUẦN (timeline theo giờ) ──
 const CAL_HOURS=Array.from({length:17},function(_,i){return i+6;}); // 6h-22h
@@ -12061,10 +12110,12 @@ function _calRenderWeek(){
     +days.map(function(d){
       const ds=_calFmtDate(d), isToday=ds===todayStr;
       const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
+      const vessels=_calVesselsForDate(ds);
       return '<div onclick="openCalDayModal(\''+ds+'\')" style="padding:6px 4px;text-align:center;cursor:pointer;background:'+(isToday?'var(--green-bg)':'var(--bg-secondary)')+'">'
         +'<div style="font-size:10px;color:var(--text-secondary);font-weight:600">'+CAL_DOW[(d.getDay()+6)%7]+'</div>'
         +'<div style="font-size:15px;font-weight:'+(isToday?'800':'600')+';color:'+(isToday?'var(--green-dark)':'var(--text-primary)')+'">'+d.getDate()+'</div>'
         +(lunar?'<div style="font-size:9px;color:var(--text-tertiary)">'+lunar.lunarStr+'</div>':'')
+        +vessels.map(function(v,vi){return '<div onclick="event.stopPropagation();openCalVesselPopup(\''+ds+'\','+vi+')" style="margin-top:2px;font-size:8.5px;padding:1px 4px;border-radius:3px;background:var(--ink);color:#fff;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" title="'+_calEsc(v.vessel)+' — '+v.lots.length+' lô">🚢'+_calEsc(v.vessel)+' ('+v.lots.length+')</div>';}).join('')
       +'</div>';
     }).join('')
   +'</div>';
@@ -12096,11 +12147,13 @@ function _calRenderDay(){
   const st=window._calState, d=st.cursor, ds=_calFmtDate(d);
   const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
   const tasks=_calTasksForDate(ds);
+  const vesselsDay=_calVesselsForDate(ds);
   const noTime=tasks.filter(function(t){return !t.startTime;});
   const timed=tasks.filter(function(t){return t.startTime;});
   let head='<div style="padding:1rem;background:var(--bg-secondary);border-radius:10px;margin-bottom:1rem">'
     +'<div style="font-size:20px;font-weight:800">'+d.getDate()+' '+CAL_MONTH_LABELS[d.getMonth()]+'/'+d.getFullYear()+' <span style="font-size:13px;font-weight:500;color:var(--text-secondary)">('+['CN','T2','T3','T4','T5','T6','T7'][d.getDay()]+')</span></div>'
     +(lunar?'<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">Âm lịch: <b>'+lunar.lunarFull+'</b> • '+lunar.canChiDay+' ngày, '+lunar.canChiMonth+' tháng, '+lunar.canChiYear+' năm'+(lunar.holiday?' • <span style="color:var(--coral);font-weight:700">🎉 '+_calEsc(lunar.holiday)+'</span>':'')+'</div>':'')
+    +(vesselsDay.length?'<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'+vesselsDay.map(function(v,vi){return '<span onclick="openCalVesselPopup(\''+ds+'\','+vi+')" style="font-size:11.5px;padding:4px 10px;border-radius:14px;background:var(--ink);color:#fff;font-weight:700;cursor:pointer"><i class="ti ti-anchor"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô</span>';}).join('')+'</div>':'')
   +'</div>';
   let body='';
   if(noTime.length){
@@ -12134,6 +12187,7 @@ function openCalDayModal(dateStr){
   const d=_calParseDate(dateStr);
   const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
   const tasks=_calTasksForDate(dateStr);
+  const vesselsDay=_calVesselsForDate(dateStr);
   let ov=g('calDayOv');
   if(!ov){ov=document.createElement('div');ov.id='calDayOv';ov.className='ov';document.body.appendChild(ov);}
   ov.className='ov';
@@ -12142,6 +12196,7 @@ function openCalDayModal(dateStr){
     +(lunar?'<div class="msub">Âm lịch '+lunar.lunarFull+' • '+lunar.canChiDay+(lunar.holiday?' • 🎉 '+_calEsc(lunar.holiday):'')+'</div>':'')
     +'</div><button class="rac" onclick="closeOv(\'calDayOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div style="padding:1rem 1.25rem;max-height:60vh;overflow-y:auto">'
+      +(vesselsDay.length?'<div style="margin-bottom:.75rem;display:flex;gap:6px;flex-wrap:wrap">'+vesselsDay.map(function(v,vi){return '<span onclick="openCalVesselPopup(\''+dateStr+'\','+vi+')" style="font-size:11.5px;padding:4px 10px;border-radius:14px;background:var(--ink);color:#fff;font-weight:700;cursor:pointer"><i class="ti ti-anchor"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô</span>';}).join('')+'</div>':'')
       +(tasks.length?tasks.map(_calTaskRowHtml).join(''):'<div style="text-align:center;color:var(--text-tertiary);padding:2rem">Chưa có công việc nào trong ngày này.</div>')
     +'</div>'
     +'<div class="mftr"><button class="btn" onclick="closeOv(\'calDayOv\')">Đóng</button><button class="btn pri" onclick="closeOv(\'calDayOv\');openCalTaskModal(null,\''+dateStr+'\')"><i class="ti ti-plus"></i> Thêm công việc</button></div>'
@@ -12170,10 +12225,9 @@ function openCalTaskModal(id, presetDate, presetTime){
         +'<div class="fi"><label class="lbl">Giờ bắt đầu</label><input type="time" id="calfStart" value="'+(t?(t.startTime||''):(presetTime||''))+'"/></div>'
         +'<div class="fi"><label class="lbl">Giờ kết thúc</label><input type="time" id="calfEnd" value="'+_calEsc(t&&t.endTime)+'"/></div>'
       +'</div>'
-      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:.75rem">'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:.75rem">'
         +'<div class="fi"><label class="lbl">Ưu tiên</label><select id="calfPriority">'+Object.keys(CAL_PRIORITY).map(function(k){return '<option value="'+k+'" '+(t&&t.priority===k?'selected':(!t&&k==='normal'?'selected':''))+'>'+CAL_PRIORITY[k].label+'</option>';}).join('')+'</select></div>'
         +'<div class="fi"><label class="lbl">Trạng thái</label><select id="calfStatus">'+Object.keys(CAL_STATUS).map(function(k){return '<option value="'+k+'" '+(t&&t.status===k?'selected':(!t&&k==='todo'?'selected':''))+'>'+CAL_STATUS[k].label+'</option>';}).join('')+'</select></div>'
-        +'<div class="fi"><label class="lbl">Nhắc nhở</label><select id="calfReminder">'+CAL_REMINDER_OPTS.map(function(o){return '<option value="'+o.v+'" '+(t&&t.reminder===o.v?'selected':'')+'>'+o.l+'</option>';}).join('')+'</select></div>'
       +'</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:.75rem">'
         +'<div class="fi"><label class="lbl">Danh mục</label><input type="text" id="calfCategory" list="calCatList" value="'+_calEsc(t&&t.category)+'" placeholder="VD: Khách hàng, Xuất hàng, Nội bộ..."/><datalist id="calCatList"><option value="Khách hàng"><option value="Xuất hàng"><option value="Nhập hàng"><option value="Nội bộ"><option value="Cont/Bãi"></datalist></div>'
@@ -12205,15 +12259,13 @@ async function saveCalTask(){
   if(!title){toast('Nhập tiêu đề công việc','error');return;}
   const date=g('calfDate').value; if(!date){toast('Chọn ngày','error');return;}
   const id=window._calEditingId;
-  const existing=id?(cache.calTasks||[]).find(function(x){return x._id===id;}):null;
   const rec={
     title:title, description:g('calfDesc').value||'', date:date,
     startTime:g('calfStart').value||'', endTime:g('calfEnd').value||'',
     priority:g('calfPriority').value, status:g('calfStatus').value,
     category:(g('calfCategory').value||'').trim(), customer:g('calfCustomer').value||'',
     containerNo:(g('calfContainer').value||'').trim(), color:g('calfColor').value||'',
-    completed:g('calfCompleted').checked, reminder:g('calfReminder').value||'none',
-    reminderFired: existing&&existing.reminder===g('calfReminder').value ? (existing.reminderFired||false) : false,
+    completed:g('calfCompleted').checked,
     updatedAt:Date.now(), updatedBy:currentUser.email
   };
   if(rec.status==='done')rec.completed=true;
@@ -12258,37 +12310,6 @@ async function _calAddComment(id){
   catch(e){toast('Lỗi: '+e.message,'error');}
 }
 window._calAddComment=_calAddComment;
-
-// ── NHẮC NHỞ (thông báo trình duyệt) ──
-// Chỉ hoạt động khi tab trình duyệt đang mở (giới hạn của Notification API thông thường,
-// không dùng push-notification qua service worker vì cần hạ tầng backend riêng).
-window._calNotifiedLocal=window._calNotifiedLocal||{}; // tránh nhắc lại nhiều lần trên CÙNG 1 máy trong 1 phiên
-function _calStartReminderInterval(){
-  if(window._calReminderInterval)return;
-  if(window.Notification && Notification.permission==='default') Notification.requestPermission();
-  window._calReminderInterval=setInterval(_calCheckReminders,30000);
-  _calCheckReminders();
-}
-function _calReminderMs(code){
-  return {'5m':5*60000,'15m':15*60000,'30m':30*60000,'1h':60*60000,'1d':24*60*60000}[code]||0;
-}
-function _calCheckReminders(){
-  if(!window.Notification || Notification.permission!=='granted')return;
-  const now=Date.now();
-  (cache.calTasks||[]).forEach(function(t){
-    if(!t.reminder || t.reminder==='none' || !t.startTime || t.status==='done' || t.status==='cancelled')return;
-    if(window._calNotifiedLocal[t._id])return;
-    const dt=new Date(t.date+'T'+t.startTime+':00');
-    const remindAt=dt.getTime()-_calReminderMs(t.reminder);
-    if(now>=remindAt && now<dt.getTime()+15*60000){ // còn trong khoảng hợp lý (chưa quá trễ >15p sau giờ hẹn)
-      try{
-        new Notification('⏰ Nhắc việc: '+t.title,{body:(t.date.split('-').reverse().join('/'))+' '+t.startTime+(t.customer?' • '+t.customer:''),icon:'icons/icon-192.png'});
-      }catch(e){}
-      window._calNotifiedLocal[t._id]=true;
-    }
-  });
-}
-window._calCheckReminders=_calCheckReminders;
 
 // ── XUẤT DỮ LIỆU: Excel / PDF / In ──
 function _calExportMenu(ev){
