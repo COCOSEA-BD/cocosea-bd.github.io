@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v315';
+window.APP_BUILD='v316';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11895,6 +11895,35 @@ function _calVesselsForDate(dateStr){
   return order.map(function(k){return groups[k];});
 }
 
+// Lấy danh sách lịch đóng hàng (Trucking) theo ngày — nguồn dữ liệu giống hệt Trucking Report
+function _calTruckingForDate(dateStr){
+  const rows=[];
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      (r.truckings||[]).forEach(function(trk){
+        if(trk && trk.date===dateStr){
+          rows.push(Object.assign({},trk,{_lotId:r._id,_tt:tt,_bookingNo:r.bookingNo||r.jobNo||'—',_shipper:r.shipper||r.supplier||'—'}));
+        }
+      });
+    });
+  });
+  return rows;
+}
+// Lấy danh sách lịch đóng hàng tại bãi (SCY) theo ngày — nguồn dữ liệu giống hệt SCY Report
+function _calScyForDate(dateStr){
+  const rows=[];
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      (r.scyItems||[]).forEach(function(scy){
+        if(scy && scy.date===dateStr){
+          rows.push(Object.assign({},scy,{_lotId:r._id,_tt:tt,_bookingNo:r.bookingNo||r.jobNo||'—',_shipper:r.shipper||r.supplier||'—'}));
+        }
+      });
+    });
+  });
+  return rows;
+}
+
 function _calDashboardStats(){
   const all=cache.calTasks||[], today=_calToday();
   const ws=_calWeekStart(new Date()), we=new Date(ws); we.setDate(we.getDate()+6);
@@ -12039,6 +12068,7 @@ function _calRenderMonth(){
     const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
     const tasks=_calTasksForDate(dateStr);
     const vessels=_calVesselsForDate(dateStr);
+    const trkList=_calTruckingForDate(dateStr), scyList=_calScyForDate(dateStr);
     const showTasks=tasks.slice(0,3);
     const more=tasks.length-showTasks.length;
     cells+='<div class="cal-daycell" ondragover="event.preventDefault()" ondrop="_calOnDrop(event,\''+dateStr+'\')" onclick="openCalDayModal(\''+dateStr+'\')" style="min-height:96px;border:1px solid var(--border-light);padding:5px 6px;cursor:pointer;background:'+(isToday?'var(--green-bg)':(inMonth?'var(--bg-primary)':'var(--bg-secondary)'))+';opacity:'+(inMonth?'1':'.55')+';position:relative;transition:background .1s" onmouseover="this.style.background=\''+(isToday?'var(--green-bg)':'var(--bg-secondary)')+'\'" onmouseout="this.style.background=\''+(isToday?'var(--green-bg)':(inMonth?'var(--bg-primary)':'var(--bg-secondary)'))+'\'">'
@@ -12048,8 +12078,12 @@ function _calRenderMonth(){
       +'</div>'
       +(lunar&&lunar.holiday?'<div style="font-size:9px;color:var(--coral);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+_calEsc(lunar.holiday)+'">🎉 '+_calEsc(lunar.holiday)+'</div>':'')
       +(vessels.length?'<div style="margin-top:1px;display:flex;flex-direction:column;gap:1.5px">'+vessels.map(function(v,vi){
-        return '<div onclick="event.stopPropagation();openCalVesselPopup(\''+dateStr+'\','+vi+')" style="font-size:9.5px;padding:1.5px 5px;border-radius:4px;background:var(--ink);color:#fff;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" title="ETD '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô hàng, bấm để xem"><i class="ti ti-anchor" style="font-size:9px"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' ('+v.lots.length+')</div>';
+        return '<div onclick="event.stopPropagation();openCalVesselPopup(\''+dateStr+'\','+vi+')" style="font-size:9px;padding:1px 6px;border-radius:20px;background:#E8F0FA;color:#1a4b8c;border:1.2px dashed #1a4b8c;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transform:rotate(-1deg);display:inline-block" title="ETD '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô hàng, bấm để xem"><i class="ti ti-anchor" style="font-size:9px"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' ('+v.lots.length+')</div>';
       }).join('')+'</div>':'')
+      +((trkList.length||scyList.length)?'<div style="margin-top:1px;display:flex;flex-wrap:wrap;gap:2px">'
+        +(trkList.length?'<div onclick="event.stopPropagation();openCalTruckingScyPopup(\''+dateStr+'\',\'trucking\')" style="font-size:8.5px;padding:1px 5px;border-radius:20px;background:#FFF4E5;color:#B45309;border:1px dashed #B45309;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block" title="'+trkList.length+' lệnh đóng hàng (trucking)"><i class="ti ti-truck" style="font-size:8px"></i> '+trkList.length+'</div>':'')
+        +(scyList.length?'<div onclick="event.stopPropagation();openCalTruckingScyPopup(\''+dateStr+'\',\'scy\')" style="font-size:8.5px;padding:1px 5px;border-radius:20px;background:#F3E8FF;color:#7C3AED;border:1px dashed #7C3AED;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block" title="'+scyList.length+' lệnh đóng hàng tại bãi (SCY)"><i class="ti ti-package" style="font-size:8px"></i> '+scyList.length+'</div>':'')
+      +'</div>':'')
       +'<div style="margin-top:2px;display:flex;flex-direction:column;gap:1.5px">'
         +showTasks.map(function(t){
           return '<div draggable="true" ondragstart="_calOnDragStart(event,\''+t._id+'\')" onclick="event.stopPropagation();openCalTaskModal(\''+t._id+'\')" style="font-size:10px;padding:1.5px 5px;border-radius:4px;background:'+_calTaskColor(t)+'22;color:'+_calTaskColor(t)+';font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:grab" title="'+_calEsc(t.title)+'">■ '+_calEsc(t.title)+'</div>';
@@ -12097,6 +12131,33 @@ function openCalVesselPopup(dateStr, idx){
 }
 window.openCalVesselPopup=openCalVesselPopup;
 
+// Popup chi tiết lịch Đóng hàng (Trucking) hoặc Đóng hàng tại bãi (SCY) theo ngày
+function openCalTruckingScyPopup(dateStr, type){
+  const isTrk=type==='trucking';
+  const rows=isTrk?_calTruckingForDate(dateStr):_calScyForDate(dateStr);
+  let ov=g('calTrkScyOv');
+  if(!ov){ov=document.createElement('div');ov.id='calTrkScyOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:600px">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-'+(isTrk?'truck':'package')+'" style="margin-right:6px"></i>'+(isTrk?'Lịch đóng hàng (Trucking)':'Đóng hàng tại bãi (SCY)')+'</div>'
+    +'<div class="msub">Ngày '+dateStr.split('-').reverse().join('/')+' • '+rows.length+' lệnh</div></div><button class="rac" onclick="closeOv(\'calTrkScyOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div style="padding:1rem 1.25rem;max-height:60vh;overflow-y:auto">'
+      +(rows.length?rows.map(function(r){
+        return '<div onclick="closeOv(\'calTrkScyOv\');openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\''+(isTrk?'trucking':'scy')+'\')" style="padding:8px 10px;border-radius:8px;background:var(--bg-secondary);margin-bottom:6px;cursor:pointer">'
+          +'<div style="display:flex;justify-content:space-between"><b>'+_calEsc(r.bookingNo||r._bookingNo)+'</b><span style="font-size:11px;color:var(--text-tertiary)">'+(r.vol||'1')+' × '+_calEsc(r.typeCont||'')+'</span></div>'
+          +'<div style="font-size:11.5px;color:var(--text-secondary)">'+_calEsc(r._shipper)+'</div>'
+          +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">'
+            +(isTrk?('Kho: '+_calEsc(r.wh||'—')+' • Cont: '+_calEsc(r.contNo||'—')+' • Xe: '+_calEsc(r.truckNo||'—')):('Bãi/ICD: '+_calEsc(r.icd||'—')))
+          +'</div>'
+        +'</div>';
+      }).join(''):'<div style="text-align:center;color:var(--text-tertiary);padding:2rem">Không có lệnh nào trong ngày này.</div>')
+    +'</div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'calTrkScyOv\')">Đóng</button></div>'
+  +'</div>';
+  openOv('calTrkScyOv');
+}
+window.openCalTruckingScyPopup=openCalTruckingScyPopup;
+
 // ── VIEW: TUẦN (timeline theo giờ) ──
 const CAL_HOURS=Array.from({length:17},function(_,i){return i+6;}); // 6h-22h
 function _calRenderWeek(){
@@ -12115,7 +12176,7 @@ function _calRenderWeek(){
         +'<div style="font-size:10px;color:var(--text-secondary);font-weight:600">'+CAL_DOW[(d.getDay()+6)%7]+'</div>'
         +'<div style="font-size:15px;font-weight:'+(isToday?'800':'600')+';color:'+(isToday?'var(--green-dark)':'var(--text-primary)')+'">'+d.getDate()+'</div>'
         +(lunar?'<div style="font-size:9px;color:var(--text-tertiary)">'+lunar.lunarStr+'</div>':'')
-        +vessels.map(function(v,vi){return '<div onclick="event.stopPropagation();openCalVesselPopup(\''+ds+'\','+vi+')" style="margin-top:2px;font-size:8.5px;padding:1px 4px;border-radius:3px;background:var(--ink);color:#fff;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" title="'+_calEsc(v.vessel)+' — '+v.lots.length+' lô">🚢'+_calEsc(v.vessel)+' ('+v.lots.length+')</div>';}).join('')
+        +vessels.map(function(v,vi){return '<div onclick="event.stopPropagation();openCalVesselPopup(\''+ds+'\','+vi+')" style="margin-top:2px;font-size:8px;padding:0 5px;border-radius:20px;background:#E8F0FA;color:#1a4b8c;border:1px dashed #1a4b8c;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transform:rotate(-1deg);display:inline-block" title="'+_calEsc(v.vessel)+' — '+v.lots.length+' lô">🚢'+_calEsc(v.vessel)+' ('+v.lots.length+')</div>';}).join('')
       +'</div>';
     }).join('')
   +'</div>';
@@ -12148,12 +12209,17 @@ function _calRenderDay(){
   const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
   const tasks=_calTasksForDate(ds);
   const vesselsDay=_calVesselsForDate(ds);
+  const trkDay=_calTruckingForDate(ds), scyDay=_calScyForDate(ds);
   const noTime=tasks.filter(function(t){return !t.startTime;});
   const timed=tasks.filter(function(t){return t.startTime;});
   let head='<div style="padding:1rem;background:var(--bg-secondary);border-radius:10px;margin-bottom:1rem">'
     +'<div style="font-size:20px;font-weight:800">'+d.getDate()+' '+CAL_MONTH_LABELS[d.getMonth()]+'/'+d.getFullYear()+' <span style="font-size:13px;font-weight:500;color:var(--text-secondary)">('+['CN','T2','T3','T4','T5','T6','T7'][d.getDay()]+')</span></div>'
     +(lunar?'<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">Âm lịch: <b>'+lunar.lunarFull+'</b> • '+lunar.canChiDay+' ngày, '+lunar.canChiMonth+' tháng, '+lunar.canChiYear+' năm'+(lunar.holiday?' • <span style="color:var(--coral);font-weight:700">🎉 '+_calEsc(lunar.holiday)+'</span>':'')+'</div>':'')
-    +(vesselsDay.length?'<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'+vesselsDay.map(function(v,vi){return '<span onclick="openCalVesselPopup(\''+ds+'\','+vi+')" style="font-size:11.5px;padding:4px 10px;border-radius:14px;background:var(--ink);color:#fff;font-weight:700;cursor:pointer"><i class="ti ti-anchor"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô</span>';}).join('')+'</div>':'')
+    +((vesselsDay.length||trkDay.length||scyDay.length)?'<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'
+      +vesselsDay.map(function(v,vi){return '<span onclick="openCalVesselPopup(\''+ds+'\','+vi+')" style="font-size:11px;padding:3px 12px;border-radius:20px;background:#E8F0FA;color:#1a4b8c;border:1.5px dashed #1a4b8c;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block"><i class="ti ti-anchor"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô</span>';}).join('')
+      +(trkDay.length?'<span onclick="openCalTruckingScyPopup(\''+ds+'\',\'trucking\')" style="font-size:11px;padding:3px 12px;border-radius:20px;background:#FFF4E5;color:#B45309;border:1.5px dashed #B45309;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block"><i class="ti ti-truck"></i> Đóng hàng — '+trkDay.length+' lệnh</span>':'')
+      +(scyDay.length?'<span onclick="openCalTruckingScyPopup(\''+ds+'\',\'scy\')" style="font-size:11px;padding:3px 12px;border-radius:20px;background:#F3E8FF;color:#7C3AED;border:1.5px dashed #7C3AED;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block"><i class="ti ti-package"></i> SCY — '+scyDay.length+' lệnh</span>':'')
+    +'</div>':'')
   +'</div>';
   let body='';
   if(noTime.length){
@@ -12188,6 +12254,7 @@ function openCalDayModal(dateStr){
   const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
   const tasks=_calTasksForDate(dateStr);
   const vesselsDay=_calVesselsForDate(dateStr);
+  const trkDay=_calTruckingForDate(dateStr), scyDay=_calScyForDate(dateStr);
   let ov=g('calDayOv');
   if(!ov){ov=document.createElement('div');ov.id='calDayOv';ov.className='ov';document.body.appendChild(ov);}
   ov.className='ov';
@@ -12196,7 +12263,11 @@ function openCalDayModal(dateStr){
     +(lunar?'<div class="msub">Âm lịch '+lunar.lunarFull+' • '+lunar.canChiDay+(lunar.holiday?' • 🎉 '+_calEsc(lunar.holiday):'')+'</div>':'')
     +'</div><button class="rac" onclick="closeOv(\'calDayOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div style="padding:1rem 1.25rem;max-height:60vh;overflow-y:auto">'
-      +(vesselsDay.length?'<div style="margin-bottom:.75rem;display:flex;gap:6px;flex-wrap:wrap">'+vesselsDay.map(function(v,vi){return '<span onclick="openCalVesselPopup(\''+dateStr+'\','+vi+')" style="font-size:11.5px;padding:4px 10px;border-radius:14px;background:var(--ink);color:#fff;font-weight:700;cursor:pointer"><i class="ti ti-anchor"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô</span>';}).join('')+'</div>':'')
+      +((vesselsDay.length||trkDay.length||scyDay.length)?'<div style="margin-bottom:.75rem;display:flex;gap:6px;flex-wrap:wrap">'
+        +vesselsDay.map(function(v,vi){return '<span onclick="openCalVesselPopup(\''+dateStr+'\','+vi+')" style="font-size:11px;padding:3px 12px;border-radius:20px;background:#E8F0FA;color:#1a4b8c;border:1.5px dashed #1a4b8c;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block"><i class="ti ti-anchor"></i> '+_calEsc(v.vessel)+(v.voy?' V.'+_calEsc(v.voy):'')+' — '+v.lots.length+' lô</span>';}).join('')
+        +(trkDay.length?'<span onclick="openCalTruckingScyPopup(\''+dateStr+'\',\'trucking\')" style="font-size:11px;padding:3px 12px;border-radius:20px;background:#FFF4E5;color:#B45309;border:1.5px dashed #B45309;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block"><i class="ti ti-truck"></i> Đóng hàng — '+trkDay.length+' lệnh</span>':'')
+        +(scyDay.length?'<span onclick="openCalTruckingScyPopup(\''+dateStr+'\',\'scy\')" style="font-size:11px;padding:3px 12px;border-radius:20px;background:#F3E8FF;color:#7C3AED;border:1.5px dashed #7C3AED;font-weight:700;cursor:pointer;transform:rotate(-1deg);display:inline-block"><i class="ti ti-package"></i> SCY — '+scyDay.length+' lệnh</span>':'')
+      +'</div>':'')
       +(tasks.length?tasks.map(_calTaskRowHtml).join(''):'<div style="text-align:center;color:var(--text-tertiary);padding:2rem">Chưa có công việc nào trong ngày này.</div>')
     +'</div>'
     +'<div class="mftr"><button class="btn" onclick="closeOv(\'calDayOv\')">Đóng</button><button class="btn pri" onclick="closeOv(\'calDayOv\');openCalTaskModal(null,\''+dateStr+'\')"><i class="ti ti-plus"></i> Thêm công việc</button></div>'
