@@ -701,7 +701,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v309';
+window.APP_BUILD='v310';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -12002,7 +12002,7 @@ async function _processMarketExcelFiles(fileList){
           usdMunDua:0,usdXoDua:0,usdKhac:0,usdTotal:0,
           tanMunDua:0,tanXoDua:0,tanKhac:0,tanTotal:0,
           rowCountMunDua:0,rowCountXoDua:0,rowCountKhac:0,nonWeightRowCount:0,
-          cneesMap:{},sourceFiles:{}};
+          unitsMap:{}, cneesMap:{},sourceFiles:{}};
       }
       const a=aggregated[key];
       if(companyName.length>a.companyName.length)a.companyName=companyName;
@@ -12010,6 +12010,8 @@ async function _processMarketExcelFiles(fileList){
       a.usdTotal+=usd;
       a.tanTotal+=qtyTons;
       if(!qtyTons && donViTinh)a.nonWeightRowCount++;
+      // Gom số lượng theo TỪNG đơn vị gốc (kể cả Tấn/Kg) để có thể liệt kê riêng: VD "12 Túi, 3 Container"
+      if(donViTinh){a.unitsMap[donViTinh]=(a.unitsMap[donViTinh]||0)+soLuong;}
       if(cat==='munDua'){a.usdMunDua+=usd;a.tanMunDua+=qtyTons;a.rowCountMunDua++;}
       else if(cat==='xoDua'){a.usdXoDua+=usd;a.tanXoDua+=qtyTons;a.rowCountXoDua++;}
       else {a.usdKhac+=usd;a.tanKhac+=qtyTons;a.rowCountKhac++;}
@@ -12020,13 +12022,14 @@ async function _processMarketExcelFiles(fileList){
   const round2=function(n){return Math.round(n*100)/100;};
   const shippers=Object.values(aggregated).map(function(a){
     const cnees=Object.entries(a.cneesMap).map(function(e){return {name:e[0],usd:round2(e[1])};}).sort(function(x,y){return y.usd-x.usd;});
+    const units=Object.entries(a.unitsMap).map(function(e){return {unit:e[0],qty:round2(e[1])};}).sort(function(x,y){return y.qty-x.qty;});
     const match=_matchShipperToPartner(a.companyName,a.mst);
     return {
       companyName:a.companyName, mst:a.mst,
       usdMunDua:round2(a.usdMunDua), usdXoDua:round2(a.usdXoDua), usdKhac:round2(a.usdKhac), usdTotal:round2(a.usdTotal),
       tanMunDua:round2(a.tanMunDua), tanXoDua:round2(a.tanXoDua), tanKhac:round2(a.tanKhac), tanTotal:round2(a.tanTotal),
       rowCountMunDua:a.rowCountMunDua, rowCountXoDua:a.rowCountXoDua, rowCountKhac:a.rowCountKhac, nonWeightRowCount:a.nonWeightRowCount,
-      cnees:cnees, sourceFiles:Object.keys(a.sourceFiles),
+      units:units, cnees:cnees, sourceFiles:Object.keys(a.sourceFiles),
       status: match.key?'active':'new', matchedPartnerKey: match.key, matchMethod: match.method
     };
   }).sort(function(x,y){return y.usdTotal-x.usdTotal;});
@@ -12058,16 +12061,24 @@ function _renderMarketListView(){
   const pg=g('mdViewBody'); if(!pg)return;
   const rows=window._marketShippers||[];
   const f=window._mdFilter;
+  const q=(window._mdSearch||'').toLowerCase().trim();
   const filtered=rows.filter(function(r){
     if(f.status&&r.status!==f.status)return false;
     if(f.cat==='mun'&&!(r.usdMunDua>0))return false;
     if(f.cat==='xo'&&!(r.usdXoDua>0))return false;
+    if(q){
+      const hay=((r.companyName||'')+' '+(r.mst||'')).toLowerCase();
+      if(hay.indexOf(q)<0)return false;
+    }
     return true;
   }).sort(function(a,b){return (b.usdTotal||0)-(a.usdTotal||0);});
   const totalActive=rows.filter(function(r){return r.status==='active';}).length;
   const totalNew=rows.filter(function(r){return r.status==='new';}).length;
   pg.innerHTML=`
-  <div style="font-weight:700;font-size:15px;margin-bottom:.25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-chart-bar" style="font-size:19px;color:var(--green)"></i>Market Data — Dữ liệu thị trường Mụn dừa / Xơ dừa</div>
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:.25rem">
+    <div style="font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px"><i class="ti ti-chart-bar" style="font-size:19px;color:var(--green)"></i>Market Data — Dữ liệu thị trường Mụn dừa / Xơ dừa</div>
+    <button class="rac" onclick="_mdRefresh()" title="Tải lại và tính toán lại dữ liệu từ máy chủ" style="width:32px;height:32px;background:var(--green);color:#fff;border-radius:8px;font-size:15px"><i class="ti ti-refresh"></i></button>
+  </div>
   <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1rem">Bấm vào MST của một shipper để mở trang chi tiết (Cnee, sản lượng, trị giá, mặt hàng).</div>
 
   <div style="display:flex;gap:10px;margin-bottom:1.1rem;flex-wrap:wrap">
@@ -12078,17 +12089,19 @@ function _renderMarketListView(){
     <button class="btn pri" onclick="openMarketImportPopup()"><i class="ti ti-upload"></i> Import Excel Hải quan</button>
   </div>
 
-  <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
-    <select onchange="window._mdFilter.status=this.value;renderMarketData()" style="width:170px">
+  <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
+    <div class="search-wrap" style="max-width:280px"><i class="ti ti-search"></i><input type="text" id="mdSearchInput" value="${(window._mdSearch||'').replace(/"/g,'&quot;')}" placeholder="Tìm theo tên hoặc MST..." oninput="window._mdSearch=this.value;_renderMarketListView();setTimeout(function(){var el=g('mdSearchInput');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},0)"/></div>
+    <select onchange="window._mdFilter.status=this.value;renderMarketData()" style="width:160px">
       <option value="">Tất cả trạng thái</option>
       <option value="active" ${f.status==='active'?'selected':''}>Active</option>
       <option value="new" ${f.status==='new'?'selected':''}>New</option>
     </select>
-    <select onchange="window._mdFilter.cat=this.value;renderMarketData()" style="width:170px">
+    <select onchange="window._mdFilter.cat=this.value;renderMarketData()" style="width:160px">
       <option value="">Tất cả mặt hàng</option>
       <option value="mun" ${f.cat==='mun'?'selected':''}>Có Mụn dừa</option>
       <option value="xo" ${f.cat==='xo'?'selected':''}>Có Xơ dừa</option>
     </select>
+    <span style="font-size:11.5px;color:var(--text-tertiary)">${filtered.length} / ${rows.length} shipper</span>
   </div>
 
   ${!rows.length?'<div style="padding:2.5rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:12px"><i class="ti ti-database-off" style="font-size:30px;display:block;margin-bottom:8px"></i>Chưa có dữ liệu thị trường — bấm "Import Excel Hải quan" để bắt đầu.</div>':
@@ -12104,6 +12117,20 @@ function _renderMarketListView(){
     }).join('')+'</tbody>'
   +'</table></div></div>'}`;
 }
+window._renderMarketListView=_renderMarketListView;
+
+// Nút refresh: tải lại toàn bộ dữ liệu Market từ Firestore rồi vẽ lại
+function _mdRefresh(){
+  setLoading(true,'Đang tải lại dữ liệu thị trường...');
+  loadMarketShippers(function(){
+    loadMarketTransactions(function(){
+      setLoading(false);
+      toast('Đã tải lại dữ liệu Market');
+      renderMarketData();
+    });
+  });
+}
+window._mdRefresh=_mdRefresh;
 
 // ═══ Tab "Market" — so sánh các shipper theo mặt hàng + chỉ số đã chọn ═══
 window._mktCompare={cat:'munDua',metric:'usd',chart:'bar'};
@@ -12273,7 +12300,9 @@ function _renderMarketDetailPage(){
     <div style="padding:.85rem 1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid #94a3b8"><div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase">Khác</div><div style="font-size:16px;font-weight:800;color:var(--text-tertiary)">${fmtV(isUsd?r.usdKhac:r.tanKhac)}</div></div>
     <div style="padding:.85rem 1rem;background:var(--green-bg);border-radius:10px;border-left:4px solid var(--green)"><div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase">Tổng ${isUsd?'trị giá':'sản lượng'}</div><div style="font-size:16px;font-weight:800;color:var(--green-dark)">${fmtV(isUsd?r.usdTotal:r.tanTotal)}</div></div>
   </div>
-  ${(!isUsd&&r.nonWeightRowCount)?'<div style="font-size:11px;color:var(--gold-dark);margin-bottom:1rem"><i class="ti ti-alert-triangle"></i> '+r.nonWeightRowCount+' dòng dùng đơn vị khác Kg/Tấn (Túi/Cái/Bộ/Container...) không quy đổi được sang Tấn nên không tính vào tổng sản lượng Tấn.</div>':''}
+  ${(!isUsd&&r.nonWeightRowCount)?'<div style="font-size:11px;color:var(--gold-dark);margin-bottom:1rem"><i class="ti ti-alert-triangle"></i> '+r.nonWeightRowCount+' dòng dùng đơn vị khác Kg/Tấn không quy đổi được sang Tấn (xem chi tiết theo đơn vị gốc bên dưới).</div>':''}
+
+  ${(r.units&&r.units.length)?'<div style="margin-bottom:1rem"><div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:.4rem">Sản lượng theo từng đơn vị gốc (như trong file)</div><div style="display:flex;gap:8px;flex-wrap:wrap">'+r.units.map(function(u){return '<span style="padding:5px 12px;background:var(--bg-secondary);border-radius:20px;font-size:12px;font-weight:600"><b>'+u.qty.toLocaleString(undefined,{maximumFractionDigits:2})+'</b> '+_mdEscHtml(u.unit)+'</span>';}).join('')+'</div></div>':''}
 
   <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:1.25rem;align-items:start">
     <div>
