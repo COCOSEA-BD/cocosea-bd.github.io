@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v316';
+window.APP_BUILD='v317';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11819,6 +11819,146 @@ function loadPersonalNotes(cb){
   }).catch(function(){window._personalNotes=[];if(cb)cb();});
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  LỊCH CÁ NHÂN (Personal Calendar) — Ghi chú riêng → "Lịch của tôi"
+//  Đơn giản hơn nhiều so với Lịch chung: KHÔNG có tàu/chuyến, KHÔNG có Trucking/SCY,
+//  chỉ để user tự ghi chú trực tiếp lên lịch, riêng tư 100% (không ai khác thấy được).
+//  Lưu theo đúng pattern personalNotes: 1 document/user (owner = email), chứa mảng tasks.
+// ═══════════════════════════════════════════════════════════════════════════
+window._personalCalTasks=window._personalCalTasks||[];
+window._pcalCursor=window._pcalCursor||new Date();
+
+function loadPersonalCalTasks(cb){
+  const docId=_notesSanitizeEmail(currentUser?.email);
+  if(!docId){window._personalCalTasks=[];if(cb)cb();return;}
+  db.collection('personalCalendarTasks').doc(docId).get().then(function(snap){
+    window._personalCalTasks=snap.exists?(snap.data().tasks||[]):[];
+    if(cb)cb();
+  }).catch(function(){window._personalCalTasks=[];if(cb)cb();});
+}
+window.loadPersonalCalTasks=loadPersonalCalTasks;
+
+async function _pcalSaveAll(tasks){
+  const docId=_notesSanitizeEmail(currentUser?.email);
+  if(!docId)return;
+  await db.collection('personalCalendarTasks').doc(docId).set({owner:currentUser.email,tasks:tasks,updatedAt:Date.now()});
+  window._personalCalTasks=tasks;
+}
+
+function _pcalTasksForDate(dateStr){
+  return (window._personalCalTasks||[]).filter(function(t){return t.date===dateStr;}).sort(function(a,b){return (a.time||'').localeCompare(b.time||'');});
+}
+
+function renderPersonalCalendar(){
+  const host=g('pcalWrap'); if(!host)return;
+  host.innerHTML='<div id="pcalToolbar" style="display:flex;align-items:center;gap:8px;margin-bottom:.75rem"></div><div id="pcalGrid"></div>';
+  _pcalRenderToolbar();
+  _pcalRenderMonth();
+}
+window.renderPersonalCalendar=renderPersonalCalendar;
+
+function _pcalRenderToolbar(){
+  const host=g('pcalToolbar'); if(!host)return;
+  const c=window._pcalCursor;
+  host.innerHTML='<div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
+      +'<button onclick="_pcalNav(-1)" style="padding:6px 9px;border:none;background:transparent;cursor:pointer;color:var(--text-secondary)"><i class="ti ti-chevron-left"></i></button>'
+      +'<button onclick="_pcalToday()" style="padding:6px 11px;border:none;border-left:1px solid var(--border-light);border-right:1px solid var(--border-light);background:transparent;cursor:pointer;font-size:12px;font-weight:600;color:var(--text-secondary)">Hôm nay</button>'
+      +'<button onclick="_pcalNav(1)" style="padding:6px 9px;border:none;background:transparent;cursor:pointer;color:var(--text-secondary)"><i class="ti ti-chevron-right"></i></button>'
+    +'</div>'
+    +'<div style="font-weight:700;font-size:14px">'+CAL_MONTH_LABELS[c.getMonth()]+'/'+c.getFullYear()+'</div>';
+}
+function _pcalNav(dir){ window._pcalCursor.setMonth(window._pcalCursor.getMonth()+dir); _pcalRenderToolbar(); _pcalRenderMonth(); }
+window._pcalNav=_pcalNav;
+function _pcalToday(){ window._pcalCursor=new Date(); _pcalRenderToolbar(); _pcalRenderMonth(); }
+window._pcalToday=_pcalToday;
+
+function _pcalRenderMonth(){
+  const host=g('pcalGrid'); if(!host)return;
+  const c=window._pcalCursor, y=c.getFullYear(), m=c.getMonth();
+  const startOffset=(new Date(y,m,1).getDay()+6)%7;
+  const gridStart=new Date(y,m,1-startOffset);
+  const todayStr=_calToday();
+  let cells='';
+  for(let i=0;i<42;i++){
+    const d=new Date(gridStart); d.setDate(gridStart.getDate()+i);
+    const dateStr=_calFmtDate(d);
+    const inMonth=d.getMonth()===m, isToday=dateStr===todayStr;
+    const lunar=window.LunarCal?window.LunarCal.describe(d.getDate(),d.getMonth()+1,d.getFullYear()):null;
+    const tasks=_pcalTasksForDate(dateStr);
+    const show=tasks.slice(0,2), more=tasks.length-show.length;
+    cells+='<div onclick="openPcalDayModal(\''+dateStr+'\')" style="min-height:78px;border:1px solid var(--border-light);padding:4px 5px;cursor:pointer;background:'+(isToday?'var(--green-bg)':(inMonth?'var(--bg-primary)':'var(--bg-secondary)'))+';opacity:'+(inMonth?'1':'.55')+'">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+        +'<div style="font-size:12px;font-weight:'+(isToday?'800':'600')+';color:'+(isToday?'var(--green-dark)':'var(--text-primary)')+'">'+d.getDate()+'</div>'
+        +(lunar?'<div style="font-size:9px;color:'+(lunar.holiday?'var(--coral)':'var(--text-tertiary)')+'">'+lunar.lunarStr+'</div>':'')
+      +'</div>'
+      +'<div style="margin-top:2px;display:flex;flex-direction:column;gap:1.5px">'
+        +show.map(function(t){
+          const c2=t.color||'#7c3aed';
+          return '<div style="font-size:9.5px;padding:1px 5px;border-radius:4px;background:'+c2+'22;color:'+c2+';font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'+(t.completed?'text-decoration:line-through;opacity:.6':'')+'" title="'+_calEsc(t.title)+'">'+_calEsc(t.title)+'</div>';
+        }).join('')
+        +(more>0?'<div style="font-size:9px;color:var(--text-tertiary);font-weight:600">+'+more+' more</div>':'')
+      +'</div>'
+    +'</div>';
+  }
+  host.innerHTML='<div style="display:grid;grid-template-columns:repeat(7,1fr);border:1px solid var(--border-light);border-bottom:none">'
+    +CAL_DOW.map(function(d){return '<div style="padding:5px;text-align:center;font-size:10.5px;font-weight:700;color:#fff;background:var(--ink)">'+d+'</div>';}).join('')
+    +'</div><div style="display:grid;grid-template-columns:repeat(7,1fr)">'+cells+'</div>';
+}
+window._pcalRenderMonth=_pcalRenderMonth;
+
+window._pcalEditingId=null;
+function openPcalDayModal(dateStr){
+  const tasks=_pcalTasksForDate(dateStr);
+  const d=_calParseDate(dateStr);
+  let ov=g('pcalOv');
+  if(!ov){ov=document.createElement('div');ov.id='pcalOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:460px">'
+    +'<div class="mhdr"><div><div class="mtitle">'+d.getDate()+' '+CAL_MONTH_LABELS[d.getMonth()]+'/'+d.getFullYear()+'</div><div class="msub">Ghi chú riêng của bạn</div></div><button class="rac" onclick="closeOv(\'pcalOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div style="padding:1rem 1.25rem">'
+      +'<div id="pcalDayList" style="margin-bottom:1rem">'+(tasks.length?tasks.map(function(t){
+        return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;margin-bottom:5px;border-radius:8px;background:var(--bg-secondary);border-left:3px solid '+(t.color||'#7c3aed')+'">'
+          +'<input type="checkbox" '+(t.completed?'checked':'')+' onchange="_pcalToggleDone(\''+dateStr+'\',\''+t.id+'\')" style="width:15px;height:15px;cursor:pointer"/>'
+          +'<span style="flex:1;font-size:12.5px;'+(t.completed?'text-decoration:line-through;opacity:.6':'')+'">'+(t.time?'<b>'+t.time+'</b> ':'')+_calEsc(t.title)+(t.description?'<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">'+_calEsc(t.description)+'</div>':'')+'</span>'
+          +'<button class="rac red" onclick="_pcalDelete(\''+dateStr+'\',\''+t.id+'\')" style="font-size:12px"><i class="ti ti-trash"></i></button>'
+        +'</div>';
+      }).join(''):'<div style="text-align:center;color:var(--text-tertiary);padding:1rem;font-size:12.5px">Chưa có ghi chú nào trong ngày này.</div>')+'</div>'
+      +'<div style="border-top:1px solid var(--border-light);padding-top:.75rem">'
+        +'<input type="text" id="pcalNewTitle" placeholder="Ghi chú mới..." style="margin-bottom:6px"/>'
+        +'<div style="display:flex;gap:6px;margin-bottom:6px"><input type="time" id="pcalNewTime" style="flex:0 0 120px"/><input type="text" id="pcalNewDesc" placeholder="Mô tả thêm (tùy chọn)" style="flex:1"/><input type="color" id="pcalNewColor" value="#7c3aed" style="flex:0 0 40px;height:36px;padding:2px"/></div>'
+        +'<button class="btn pri" onclick="_pcalAdd(\''+dateStr+'\')" style="width:100%"><i class="ti ti-plus"></i> Thêm vào ngày này</button>'
+      +'</div>'
+    +'</div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'pcalOv\')">Đóng</button></div>'
+  +'</div>';
+  openOv('pcalOv');
+}
+window.openPcalDayModal=openPcalDayModal;
+
+async function _pcalAdd(dateStr){
+  const title=(g('pcalNewTitle').value||'').trim();
+  if(!title){toast('Nhập nội dung ghi chú','error');return;}
+  const newTask={id:'t'+Date.now()+Math.random().toString(36).slice(2,6),title:title,description:g('pcalNewDesc').value||'',date:dateStr,time:g('pcalNewTime').value||'',color:g('pcalNewColor').value||'#7c3aed',completed:false,createdAt:Date.now()};
+  const tasks=(window._personalCalTasks||[]).concat([newTask]);
+  try{ await _pcalSaveAll(tasks); openPcalDayModal(dateStr); _pcalRenderMonth(); toast('Đã thêm ghi chú'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+}
+window._pcalAdd=_pcalAdd;
+
+async function _pcalToggleDone(dateStr,id){
+  const tasks=(window._personalCalTasks||[]).map(function(t){ if(t.id===id)t.completed=!t.completed; return t; });
+  try{ await _pcalSaveAll(tasks); openPcalDayModal(dateStr); _pcalRenderMonth(); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+}
+window._pcalToggleDone=_pcalToggleDone;
+
+async function _pcalDelete(dateStr,id){
+  const tasks=(window._personalCalTasks||[]).filter(function(t){return t.id!==id;});
+  try{ await _pcalSaveAll(tasks); openPcalDayModal(dateStr); _pcalRenderMonth(); toast('Đã xóa ghi chú'); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); }
+}
+window._pcalDelete=_pcalDelete;
+
 function renderNotesPage(){
   const pg=g('page-notes'); if(!pg)return;
   if(!window._notesTab) window._notesTab='calendar'; // Mở COCO NOTES lần đầu → vào thẳng trang Lịch
@@ -13518,7 +13658,12 @@ function renderNotesPersonalTab(){
       <div class="search-wrap" style="flex:1;min-width:200px;max-width:320px"><i class="ti ti-search"></i><input type="text" id="notesPersonalSearch" placeholder="Tìm ghi chú..." oninput="renderNotesPersonalList()"/></div>
       <button class="btn pri" onclick="openNoteEditor('personal')" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-plus"></i> Thêm ghi chú</button>
     </div>
-    <div id="notesPersonalList"></div>`;
+    <div id="notesPersonalList"></div>
+    <div style="margin-top:1.75rem;padding-top:1.25rem;border-top:1px solid var(--border-light)">
+      <div style="font-size:12.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-calendar"></i> Lịch của tôi <span style="font-weight:400;text-transform:none;color:var(--text-tertiary)">— chỉ riêng bạn thấy được</span></div>
+      <div id="pcalWrap"></div>
+    </div>`;
+  loadPersonalCalTasks(function(){ renderPersonalCalendar(); });
 }
 
 function renderNotesPersonalList(){
