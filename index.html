@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.02';
+window.APP_BUILD='v2.03';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1148,7 +1148,7 @@ async function doLogout(){
 let _inactivityTimer=null;
 let _inactivityListenerAttached=false;
 let _pwCheckTimer=null;
-let _securitySettings={inactivity:{enabled:false,minutes:30},password:{enabled:false,minutes:10080}}; // defaults
+let _securitySettings={inactivity:{enabled:false,minutes:30},password:{enabled:false,minutes:10080},backDashboard:{enabled:true,minutes:30}}; // defaults
 
 // Load security settings từ Firestore (gọi khi user login)
 function _loadSecuritySettings(cb){
@@ -1164,11 +1164,16 @@ function _loadSecuritySettings(cb){
 // Áp dụng cài đặt bảo mật (gọi sau khi load hoặc save)
 function _applySecuritySettings(){
   _stopInactivityTracker();
+  _stopDashboardIdleTracker();
   if(_pwCheckTimer){clearInterval(_pwCheckTimer);_pwCheckTimer=null;}
 
   // Inactivity auto-logout
   if(_securitySettings.inactivity&&_securitySettings.inactivity.enabled&&currentUser){
     _startInactivityTracker(_securitySettings.inactivity.minutes*60*1000);
+  }
+  // Tự động về Dashboard khi không thao tác
+  if(_securitySettings.backDashboard&&_securitySettings.backDashboard.enabled&&currentUser){
+    _startDashboardIdleTracker();
   }
   // Password expiry check
   if(_securitySettings.password&&_securitySettings.password.enabled&&currentUser){
@@ -1292,6 +1297,33 @@ function _startInactivityTracker(limitMs){
 }
 function _stopInactivityTracker(){
   if(_inactivityTimer){clearTimeout(_inactivityTimer);_inactivityTimer=null;}
+}
+
+// ─── Tự động quay về DASHBOARD khi không thao tác (độc lập với cơ chế tự đăng xuất ở trên) ───
+let _dashIdleTimer=null, _dashIdleListenerAttached=false;
+function _resetDashboardIdleTimer(){
+  if(!currentUser||!_securitySettings.backDashboard||!_securitySettings.backDashboard.enabled)return;
+  if(currentTab==='home')return; // đã ở Dashboard rồi thì thôi
+  const ms=(_securitySettings.backDashboard.minutes||30)*60*1000;
+  if(_dashIdleTimer)clearTimeout(_dashIdleTimer);
+  _dashIdleTimer=setTimeout(_handleDashboardIdleTimeout,ms);
+}
+function _handleDashboardIdleTimeout(){
+  if(!currentUser||currentTab==='home')return;
+  toast('Không có thao tác trong '+(_securitySettings.backDashboard.minutes||30)+' phút — đã tự động về Dashboard');
+  goTab('home');
+}
+function _startDashboardIdleTracker(){
+  if(!_dashIdleListenerAttached){
+    ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(function(evt){
+      document.addEventListener(evt,_resetDashboardIdleTimer,{passive:true});
+    });
+    _dashIdleListenerAttached=true;
+  }
+  _resetDashboardIdleTimer();
+}
+function _stopDashboardIdleTracker(){
+  if(_dashIdleTimer){clearTimeout(_dashIdleTimer);_dashIdleTimer=null;}
 }
 
 /* ─────────────────────────────────────────────
@@ -1741,12 +1773,12 @@ window._injectBackBtn=_injectBackBtn;
 const HOME_STATUS_COLORS = ['#F59E0B','#16A34A','#2563EB','#DC2626','#7C3AED','#0E7C7B','#94A3B8'];
 
 const HOME_TILES = [
-  {tab:'xuat', icon:'ti-arrow-up-right', label:'Shipment List', sub:'Quản lý lô hàng Xuất khẩu', color:'#0E7C7B'},
+  {tab:'xuat', icon:'ti-ship', label:'Shipment List', sub:'Quản lý lô hàng Xuất khẩu', color:'#0E7C7B'},
   {tab:'notes', icon:'ti-notes', label:'COCO NOTES', sub:'Lịch, ghi chú chung & cá nhân', color:'#7C3AED'},
   {tab:'thu-chi', icon:'ti-cash', label:'Finance', sub:'Thu chi, báo cáo tài chính', color:'#C99A3C'},
   {tab:'doi-tac', icon:'ti-building-community', label:'CRM', sub:'Đối tác, Market Data', color:'#1a4b8c'},
   {tab:'trucking-report', icon:'ti-truck', label:'Trucking Report', sub:'Lịch đóng hàng vận chuyển', color:'#B45309'},
-  {tab:'scy-report', icon:'ti-package', label:'SCY Report', sub:'Đóng hàng tại bãi container', color:'#0F766E'}
+  {tab:'scy-report', icon:'ti-building-warehouse', label:'SCY Report', sub:'Đóng hàng tại bãi container', color:'#0F766E'}
 ];
 
 function _homeStats(){
@@ -1871,7 +1903,7 @@ function renderHomePage(){
         <div style="font-size:13px;color:#E2E8F0">Chọn 1 module bên dưới để bắt đầu công việc hôm nay.</div>
       </div>
 
-      <div class="home-fade" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:2rem;animation-delay:.1s">
+      <div class="home-fade" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:2rem;animation-delay:.1s">
         ${HOME_TILES.map(function(t,i){
           return '<div class="home-tile" style="--tile-color:'+t.color+';animation-delay:'+(0.12+i*0.05)+'s" onclick="goTab(\''+t.tab+'\')">'
             +'<div class="home-tile-ic"><i class="ti '+t.icon+'"></i></div>'
@@ -1886,19 +1918,19 @@ function renderHomePage(){
         <div class="home-stat-card">
           <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;color:#CBD5E1;text-transform:uppercase;letter-spacing:.3px;margin-bottom:14px"><i class="ti ti-chart-donut" style="color:var(--green);font-size:15px"></i> Tổng lô hàng, Chờ xử lý &amp; VST</div>
           ${loading?'<div style="display:flex;align-items:center;gap:8px;color:#94A3B8;font-size:12.5px"><i class="ti ti-loader-2" style="animation:spin 1s linear infinite"></i> Đang tải dữ liệu...</div>':
-            '<div style="display:flex;align-items:stretch;gap:14px">'
-              +_homeDonutChart(stats.statusBreakdown,'Tổng lô hàng',108)
-              +'<div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:4px">'+stats.statusBreakdown.map(function(s){
+            '<div style="display:flex;align-items:stretch;gap:16px">'
+              +_homeDonutChart(stats.statusBreakdown,'Tổng lô hàng',150)
+              +'<div style="flex:0 0 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:5px">'+stats.statusBreakdown.map(function(s){
                 const pct=stats.total?Math.round(s.count/stats.total*100):0;
-                return '<div style="display:flex;align-items:center;gap:6px;font-size:11px"><span style="width:7px;height:7px;border-radius:50%;background:'+s.color+';flex-shrink:0"></span><span style="color:#E2E8F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+s.label+'</span><span style="margin-left:auto;color:#94A3B8;font-weight:600;white-space:nowrap;padding-left:6px">'+s.count+' ('+pct+'%)</span></div>';
+                return '<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:'+s.color+';flex-shrink:0"></span><span style="color:#E2E8F0">'+s.label+'</span><span style="color:#94A3B8;font-weight:600;padding-left:4px">'+s.count+' ('+pct+'%)</span></div>';
               }).join('')
-              +'<div style="font-size:11px;color:var(--gold);font-weight:700;margin-top:4px"><i class="ti ti-clock" style="margin-right:3px"></i>'+stats.pending+' chờ xử lý</div>'
+              +'<div style="font-size:11px;color:var(--gold);font-weight:700;margin-top:5px;white-space:nowrap"><i class="ti ti-clock" style="margin-right:3px"></i>'+stats.pending+' chờ xử lý</div>'
               +'</div>'
               +'<div style="width:1px;background:rgba(255,255,255,.15);flex-shrink:0"></div>'
-              +'<div style="flex:0 0 92px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:2px">'
-                +'<i class="ti ti-list-check" style="font-size:20px;color:'+(stats.vstNeed>0?'#F59E0B':'#94A3B8')+'"></i>'
-                +'<div style="font-family:var(--font-disp);font-size:24px;font-weight:800;color:'+(stats.vstNeed>0?'#F59E0B':'#fff')+'">'+stats.vstNeed+'</div>'
-                +'<div style="font-size:9.5px;color:#94A3B8;line-height:1.3">cần xác nhận VST</div>'
+              +'<div style="flex:1;min-width:110px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:4px;background:rgba(245,158,11,.06);border-radius:12px">'
+                +'<i class="ti ti-list-check" style="font-size:26px;color:'+(stats.vstNeed>0?'#F59E0B':'#94A3B8')+'"></i>'
+                +'<div style="font-family:var(--font-disp);font-size:32px;font-weight:800;color:'+(stats.vstNeed>0?'#F59E0B':'#fff')+'">'+stats.vstNeed+'</div>'
+                +'<div style="font-size:10.5px;color:#94A3B8;line-height:1.3">lô cần xác nhận<br/>VST</div>'
               +'</div>'
             +'</div>'}
           <button class="btn sm" style="margin-top:14px;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#fff" onclick="goTab('xuat')">Xem Shipment List <i class="ti ti-arrow-right"></i></button>
@@ -11186,7 +11218,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 <div id="loginWrap" class="login-wrap" style="display:none">
   <div class="login-card">
     <div class="login-logo">
-      <div class="login-logo-ic"><i class="ti ti-ship"></i></div>
+      <div class="login-logo-ic" style="overflow:hidden;padding:0"><img src="icons/icon-48.png" alt="CocoFlow" style="width:100%;height:100%;object-fit:cover"/></div>
       <div>
         <div style="font-size:18px;font-weight:700">COCOFLOW</div>
         <div style="font-size:11px;color:var(--text-secondary)">Import / Export Management</div>
@@ -11988,11 +12020,14 @@ async function saveSecuritySettings(){
   const pwOn=g('set_pw_on')?.checked||false;
   const pwMin=Math.max(1,parseInt(g('set_pw_min')?.value)||10080);
   const closeOn=g('set_close_on')?.checked||false;
+  const dashOn=g('set_dash_on')?.checked||false;
+  const dashMin=Math.max(1,parseInt(g('set_dash_min')?.value)||30);
   // Luôn lưu giá trị người dùng nhập, bất kể toggle on/off
   const s={
     inactivity:{enabled:inOn,minutes:inMin},
     password:{enabled:pwOn,minutes:pwMin},
     closeLogout:closeOn,
+    backDashboard:{enabled:dashOn,minutes:dashMin},
     updatedAt:Date.now(),updatedBy:currentUser.email
   };
   // Optimistic update trước await để re-render hiển thị đúng
@@ -12008,9 +12043,11 @@ async function saveSecuritySettings(){
       const inLabel=bodyEl.querySelector('#set_inactivity_label');
       const pwLabel=bodyEl.querySelector('#set_pw_label');
       const clLabel=bodyEl.querySelector('#set_close_label');
+      const dashLabel=bodyEl.querySelector('#set_dash_label');
       if(inLabel)inLabel.textContent=inOn?'Bật':'Tắt';
       if(pwLabel)pwLabel.textContent=pwOn?'Bật':'Tắt';
       if(clLabel)clLabel.textContent=closeOn?'Bật':'Tắt';
+      if(dashLabel)dashLabel.textContent=dashOn?'Bật':'Tắt';
     }
   }catch(e){
     _securitySettings=Object.assign({},_securitySettings); // keep optimistic
@@ -14300,6 +14337,15 @@ function renderSettings(){
         +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
           +'<input type="checkbox" id="set_inactivity_on" '+((_securitySettings.inactivity||{}).enabled?'checked':'')+' onchange="this.nextElementSibling.textContent=this.checked?\'Bật\':\'Tắt\'\" style="width:16px;height:16px"/>'
           +'<span id="set_inactivity_label">'+((_securitySettings.inactivity||{}).enabled?'Bật':'Tắt')+'</span>'
+        +'</label>'
+      +'</div>'
+      // Back to Dashboard khi không hoạt động
+      +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+        +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Tự động về Dashboard khi không hoạt động</div><div style="font-size:11.5px;color:var(--text-secondary)">Không đăng xuất — chỉ đưa người dùng về trang Dashboard sau khoảng thời gian không thao tác</div></div>'
+        +'<input type="number" id="set_dash_min" value="'+((_securitySettings.backDashboard||{}).minutes||30)+'" min="1" max="480" style="width:70px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
+        +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
+          +'<input type="checkbox" id="set_dash_on" '+((_securitySettings.backDashboard||{}).enabled?'checked':'')+' onchange="this.nextElementSibling.textContent=this.checked?\'Bật\':\'Tắt\'\" style="width:16px;height:16px"/>'
+          +'<span id="set_dash_label">'+((_securitySettings.backDashboard||{}).enabled?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
       // Password expiry
