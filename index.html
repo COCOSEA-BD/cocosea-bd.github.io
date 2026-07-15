@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v321';
+window.APP_BUILD='v322';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2133,14 +2133,14 @@ function renderLotTable(tt){
           +(r.cutoffCY?`<div style="font-size:10.5px;color:#b45309;margin-top:2px">CY: ${r.cutoffCY}</div>`:'')
           +`</td>`;
         }
-        // ── Partner: Shipper/Carrier — bold navy
+        // ── Partner: Shipper/Carrier — dạng badge "con dấu hải quan" (viền chấm, nghiêng nhẹ)
         if(c.partner){
           const val=r[c.k]||'';
           if(!val) return`<td style="text-align:center">—</td>`;
           const pt=partnersRef[val];
           const sn=pt&&(pt.shortname||pt.name||'');
           const hasPartner=!!pt;
-          return`<td style="max-width:150px;text-align:center"><div onclick="${hasPartner?`event.stopPropagation();_gotoPartnerFromList('${val.replace(/'/g,"\\'")}')`:''}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:#1a4b8c${hasPartner?';cursor:pointer;text-decoration:underline':''}" title="${hasPartner?'Mở CRM: '+val:val}">${sn||val}</div></td>`;
+          return`<td style="max-width:150px;text-align:center"><div onclick="${hasPartner?`event.stopPropagation();_gotoPartnerFromList('${val.replace(/'/g,"\\'")}')`:''}" style="display:inline-flex;max-width:100%;padding:3px 10px;border-radius:20px;border:1.2px dashed #1a4b8c;background:#E8F0FA;color:#1a4b8c;font-weight:700;font-size:11px;letter-spacing:.2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transform:rotate(-1deg)${hasPartner?';cursor:pointer':''}" title="${hasPartner?'Mở CRM: '+val:val}">${sn||val}</div></td>`;
         }
         return`<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center">${r[c.k]||'—'}</td>`;
       }).join('')
@@ -13105,24 +13105,29 @@ function _mdCneesForCountry(country){
     map[cnee].shippers[shipKey].usd+=(t.triGiaUSD||0);
   });
   return Object.values(map).map(function(c){
-    return {cnee:c.cnee,usd:Math.round(c.usd*100)/100,
+    return {cnee:c.cnee,country:country,usd:Math.round(c.usd*100)/100,
       shippers:Object.values(c.shippers).map(function(s){return {name:s.name,mst:s.mst,usd:Math.round(s.usd*100)/100};}).sort(function(a,b){return b.usd-a.usd;})};
   }).sort(function(a,b){return b.usd-a.usd;});
 }
 
+window._mdCneeSearch=window._mdCneeSearch||'';
 function _renderMarketCneeView(){
   const pg=g('mdViewBody'); if(!pg)return;
   const country=window._mdCneeCountry;
+  const q=(window._mdCneeSearch||'').toLowerCase().trim();
+  const qNorm=_normCompanyName(q);
   const money=function(n){return '$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0});};
   if(!country){
-    const countries=_mdCountriesAgg();
+    let countries=_mdCountriesAgg();
     window._mdCneeCountryList=countries;
+    if(q)countries=countries.filter(function(c){return c.country.toLowerCase().indexOf(q)>=0||_normCompanyName(c.country).indexOf(qNorm)>=0;});
     pg.innerHTML='<div style="font-weight:700;font-size:14px;margin-bottom:.25rem">Chọn quốc gia để xem danh sách Cnee</div>'
-      +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:1rem">Dựa theo "Tên nước nhập khẩu" trong dữ liệu hải quan đã import.</div>'
-      +(!countries.length?'<div style="padding:2.5rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:12px">Chưa có dữ liệu — hãy Import Excel ở tab Danh sách Shipper trước.</div>':
+      +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:.75rem">Dựa theo "Tên nước nhập khẩu" trong dữ liệu hải quan đã import.</div>'
+      +'<div class="search-wrap" style="max-width:280px;margin-bottom:1rem"><i class="ti ti-search"></i><input type="text" id="mdCneeSearchInput" value="'+q.replace(/"/g,'&quot;')+'" placeholder="Tìm quốc gia..." oninput="window._mdCneeSearch=this.value;clearTimeout(window._mdCneeSearchDebounce);window._mdCneeSearchDebounce=setTimeout(function(){_renderMarketCneeView();var el=g(\'mdCneeSearchInput\');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},350);"/></div>'
+      +(!countries.length?'<div style="padding:2.5rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:12px">'+(q?'Không tìm thấy quốc gia phù hợp.':'Chưa có dữ liệu — hãy Import Excel ở tab Danh sách Shipper trước.')+'</div>':
         '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">'
-        +countries.map(function(c,ci){
-          return '<div onclick="window._mdCneeCountry=window._mdCneeCountryList['+ci+'].country;_renderMarketCneeView()" style="padding:14px 16px;background:var(--bg-secondary);border-radius:10px;cursor:pointer;border:1.5px solid var(--border-light);transition:border-color .1s" onmouseover="this.style.borderColor=\'var(--green)\'" onmouseout="this.style.borderColor=\'var(--border-light)\'">'
+        +countries.map(function(c){
+          return '<div onclick="window._mdCneeCountry=\''+c.country.replace(/'/g,"\\'")+'\';window._mdCneeSearch=\'\';_renderMarketCneeView()" style="padding:14px 16px;background:var(--bg-secondary);border-radius:10px;cursor:pointer;border:1.5px solid var(--border-light);transition:border-color .1s" onmouseover="this.style.borderColor=\'var(--green)\'" onmouseout="this.style.borderColor=\'var(--border-light)\'">'
             +'<div style="font-weight:700;font-size:13.5px;margin-bottom:4px"><i class="ti ti-flag" style="color:var(--green);margin-right:4px"></i>'+_mdEscHtml(c.country)+'</div>'
             +'<div style="font-size:11.5px;color:var(--text-secondary)">'+c.cneeCount+' Cnee &nbsp;•&nbsp; <b style="color:var(--text-primary)">'+money(c.usd)+'</b></div>'
           +'</div>';
@@ -13130,23 +13135,43 @@ function _renderMarketCneeView(){
         +'</div>');
     return;
   }
-  const cnees=_mdCneesForCountry(country);
+  let cnees=_mdCneesForCountry(country);
   window._mdCneeList=cnees;
-  pg.innerHTML='<button class="btn" onclick="window._mdCneeCountry=\'\';_renderMarketCneeView()" style="margin-bottom:1rem"><i class="ti ti-arrow-left"></i> Chọn quốc gia khác</button>'
+  const cneesFiltered=q?cnees.filter(function(c){return c.cnee.toLowerCase().indexOf(q)>=0||_normCompanyName(c.cnee).indexOf(qNorm)>=0;}):cnees;
+  pg.innerHTML='<button class="btn" onclick="window._mdCneeCountry=\'\';window._mdCneeSearch=\'\';_renderMarketCneeView()" style="margin-bottom:1rem"><i class="ti ti-arrow-left"></i> Chọn quốc gia khác</button>'
     +'<div style="font-weight:700;font-size:15px;margin-bottom:.25rem"><i class="ti ti-flag" style="color:var(--green);margin-right:4px"></i>'+_mdEscHtml(country)+'</div>'
-    +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:1rem">'+cnees.length+' Cnee — bấm vào 1 Cnee để xem các Shipper Việt Nam đang bán hàng cho họ.</div>'
-    +'<div class="table-card"><div class="table-wrap"><table>'
+    +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:.75rem">'+cnees.length+' Cnee — bấm vào 1 Cnee để xem các Shipper Việt Nam đang bán hàng cho họ.</div>'
+    +'<div class="search-wrap" style="max-width:280px;margin-bottom:1rem"><i class="ti ti-search"></i><input type="text" id="mdCneeSearchInput" value="'+q.replace(/"/g,'&quot;')+'" placeholder="Tìm Cnee..." oninput="window._mdCneeSearch=this.value;clearTimeout(window._mdCneeSearchDebounce);window._mdCneeSearchDebounce=setTimeout(function(){_renderMarketCneeView();var el=g(\'mdCneeSearchInput\');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},350);"/></div>'
+    +(!cneesFiltered.length?'<div style="padding:2rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:12px">Không tìm thấy Cnee phù hợp.</div>':
+    '<div class="table-card"><div class="table-wrap"><table>'
       +'<thead><tr><th>Cnee (Công ty nhập khẩu)</th><th style="text-align:right">Trị giá USD</th><th style="text-align:right">Số Shipper VN</th></tr></thead>'
-      +'<tbody>'+cnees.map(function(c,ci){
+      +'<tbody>'+cneesFiltered.map(function(c){
+        const ci=cnees.indexOf(c);
         return '<tr style="cursor:pointer" onclick="_mdOpenCneeShippersPopup('+ci+')">'
           +'<td style="font-weight:600">'+_mdEscHtml(c.cnee)+'</td>'
           +'<td style="text-align:right;font-weight:700">'+money(c.usd)+'</td>'
           +'<td style="text-align:right;color:var(--text-secondary)">'+c.shippers.length+'</td>'
         +'</tr>';
       }).join('')+'</tbody>'
-    +'</table></div></div>';
+    +'</table></div></div>');
 }
 window._renderMarketCneeView=_renderMarketCneeView;
+
+// Điều hướng từ trang chi tiết Shipper → trang Cnee (tìm đúng quốc gia của Cnee này, mở danh
+// sách Cnee của quốc gia đó, rồi tự mở popup chi tiết đúng Cnee vừa bấm).
+function _mdGotoCnee(cneeName){
+  const tx=(window._marketTransactions||[]).find(function(t){return t.cnee===cneeName;});
+  const country=tx?((tx.nuocNhap||'').trim()||'Không xác định'):'Không xác định';
+  window._mdView='cnee';
+  window._mdCneeCountry=country;
+  window._mdCneeSearch='';
+  renderMarketData();
+  setTimeout(function(){
+    const idx=(window._mdCneeList||[]).findIndex(function(c){return c.cnee===cneeName;});
+    if(idx>=0)_mdOpenCneeShippersPopup(idx);
+  },50);
+}
+window._mdGotoCnee=_mdGotoCnee;
 
 function _mdOpenCneeShippersPopup(idx){
   const c=(window._mdCneeList||[])[idx]; if(!c)return;
@@ -13157,6 +13182,7 @@ function _mdOpenCneeShippersPopup(idx){
   ov.innerHTML='<div class="modal" style="max-width:560px">'
     +'<div class="mhdr"><div><div class="mtitle">'+_mdEscHtml(c.cnee)+'</div><div class="msub">'+c.shippers.length+' Shipper Việt Nam đang bán hàng cho Cnee này • Tổng '+money(c.usd)+'</div></div><button class="rac" onclick="closeOv(\'mdCneeOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div style="padding:1rem 1.25rem;max-height:60vh;overflow-y:auto">'
+      +(c.country?'<div style="display:flex;align-items:center;gap:6px;margin-bottom:1rem;font-size:12px;color:var(--text-secondary)"><i class="ti ti-map-pin" style="color:var(--green)"></i> '+_mdEscHtml(c.country)+' <span style="color:var(--text-tertiary);font-size:10.5px">(dữ liệu hải quan chỉ có tên quốc gia, không có địa chỉ chi tiết)</span></div>':'')
       +c.shippers.map(function(s){
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:8px;background:var(--bg-secondary);margin-bottom:6px">'
           +'<div><div style="font-weight:600;font-size:12.5px">'+_mdEscHtml(s.name)+'</div><div style="font-size:10.5px;color:var(--text-tertiary);font-family:\'IBM Plex Mono\',monospace">MST: '+(s.mst||'—')+'</div></div>'
@@ -13651,10 +13677,10 @@ function _renderMarketDetailPage(){
 
   <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:1.25rem;align-items:start">
     <div>
-      <div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:.5rem">Danh sách Cnee (${(r.cnees||[]).length} khách hàng)</div>
+      <div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:.5rem">Danh sách Cnee (${(r.cnees||[]).length} khách hàng) <span style="font-weight:400;text-transform:none;color:var(--text-tertiary)">— click để xem các Shipper khác cũng đang bán cho họ</span></div>
       <div class="table-card"><div class="table-wrap" style="max-height:420px;overflow-y:auto"><table style="font-size:12px">
         <thead><tr><th>Cnee (nước nhập)</th><th style="text-align:right">Trị giá USD</th></tr></thead>
-        <tbody>${(r.cnees||[]).map(function(c){return '<tr><td>'+_mdEscHtml(c.name)+'</td><td style="text-align:right;font-weight:600">$'+(c.usd||0).toLocaleString(undefined,{maximumFractionDigits:0})+'</td></tr>';}).join('')||'<tr><td colspan=2 style="text-align:center;color:var(--text-tertiary);padding:1rem">Không có</td></tr>'}</tbody>
+        <tbody>${(r.cnees||[]).map(function(c){return '<tr style="cursor:pointer" onclick="_mdGotoCnee(\''+(c.name||'').replace(/'/g,"\\'")+'\')" title="Xem trang Cnee"><td>'+_mdEscHtml(c.name)+' <i class="ti ti-external-link" style="font-size:10px;color:var(--text-tertiary)"></i></td><td style="text-align:right;font-weight:600">$'+(c.usd||0).toLocaleString(undefined,{maximumFractionDigits:0})+'</td></tr>';}).join('')||'<tr><td colspan=2 style="text-align:center;color:var(--text-tertiary);padding:1rem">Không có</td></tr>'}</tbody>
       </table></div></div>
     </div>
     <div>
