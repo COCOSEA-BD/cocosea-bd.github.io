@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.05';
+window.APP_BUILD='v2.06';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11738,11 +11738,12 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
     doc.text(dnNo||'-',ML,y); doc.text(debitDate||'-',ML+62,y); doc.text(r.bookingNo||'-',ML+124,y);
     y+=7;
 
-    function sectionHdr(label){
+    function sectionHdr(label, rightText){
       doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]);
       doc.rect(ML,y,CW,6.5,'F');
       doc.setFont('Roboto','bold'); doc.setFontSize(8.5); doc.setTextColor(255,255,255);
       doc.text(label.toUpperCase(),ML+3,y+4.6);
+      if(rightText){ doc.text(rightText,ML+CW-3,y+4.6,{align:'right'}); }
       y+=6.5;
     }
     function kvTable(rows){
@@ -11786,10 +11787,10 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
     function amtOf(s){ const sv=svcs[s.key]; const amt=sv.amount||(sv.price||0)*(sv.qty||1); const cur=sv.cur||'USD'; return cur==='VND'?amt:Math.round(amt*roe); }
     [...svcsYes,...svcsNo].forEach(function(s){ const sv=svcs[s.key]; const amtVND=amtOf(s); grandVND+=amtVND; const vat=sv.vat||'0%'; if(vatGroups[vat]===undefined)vatGroups[vat]=0; vatGroups[vat]+=amtVND; });
 
-    sectionHdr('Charge Detail');
+    sectionHdr('Charge Detail', 'ROE: '+Math.round(roe).toLocaleString()+' VND/USD');
     const chargeHead=[['No.','Service Item','Price','Curr','VAT','Qty','Unit','Amount (VND)','VAT Amt (VND)']];
     const chargeBody=[];
-    function pushGroup(label,list,startIdx){
+    function pushGroup(label,list,startIdx,showInclVat){
       if(!list.length)return startIdx;
       chargeBody.push([{content:label,colSpan:9,styles:{fillColor:[44,111,173],textColor:255,fontStyle:'bold',fontSize:8}}]);
       let sum=0,sumVat=0;
@@ -11804,15 +11805,17 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
         ]);
       });
       chargeBody.push([{content:'Subtotal (VND):',colSpan:7,styles:{halign:'right',fontStyle:'bold',fillColor:[240,245,252]}},{content:sum.toLocaleString(),styles:{halign:'right',fontStyle:'bold',fillColor:[240,245,252],textColor:NAVY}},{content:sumVat>0?sumVat.toLocaleString():'',styles:{halign:'right',fillColor:[240,245,252],textColor:[224,112,0]}}]);
+      if(showInclVat){
+        chargeBody.push([{content:'Subtotal (VND) incl. VAT:',colSpan:8,styles:{halign:'right',fontStyle:'bold',fillColor:[225,236,250]}},{content:(sum+sumVat).toLocaleString(),styles:{halign:'right',fontStyle:'bold',fillColor:[225,236,250],textColor:NAVY}}]);
+      }
       return startIdx+list.length;
     }
     let idx=0;
-    idx=pushGroup('A. PHÍ CÓ HÓA ĐƠN (INVOICE = YES)',svcsYes,idx);
-    idx=pushGroup('B. PHÍ KHÔNG HÓA ĐƠN (INVOICE = NO)',svcsNo,idx);
+    idx=pushGroup('A. PHÍ CÓ HÓA ĐƠN (INVOICE = YES)',svcsYes,idx,true);
+    idx=pushGroup('B. PHÍ KHÔNG HÓA ĐƠN (INVOICE = NO)',svcsNo,idx,false);
     const sub8=vatGroups['8%']||0, sub10=vatGroups['10%']||0;
     const vatAmt=Math.round(sub8*0.08+sub10*0.10);
     const grandWithVAT=Math.round(grandVND+vatAmt);
-    if(vatAmt)chargeBody.push([{content:'VAT Amount (VND):',colSpan:8,styles:{halign:'right'}},{content:vatAmt.toLocaleString(),styles:{halign:'right',textColor:[224,112,0]}}]);
     chargeBody.push([{content:'GRAND TOTAL (VND)',colSpan:8,styles:{halign:'left',fontStyle:'bold',fillColor:NAVY,textColor:255,fontSize:9.5}},{content:grandWithVAT.toLocaleString(),styles:{halign:'right',fontStyle:'bold',fillColor:NAVY,textColor:255,fontSize:9.5}}]);
 
     doc.autoTable({startY:y,margin:{left:ML,right:MR},head:chargeHead,body:chargeBody,theme:'grid',
