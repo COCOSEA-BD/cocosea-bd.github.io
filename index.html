@@ -824,7 +824,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v320';
+window.APP_BUILD='v321';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -13065,15 +13065,110 @@ function renderMarketData(){
     _renderMarketDetailPage();
     return;
   }
-  const view=window._mdView==='compare'?'compare':'list';
+  const view=(window._mdView==='compare'||window._mdView==='cnee')?window._mdView:'list';
   pg.innerHTML='<div style="display:flex;gap:6px;margin-bottom:1.1rem;border-bottom:1px solid var(--border-light)">'
     +'<button onclick="window._mdView=\'list\';renderMarketData()" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(view==='list'?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(view==='list'?'700':'500')+';color:'+(view==='list'?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti ti-list" style="font-size:15px"></i>Danh sách Shipper</button>'
+    +'<button onclick="window._mdView=\'cnee\';renderMarketData()" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(view==='cnee'?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(view==='cnee'?'700':'500')+';color:'+(view==='cnee'?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti ti-world" style="font-size:15px"></i>Danh sách Cnee</button>'
     +'<button onclick="window._mdView=\'compare\';renderMarketData()" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(view==='compare'?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(view==='compare'?'700':'500')+';color:'+(view==='compare'?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti ti-chart-pie" style="font-size:15px"></i>Market — So sánh thị trường</button>'
   +'</div><div id="mdViewBody"></div>';
   if(view==='compare')_renderMarketCompare();
+  else if(view==='cnee')_renderMarketCneeView();
   else _renderMarketListView();
 }
 window.renderMarketData=renderMarketData;
+
+// ═══ Tab "Danh sách Cnee" — nhóm theo quốc gia (cột "Tên nước nhập khẩu"), click Cnee xem Shipper VN ═══
+window._mdCneeCountry=window._mdCneeCountry||'';
+
+function _mdCountriesAgg(){
+  const map={};
+  (window._marketTransactions||[]).forEach(function(t){
+    const country=(t.nuocNhap||'').trim()||'Không xác định';
+    if(!map[country])map[country]={country:country,usd:0,cnees:{}};
+    map[country].usd+=(t.triGiaUSD||0);
+    map[country].cnees[t.cnee||'—']=true;
+  });
+  return Object.values(map).map(function(c){
+    return {country:c.country,usd:Math.round(c.usd*100)/100,cneeCount:Object.keys(c.cnees).length};
+  }).sort(function(a,b){return b.usd-a.usd;});
+}
+function _mdCneesForCountry(country){
+  const map={};
+  (window._marketTransactions||[]).forEach(function(t){
+    const c=(t.nuocNhap||'').trim()||'Không xác định';
+    if(c!==country)return;
+    const cnee=t.cnee||'—';
+    if(!map[cnee])map[cnee]={cnee:cnee,usd:0,shippers:{}};
+    map[cnee].usd+=(t.triGiaUSD||0);
+    const shipKey=t.mst||t.companyName||'—';
+    if(!map[cnee].shippers[shipKey])map[cnee].shippers[shipKey]={name:t.companyName,mst:t.mst,usd:0};
+    map[cnee].shippers[shipKey].usd+=(t.triGiaUSD||0);
+  });
+  return Object.values(map).map(function(c){
+    return {cnee:c.cnee,usd:Math.round(c.usd*100)/100,
+      shippers:Object.values(c.shippers).map(function(s){return {name:s.name,mst:s.mst,usd:Math.round(s.usd*100)/100};}).sort(function(a,b){return b.usd-a.usd;})};
+  }).sort(function(a,b){return b.usd-a.usd;});
+}
+
+function _renderMarketCneeView(){
+  const pg=g('mdViewBody'); if(!pg)return;
+  const country=window._mdCneeCountry;
+  const money=function(n){return '$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0});};
+  if(!country){
+    const countries=_mdCountriesAgg();
+    window._mdCneeCountryList=countries;
+    pg.innerHTML='<div style="font-weight:700;font-size:14px;margin-bottom:.25rem">Chọn quốc gia để xem danh sách Cnee</div>'
+      +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:1rem">Dựa theo "Tên nước nhập khẩu" trong dữ liệu hải quan đã import.</div>'
+      +(!countries.length?'<div style="padding:2.5rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:12px">Chưa có dữ liệu — hãy Import Excel ở tab Danh sách Shipper trước.</div>':
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">'
+        +countries.map(function(c,ci){
+          return '<div onclick="window._mdCneeCountry=window._mdCneeCountryList['+ci+'].country;_renderMarketCneeView()" style="padding:14px 16px;background:var(--bg-secondary);border-radius:10px;cursor:pointer;border:1.5px solid var(--border-light);transition:border-color .1s" onmouseover="this.style.borderColor=\'var(--green)\'" onmouseout="this.style.borderColor=\'var(--border-light)\'">'
+            +'<div style="font-weight:700;font-size:13.5px;margin-bottom:4px"><i class="ti ti-flag" style="color:var(--green);margin-right:4px"></i>'+_mdEscHtml(c.country)+'</div>'
+            +'<div style="font-size:11.5px;color:var(--text-secondary)">'+c.cneeCount+' Cnee &nbsp;•&nbsp; <b style="color:var(--text-primary)">'+money(c.usd)+'</b></div>'
+          +'</div>';
+        }).join('')
+        +'</div>');
+    return;
+  }
+  const cnees=_mdCneesForCountry(country);
+  window._mdCneeList=cnees;
+  pg.innerHTML='<button class="btn" onclick="window._mdCneeCountry=\'\';_renderMarketCneeView()" style="margin-bottom:1rem"><i class="ti ti-arrow-left"></i> Chọn quốc gia khác</button>'
+    +'<div style="font-weight:700;font-size:15px;margin-bottom:.25rem"><i class="ti ti-flag" style="color:var(--green);margin-right:4px"></i>'+_mdEscHtml(country)+'</div>'
+    +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:1rem">'+cnees.length+' Cnee — bấm vào 1 Cnee để xem các Shipper Việt Nam đang bán hàng cho họ.</div>'
+    +'<div class="table-card"><div class="table-wrap"><table>'
+      +'<thead><tr><th>Cnee (Công ty nhập khẩu)</th><th style="text-align:right">Trị giá USD</th><th style="text-align:right">Số Shipper VN</th></tr></thead>'
+      +'<tbody>'+cnees.map(function(c,ci){
+        return '<tr style="cursor:pointer" onclick="_mdOpenCneeShippersPopup('+ci+')">'
+          +'<td style="font-weight:600">'+_mdEscHtml(c.cnee)+'</td>'
+          +'<td style="text-align:right;font-weight:700">'+money(c.usd)+'</td>'
+          +'<td style="text-align:right;color:var(--text-secondary)">'+c.shippers.length+'</td>'
+        +'</tr>';
+      }).join('')+'</tbody>'
+    +'</table></div></div>';
+}
+window._renderMarketCneeView=_renderMarketCneeView;
+
+function _mdOpenCneeShippersPopup(idx){
+  const c=(window._mdCneeList||[])[idx]; if(!c)return;
+  const money=function(n){return '$'+(n||0).toLocaleString(undefined,{maximumFractionDigits:0});};
+  let ov=g('mdCneeOv');
+  if(!ov){ov=document.createElement('div');ov.id='mdCneeOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:560px">'
+    +'<div class="mhdr"><div><div class="mtitle">'+_mdEscHtml(c.cnee)+'</div><div class="msub">'+c.shippers.length+' Shipper Việt Nam đang bán hàng cho Cnee này • Tổng '+money(c.usd)+'</div></div><button class="rac" onclick="closeOv(\'mdCneeOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div style="padding:1rem 1.25rem;max-height:60vh;overflow-y:auto">'
+      +c.shippers.map(function(s){
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:8px;background:var(--bg-secondary);margin-bottom:6px">'
+          +'<div><div style="font-weight:600;font-size:12.5px">'+_mdEscHtml(s.name)+'</div><div style="font-size:10.5px;color:var(--text-tertiary);font-family:\'IBM Plex Mono\',monospace">MST: '+(s.mst||'—')+'</div></div>'
+          +'<div style="font-weight:700">'+money(s.usd)+'</div>'
+        +'</div>';
+      }).join('')
+    +'</div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'mdCneeOv\')">Đóng</button></div>'
+  +'</div>';
+  openOv('mdCneeOv');
+}
+window._mdOpenCneeShippersPopup=_mdOpenCneeShippersPopup;
 
 function _renderMarketListView(){
   const pg=g('mdViewBody'); if(!pg)return;
@@ -13086,7 +13181,9 @@ function _renderMarketListView(){
     if(f.cat==='xo'&&!(r.usdXoDua>0))return false;
     if(q){
       const hay=((r.companyName||'')+' '+(r.mst||'')).toLowerCase();
-      if(hay.indexOf(q)<0)return false;
+      const hayNorm=_normCompanyName(r.companyName||'')+' '+(r.mst||'');
+      const qNorm=_normCompanyName(q);
+      if(hay.indexOf(q)<0 && hayNorm.indexOf(qNorm)<0)return false;
     }
     return true;
   }).sort(function(a,b){return (b.usdTotal||0)-(a.usdTotal||0);});
@@ -13110,7 +13207,7 @@ function _renderMarketListView(){
   </div>
 
   <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
-    <div class="search-wrap" style="max-width:280px"><i class="ti ti-search"></i><input type="text" id="mdSearchInput" value="${(window._mdSearch||'').replace(/"/g,'&quot;')}" placeholder="Tìm theo tên hoặc MST..." oninput="window._mdSearch=this.value;_renderMarketListView();setTimeout(function(){var el=g('mdSearchInput');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},0)"/></div>
+    <div class="search-wrap" style="max-width:280px"><i class="ti ti-search"></i><input type="text" id="mdSearchInput" value="${(window._mdSearch||'').replace(/"/g,'&quot;')}" placeholder="Tìm theo tên hoặc MST..." oninput="window._mdSearch=this.value;clearTimeout(window._mdSearchDebounce);window._mdSearchDebounce=setTimeout(function(){_renderMarketListView();var el=g('mdSearchInput');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}},350);"/></div>
     <select onchange="window._mdFilter.status=this.value;renderMarketData()" style="width:160px">
       <option value="">Tất cả trạng thái</option>
       <option value="active" ${f.status==='active'?'selected':''}>Active</option>
@@ -13231,6 +13328,27 @@ window._mdCleanDuplicates=_mdCleanDuplicates;
 
 // ═══ Tab "Market" — so sánh các shipper theo HS 4-số + chỉ số đã chọn ═══
 window._mktCompare={hs:'all',metric:'usd',chart:'bar'};
+// Tổng hợp theo Shipper — có thể lọc theo Tháng/Năm và nhóm HS, tính TRỰC TIẾP từ giao dịch gốc
+// (không dùng số tổng cố định của marketShippers) để bộ lọc thời gian hoạt động chính xác.
+function _mdCompareAgg(hsPick, month, year, metric){
+  const map={};
+  (window._marketTransactions||[]).forEach(function(t){
+    if(hsPick!=='all' && t.hs4!==hsPick)return;
+    if(year && (t.ngay||'').slice(0,4)!==String(year))return;
+    if(month && (t.ngay||'').slice(5,7)!==String(month).padStart(2,'0'))return;
+    const key=t.mst||t.companyName||'—';
+    if(!map[key])map[key]={label:t.companyName,mst:t.mst,usd:0,tan:0};
+    map[key].usd+=(t.triGiaUSD||0);
+    map[key].tan+=(t.qtyTons||0);
+  });
+  const shipperStatus={};
+  (window._marketShippers||[]).forEach(function(r){shipperStatus[r.mst||r.companyName]={status:r.status,id:r._id};});
+  return Object.values(map).map(function(a){
+    const st=shipperStatus[a.mst||a.label]||{};
+    return {label:a.label,value:metric==='usd'?Math.round(a.usd*100)/100:Math.round(a.tan*100)/100,status:st.status||'new',id:st.id};
+  }).sort(function(a,b){return b.value-a.value;});
+}
+
 function _renderMarketCompare(){
   const pg=g('mdViewBody'); if(!pg)return;
   const st=window._mktCompare;
@@ -13241,24 +13359,29 @@ function _renderMarketCompare(){
   const hsOptions=Object.keys(hsSet).sort();
   const HS_LABEL={'5305':'5305 — Xơ dừa (coir)','1404':'1404 — Mụn dừa / vỏ dừa'};
   const hsPick=st.hs||'all';
-  // Giá trị của mỗi shipper theo HS đã chọn (hoặc tổng tất cả HS)
-  const valKey=function(r){
-    if(hsPick==='all')return st.metric==='usd'?(r.usdTotal||0):(r.tanTotal||0);
-    const hit=(r.hs4List||[]).find(function(h){return h.hs4===hsPick;});
-    if(!hit)return 0;
-    return st.metric==='usd'?(hit.usd||0):(hit.tan||0);
-  };
-  const data=rows.map(function(r){return {label:r.companyName,value:valKey(r),status:r.status,id:r._id};})
-    .filter(function(d){return d.value>0;})
-    .sort(function(a,b){return b.value-a.value;});
+  // Tập hợp các Năm có trong dữ liệu để dựng dropdown Năm
+  const yearSet={};
+  (window._marketTransactions||[]).forEach(function(t){var y=(t.ngay||'').slice(0,4); if(y)yearSet[y]=true;});
+  const yearOptions=Object.keys(yearSet).sort().reverse();
+  const MONTH_LABEL=['','Th1','Th2','Th3','Th4','Th5','Th6','Th7','Th8','Th9','Th10','Th11','Th12'];
+
+  const data=_mdCompareAgg(hsPick, st.month||'', st.year||'', st.metric).filter(function(d){return d.value>0;});
   const totalVal=data.reduce(function(s,d){return s+d.value;},0);
   const fmt=function(n){return st.metric==='usd'?('$'+n.toLocaleString(undefined,{maximumFractionDigits:0})):(n.toLocaleString(undefined,{maximumFractionDigits:1})+' T');};
 
-  pg.innerHTML='<div style="font-weight:700;font-size:14px;margin-bottom:.75rem">So sánh thị trường — chọn nhóm HS (4 số đầu) và chỉ số để xếp hạng shipper</div>'
-    +'<div style="display:flex;gap:8px;margin-bottom:1.1rem;flex-wrap:wrap">'
-      +'<select onchange="window._mktCompare.hs=this.value;_renderMarketCompare()" style="width:220px">'
+  pg.innerHTML='<div style="font-weight:700;font-size:14px;margin-bottom:.75rem">So sánh thị trường — chọn nhóm HS, thời gian và chỉ số để xếp hạng shipper</div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:1.1rem;flex-wrap:wrap;align-items:center">'
+      +'<select onchange="window._mktCompare.hs=this.value;_renderMarketCompare()" style="width:200px;flex:0 0 200px">'
         +'<option value="all" '+(hsPick==='all'?'selected':'')+'>Tất cả nhóm HS</option>'
         +hsOptions.map(function(h){return '<option value="'+h+'" '+(hsPick===h?'selected':'')+'>'+(HS_LABEL[h]||('HS '+h))+'</option>';}).join('')
+      +'</select>'
+      +'<select onchange="window._mktCompare.month=this.value;_renderMarketCompare()" style="width:110px;flex:0 0 110px">'
+        +'<option value="">Mọi tháng</option>'
+        +[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return '<option value="'+m+'" '+(String(st.month)===String(m)?'selected':'')+'>'+MONTH_LABEL[m]+'</option>';}).join('')
+      +'</select>'
+      +'<select onchange="window._mktCompare.year=this.value;_renderMarketCompare()" style="width:100px;flex:0 0 100px">'
+        +'<option value="">Mọi năm</option>'
+        +yearOptions.map(function(y){return '<option value="'+y+'" '+(String(st.year)===String(y)?'selected':'')+'>'+y+'</option>';}).join('')
       +'</select>'
       +'<div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'
         +'<button onclick="window._mktCompare.metric=\'usd\';_renderMarketCompare()" style="padding:7px 14px;border:none;background:'+(st.metric==='usd'?'var(--green)':'transparent')+';color:'+(st.metric==='usd'?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12.5px;font-weight:600">Trị giá (USD)</button>'
@@ -13268,16 +13391,17 @@ function _renderMarketCompare(){
         +'<button onclick="window._mktCompare.chart=\'bar\';_renderMarketCompare()" title="Biểu đồ cột" style="padding:7px 12px;border:none;background:'+(st.chart==='bar'?'var(--bg-secondary)':'transparent')+';cursor:pointer"><i class="ti ti-chart-bar"></i></button>'
         +'<button onclick="window._mktCompare.chart=\'pie\';_renderMarketCompare()" title="Biểu đồ tròn" style="padding:7px 12px;border:none;background:'+(st.chart==='pie'?'var(--bg-secondary)':'transparent')+';cursor:pointer"><i class="ti ti-chart-pie"></i></button>'
       +'</div>'
+      +(st.month||st.year?'<button class="btn sm" onclick="window._mktCompare.month=\'\';window._mktCompare.year=\'\';_renderMarketCompare()"><i class="ti ti-x"></i> Bỏ lọc thời gian</button>':'')
     +'</div>'
     +(!data.length?'<div style="padding:2.5rem;text-align:center;color:var(--text-tertiary);border:1px dashed var(--border-light);border-radius:12px">Không có dữ liệu cho lựa chọn này.</div>':
-      '<div style="margin-bottom:1.25rem">'
-        +(st.chart==='bar'?('<div style="max-width:700px">'+_mdSvgBarChart(data,15,fmt)+'</div>'):_mdSvgPieChart(data,8,fmt))
+      '<div style="margin-bottom:1.5rem;padding:1.25rem;background:var(--bg-secondary);border-radius:14px;border:1px solid var(--border-light)">'
+        +(st.chart==='bar'?_mdSvgBarChart(data,12,fmt,totalVal):_mdSvgPieChart(data,7,fmt,totalVal))
       +'</div>'
       +'<div style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:.5rem">Bảng xếp hạng Top Shipper</div>'
       +'<div class="table-card"><div class="table-wrap"><table>'
         +'<thead><tr><th>#</th><th>Trạng thái</th><th>Shipper</th><th style="text-align:right">'+(st.metric==='usd'?'Trị giá (USD)':'Số lượng (Tấn)')+'</th><th style="text-align:right">% thị phần</th></tr></thead>'
         +'<tbody>'+data.map(function(d,i){
-          return '<tr style="cursor:pointer" onclick="openMarketShipperDetail(\''+d.id+'\')">'
+          return '<tr style="cursor:'+(d.id?'pointer':'default')+'" '+(d.id?'onclick="openMarketShipperDetail(\''+d.id+'\')"':'')+'>'
             +'<td style="color:var(--text-tertiary)">'+(i+1)+'</td>'
             +'<td>'+(d.status==='active'?'<span class="bdg bdg-g">Active</span>':'<span class="bdg bdg-a">New</span>')+'</td>'
             +'<td style="font-weight:600">'+_mdEscHtml(d.label)+'</td>'
@@ -13289,53 +13413,78 @@ function _renderMarketCompare(){
 }
 window._renderMarketCompare=_renderMarketCompare;
 
-// Biểu đồ cột ngang (SVG) — dễ đọc tên dài, phù hợp xếp hạng nhiều shipper
-function _mdSvgBarChart(data,maxItems,fmt){
+// Biểu đồ cột ngang (SVG) — thiết kế lại: có lưới tham chiếu, gradient, bo tròn đầu cột
+function _mdSvgBarChart(data,maxItems,fmt,grandTotal){
   const items=data.slice(0,maxItems);
   const max=Math.max.apply(null,items.map(function(d){return d.value;}))||1;
-  const barH=24,gap=8,leftW=190,chartW=340,svgW=leftW+chartW+90,svgH=items.length*(barH+gap)+10;
-  const colors=['#0E7C7B','#1a4b8c'];
+  const barH=26,gap=12,leftW=190,chartW=380,padTop=28,svgW=leftW+chartW+95,svgH=padTop+items.length*(barH+gap)+8;
+  const gid='mdbg'+Math.random().toString(36).slice(2,8);
+  let defs='<defs><linearGradient id="'+gid+'" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#0E7C7B"/><stop offset="100%" stop-color="#14B8A6"/></linearGradient></defs>';
+  // Lưới tham chiếu dọc (0%, 25%, 50%, 75%, 100%) + nhãn giá trị mốc
+  let grid='';
+  [0,0.25,0.5,0.75,1].forEach(function(fr){
+    const gx=leftW+chartW*fr;
+    grid+='<line x1="'+gx+'" y1="'+(padTop-6)+'" x2="'+gx+'" y2="'+(svgH-4)+'" stroke="#E2E8F0" stroke-width="1" stroke-dasharray="3,3"/>';
+    grid+='<text x="'+gx+'" y="'+(padTop-12)+'" text-anchor="middle" font-size="9.5" fill="#94A3B8">'+_mdEscHtml(fmt(max*fr))+'</text>';
+  });
   let bars='';
   items.forEach(function(d,i){
-    const y=6+i*(barH+gap);
-    const w=Math.max(3,(d.value/max)*chartW);
-    const lbl=d.label.length>26?d.label.slice(0,24)+'…':d.label;
-    bars+='<text x="'+(leftW-8)+'" y="'+(y+barH/2+4)+'" text-anchor="end" font-size="11" fill="#334155">'+_mdEscHtml(lbl)+'</text>';
-    bars+='<rect x="'+leftW+'" y="'+y+'" width="'+w+'" height="'+barH+'" rx="4" fill="'+colors[i%2===0?0:0]+'" opacity="'+(1-i*0.03).toFixed(2)+'"/>';
-    bars+='<text x="'+(leftW+w+8)+'" y="'+(y+barH/2+4)+'" font-size="11" font-weight="700" fill="#1a1a18">'+_mdEscHtml(fmt(d.value))+'</text>';
+    const y=padTop+i*(barH+gap);
+    const w=Math.max(4,(d.value/max)*chartW);
+    const lbl=d.label.length>24?d.label.slice(0,22)+'…':d.label;
+    const pct=grandTotal?((d.value/grandTotal)*100).toFixed(1):'0';
+    if(i%2===0)bars+='<rect x="0" y="'+(y-4)+'" width="'+svgW+'" height="'+(barH+8)+'" fill="#F8FAFC"/>';
+    bars+='<text x="'+(leftW-10)+'" y="'+(y+barH/2+4)+'" text-anchor="end" font-size="11.5" font-weight="600" fill="#334155">'+_mdEscHtml(lbl)+'</text>';
+    bars+='<rect x="'+leftW+'" y="'+y+'" width="'+w+'" height="'+barH+'" rx="6" fill="url(#'+gid+')"/>';
+    bars+='<text x="'+(leftW+w+10)+'" y="'+(y+barH/2+4)+'" font-size="11.5" font-weight="800" fill="#0F2747">'+_mdEscHtml(fmt(d.value))+'</text>';
+    bars+='<text x="'+(leftW+w+10)+'" y="'+(y+barH/2+16)+'" font-size="9.5" fill="#94A3B8">'+pct+'% thị phần</text>';
   });
-  return '<svg viewBox="0 0 '+svgW+' '+svgH+'" style="width:100%;max-width:700px;height:auto">'+bars+'</svg>';
+  return '<svg viewBox="0 0 '+svgW+' '+svgH+'" style="width:100%;max-width:760px;height:auto;display:block;margin:0 auto">'+defs+grid+bars+'</svg>';
 }
 window._mdSvgBarChart=_mdSvgBarChart;
 
-// Biểu đồ tròn (SVG) — top N + gộp phần còn lại vào "Khác"
-function _mdSvgPieChart(data,maxSlices,fmt){
+// Biểu đồ tròn dạng Donut (SVG) — thiết kế lại: rỗng giữa hiện tổng, viền tách lát, legend có thanh tỷ lệ
+function _mdSvgPieChart(data,maxSlices,fmt,grandTotal){
   const top=data.slice(0,maxSlices);
   const restSum=data.slice(maxSlices).reduce(function(s,d){return s+d.value;},0);
   const items=restSum>0?top.concat([{label:'Khác (còn lại)',value:restSum}]):top;
   const total=items.reduce(function(s,d){return s+d.value;},0)||1;
-  const colors=['#0E7C7B','#C99A3C','#1a4b8c','#C1553E','#8B5CF6','#14B8A6','#F59E0B','#64748b','#94a3b8'];
+  const colors=['#0E7C7B','#C99A3C','#1a4b8c','#C1553E','#8B5CF6','#14B8A6','#F59E0B','#64748b'];
   let angle=-90,paths='',legend='';
-  const cx=110,cy=110,r=100;
+  const cx=130,cy=130,rOuter=112,rInner=68;
   items.forEach(function(d,i){
     const frac=d.value/total;
-    const sweep=frac*360;
+    const sweep=Math.max(frac*360,0.01);
     const largeArc=sweep>180?1:0;
     const rad=Math.PI/180;
-    const x1=cx+r*Math.cos(angle*rad),y1=cy+r*Math.sin(angle*rad);
+    const x1o=cx+rOuter*Math.cos(angle*rad),y1o=cy+rOuter*Math.sin(angle*rad);
     const endAngle=angle+sweep;
-    const x2=cx+r*Math.cos(endAngle*rad),y2=cy+r*Math.sin(endAngle*rad);
-    paths+='<path d="M'+cx+','+cy+' L'+x1.toFixed(2)+','+y1.toFixed(2)+' A'+r+','+r+' 0 '+largeArc+' 1 '+x2.toFixed(2)+','+y2.toFixed(2)+' Z" fill="'+colors[i%colors.length]+'"/>';
-    legend+='<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:4px"><span style="width:10px;height:10px;border-radius:2px;background:'+colors[i%colors.length]+';display:inline-block;flex-shrink:0"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_mdEscHtml(d.label)+'</span><span style="margin-left:auto;color:var(--text-tertiary)">'+(frac*100).toFixed(1)+'%</span></div>';
+    const x2o=cx+rOuter*Math.cos(endAngle*rad),y2o=cy+rOuter*Math.sin(endAngle*rad);
+    const x1i=cx+rInner*Math.cos(endAngle*rad),y1i=cy+rInner*Math.sin(endAngle*rad);
+    const x2i=cx+rInner*Math.cos(angle*rad),y2i=cy+rInner*Math.sin(angle*rad);
+    paths+='<path d="M'+x1o.toFixed(2)+','+y1o.toFixed(2)+' A'+rOuter+','+rOuter+' 0 '+largeArc+' 1 '+x2o.toFixed(2)+','+y2o.toFixed(2)
+      +' L'+x1i.toFixed(2)+','+y1i.toFixed(2)+' A'+rInner+','+rInner+' 0 '+largeArc+' 0 '+x2i.toFixed(2)+','+y2i.toFixed(2)+' Z" fill="'+colors[i%colors.length]+'" stroke="#fff" stroke-width="2"/>';
+    legend+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+      +'<span style="width:11px;height:11px;border-radius:3px;background:'+colors[i%colors.length]+';flex-shrink:0"></span>'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--text-primary)">'+_mdEscHtml(d.label)+'</span><span style="color:var(--text-secondary);font-weight:700;flex-shrink:0">'+(frac*100).toFixed(1)+'%</span></div>'
+        +'<div style="height:4px;background:var(--border-light);border-radius:2px;margin-top:3px;overflow:hidden"><div style="height:100%;width:'+(frac*100).toFixed(1)+'%;background:'+colors[i%colors.length]+';border-radius:2px"></div></div>'
+      +'</div>'
+    +'</div>';
     angle=endAngle;
   });
-  return '<div style="display:flex;flex-direction:row;align-items:flex-start;gap:20px;justify-content:flex-start">'
-    +'<svg viewBox="0 0 220 220" style="width:220px;height:220px;flex-shrink:0">'+paths+'</svg>'
-    +'<div style="padding-top:6px;max-width:280px">'+legend+'</div>'
+  return '<div style="display:flex;flex-direction:row;align-items:center;gap:32px;justify-content:flex-start;flex-wrap:wrap">'
+    +'<div style="position:relative;flex-shrink:0">'
+      +'<svg viewBox="0 0 260 260" style="width:240px;height:240px">'+paths+'</svg>'
+      +'<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none">'
+        +'<div style="font-size:9.5px;color:var(--text-tertiary);font-weight:700;text-transform:uppercase;letter-spacing:.3px">Tổng</div>'
+        +'<div style="font-size:15px;font-weight:800;color:var(--text-primary)">'+_mdEscHtml(fmt(grandTotal||total))+'</div>'
+      +'</div>'
+    +'</div>'
+    +'<div style="flex:1;min-width:220px;max-width:340px">'+legend+'</div>'
   +'</div>';
 }
 window._mdSvgPieChart=_mdSvgPieChart;
-window.renderMarketData=renderMarketData;
 
 async function _mdToggleStatus(id){
   const r=(window._marketShippers||[]).find(function(x){return x._id===id;});
