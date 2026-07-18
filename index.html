@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.29';
+window.APP_BUILD='v2.30';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2236,25 +2236,9 @@ function computeShipmentKpis(tt){
 window.computeShipmentKpis=computeShipmentKpis;
 
 function _wsSidebarHTML(tt){
-  const stats=_homeStats();
-  const loading=!stats.loaded;
   const vessels=_homeUpcomingVessels(3);
   return `
   <div class="ws-side">
-
-    <div class="ws-side-card">
-      <div class="ws-side-hdr"><i class="ti ti-chart-donut"></i> Tổng quan lô hàng<span class="ws-side-link" onclick="computeShipmentKpis('${tt}')" title="Tải lại"><i class="ti ti-refresh"></i></span></div>
-      ${loading?'<div style="font-size:11.5px;color:var(--text-tertiary)"><i class="ti ti-loader-2" style="animation:spin 1s linear infinite"></i> Đang tải...</div>':
-        '<div style="display:flex;align-items:center;gap:14px">'
-          +_homeDonutChart(stats.statusBreakdown,'Tổng lô hàng',128,'var(--text-primary)')
-          +'<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">'+stats.statusBreakdown.map(function(s){
-            const pct=stats.total?Math.round(s.count/stats.total*100):0;
-            return '<div style="display:flex;align-items:center;gap:5px;font-size:10.5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:'+s.color+';flex-shrink:0"></span><span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis">'+s.label+'</span><span style="color:var(--text-tertiary);font-weight:600;margin-left:auto">'+s.count+' ('+pct+'%)</span></div>';
-          }).join('')+'</div>'
-        +'</div>'}
-      <!-- Giữ nguyên id cũ để không phá logic computeShipmentKpis() — chỉ ẩn hiển thị số thô ở đây -->
-      <div style="display:none"><span id="kpiTotal_${tt}"></span><span id="kpiPending_${tt}"></span></div>
-    </div>
 
     <div class="ws-side-card">
       <div class="ws-side-hdr"><i class="ti ti-calendar"></i> Lịch &amp; tàu sắp chạy<span class="ws-side-link" onclick="goTab('notes')">Xem tất cả</span></div>
@@ -2270,14 +2254,89 @@ function _wsSidebarHTML(tt){
       </div>
     </div>
 
+    ${_wsNotesCardHTML()}
+
     <div class="ws-side-card">
-      <div class="ws-side-hdr"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Cảnh báo VST</div>
+      <div class="ws-side-hdr"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Cảnh báo VST<span class="ws-side-link" onclick="computeShipmentKpis('${tt}')" title="Tải lại"><i class="ti ti-refresh"></i></span></div>
       <div id="kpiVst_${tt}" style="font-family:var(--font-disp);font-size:22px;font-weight:800;color:var(--warning-dark)">— <span style="font-size:11px;font-weight:600;color:var(--text-tertiary);font-family:inherit">lô cần VST</span></div>
       <div id="vstWarnBar_${tt}" style="margin-top:8px"></div>
+      <!-- Giữ nguyên id cũ để không phá logic computeShipmentKpis() -->
+      <div style="display:none"><span id="kpiTotal_${tt}"></span><span id="kpiPending_${tt}"></span></div>
     </div>
 
   </div>`;
 }
+
+// ═══ Ô GHI CHÚ trong sidebar Shipment List — lấy dữ liệu từ COCO NOTES (chung/riêng) ═══
+window._wsNotesScope = window._wsNotesScope || (localStorage.getItem('ws_notes_scope')||'shared');
+window._wsNotesTempId = window._wsNotesTempId || null; // note đang xem tạm khi CHƯA ghim (không lưu)
+
+function _wsNotesGetPin(){
+  try{ return JSON.parse(localStorage.getItem('ws_pinned_note')||'null'); }catch(e){ return null; }
+}
+function _wsNotesEnsureLoaded(cb){
+  const need1=!window._sharedNotesLoaded, need2=!window._personalNotesLoaded;
+  let pending=0;
+  function done(){ pending--; if(pending<=0 && cb)cb(); }
+  if(need1){ pending++; window._sharedNotesLoaded=true; loadSharedNotes(done); }
+  if(need2){ pending++; window._personalNotesLoaded=true; loadPersonalNotes(done); }
+  if(!need1&&!need2 && cb) cb();
+}
+function _wsNotesCardHTML(){
+  const scope=window._wsNotesScope||'shared';
+  const list=(scope==='shared'?(window._sharedNotes||[]):(window._personalNotes||[])).slice().sort(function(a,b){return (b.updatedAt||0)-(a.updatedAt||0);});
+  const pin=_wsNotesGetPin();
+  let activeId=(pin&&pin.scope===scope)?pin.id:window._wsNotesTempId;
+  let activeNote=list.find(function(n){return n.id===activeId;})||list[0]||null;
+  if(activeNote)window._wsNotesTempId=activeNote.id;
+  const isPinned=!!(pin&&pin.scope===scope&&activeNote&&pin.id===activeNote.id);
+  return `
+    <div class="ws-side-card">
+      <div class="ws-side-hdr">
+        <i class="ti ti-notes"></i> Ghi chú
+        <span style="display:flex;gap:3px;margin-left:auto">
+          <button class="ws-notes-scope-btn${scope==='shared'?' active':''}" onclick="_wsNotesSwitchScope('shared')">Chung</button>
+          <button class="ws-notes-scope-btn${scope==='personal'?' active':''}" onclick="_wsNotesSwitchScope('personal')">Riêng</button>
+        </span>
+      </div>
+      ${!list.length?'<div style="font-size:11px;color:var(--text-tertiary)">Chưa có ghi chú '+(scope==='shared'?'chung':'riêng')+' nào.</div>':`
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+        <select onchange="_wsNotesSelectNote(this.value)" style="flex:1;min-width:0;font-size:11px;padding:4px 6px">
+          ${list.map(function(n){return '<option value="'+n.id+'"'+(activeNote&&activeNote.id===n.id?' selected':'')+'>'+(n.title||'(không tiêu đề)').replace(/</g,'&lt;')+'</option>';}).join('')}
+        </select>
+        <button class="rac" onclick="_wsNotesTogglePin()" title="${isPinned?'Bỏ ghim':'Ghim ghi chú này'}" style="color:${isPinned?'var(--gold-dark)':'var(--text-tertiary)'};flex-shrink:0">
+          <i class="ti ${isPinned?'ti-pin-filled':'ti-pin'}"></i>
+        </button>
+      </div>
+      ${activeNote?'<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px;word-break:break-word">'+(activeNote.title||'').replace(/</g,'&lt;')+'</div>'
+        +'<div style="font-size:11px;color:var(--text-secondary);white-space:pre-line;line-height:1.5;max-height:90px;overflow-y:auto">'+((activeNote.content||'').replace(/</g,'&lt;')||'(trống)')+'</div>':''}
+      `}
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-light)"><span class="ws-side-link" onclick="goTab('notes')" style="margin-left:0">Mở COCO NOTES <i class="ti ti-arrow-right"></i></span></div>
+    </div>`;
+}
+function _wsNotesSwitchScope(scope){
+  window._wsNotesScope=scope;
+  window._wsNotesTempId=null;
+  localStorage.setItem('ws_notes_scope',scope);
+  _wsNotesEnsureLoaded(function(){ _wsRefreshSidebar('xuat'); });
+}
+window._wsNotesSwitchScope=_wsNotesSwitchScope;
+function _wsNotesSelectNote(id){
+  window._wsNotesTempId=id;
+  _wsRefreshSidebar('xuat');
+}
+window._wsNotesSelectNote=_wsNotesSelectNote;
+function _wsNotesTogglePin(){
+  const scope=window._wsNotesScope||'shared';
+  const pin=_wsNotesGetPin();
+  if(pin&&pin.scope===scope&&pin.id===window._wsNotesTempId){
+    localStorage.removeItem('ws_pinned_note');
+  } else if(window._wsNotesTempId){
+    localStorage.setItem('ws_pinned_note',JSON.stringify({scope:scope,id:window._wsNotesTempId}));
+  }
+  _wsRefreshSidebar('xuat');
+}
+window._wsNotesTogglePin=_wsNotesTogglePin;
 
 function _wsRefreshSidebar(tt){
   if(document.body.classList.contains('xuat-lotmode'))return; // đang xem chi tiết lô hàng — không đụng vào DOM danh sách
@@ -2341,6 +2400,7 @@ function renderLot(tt){
   renderVstWarning(tt);
   computeShipmentKpis(tt);
   _startVstWarnAutoRefresh(tt);
+  _wsNotesEnsureLoaded(function(){ _wsRefreshSidebar(tt); });
 }
 
 // Sort state per tab
@@ -11326,19 +11386,13 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .hex-part.p3{bottom:26%;left:6%;animation-delay:2.8s}
 .hex-part.p4{bottom:9%;left:50%;animation-delay:4.2s}
 
-/* ── Lớp 1+11: đổ bóng nhiều tầng + glow màu 30px + Idle float ── */
+/* ── Lớp 1+11: đổ bóng nhiều tầng + glow màu 30px — khối ĐỨNG YÊN, không trôi nổi ── */
 .hex-shape{position:relative;width:100%;aspect-ratio:.866;cursor:pointer;transform-style:preserve-3d;will-change:transform;backface-visibility:hidden;
   filter:
     drop-shadow(0 30px 60px rgba(0,0,0,.45))
     drop-shadow(0 10px 25px rgba(0,0,0,.30))
     drop-shadow(0 0 30px rgba(var(--glow),.55));
-  animation:hexFloat 5s ease-in-out infinite;
   transition:transform .35s cubic-bezier(.2,.9,.3,1.15), filter .35s ease}
-.hp-ur .hex-shape{animation-delay:.8s}
-.hp-right .hex-shape{animation-delay:1.6s}
-.hp-lr .hex-shape{animation-delay:2.4s}
-.hp-ll .hex-shape{animation-delay:3.2s}
-.hp-left .hex-shape{animation-delay:4s}
 
 /* ── Lớp 6: viền ngoài + các nét SVG ── */
 .hex-art{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:4;overflow:visible}
@@ -11547,6 +11601,9 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .ws-side-hdr{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:12px}
 .ws-side-hdr .ti{font-size:15px;color:var(--green)}
 .ws-side-link{font-size:11px;color:var(--blue);font-weight:600;cursor:pointer;margin-left:auto;text-decoration:none}
+.ws-notes-scope-btn{font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;border:1px solid var(--border-light);background:var(--bg-secondary);color:var(--text-tertiary);cursor:pointer;transition:all .15s}
+.ws-notes-scope-btn.active{background:var(--green);border-color:var(--green);color:#fff}
+.ws-notes-scope-btn:hover:not(.active){background:var(--hover-bg);color:var(--text-primary)}
 /* Lịch mini sáng màu — tái dùng cell HTML của Dashboard, chỉ đổi màu qua wrapper */
 .ws-cal .kpi-cal-dow{color:var(--text-tertiary)}
 .ws-cal .kpi-cal-d{color:var(--text-primary)}
