@@ -773,7 +773,7 @@ function _xuatLotSummaryHTML(r,tt){
   };
   return `
     <div class="xls-hdr">
-      <div class="xls-hdr-eyebrow"><i class="ti ti-package"></i> Lô hàng</div>
+      <div class="xls-hdr-eyebrow"><i class="ti ti-package"></i> Job ID</div>
       <div class="xls-hdr-job">${r.jobNo||r.bookingNo||'—'}</div>
       <span class="bdg ${SB[r.status]||'bdg-gr'}" style="position:relative;z-index:2">${r.status||'—'}</span>
     </div>
@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.28';
+window.APP_BUILD='v2.29';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2246,7 +2246,7 @@ function _wsSidebarHTML(tt){
       <div class="ws-side-hdr"><i class="ti ti-chart-donut"></i> Tổng quan lô hàng<span class="ws-side-link" onclick="computeShipmentKpis('${tt}')" title="Tải lại"><i class="ti ti-refresh"></i></span></div>
       ${loading?'<div style="font-size:11.5px;color:var(--text-tertiary)"><i class="ti ti-loader-2" style="animation:spin 1s linear infinite"></i> Đang tải...</div>':
         '<div style="display:flex;align-items:center;gap:14px">'
-          +_homeDonutChart(stats.statusBreakdown,'Tổng lô hàng',96,'var(--text-primary)')
+          +_homeDonutChart(stats.statusBreakdown,'Tổng lô hàng',128,'var(--text-primary)')
           +'<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">'+stats.statusBreakdown.map(function(s){
             const pct=stats.total?Math.round(s.count/stats.total*100):0;
             return '<div style="display:flex;align-items:center;gap:5px;font-size:10.5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:'+s.color+';flex-shrink:0"></span><span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis">'+s.label+'</span><span style="color:var(--text-tertiary);font-weight:600;margin-left:auto">'+s.count+' ('+pct+'%)</span></div>';
@@ -2829,7 +2829,21 @@ function renderDetailPanel(r,tt){
   if(detailTab==='info'){
     const allCols=tt==='xuat'?XCOLS:NCOLS;
     const skipList=['bookingNo','status','cutoffCY','cutoffSI','polCountry','podCountry','loaiHang','remark'];
-    bodyHtml=`<div class="detail-grid">
+    bodyHtml=`
+    <!-- Toolbar hành động — đưa lên đầu để thao tác nhanh không cần cuộn -->
+    <div class="detail-actionbar">
+      <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
+      <button class="btn blu" onclick="openBookingEmail('${r._id}','${tt}')"><i class="ti ti-mail"></i> Email Booking</button>
+      ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')"><i class="ti ${r.locked?'ti-lock-open':'ti-lock'}"></i> ${r.locked?'Mở khóa':'Khóa lô hàng'}</button>`:''}
+      <label class="detail-vst-toggle">
+        <input type="checkbox" id="vstEnabledChk" data-id="${r._id}" data-tt="${tt}" ${r.vstEnabled?'checked':''} onchange="toggleVstEnabled(this.dataset.id,this.dataset.tt,this.checked)"/>
+        <span>Xác nhận VST</span>
+        ${r.vstEnabled?`<span class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" style="font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</span>`:''}
+      </label>
+      ${can('deleteLot')?`<button class="btn red" onclick="delLot('${r._id}','${tt}')" style="margin-left:auto"><i class="ti ti-trash"></i> Xóa lô hàng</button>`:''}
+    </div>
+    ${r.locked?'<div style="margin:-4px 0 .8rem"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:500"><i class="ti ti-lock" style="font-size:14px"></i>Lô hàng đã được khóa — chỉ Admin mới mở được</span></div>':''}
+    <div class="detail-grid">
       ${allCols.filter(c=>!skipList.includes(c.k)).map(c=>{
         let val=r[c.k]||'—';
         if(c.k==='typeCont'&&r[c.k]){const isRf=r[c.k].includes('R');val=`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${r[c.k]}</span>`;}
@@ -2876,30 +2890,13 @@ function renderDetailPanel(r,tt){
         +'</div>';}).join('')
       +'</div>';
     })()}
-    <!-- Xác nhận VST -->
-    <div style="margin-top:.6rem">
-      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;padding:.55rem .85rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);width:fit-content">
-        <input type="checkbox" id="vstEnabledChk" data-id="${r._id}" data-tt="${tt}" ${r.vstEnabled?'checked':''} onchange="toggleVstEnabled(this.dataset.id,this.dataset.tt,this.checked)" style="width:16px;height:16px;cursor:pointer"/>
-        <span style="font-size:12.5px;font-weight:600">Xác nhận VST <span style="font-weight:400;color:var(--text-secondary)">(bật theo dõi trạng thái Vào sổ tàu cho lô này)</span></span>
-      </label>
-      ${r.vstEnabled?`<div style="margin-top:6px;font-size:12px;display:flex;align-items:center;gap:6px">Trạng thái hiện tại: <span class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" style="font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</span></div>`:''}
-    </div>
     <!-- Status quick buttons -->
     ${can('editLot')&&!r.locked?`<div style="margin-top:.75rem">
       <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Trạng thái lô hàng</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${['Confirm','Standby','Done','Cancel'].map(s=>`<button onclick="quickSetStatus('${r._id}','${tt}','${s}')" style="padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:2px solid ${r.status===s?'transparent':'#ddd'};background:${r.status===s?(s==='Confirm'?'#dc3545':s==='Standby'?'#ffc107':s==='Done'?'#198754':'#0d6efd'):(s==='Confirm'?'rgba(220,53,69,.1)':s==='Standby'?'rgba(255,193,7,.1)':s==='Done'?'rgba(25,135,84,.1)':'rgba(13,110,253,.1)')};color:${s==='Confirm'?'#dc3545':s==='Standby'?'#856404':s==='Done'?'#198754':'#0d6efd'}">${s}</button>`).join('')}
       </div>
-    </div>`:''}
-    <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
-      <button class="btn blu" onclick="openBookingEmail('${r._id}','${tt}')"><i class="ti ti-mail"></i> Email Booking</button>
-      ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')">
-        <i class="ti ${r.locked?'ti-lock-open':'ti-lock'}"></i> ${r.locked?'Mở khóa':'Khóa lô hàng'}
-      </button>`:''}
-      ${can('deleteLot')?`<button class="btn red" onclick="delLot('${r._id}','${tt}')" style="margin-left:auto"><i class="ti ti-trash"></i> Xóa lô hàng</button>`:''}
-      ${r.locked?'<span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:500"><i class="ti ti-lock" style="font-size:14px"></i>Lô hàng đã được khóa — chỉ Admin mới mở được</span>':''}
-    </div>`;
+    </div>`:''}`;
   }
 
   else if(detailTab==='cont'){
@@ -11522,10 +11519,10 @@ tr:hover td{background:var(--hover-bg)}
 .xls-wrap{display:grid;grid-template-columns:250px 1fr;gap:0;align-items:start;min-height:calc(100vh - 60px)}
 @media (max-width:900px){.xls-wrap{grid-template-columns:1fr}.xls-summary{position:static!important}}
 .xls-summary{background:var(--bg-primary);border-right:1px solid var(--border-light);padding:0 0 1rem;position:sticky;top:0;align-self:start;height:calc(100vh - 60px);overflow-y:auto;box-shadow:2px 0 10px rgba(11,27,43,.04)}
-.xls-hdr{background:linear-gradient(150deg,var(--ink) 0%,var(--ink-2) 100%);padding:1.1rem 1rem 1rem;margin-bottom:.9rem;position:relative;overflow:hidden}
-.xls-hdr::after{content:'';position:absolute;top:-30%;right:-20%;width:120px;height:120px;border-radius:50%;background:radial-gradient(circle,rgba(63,167,163,.28),transparent 70%);pointer-events:none}
-.xls-hdr-eyebrow{font-size:9px;font-weight:700;color:#7C93A8;text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:5px;position:relative;z-index:2}
-.xls-hdr-job{font-family:var(--font-disp);font-size:18px;font-weight:800;color:#fff;margin:4px 0 8px;position:relative;z-index:2;word-break:break-word}
+.xls-hdr{background:linear-gradient(150deg,var(--green-bg) 0%,var(--bg-primary) 65%);border-bottom:1px solid var(--border-light);padding:1.1rem 1rem 1rem;margin-bottom:.9rem;position:relative;overflow:hidden}
+.xls-hdr::after{content:'';position:absolute;top:-30%;right:-20%;width:120px;height:120px;border-radius:50%;background:radial-gradient(circle,rgba(14,124,123,.14),transparent 70%);pointer-events:none}
+.xls-hdr-eyebrow{font-size:9px;font-weight:700;color:var(--green-dark);text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:5px;position:relative;z-index:2}
+.xls-hdr-job{font-family:var(--font-disp);font-size:18px;font-weight:800;color:var(--text-primary);margin:4px 0 8px;position:relative;z-index:2;word-break:break-word}
 .xls-body{display:flex;flex-direction:column;gap:3px;padding:0 .9rem}
 .xls-row{display:flex;gap:10px;align-items:flex-start;padding:8px 6px;border-radius:9px;transition:background .15s}
 .xls-row:hover{background:var(--hover-bg)}
@@ -11541,6 +11538,7 @@ tr:hover td{background:var(--hover-bg)}
    Nhờ đó thanh tab / bộ lọc / sidebar KPI tự đứng yên mà KHÔNG cần sticky (đơn giản & an toàn).
    Chỉ áp dụng cho danh sách Shipment List, không ảnh hưởng trang chi tiết lô hàng. ═══ */
 body.xuat-tabmode:not(.xuat-lotmode) .table-wrap{max-height:calc(100vh - 230px);overflow-y:auto}
+body.xuat-tabmode:not(.xuat-lotmode) .content{padding-bottom:0}
 body.xuat-tabmode:not(.xuat-lotmode) .lot-table thead tr{position:sticky;top:0;z-index:3}
 body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);overflow-y:auto}
 .ws-side-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow-sm)}
@@ -11617,6 +11615,9 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .dtab:hover{background:var(--bg-primary);color:var(--text-primary)}
 .dtab.active{background:var(--bg-primary);color:var(--green);border:1px solid var(--border-light)}
 .detail-body{padding:1.25rem}
+.detail-actionbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:.9rem;margin-bottom:.9rem;border-bottom:1px solid var(--border-light)}
+.detail-vst-toggle{display:flex;align-items:center;gap:7px;cursor:pointer;padding:0 12px;height:34px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);font-size:12.5px;font-weight:600;color:var(--text-primary)}
+.detail-vst-toggle input{width:15px;height:15px;cursor:pointer;accent-color:var(--green)}
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .detail-field{background:var(--bg-secondary);border-radius:8px;padding:.6rem .85rem;border:0.5px solid var(--border-light)}
 .detail-label{font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
@@ -19775,10 +19776,11 @@ function renderVesselEditor(){
     +'<div class="mbody" style="padding:16px 20px;display:flex;flex-direction:column;gap:14px;max-height:70vh;overflow:auto">'
       +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">'
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Tên tàu (Vessel)</label>'
-          +'<input type="text" id="vesVessel" value="'+(d.vessel||'').replace(/"/g,'&quot;')+'" oninput="_vesselDraft.vessel=this.value" placeholder="VD: MAERSK ATLANTIC" style="width:100%;font-size:13px"/></div>'
+          +'<input type="text" id="vesVessel" value="'+(d.vessel||'').replace(/"/g,'&quot;')+'" oninput="_vesselDraft.vessel=this.value;_vesselCheckDup()" placeholder="VD: MAERSK ATLANTIC" style="width:100%;font-size:13px"/></div>'
         +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Số chuyến (Voy)</label>'
-          +'<input type="text" id="vesVoy" value="'+(d.voy||'').replace(/"/g,'&quot;')+'" oninput="_vesselDraft.voy=this.value" placeholder="VD: 245W" style="width:100%;font-size:13px"/></div>'
+          +'<input type="text" id="vesVoy" value="'+(d.voy||'').replace(/"/g,'&quot;')+'" oninput="_vesselDraft.voy=this.value;_vesselCheckDup()" placeholder="VD: 245W" style="width:100%;font-size:13px"/></div>'
       +'</div>'
+      +'<div id="vesDupWarn"></div>'
       +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:6px">Carrier (có thể nhiều)</label>'
         +carrierChecks+'</div>'
       +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">'
@@ -19994,6 +19996,23 @@ function _vesselDelPod(i){
 }
 window._vesselDelPod=_vesselDelPod;
 
+// Kiểm tra trùng Tàu + Chuyến ngay khi người dùng đang nhập (live), hiện banner cảnh báo — không chặn gõ
+function _vesselCheckDup(){
+  const box=g('vesDupWarn'); if(!box)return;
+  const d=_vesselDraft;
+  const vName=(d.vessel||'').trim();
+  const voy=(d.voy||'').trim();
+  if(!vName||!voy){ box.innerHTML=''; return; }
+  const vNorm=vName.toLowerCase(), voyNorm=voy.toLowerCase();
+  const dup=(cache.vessels||[]).find(function(v){
+    return v._id!==_vesselEditId && (v.vessel||'').trim().toLowerCase()===vNorm && (v.voy||'').trim().toLowerCase()===voyNorm;
+  });
+  box.innerHTML=dup
+    ? '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);border-radius:8px;font-size:12px;color:var(--red);font-weight:600"><i class="ti ti-alert-triangle" style="font-size:15px;flex-shrink:0"></i> Tàu "'+vName+'" chuyến "'+voy+'" đã tồn tại trong hệ thống — có thể bị trùng.</div>'
+    : '';
+}
+window._vesselCheckDup=_vesselCheckDup;
+
 async function saveVessel(){
   if(typeof _vesselCaptureBasics==='function')_vesselCaptureBasics();
   if(typeof _vesselSyncTransships==='function')_vesselSyncTransships();
@@ -20001,6 +20020,18 @@ async function saveVessel(){
   const d=_vesselDraft;
   if(!d.vessel.trim()){toast('Nhập tên tàu','error');return;}
   if(!d.carriers.length){toast('Chọn ít nhất 1 Carrier','error');return;}
+  // Kiểm tra trùng Tàu + Chuyến khi THÊM MỚI (không áp dụng lúc đang sửa chính bản ghi đó)
+  if(!_vesselEditId){
+    const vNorm=d.vessel.trim().toLowerCase();
+    const voyNorm=(d.voy||'').trim().toLowerCase();
+    const dup=(cache.vessels||[]).find(function(v){
+      return (v.vessel||'').trim().toLowerCase()===vNorm && (v.voy||'').trim().toLowerCase()===voyNorm;
+    });
+    if(dup){
+      const ok=confirm('⚠️ Tàu "'+d.vessel.trim()+'" chuyến "'+(d.voy||'—')+'" đã tồn tại trong hệ thống.\n\nBạn có chắc muốn tạo thêm 1 bản ghi trùng không?');
+      if(!ok) return;
+    }
+  }
   // Clean empty PODs
   const pods=d.pods.filter(function(p){return (p.pod||'').trim();});
 
