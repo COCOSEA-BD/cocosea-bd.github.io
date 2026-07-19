@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.35';
+window.APP_BUILD='v2.36';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1656,6 +1656,58 @@ function showApp(){
   updateSidebar();
   goTab('home');
 }
+
+// ═══ Menu mobile (hamburger) — chỉ hiển thị/hoạt động khi màn hình hẹp qua CSS.
+//     Không đụng vào goTab() hay bất kỳ logic điều hướng nào — chỉ toggle class hiển thị. ═══
+// ═══ Tự động chuyển MỌI bảng trong .content thành dạng thẻ trên mobile.
+//     Đọc nhãn cột từ <thead><th> có sẵn, gắn data-label vào từng <td> tương ứng.
+//     Không sửa/đụng vào bất kỳ hàm renderXxxTable() nào đang có — hoạt động độc lập,
+//     hoàn toàn AN TOÀN với PC vì chỉ có tác dụng khi CSS media query (<640px) kích hoạt. ═══
+function _autoResponsivizeTables(){
+  document.querySelectorAll('.content table').forEach(function(table){
+    const ths=Array.prototype.map.call(table.querySelectorAll('thead th'), function(th){return (th.textContent||'').trim();});
+    if(!ths.length)return; // bảng không có header rõ ràng -> bỏ qua, giữ cuộn ngang mặc định
+    table.classList.add('rtable-mobile');
+    const rows=table.querySelectorAll('tbody tr');
+    for(let r=0;r<rows.length;r++){
+      const cells=rows[r].children;
+      for(let i=0;i<cells.length;i++){
+        if(ths[i]!==undefined) cells[i].setAttribute('data-label', ths[i]);
+      }
+    }
+  });
+}
+window._autoResponsivizeTables=_autoResponsivizeTables;
+let _rtDebounce=null;
+function _scheduleResponsivizeTables(){
+  clearTimeout(_rtDebounce);
+  _rtDebounce=setTimeout(_autoResponsivizeTables,150);
+}
+document.addEventListener('DOMContentLoaded',function(){
+  const contentEl=document.querySelector('.content');
+  if(!contentEl)return;
+  const obs=new MutationObserver(_scheduleResponsivizeTables);
+  obs.observe(contentEl,{childList:true,subtree:true});
+  _scheduleResponsivizeTables();
+});
+
+function _toggleMobileNav(){
+  g('topNavMenu')?.classList.toggle('open');
+  document.body.classList.toggle('mobile-nav-open');
+}
+window._toggleMobileNav=_toggleMobileNav;
+document.addEventListener('DOMContentLoaded',function(){
+  // Tự đóng menu khi bấm chọn 1 mục điều hướng (chỉ có ý nghĩa ở chế độ drawer mobile)
+  g('topNavMenu')?.addEventListener('click',function(e){
+    if(e.target.closest('.sb-item') && document.body.classList.contains('mobile-nav-open')) _toggleMobileNav();
+  });
+  // Bấm ra ngoài vùng menu (vào lớp phủ tối) cũng đóng menu
+  document.addEventListener('click',function(e){
+    if(!document.body.classList.contains('mobile-nav-open'))return;
+    if(e.target.closest('#topNavMenu')||e.target.closest('#tnHamburger'))return;
+    _toggleMobileNav();
+  });
+});
 
 function updateSidebar(){
   const u=currentProfile; if(!u)return;
@@ -11512,6 +11564,25 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .topnav::before{content:'';position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14) 30%,rgba(255,255,255,.14) 70%,transparent)}
 .topnav::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;background:linear-gradient(90deg,transparent 0%,rgba(63,167,163,.55) 18%,rgba(201,154,60,.4) 50%,rgba(63,167,163,.55) 82%,transparent 100%)}
 .topnav-menu{display:flex;align-items:center;gap:1px;flex:1;min-width:0;overflow-x:auto}
+.tn-hamburger{display:none;width:36px;height:36px;border-radius:9px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);color:#E4EAEE;align-items:center;justify-content:center;font-size:18px;cursor:pointer;flex-shrink:0}
+.tn-hamburger:hover{background:rgba(255,255,255,.1)}
+/* ═══ MOBILE (<768px): topnav-menu biến thành drawer trượt từ trái, ẩn dưới nút hamburger.
+   Không đổi bất kỳ nội dung/onclick nào bên trong — chỉ đổi CÁCH TRÌNH BÀY khi màn hình hẹp. ═══ */
+@media (max-width:768px){
+  .tn-hamburger{display:flex}
+  .topnav-menu{
+    position:fixed;top:58px;left:0;bottom:0;width:80vw;max-width:300px;
+    flex-direction:column;align-items:stretch;gap:3px;
+    background:var(--ink);padding:.9rem;overflow-y:auto;overflow-x:hidden;
+    transform:translateX(-100%);transition:transform .25s cubic-bezier(.4,0,.2,1);
+    z-index:45;box-shadow:6px 0 28px rgba(0,0,0,.4);border-right:1px solid rgba(255,255,255,.08);
+  }
+  .topnav-menu.open{transform:translateX(0)}
+  .topnav-menu .sb-item{width:100%;justify-content:flex-start;transform:none;margin:0}
+  body.mobile-nav-open{overflow:hidden}
+  body.mobile-nav-open::after{content:'';position:fixed;inset:0;top:58px;background:rgba(0,0,0,.5);z-index:40;animation:tnFadeIn .2s ease}
+}
+@keyframes tnFadeIn{from{opacity:0}to{opacity:1}}
 .topnav-menu::-webkit-scrollbar{height:0}
 .tn-brand-name{font-size:12.5px;font-weight:700;line-height:1.2;color:#F1F5F9;font-family:var(--font-disp);white-space:nowrap}
 .tn-brand-tag{font-size:9px;color:var(--gold);font-style:italic;letter-spacing:.2px;white-space:nowrap}
@@ -11782,6 +11853,37 @@ input:focus,select:focus,textarea:focus{border-color:var(--green);box-shadow:0 0
 /* TABLE */
 .table-card{background:var(--bg-primary);border-radius:var(--radius-lg);border:1px solid var(--border-light);overflow:hidden;box-shadow:var(--shadow-sm)}
 .table-wrap{overflow-x:auto}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BẢNG RESPONSIVE TỰ ĐỘNG (mobile) — áp dụng cho MỌI bảng trong toàn app.
+   Cơ chế: JS (_autoResponsivizeTables) tự động gắn class .rtable-mobile +
+   data-label vào mọi <table> có <thead><th> trong .content — không cần sửa
+   từng hàm render riêng lẻ. CSS dưới đây CHỈ kích hoạt khi màn hình < 640px,
+   trên PC hoàn toàn không có tác dụng.
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (max-width:640px){
+  table.rtable-mobile{width:100%!important}
+  table.rtable-mobile thead{position:absolute!important;left:-9999px;top:-9999px} /* ẩn nhưng vẫn đọc được bằng screen reader */
+  table.rtable-mobile,table.rtable-mobile tbody{display:block!important;width:100%!important}
+  table.rtable-mobile tr{
+    display:block!important;width:100%!important;box-sizing:border-box;
+    margin-bottom:10px;border:1px solid var(--border-light)!important;border-radius:10px;
+    padding:4px 10px;background:var(--bg-primary)!important;box-shadow:var(--shadow-sm)
+  }
+  table.rtable-mobile td{
+    display:flex!important;justify-content:space-between;align-items:center;gap:10px;
+    padding:7px 0!important;border:none!important;border-bottom:1px solid var(--border-light);
+    text-align:right!important;white-space:normal!important;background:transparent!important;font-size:12.5px
+  }
+  table.rtable-mobile tr td:last-child{border-bottom:none}
+  table.rtable-mobile td::before{
+    content:attr(data-label);font-weight:700;font-size:9.5px;color:var(--text-tertiary);
+    text-transform:uppercase;letter-spacing:.3px;text-align:left;flex-shrink:0;margin-right:auto;padding-right:8px
+  }
+  /* Ô trống (data-label rỗng, VD cột checkbox/thao tác) thì không cần nhãn, canh giữa cho gọn */
+  table.rtable-mobile td[data-label=""]{justify-content:center}
+  table.rtable-mobile td[data-label=""]::before{display:none}
+}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{background:var(--bg-secondary);padding:8px 10px;text-align:left;font-weight:600;font-size:10px;color:var(--text-secondary);border-bottom:1px solid var(--border-light);white-space:nowrap;text-transform:uppercase;letter-spacing:.5px}
 td{padding:7px 10px;border-bottom:1px solid var(--border-light);vertical-align:middle;white-space:nowrap}
@@ -11885,6 +11987,10 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .perm-toggle.on::after{left:19px}.perm-toggle.off::after{left:3px}
 /* DETAIL PANEL */
 .detail-panel{position:fixed;top:0;right:0;transform:translateX(100%);width:clamp(560px,70vw,1400px);max-width:98vw;height:100vh;background:var(--bg-primary);border-left:1px solid var(--border-light);z-index:150;overflow-y:auto;transition:transform .28s cubic-bezier(.4,0,.2,1);box-shadow:-4px 0 24px rgba(0,0,0,.08)}
+/* Mobile: bỏ min-width 560px cứng — panel chiếm toàn màn hình để không bị tràn/cuộn ngang */
+@media (max-width:640px){
+  .detail-panel{width:100vw!important;max-width:100vw!important;border-left:none}
+}
 .detail-panel.open{transform:translateX(0)}
 .dpanel-tabbar{display:flex;align-items:center;gap:2px;background:var(--bg-secondary);border-bottom:1px solid var(--border-light);padding:6px 8px 0;position:sticky;top:0;z-index:10;overflow-x:auto;flex-wrap:nowrap}
 .dpanel-tab{display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-primary);border:1px solid var(--border-light);border-bottom:none;border-radius:8px 8px 0 0;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;color:var(--text-secondary);max-width:200px}
@@ -12011,6 +12117,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 <!-- APP SHELL — topbar ngang (đã chuyển từ sidebar dọc) -->
 <div id="appShell" class="shell" style="display:none">
   <header class="topnav">
+    <button class="tn-hamburger" id="tnHamburger" onclick="_toggleMobileNav()" title="Menu" aria-label="Menu"><i class="ti ti-menu-2"></i></button>
     <div class="sb-logo" onclick="goTab('home')" style="cursor:pointer" title="Về Dashboard">
       <div class="sb-logo-ic" style="overflow:hidden;padding:0"><img src="icons/icon-48.png" alt="CocoFlow" style="width:100%;height:100%;object-fit:cover"/></div>
       <div>
