@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.31';
+window.APP_BUILD='v2.32';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1661,7 +1661,8 @@ function updateSidebar(){
   const u=currentProfile; if(!u)return;
   const r=ROLES[u.role||'viewer'];
   console.log('COCOFLOW: user='+u.email+' role='+u.role+' docId='+u._docId);
-  g('sbAvatar').textContent=u.avatar||'??';
+  const avEl=g('sbAvatar');
+  if(avEl)avEl.innerHTML=u.avatarUrl?'<img src="'+u.avatarUrl+'" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>':(u.avatar||'??');
   g('sbName').textContent=u.name||u.email||'';
   g('sbEmail').textContent=currentUser?.email||'';
   g('sbRole').innerHTML=`<span class="${r.cls}">${r.label}</span>`;
@@ -2004,6 +2005,7 @@ function renderHomePage(){
       </div>
 
       <div class="main-row home-fade" style="animation-delay:.1s">
+        <div class="dash-scale-wrap" id="dashScaleWrap">
 
         <div class="kpi-col">
           <div class="kpi-hex-shape" style="--glow:14,124,123">
@@ -2076,6 +2078,7 @@ function renderHomePage(){
           </div>
         </div>
 
+        </div>
       </div>
 
       <div class="dash-footer home-fade" style="animation-delay:.2s">
@@ -2087,11 +2090,33 @@ function renderHomePage(){
     </div>
   </div>`;
   _homeBindHexTilt();
+  requestAnimationFrame(_homeApplyScale);
 }
 window.renderHomePage=renderHomePage;
 
 // ═══ Parallax 3D theo con trỏ (tối đa 6°) + gợn sóng khi bấm ═══
 // Dùng requestAnimationFrame để mượt, giới hạn góc nhỏ + translateZ để chữ không bị nhòe.
+// ═══ Tự động thu nhỏ TOÀN BỘ khối KPI + hoa lục giác theo tỉ lệ khi cửa sổ nhỏ,
+//     tránh bị chồng lấn (transform:scale giữ nguyên layout tương đối, chỉ đổi kích thước) ═══
+function _homeApplyScale(){
+  const wrap=g('dashScaleWrap'); if(!wrap)return;
+  const outer=wrap.parentElement; if(!outer)return;
+  wrap.style.transform='none'; // reset để đo kích thước tự nhiên trước
+  const availW=outer.clientWidth, availH=outer.clientHeight;
+  const naturalW=wrap.scrollWidth, naturalH=wrap.scrollHeight;
+  if(!naturalW||!naturalH||!availW||!availH)return;
+  const scale=Math.min(1, availW/naturalW, availH/naturalH);
+  wrap.style.transform=scale<0.995?'scale('+scale.toFixed(3)+')':'none';
+}
+window._homeApplyScale=_homeApplyScale;
+let _homeScaleResizeTimer=null;
+window.addEventListener('resize',function(){
+  if(document.body.classList.contains('home-fullscreen')){
+    clearTimeout(_homeScaleResizeTimer);
+    _homeScaleResizeTimer=setTimeout(_homeApplyScale,80);
+  }
+});
+
 function _homeBindHexTilt(){
   const flower=g('homeHexFlower'); if(!flower)return;
   flower.querySelectorAll('[data-hex-tilt]').forEach(function(wrap){
@@ -4121,7 +4146,7 @@ function importContFromExcelBk(input){
   const reader=new FileReader();
   reader.onload=function(e){
     try{
-      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:false});
       const ws=wb.Sheets[wb.SheetNames[0]];
       const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
       if(grid.length<2){toast('File không có dữ liệu','error');return;}
@@ -4191,11 +4216,14 @@ function _smartParseContGrid(grid,XLSX){
   const toNum=function(v){if(v==null||v==='')return null;const n=parseFloat((v+'').replace(/[, ]/g,''));return isNaN(n)?null:n;};
   const toDate=function(v){
     if(v==null||v==='')return '';
-    // FIX lệch ngày: SheetJS (cellDates:true) tạo Date object dựa trên giờ UTC khớp với ngày
-    // trong Excel — phải đọc bằng getUTC*() thay vì local getter, nếu không ngày bị lùi/tiến 1
-    // ngày tùy múi giờ trình duyệt (VD Excel 13/7 → hiện 12/7).
-    if(v instanceof Date && !isNaN(v))return v.getUTCFullYear()+'-'+String(v.getUTCMonth()+1).padStart(2,'0')+'-'+String(v.getUTCDate()).padStart(2,'0');
+    // FIX lệch ngày tận gốc: KHÔNG dùng cellDates:true nữa — đã kiểm chứng bằng test thực tế rằng
+    // SheetJS 0.18.5 tạo Date object SAI LỆCH gần 1 ngày cho múi giờ Việt Nam (UTC+7) do lỗi nội bộ
+    // của thư viện (VD Excel 19/7 -> Date object ra 2026-07-18T16:59:30Z, sai cả khi đọc bằng UTC
+    // getters lẫn local getters). Đọc thẳng SỐ SERIAL GỐC qua parse_date_code() là cách DUY NHẤT
+    // không phụ thuộc múi giờ, vì đây là phép tính số học thuần túy, không qua Date object nào.
     if(typeof v==='number'){var dt=XLSX.SSF&&XLSX.SSF.parse_date_code(v);if(dt)return dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
+    // Dự phòng hiếm gặp nếu vẫn nhận được Date object từ nguồn khác
+    if(v instanceof Date && !isNaN(v))return v.getUTCFullYear()+'-'+String(v.getUTCMonth()+1).padStart(2,'0')+'-'+String(v.getUTCDate()).padStart(2,'0');
     var s=(v+'').trim();
     var m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
     if(m){var y=m[3].length===2?'20'+m[3]:m[3];return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');}
@@ -10990,9 +11018,85 @@ function renderCrmCneeTab(p){
 // Editable permission matrix state (in-memory, admin can save to Firestore)
 let editingPerms = false;
 
+// ═══ Hồ sơ của tôi — dành cho user KHÔNG phải admin (tự đổi tên + ảnh đại diện, không đổi được vai trò) ═══
+function renderMyProfileOnly(pg){
+  if(!pg)return;
+  const u=currentProfile||{};
+  window._userEditAvatarFile=null;
+  window._userEditAvatarCleared=false;
+  const r=ROLES[u.role||'viewer'];
+  pg.innerHTML=`
+    <div style="max-width:460px;margin:2rem auto;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:14px;padding:1.75rem;box-shadow:var(--shadow-sm)">
+      <div style="font-size:16px;font-weight:800;margin-bottom:1.25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-user-circle" style="font-size:20px;color:var(--green)"></i> Hồ sơ của tôi</div>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:1.25rem">
+        <div id="myProfAvPreview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--bg-secondary);border:1px solid var(--border-light);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:var(--text-secondary)">
+          ${u.avatarUrl?'<img src="'+u.avatarUrl+'" style="width:100%;height:100%;object-fit:cover"/>':(u.avatar||'??')}
+        </div>
+        <div>
+          <input type="file" id="myProfAvFile" accept="image/*" style="display:none" onchange="_myProfileAvatarPreview(this)"/>
+          <button type="button" class="btn sm" onclick="g('myProfAvFile').click()"><i class="ti ti-upload"></i> Đổi ảnh đại diện</button>
+          ${u.avatarUrl?'<button type="button" class="btn sm red" onclick="_myProfileAvatarClear()" style="margin-left:4px"><i class="ti ti-trash"></i></button>':''}
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:4px">JPG/PNG, tối đa 2MB</div>
+        </div>
+      </div>
+      <div class="fi full" style="margin-bottom:.75rem"><label class="lbl">Email</label><input type="email" value="${u.email||''}" readonly/></div>
+      <div class="fi full" style="margin-bottom:.75rem"><label class="lbl">Họ và tên</label><input type="text" id="myProfName" value="${u.name||''}"/></div>
+      <div class="fi full" style="margin-bottom:1.25rem"><label class="lbl">Vai trò</label><div><span class="${r.cls}">${r.label}</span> <span style="font-size:11px;color:var(--text-tertiary)">— liên hệ Admin để thay đổi</span></div></div>
+      <button class="btn pri" onclick="saveMyProfile()"><i class="ti ti-device-floppy"></i> Lưu thay đổi</button>
+    </div>`;
+}
+window.renderMyProfileOnly=renderMyProfileOnly;
+
+function _myProfileAvatarPreview(input){
+  const file=input.files[0]; if(!file)return;
+  if(file.size>2*1024*1024){toast('Ảnh quá lớn (tối đa 2MB)','error');input.value='';return;}
+  if(!file.type.startsWith('image/')){toast('Chỉ nhận file ảnh','error');input.value='';return;}
+  window._userEditAvatarFile=file;
+  window._userEditAvatarCleared=false;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const box=g('myProfAvPreview'); if(box)box.innerHTML='<img src="'+e.target.result+'" style="width:100%;height:100%;object-fit:cover"/>';
+  };
+  reader.readAsDataURL(file);
+}
+window._myProfileAvatarPreview=_myProfileAvatarPreview;
+function _myProfileAvatarClear(){
+  window._userEditAvatarFile=null;
+  window._userEditAvatarCleared=true;
+  const fileInput=g('myProfAvFile'); if(fileInput)fileInput.value='';
+  const box=g('myProfAvPreview'); if(box)box.innerHTML=((currentProfile&&currentProfile.avatar)||'??');
+}
+window._myProfileAvatarClear=_myProfileAvatarClear;
+
+async function saveMyProfile(){
+  const name=(g('myProfName')?.value||'').trim();
+  if(!name){toast('Nhập họ tên','error');return;}
+  const u=currentProfile||{};
+  const docId=u._docId||u.uid||(u.email||'').replace(/\./g,'_');
+  if(!docId){toast('Không xác định được tài khoản','error');return;}
+  setLoading(true,'Đang lưu hồ sơ...');
+  try{
+    let avatarUrl;
+    if(window._userEditAvatarFile){
+      const ext=(window._userEditAvatarFile.name.split('.').pop()||'jpg').toLowerCase();
+      avatarUrl=await _uploadFileToStorage(window._userEditAvatarFile,'avatars/'+docId+'/avatar_'+Date.now()+'.'+ext);
+    } else if(window._userEditAvatarCleared){
+      avatarUrl=null;
+    }
+    const payload={name,updatedAt:Date.now()};
+    if(avatarUrl!==undefined)payload.avatarUrl=avatarUrl;
+    await fsSet('users', docId, payload);
+    currentProfile=Object.assign({},currentProfile,payload);
+    updateSidebar();
+    toast('Đã lưu hồ sơ');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.saveMyProfile=saveMyProfile;
+
 function renderUsers(){
   const pg=g('page-users');
-  if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div style="font-weight:600">Chỉ Admin mới quản lý được người dùng</div></div>';return;}
+  if(!can('manageUsers')){ renderMyProfileOnly(pg); return; }
 
   const PERM_LABELS={
     addLot:'Thêm lô hàng',
@@ -11018,7 +11122,7 @@ function renderUsers(){
     return '<tr'+(isSelf?' style="background:var(--green-bg)"':'')+'>'
       +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light)">'
         +'<div style="display:flex;align-items:center;gap:8px">'
-          +'<div style="width:32px;height:32px;border-radius:50%;background:var(--bg-secondary);border:1px solid var(--border-light);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">'+(u.avatar||'??')+'</div>'
+          +'<div style="width:32px;height:32px;border-radius:50%;background:var(--bg-secondary);border:1px solid var(--border-light);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0;overflow:hidden">'+(u.avatarUrl?'<img src="'+u.avatarUrl+'" style="width:100%;height:100%;object-fit:cover"/>':(u.avatar||'??'))+'</div>'
           +'<div><div style="font-weight:500;font-size:12.5px">'+(u.name||u.email)+(isSelf?' <span style="font-size:10px;color:var(--green)">(bạn)</span>':'')+(u.active===false?' <span style="font-size:9px;color:#fff;background:var(--red);border-radius:4px;padding:1px 5px">BỊ CHẶN</span>':'')+'</div>'
           +'<div style="font-size:10.5px;color:var(--text-secondary)">'+(u.email||'')+'</div></div>'
         +'</div>'
@@ -11189,12 +11293,28 @@ async function savePermissions(){
 }
 function openUserEdit(idx){
   userEditIdx=idx; const u=idx!==null?cache.users[idx]:{};
+  window._userEditAvatarFile=null;
+  window._userEditAvatarCleared=false;
   g('userEditTitle').textContent=idx!==null?'Chỉnh sửa: '+(u.name||u.email):'Thêm người dùng mới';
   g('userEditFields').innerHTML=`
     <div class="fi full"><label class="lbl">Email (dùng để đăng nhập)</label><input type="email" id="uf_email" value="${u.email||''}" ${idx!==null?'readonly':''}/></div>
     <div class="fi"><label class="lbl">Tên đăng nhập (không bắt buộc)</label><input type="text" id="uf_username" value="${u.username||''}" placeholder="VD: nguyenvana" style="text-transform:lowercase"/></div>
     <div class="fi"><label class="lbl">Họ và tên</label><input type="text" id="uf_name" value="${u.name||''}"/></div>
-    <div class="fi"><label class="lbl">Avatar (2 ký tự)</label><input type="text" id="uf_av" value="${u.avatar||''}" maxlength="2"/></div>
+    <div class="fi full">
+      <label class="lbl">Ảnh đại diện</label>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="uf_avPreview" style="width:52px;height:52px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--bg-secondary);border:1px solid var(--border-light);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:var(--text-secondary)">
+          ${u.avatarUrl?'<img src="'+u.avatarUrl+'" style="width:100%;height:100%;object-fit:cover"/>':(u.avatar||'??')}
+        </div>
+        <div>
+          <input type="file" id="uf_avFile" accept="image/*" style="display:none" onchange="_userAvatarPreview(this)"/>
+          <button type="button" class="btn sm" onclick="g('uf_avFile').click()"><i class="ti ti-upload"></i> Tải ảnh lên</button>
+          ${u.avatarUrl?'<button type="button" class="btn sm red" onclick="_userAvatarClear()" style="margin-left:4px"><i class="ti ti-trash"></i></button>':''}
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:3px">JPG/PNG, tối đa 2MB. Nếu không có ảnh, dùng 2 ký tự bên dưới.</div>
+        </div>
+      </div>
+    </div>
+    <div class="fi"><label class="lbl">Avatar (2 ký tự — dự phòng khi chưa có ảnh)</label><input type="text" id="uf_av" value="${u.avatar||''}" maxlength="2"/></div>
     <div class="fi"><label class="lbl">Vai trò</label><select id="uf_role"><option value="admin"${(u.role||'viewer')==='admin'?' selected':''}>Admin</option><option value="operator"${u.role==='operator'?' selected':''}>Operator</option><option value="accountant"${u.role==='accountant'?' selected':''}>Accountant</option><option value="doc"${u.role==='doc'?' selected':''}>Doc</option><option value="cus"${u.role==='cus'?' selected':''}>Cus</option><option value="viewer"${(u.role||'viewer')==='viewer'?' selected':''}>Viewer</option></select></div>
     ${idx===null?`<div class="fi"><label class="lbl">Mật khẩu ban đầu</label><input type="password" id="uf_pass" placeholder="Tối thiểu 6 ký tự"/></div>`:''}
     <div class="fi full">
@@ -11207,6 +11327,27 @@ function openUserEdit(idx){
     </div>`;
   openOv('userEditOv');
 }
+function _userAvatarPreview(input){
+  const file=input.files[0]; if(!file)return;
+  if(file.size>2*1024*1024){toast('Ảnh quá lớn (tối đa 2MB)','error');input.value='';return;}
+  if(!file.type.startsWith('image/')){toast('Chỉ nhận file ảnh','error');input.value='';return;}
+  window._userEditAvatarFile=file;
+  window._userEditAvatarCleared=false;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const box=g('uf_avPreview'); if(box)box.innerHTML='<img src="'+e.target.result+'" style="width:100%;height:100%;object-fit:cover"/>';
+  };
+  reader.readAsDataURL(file);
+}
+window._userAvatarPreview=_userAvatarPreview;
+function _userAvatarClear(){
+  window._userEditAvatarFile=null;
+  window._userEditAvatarCleared=true;
+  const fileInput=g('uf_avFile'); if(fileInput)fileInput.value='';
+  const box=g('uf_avPreview'); if(box)box.innerHTML=(g('uf_av')?.value||'??');
+}
+window._userAvatarClear=_userAvatarClear;
+
 async function saveUser(){
   const name=g('uf_name').value.trim(); const email=g('uf_email').value.trim();
   const username=(g('uf_username')?.value||'').trim().toLowerCase().replace(/[^a-z0-9_.]/g,'');
@@ -11242,14 +11383,37 @@ async function saveUser(){
       }
       // Step 2: Save profile to Firestore using UID as document ID (most reliable)
       const docId=uid||email.replace(/\./g,'_');
-      await fsSet('users', docId, {uid,email,name,username,role,avatar:av,emailSignature,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''});
+      let avatarUrl;
+      if(window._userEditAvatarFile){
+        setLoading(true,'Đang tải ảnh đại diện...');
+        const ext=(window._userEditAvatarFile.name.split('.').pop()||'jpg').toLowerCase();
+        avatarUrl=await _uploadFileToStorage(window._userEditAvatarFile,'avatars/'+docId+'/avatar_'+Date.now()+'.'+ext);
+      }
+      const payload={uid,email,name,username,role,avatar:av,emailSignature,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''};
+      if(avatarUrl)payload.avatarUrl=avatarUrl;
+      await fsSet('users', docId, payload);
       if(username)await db.collection('usernameMap').doc(username).set({email:email,updatedAt:Date.now()});
       toast('Đã tạo người dùng: '+email+' ('+ROLES[role].label+')');
     } else {
       // Editing existing user
       const u=cache.users[userEditIdx];
       const docId=u._docId||u.uid||u.email.replace(/\./g,'_');
-      await fsSet('users', docId, {email,name,username,role,avatar:av,emailSignature,updatedAt:Date.now(),updatedBy:currentUser?.email||''});
+      let avatarUrl;
+      if(window._userEditAvatarFile){
+        setLoading(true,'Đang tải ảnh đại diện...');
+        const ext=(window._userEditAvatarFile.name.split('.').pop()||'jpg').toLowerCase();
+        avatarUrl=await _uploadFileToStorage(window._userEditAvatarFile,'avatars/'+docId+'/avatar_'+Date.now()+'.'+ext);
+      } else if(window._userEditAvatarCleared){
+        avatarUrl=null;
+      }
+      const payload={email,name,username,role,avatar:av,emailSignature,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
+      if(avatarUrl!==undefined)payload.avatarUrl=avatarUrl;
+      await fsSet('users', docId, payload);
+      // Nếu đang tự sửa hồ sơ của chính mình, cập nhật currentProfile + giao diện ngay
+      if(u.email===currentUser?.email){
+        currentProfile=Object.assign({},currentProfile,payload);
+        updateSidebar();
+      }
       // Đồng bộ usernameMap: nếu username thay đổi, xóa mapping cũ và ghi mapping mới
       const oldUsername=(u.username||'').toLowerCase();
       if(oldUsername&&oldUsername!==username){
@@ -11340,9 +11504,10 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .dash-right-group{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:6px 10px 6px 6px}
 
 /* ═══ HÀNG CHÍNH: cột KPI lục giác + hoa 6 khối module ═══ */
-.main-row{flex:1;min-height:0;display:flex;align-items:center}
-.kpi-col{display:flex;flex-direction:column;gap:30px;flex-shrink:0;margin-left:5.5rem}
-.hex-flower-wrap{flex:1;display:flex;justify-content:center;align-items:center;min-width:0}
+.main-row{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.dash-scale-wrap{display:flex;align-items:center;gap:56px;transform-origin:center center;transition:transform .18s ease;flex-shrink:0}
+.kpi-col{display:flex;flex-direction:column;gap:30px;flex-shrink:0}
+.hex-flower-wrap{display:flex;justify-content:center;align-items:center;flex-shrink:0}
 
 /* ══════════════════════════════════════════════════════════════════════════
    HEXAGON CRYSTAL — khối pha lê đa lớp (12 lớp) cho Dashboard
@@ -18494,7 +18659,7 @@ function importContFromExcel(input){
   const reader=new FileReader();
   reader.onload=function(e){
     try{
-      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:false});
       const ws=wb.Sheets[wb.SheetNames[0]];
       const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
       if(grid.length<2){toast('File không có dữ liệu','error');return;}
@@ -18547,11 +18712,14 @@ function importContFromExcel(input){
       const toNum=function(v){if(v==null||v==='')return null;const n=parseFloat((v+'').replace(/[, ]/g,''));return isNaN(n)?null:n;};
       const toDate=function(v){
         if(v==null||v==='')return '';
-        // FIX lệch ngày: SheetJS (cellDates:true) tạo Date object dựa trên giờ UTC khớp với ngày
-        // trong Excel — phải đọc bằng getUTC*() thay vì local getter, nếu không ngày bị lùi/tiến
-        // 1 ngày tùy múi giờ trình duyệt (VD Excel 13/7 → hiện 12/7).
-        if(v instanceof Date && !isNaN(v))return v.getUTCFullYear()+'-'+String(v.getUTCMonth()+1).padStart(2,'0')+'-'+String(v.getUTCDate()).padStart(2,'0');
+        // FIX lệch ngày tận gốc: KHÔNG dùng cellDates:true nữa — đã kiểm chứng bằng test thực tế rằng
+        // SheetJS 0.18.5 tạo Date object SAI LỆCH gần 1 ngày cho múi giờ Việt Nam (UTC+7) do lỗi nội bộ
+        // của thư viện (VD Excel 19/7 -> Date object ra 2026-07-18T16:59:30Z, sai cả khi đọc bằng UTC
+        // getters lẫn local getters). Đọc thẳng SỐ SERIAL GỐC qua parse_date_code() là cách DUY NHẤT
+        // không phụ thuộc múi giờ, vì đây là phép tính số học thuần túy, không qua Date object nào.
         if(typeof v==='number'){var dt=XLSX.SSF&&XLSX.SSF.parse_date_code(v);if(dt)return dt.y+'-'+String(dt.m).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0');}
+        // Dự phòng hiếm gặp nếu vẫn nhận được Date object từ nguồn khác
+        if(v instanceof Date && !isNaN(v))return v.getUTCFullYear()+'-'+String(v.getUTCMonth()+1).padStart(2,'0')+'-'+String(v.getUTCDate()).padStart(2,'0');
         var s=(v+'').trim();
         // dd/mm/yyyy or dd-mm-yyyy
         var m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
