@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.41';
+window.APP_BUILD='v2.42';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -12498,6 +12498,25 @@ function _jobReportData(){
   return {shipper:shipper,loai:loai,from:from,to:to,rows:rows,lotCount:lots.length};
 }
 
+// Thống kê Tổng số lô / Tổng số cont theo Tên hàng — đếm SỐ LÔ DUY NHẤT (jobId), tổng Vol theo số (nếu là số)
+function _jobReportCargoSummary(rows){
+  const map={};
+  rows.forEach(function(r){
+    const name=r.tenHang||'(Không rõ tên hàng)';
+    if(!map[name])map[name]={lots:{},contQty:0,contUnits:{}};
+    map[name].lots[r.jobId||r.booking]=true;
+    const volNum=parseFloat(r.vol);
+    if(!isNaN(volNum))map[name].contQty+=volNum;
+    const unit=(r.typeCont||'').trim();
+    if(unit)map[name].contUnits[unit]=(map[name].contUnits[unit]||0)+(isNaN(volNum)?1:volNum);
+  });
+  return Object.keys(map).sort().map(function(name){
+    const m=map[name];
+    const contDetail=Object.keys(m.contUnits).map(function(u){return m.contUnits[u]+' x '+u;}).join(', ');
+    return {name:name, lotCount:Object.keys(m.lots).length, contQty:m.contQty, contDetail:contDetail||''};
+  });
+}
+
 async function _jobReportExport(fmt){
   const data=_jobReportData();
   if(!data.rows.length){toast('Không có lô hàng khớp bộ lọc','error');return;}
@@ -12558,6 +12577,37 @@ async function _jobReportExcel(data,sp){
     const widths=[5,14,15,17,22,13,12,14,6,10,13,16,24,17];
     widths.forEach(function(w,i){ws.getColumn(i+1).width=w;});
 
+    // ═══ Thống kê Tổng số lô / Số cont theo Tên hàng ═══
+    const summary=_jobReportCargoSummary(data.rows);
+    let sy=9+data.rows.length+2;
+    ws.mergeCells('A'+sy+':N'+sy);
+    const sTitle=ws.getCell('A'+sy); sTitle.value='THỐNG KÊ THEO TÊN HÀNG'; sTitle.font={bold:true,size:11,color:{argb:NAVY}};
+    sy++;
+    const sHeaders=['Tên hàng','Số lô','Số cont (tổng)','Chi tiết loại cont'];
+    const sHRow=ws.getRow(sy);
+    sHeaders.forEach(function(h,i){
+      const c=sHRow.getCell(i+1);
+      c.value=h; c.font={bold:true,size:10,color:{argb:NAVY}};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:GOLD}};
+      c.alignment={horizontal:'center',vertical:'middle'};
+      c.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
+    });
+    ws.mergeCells(sy,4,sy,8); // gộp cột "Chi tiết loại cont" rộng hơn cho dễ đọc
+    sy++;
+    summary.forEach(function(s,idx){
+      const row=ws.getRow(sy+idx);
+      const vals=[s.name,s.lotCount,s.contQty,s.contDetail];
+      vals.forEach(function(v,i){
+        const c=row.getCell(i+1);
+        c.value=v; c.font={size:9.5,bold:i===0};
+        c.alignment={vertical:'middle',horizontal:(i===1||i===2)?'center':'left'};
+        c.border={top:{style:'thin',color:{argb:'FFDDDDDD'}},left:{style:'thin',color:{argb:'FFDDDDDD'}},bottom:{style:'thin',color:{argb:'FFDDDDDD'}},right:{style:'thin',color:{argb:'FFDDDDDD'}}};
+        if(idx%2===1)c.fill={type:'pattern',pattern:'solid',fgColor:{argb:LIGHT}};
+      });
+      row.getCell(4).alignment={vertical:'middle',horizontal:'left'};
+      ws.mergeCells(sy+idx,4,sy+idx,8);
+    });
+
     const buf=await wb.xlsx.writeBuffer();
     const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const url=URL.createObjectURL(blob);
@@ -12614,6 +12664,25 @@ function _jobReportPdf(data,sp){
           doc.text('COCO SEA — Job Report  •  '+new Date().toLocaleDateString('vi-VN'),40,doc.internal.pageSize.getHeight()-16);
           doc.text('Trang '+doc.internal.getNumberOfPages(),pageW-60,doc.internal.pageSize.getHeight()-16);
         }
+      });
+
+      // ═══ Thống kê Tổng số lô / Số cont theo Tên hàng ═══
+      const summary=_jobReportCargoSummary(data.rows);
+      const pageH=doc.internal.pageSize.getHeight();
+      let sumStartY=(doc.lastAutoTable&&doc.lastAutoTable.finalY||infoY+14)+18;
+      // Nếu không đủ chỗ cho tiêu đề + ít nhất vài dòng bảng, tự sang trang mới
+      if(sumStartY>pageH-80){ doc.addPage(); sumStartY=40; }
+      doc.setFont('Roboto','bold'); doc.setFontSize(10); doc.setTextColor(15,30,46);
+      doc.text('THỐNG KÊ THEO TÊN HÀNG',40,sumStartY);
+      doc.autoTable({
+        head:[['Tên hàng','Số lô','Số cont (tổng)','Chi tiết loại cont']],
+        body:summary.map(function(s){return [s.name,s.lotCount,s.contQty,s.contDetail];}),
+        startY:sumStartY+6,
+        styles:{font:'Roboto',fontSize:8,cellPadding:3,overflow:'linebreak',lineColor:[221,221,221],lineWidth:.5},
+        headStyles:{font:'Roboto',fontStyle:'bold',fillColor:[245,197,24],textColor:[15,30,46],halign:'center',valign:'middle'},
+        alternateRowStyles:{fillColor:[242,246,252]},
+        columnStyles:{1:{halign:'center',cellWidth:50},2:{halign:'center',cellWidth:70}},
+        margin:{left:40,right:40}
       });
 
       doc.save('JobReport_'+(data.shipper||'All').replace(/[^A-Za-z0-9]/g,'_')+'_'+(data.from||'')+'_'+(data.to||'')+'.pdf');
@@ -22712,7 +22781,7 @@ function exportSOA(){
   var lots=allR.filter(function(r){
     var sh=r.shipper||r.supplier||'';
     return sh===filterShipper&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
-  });
+  }).sort(function(a,b){return (b.etd||'').localeCompare(a.etd||'');}); // ETD trễ (lớn) hơn ở trên
   if(!lots.length){toast('Không có dữ liệu cho shipper này','error');return;}
   var sp=cache.partners[filterShipper]||{};
   var roe=26390;
@@ -22860,14 +22929,13 @@ function exportSOA(){
     var rows='';
     displayRows.forEach(function(row,i){
       var r=row.d.r;
-      var bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||'—'));
       var podStr=(r.vol?(r.vol+(r.typeCont?'x'+r.typeCont:'')+' đi '):'')+(r.pod||'—');
       var bg=i%2===0?'#fff':'#f8f8f6';
       rows+='<tr style="background:'+bg+'">'
         +'<td style="'+tdStyle+';color:#666;text-align:center">'+(i+1)+'</td>'
-        +'<td style="'+tdStyle+';font-weight:600">'+bkgNos+'</td>'
-        +'<td style="'+tdStyle+'">'+(r.mblNo||'—')+'</td>'
         +'<td style="'+tdStyle+'">'+fd(r.etd)+'</td>'
+        +'<td style="'+tdStyle+'">'+(r.mblNo||'—')+'</td>'
+        +'<td style="'+tdStyle+'">'+(r.tenHang||'—')+'</td>'
         +'<td style="'+tdStyle+'">'+podStr+'</td>'
         +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+row.color+'">'+row.kind+'</td>'
         +'<td style="'+tdStyle+';text-align:right;color:#555">'+fmt(row.pre)+'</td>'
@@ -22876,11 +22944,14 @@ function exportSOA(){
         +'<td style="'+tdStyle+';text-align:center;font-weight:600;color:'+(row.kind==='Có hóa đơn'?(row.d.invPs.status==='paid'?'#0F6E56':row.d.invPs.status==='partial'?'#b45309':'#A32D2D'):(row.d.noInvPs.status==='paid'?'#0F6E56':row.d.noInvPs.status==='partial'?'#b45309':'#A32D2D'))+'">'+( row.kind==='Có hóa đơn'?row.d.invPs.display:row.d.noInvPs.display)+'</td>'
       +'</tr>';
     });
-    return '<table style="border-collapse:collapse;width:100%;margin-bottom:6px"><thead><tr style="background:#0F6E56">'
+    return '<table style="border-collapse:collapse;width:100%;margin-bottom:6px;table-layout:fixed"><colgroup>'
+      +'<col style="width:26px"><col style="width:64px"><col style="width:90px"><col style="width:auto">'
+      +'<col style="width:100px"><col style="width:74px"><col style="width:70px"><col style="width:56px"><col style="width:70px"><col style="width:60px">'
+      +'</colgroup><thead><tr style="background:#0F6E56">'
       +'<th style="'+thStyle+';text-align:center">#</th>'
-      +'<th style="'+thStyle+';text-align:left">Booking No</th>'
-      +'<th style="'+thStyle+';text-align:left">MBL No</th>'
       +'<th style="'+thStyle+';text-align:left">ETD</th>'
+      +'<th style="'+thStyle+';text-align:left">MBL No</th>'
+      +'<th style="'+thStyle+';text-align:left">Tên hàng</th>'
       +'<th style="'+thStyle+';text-align:left">POD</th>'
       +'<th style="'+thStyle+';text-align:center">Loại</th>'
       +'<th style="'+thStyle+';text-align:right">Trước VAT</th>'
@@ -22946,7 +23017,7 @@ function exportSOA(){
   });
 
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
-    +'<title>SOA - '+filterShipper+'</title>'
+    +'<title>SOA - '+filterShipper+(from||to?(' - '+(from||'...')+'_to_'+(to||'...')):'')+'</title>'
     +'<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a18;padding:24px}table{border-collapse:collapse;width:100%}@media print{body{padding:8px}@page{margin:10mm}}</style>'
     +'</head><body>'
     // PAGE 1 HEADER
