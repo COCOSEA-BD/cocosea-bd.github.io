@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.37';
+window.APP_BUILD='v2.39';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3699,7 +3699,7 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
       <div style="font-size:15px;font-weight:600">${r.bookingNo||'—'} ${statusBadge} ${r.jobNo?`<span style="font-size:10px;padding:2px 8px;border-radius:20px;background:var(--bg-secondary);color:var(--blue);font-weight:700;border:1px solid var(--border-light)">${r.jobNo}</span>`:''}</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${r.shipper||r.supplier||''} ${r.pol&&r.pod?'| '+r.pol+' → '+r.pod:''}</div>
     </div>
-    <button class="rac" onclick="closeTab(_activeTabKey)" style="font-size:18px;flex-shrink:0;padding:6px;border-radius:6px;border:1px solid var(--border-light)" title="Đóng bảng (hoặc nhấn vùng tối)"><i class="ti ti-x"></i></button>
+    <button class="rac" onclick="document.body.classList.contains('xuat-lotmode')?xuatCloseTab('${r._id}',event):closeTab(_activeTabKey)" style="font-size:18px;flex-shrink:0;padding:6px;border-radius:6px;border:1px solid var(--border-light)" title="Đóng"><i class="ti ti-x"></i></button>
   </div>
   <div class="dtabs">${tabsHtml}</div>
   <div class="detail-body">${bodyHtml}</div>`;
@@ -4731,9 +4731,9 @@ function openLot(id, tt){
   window._lotEditSnapshot=id?{id:id,tt:tt,updatedAt:r.updatedAt||0}:null;
   g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'Shipment List':'nhập khẩu');
   g('lotSub').textContent=id?(r.bookingNo||''):'';
-  const pC=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname);
-  const pS=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname);
-  const pF=Object.values(cache.partners).filter(p=>p.type==='fwd').map(p=>p.shortname);
+  const pC=Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname);
+  const pS=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname);
+  const pF=Object.values(cache.partners).filter(p=>_partnerHasType(p,'fwd')).map(p=>p.shortname);
   const pAll=Object.values(cache.partners).map(p=>p.shortname);
   const initCargo=r.cargoType||'Hàng khô';
   const initCont=r.typeCont||'';
@@ -5889,7 +5889,9 @@ function _svcNccEmail(svcKey){
   const sv=(r.svcs||{})[svcKey]||{};
   const nccName=sv.svcSupplier||'';
   const ncc=cache.partners[nccName]||{};
-  return {r:r, ncc:ncc, nccName:nccName, email:ncc.email||'', contact:ncc.contact||''};
+  // Tên hiển thị trên mail: ưu tiên "Tên xuất hiện trên mail" khai báo trong CRM, dự phòng shortname
+  const displayName=ncc.mailToName||nccName;
+  return {r:r, ncc:ncc, nccName:nccName, displayName:displayName, email:ncc.email||'', contact:ncc.contact||''};
 }
 
 function _emailContList(r){
@@ -6004,7 +6006,7 @@ function openBookingEmail(id,tt){
       +'<div style="color:#cbd5e1;font-size:11.5px;margin-top:2px">'+(r.pol||'')+' → '+podFull+'</div>'
     +'</div>'
     +'<div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:16px 18px">'
-    +'<p style="font-size:12.5px;margin:0 0 12px;line-height:1.5">To: <strong>'+(shipperKey||'Valued Customer')+'</strong><br>'
+    +'<p style="font-size:12.5px;margin:0 0 12px;line-height:1.5">To: <strong>'+(sp.enShort||shipperKey||'Valued Customer')+'</strong><br>'
     +'<span style="color:#475569">Dear Valued Customer, please be informed that your booking below is received.</span></p>'
     +'<table style="border-collapse:collapse;width:100%;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">'+tblRows+'</table>'
     +'<p style="font-size:12px;margin:14px 0 0;color:#475569">We look forward to your cooperation. Please do not hesitate to contact us for any further information.</p>'
@@ -6686,7 +6688,7 @@ function sendStuffingEmail(){
   }).join('<br>');
   const bodyHtml=
     '<div style="font-weight:700;font-size:14px;margin-bottom:8px">ĐĂNG KÝ ĐÓNG BÃI]</div>'+
-    '<div style="margin-bottom:4px"><strong>To: ['+(info.nccName).toUpperCase()+']</strong></div>'+
+    '<div style="margin-bottom:4px"><strong>To: ['+(info.displayName).toUpperCase()+']</strong></div>'+
     '<div>Kính gửi: Quý cảng</div>'+
     '<div style="margin-bottom:10px">Cty COCOSEA đăng ký đóng bãi với chi tiết như sau:</div>'+
     '<table style="border-collapse:collapse;width:100%;max-width:680px">'+
@@ -6843,7 +6845,7 @@ function sendTruckingEmail(){
   const r=info.r;
   if(!info.nccName){toast('Chưa chọn NCC cho dịch vụ Trucking','error');return;}
   if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
-  const nccFullName=info.ncc.fullname||info.nccName;
+  const nccFullName=info.displayName!==info.nccName?info.displayName:(info.ncc.fullname||info.nccName);
   const co=_coInfo();
   const bkgNosDefault=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||''));
   // Ưu tiên dữ liệu đang nhập trên popup Trucking (nếu mở), nếu không lấy dữ liệu đã lưu
@@ -10433,7 +10435,10 @@ function openPartnerModal(name){
   // ── Form mặc định cho các loại đối tác khác ──
   g('partnerFields').innerHTML=`
     <div class="fi"><label class="lbl">Short name (ID)</label><input type="text" id="pf_sn" value="${p.shortname||''}" ${name?'readonly':''}/></div>
-    <div class="fi"><label class="lbl">Loại đối tác</label><select id="pf_type"><option value="carrier"${p.type==='carrier'?' selected':''}>Carrier</option><option value="shipper"${p.type==='shipper'?' selected':''}>Shipper</option><option value="fwd"${p.type==='fwd'?' selected':''}>Forwarder</option><option value="supplier"${p.type==='supplier'?' selected':''}>Nhà cung cấp</option></select></div>
+    <div class="fi full"><label class="lbl">Loại đối tác (có thể chọn nhiều vai trò)</label>
+      <div id="pf_typeChecks" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px">${_partnerTypeChecksHtml('pf_type_cb',p.types||(p.type?[p.type]:[]),'_pfTypeChanged()')}</div>
+    </div>
+    <div class="fi full"><label class="lbl">Tên xuất hiện trên mail (mục "To:")</label><input type="text" id="pf_mailToName" value="${p.mailToName||''}" placeholder="VD: Mr. Tuấn - SINARAN MANUFACTURING"/></div>
     <div class="fi full"><label class="lbl">Tên công ty đầy đủ</label><input type="text" id="pf_fn" value="${p.fullname||''}"/></div>
     <div class="fi"><label class="lbl">MST</label><input type="text" id="pf_mst" value="${p.mst||''}"/></div>
     <div class="fi full"><label class="lbl">Địa chỉ</label><input type="text" id="pf_addr" value="${p.addr||''}"/></div>
@@ -10441,12 +10446,12 @@ function openPartnerModal(name){
     <div class="fi"><label class="lbl">Email nhận hóa đơn</label><input type="email" id="pf_invEmail" placeholder="Có thể nhập nhiều, cách nhau bằng dấu ;" value="${p.invEmail||''}"/></div>
     <div class="fi"><label class="lbl">Người liên hệ</label><input type="text" id="pf_contact" value="${p.contact||''}"/></div>
     <div class="fi"><label class="lbl">Điện thoại</label><input type="tel" id="pf_phone" value="${p.phone||''}"/></div>
-    ${g('pf_type')?.value==='shipper'||p.type==='shipper'?`
+    <div id="pf_shipperFields" style="display:${(p.types?p.types.includes('shipper'):p.type==='shipper')?'contents':'none'}">
     <div class="fi full" style="grid-column:1/-1;border-top:1px solid var(--border-light);padding-top:.75rem;margin-top:.25rem">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px;margin-bottom:.5rem">Thông tin Shipper (tiếng Anh)</div>
     </div>
     <div class="fi full"><label class="lbl">Tên tiếng Anh (Company)</label><input type="text" id="pf_enName" value="${p.enName||''}" placeholder="Full English company name"/></div>
-    <div class="fi full"><label class="lbl">Tên tiếng Anh rút gọn (ký tên cuối văn bản)</label><input type="text" id="pf_enShort" value="${p.enShort||''}" placeholder="VD: LINDA ASIA CO., LTD"/></div>
+    <div class="fi full"><label class="lbl">Tên tiếng Anh rút gọn (ký tên cuối văn bản, cũng dùng làm tên "To:" trên mail)</label><input type="text" id="pf_enShort" value="${p.enShort||''}" placeholder="VD: LINDA ASIA CO., LTD"/></div>
     <div class="fi full"><label class="lbl">Địa chỉ tiếng Anh</label><input type="text" id="pf_enAddr" value="${p.enAddr||''}" placeholder="English address"/></div>
     <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Thông tin ngân hàng (cho Invoice)</div></div>
     <div class="fi full"><label class="lbl">ACCOUNT NAME</label><input type="text" id="pf_acctName" value="${p.acctName||p.enName||''}" placeholder="Beneficiary name"/></div>
@@ -10465,7 +10470,8 @@ function openPartnerModal(name){
           <span style="font-size:10px;color:var(--text-tertiary)">PNG nền trong suốt, ≤ 500KB</span>
         </div>
       </div>
-    </div>`:''}
+    </div>
+    </div>
     <div class="fi full"><label class="lbl">Ghi chú / Remark</label><textarea id="pf_remark" rows="2" style="font-size:12px;resize:vertical">${p.remark||''}</textarea></div>`;
   openOv('partnerOv');
     
@@ -10503,14 +10509,44 @@ function clearStamp(){
 window.onStampUpload=onStampUpload;
 window.clearStamp=clearStamp;
 
+// Kiểm tra đối tác có vai trò X không — tương thích cả dữ liệu cũ (field .type đơn) lẫn mới (mảng .types đa vai trò)
+function _partnerHasType(p, type){
+  if(!p)return false;
+  if(Array.isArray(p.types) && p.types.length) return p.types.indexOf(type)>-1;
+  return p.type===type;
+}
+window._partnerHasType=_partnerHasType;
+// Đọc danh sách vai trò đã tick từ 1 nhóm checkbox theo tên class
+function _readCheckedTypes(cls){
+  return Array.prototype.map.call(document.querySelectorAll('.'+cls+':checked'), function(el){return el.value;});
+}
+// HTML nhóm checkbox chọn nhiều vai trò đối tác — dùng chung cho cả 2 form
+function _partnerTypeChecksHtml(cls, curTypes, onchangeFn){
+  const opts=[['carrier','Carrier'],['shipper','Shipper'],['fwd','Forwarder'],['supplier','Nhà cung cấp']];
+  return opts.map(function(o){
+    const checked=curTypes.indexOf(o[0])>-1?' checked':'';
+    return '<label style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border:1px solid var(--border-light);border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-secondary)">'
+      +'<input type="checkbox" class="'+cls+'" value="'+o[0]+'"'+checked+' onchange="'+onchangeFn+'" style="width:14px;height:14px;cursor:pointer"/> '+o[1]
+    +'</label>';
+  }).join('');
+}
+
+// Hiện/ẩn phần thông tin Shipper (tiếng Anh) ngay khi tick/bỏ tick checkbox "Shipper"
+function _pfTypeChanged(){
+  const checked=_readCheckedTypes('pf_type_cb');
+  const el=g('pf_shipperFields');
+  if(el) el.style.display=checked.indexOf('shipper')>-1?'contents':'none';
+}
+window._pfTypeChanged=_pfTypeChanged;
+
 async function savePartner(){
   const sn=g('pf_sn').value.trim(); if(!sn){toast('Nhập tên viết tắt','error');return;}
   const remark=g('pf_remark')?.value||'';
-  const type=g('pf_type')?.value||crmType;
 
-  // Sà Lan: chỉ lưu các field riêng
-  if(type==='salan'){
-    const rec={type:'salan',fullname:g('pf_fn')?.value||'',phone:g('pf_phone')?.value||'',sucChua:g('pf_sucChua')?.value||'',remark,updatedAt:Date.now()};
+  // Sà Lan dùng form riêng (field pf_type ẩn, không có checkbox đa chọn) — xử lý TRƯỚC, tách biệt hoàn toàn
+  const hiddenType=g('pf_type')?.value||'';
+  if(hiddenType==='salan'){
+    const rec={type:'salan',types:['salan'],fullname:g('pf_fn')?.value||'',phone:g('pf_phone')?.value||'',sucChua:g('pf_sucChua')?.value||'',remark,updatedAt:Date.now()};
     setLoading(true,'Đang lưu...');
     try{ await fsSet('partners',sn,rec); toast('Đã lưu sà lan'); closeOv('partnerOv'); }
     catch(e){ toast('Lỗi: '+e.message,'error'); }
@@ -10518,10 +10554,15 @@ async function savePartner(){
     return;
   }
 
+  const types=_readCheckedTypes('pf_type_cb');
+  if(!types.length){toast('Chọn ít nhất 1 loại đối tác','error');return;}
+  const type=types[0]; // Tương thích ngược: các chỗ cũ trong app đọc field .type đơn sẽ lấy vai trò đầu tiên
+
   const enName=g('pf_enName')?.value||'';const enShort=g('pf_enShort')?.value||'';const enAddr=g('pf_enAddr')?.value||'';
   const bankAcc=g('pf_bankAcc')?.value||'';const bankName=g('pf_bankName')?.value||'';
   const acctName=g('pf_acctName')?.value||'';const swift=g('pf_swift')?.value||'';const bankAddr=g('pf_bankAddr')?.value||'';const stamp=g('pf_stamp')?.value||'';
-  const rec={type,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,invEmail:g('pf_invEmail')?.value||'',contact:g('pf_contact').value,phone:g('pf_phone').value,remark,enName,enShort,enAddr,bankAcc,bankName,acctName,swift,bankAddr,stamp,updatedAt:Date.now()};
+  const mailToName=g('pf_mailToName')?.value||'';
+  const rec={type,types,fullname:g('pf_fn').value,mst:g('pf_mst').value,addr:g('pf_addr').value,email:g('pf_email').value,invEmail:g('pf_invEmail')?.value||'',contact:g('pf_contact').value,phone:g('pf_phone').value,remark,mailToName,enName,enShort,enAddr,bankAcc,bankName,acctName,swift,bankAddr,stamp,updatedAt:Date.now()};
   setLoading(true,'Đang lưu...');
   try { await fsSet('partners',sn,rec); toast('Đã lưu đối tác'); closeOv('partnerOv'); }
   catch(e){ toast('Lỗi: '+e.message,'error'); }
@@ -10586,7 +10627,7 @@ function _isEditingCrmDetail(){
 function renderCrmDetail(){
   const p=cache.partners[crmDetailKey]||{};
   const isSaLan=p.type==='salan';
-  const isShipper=p.type==='shipper';
+  const isShipper=_partnerHasType(p,'shipper');
   const tabs=isSaLan
     ?[{k:'general',label:'Info',icon:'ti-info-circle'}]
     :[
@@ -10602,6 +10643,7 @@ function renderCrmDetail(){
   if(window._crmDetailFullPage){
     const pg=g('page-doi-tac'); if(!pg)return;
     pg.innerHTML=`
+    <div style="max-width:960px;margin:0 auto">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border-light)">
       <button class="btn" onclick="closeCrmDetailPage()"><i class="ti ti-arrow-left"></i> Danh sách</button>
       <div style="width:44px;height:44px;border-radius:10px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:var(--green);flex-shrink:0">${(p.shortname||'??').slice(0,2).toUpperCase()}</div>
@@ -10614,7 +10656,8 @@ function renderCrmDetail(){
     <div style="display:flex;gap:3px;border-bottom:1px solid var(--border-light);margin-bottom:1.25rem;flex-wrap:wrap">
       ${tabs.map(function(t){const active=crmDetailTab===t.k;return '<button onclick="switchCrmDetailTab(\''+t.k+'\')" style="display:flex;align-items:center;gap:6px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit"><i class="ti '+t.icon+'" style="font-size:15px"></i>'+t.label+'</button>';}).join('')}
     </div>
-    <div id="crmDetailBody"></div>`;
+    <div id="crmDetailBody"></div>
+    </div>`;
     renderCrmDetailBody();
     return;
   }
@@ -10864,15 +10907,14 @@ window.saveCrmDefSvc=saveCrmDefSvc;
 
 // ── TAB: Thông tin chung (dùng prefix cg_ để không trùng ID với form "Thêm đối tác" pf_) ──
 function renderCrmGeneralTab(p){
-  const isShipper=(p.type==='shipper');
+  const curTypes=p.types||(p.type?[p.type]:[]);
+  const isShipper=curTypes.indexOf('shipper')>-1;
   return `<div class="fg">
     <div class="fi"><label class="lbl">Short name (ID)</label><input type="text" id="cg_sn" value="${p.shortname||''}" readonly style="background:var(--bg-secondary);color:var(--text-secondary)"/></div>
-    <div class="fi"><label class="lbl">Loại đối tác</label><select id="cg_type">
-      <option value="shipper"${p.type==='shipper'?' selected':''}>Shipper</option>
-      <option value="carrier"${p.type==='carrier'?' selected':''}>Carrier</option>
-      <option value="fwd"${p.type==='fwd'?' selected':''}>Forwarder</option>
-      <option value="supplier"${p.type==='supplier'?' selected':''}>Nhà cung cấp</option>
-    </select></div>
+    <div class="fi full"><label class="lbl">Loại đối tác (có thể chọn nhiều vai trò)</label>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px">${_partnerTypeChecksHtml('cg_type_cb',curTypes,'_cgTypeChanged()')}</div>
+    </div>
+    <div class="fi full"><label class="lbl">Tên xuất hiện trên mail (mục "To:")</label><input type="text" id="cg_mailToName" value="${(p.mailToName||'').replace(/"/g,'&quot;')}" placeholder="VD: Mr. Tuấn - SINARAN MANUFACTURING"/></div>
     <div class="fi full"><label class="lbl">Tên công ty đầy đủ</label><input type="text" id="cg_fn" value="${(p.fullname||'').replace(/"/g,'&quot;')}"/></div>
     <div class="fi"><label class="lbl">MST</label><input type="text" id="cg_mst" value="${(p.mst||'').replace(/"/g,'&quot;')}"/></div>
     <div class="fi full"><label class="lbl">Địa chỉ</label><input type="text" id="cg_addr" value="${(p.addr||'').replace(/"/g,'&quot;')}"/></div>
@@ -10880,12 +10922,12 @@ function renderCrmGeneralTab(p){
     <div class="fi"><label class="lbl">Email nhận hóa đơn</label><input type="email" id="cg_invEmail" placeholder="Có thể nhập nhiều, cách nhau bằng dấu ;" value="${(p.invEmail||'').replace(/"/g,'&quot;')}"/></div>
     <div class="fi"><label class="lbl">Người liên hệ (chính)</label><input type="text" id="cg_contact" value="${(p.contact||'').replace(/"/g,'&quot;')}"/></div>
     <div class="fi"><label class="lbl">Điện thoại</label><input type="tel" id="cg_phone" value="${(p.phone||'').replace(/"/g,'&quot;')}"/></div>
-    ${isShipper?`
+    <div id="cg_shipperFields" style="display:${isShipper?'contents':'none'}">
     <div class="fi full" style="grid-column:1/-1;border-top:1px solid var(--border-light);padding-top:.75rem;margin-top:.25rem">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px;margin-bottom:.5rem">Thông tin Shipper (tiếng Anh)</div>
     </div>
     <div class="fi full"><label class="lbl">Tên tiếng Anh (Company)</label><input type="text" id="cg_enName" value="${(p.enName||'').replace(/"/g,'&quot;')}" placeholder="Full English company name"/></div>
-    <div class="fi full"><label class="lbl">Tên tiếng Anh rút gọn (ký tên cuối văn bản)</label><input type="text" id="cg_enShort" value="${(p.enShort||'').replace(/"/g,'&quot;')}" placeholder="VD: LINDA ASIA CO., LTD"/></div>
+    <div class="fi full"><label class="lbl">Tên tiếng Anh rút gọn (ký tên cuối văn bản, cũng dùng làm tên "To:" trên mail)</label><input type="text" id="cg_enShort" value="${(p.enShort||'').replace(/"/g,'&quot;')}" placeholder="VD: LINDA ASIA CO., LTD"/></div>
     <div class="fi full"><label class="lbl">Địa chỉ tiếng Anh</label><input type="text" id="cg_enAddr" value="${(p.enAddr||'').replace(/"/g,'&quot;')}" placeholder="English address"/></div>
     <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Thông tin ngân hàng</div></div>
     <div class="fi full"><label class="lbl">Tên thụ hưởng (Beneficiary)</label><input type="text" id="cg_acctName" value="${(p.acctName||p.enName||'').replace(/"/g,'&quot;')}" placeholder="Tên người/công ty thụ hưởng"/></div>
@@ -10908,11 +10950,18 @@ function renderCrmGeneralTab(p){
           <span style="font-size:10px;color:var(--text-tertiary)">PNG nền trong suốt, ≤ 500KB</span>
         </div>
       </div>
-    </div>`:''}
+    </div>
+    </div>
     <div class="fi full"><label class="lbl">Ghi chú / Remark</label><textarea id="cg_remark" rows="2" style="font-size:12px;resize:vertical">${p.remark||''}</textarea></div>
   </div>
   <div class="mftr"><button class="btn pri" onclick="saveCrmGeneral()"><i class="ti ti-check"></i> Lưu thông tin chung</button></div>`;
 }
+function _cgTypeChanged(){
+  const checked=_readCheckedTypes('cg_type_cb');
+  const el=g('cg_shipperFields');
+  if(el) el.style.display=checked.indexOf('shipper')>-1?'contents':'none';
+}
+window._cgTypeChanged=_cgTypeChanged;
 function onCrmStampUpload(input){
   const file=input.files[0]; if(!file)return;
   if(file.size>500*1024){toast('Ảnh quá lớn (>500KB), chọn ảnh nhỏ hơn','error');return;}
@@ -10944,11 +10993,16 @@ window.clearCrmStamp=clearCrmStamp;
 
 async function saveCrmGeneral(){
   const sn=crmDetailKey;
-  const type=g('cg_type').value;
-  const rec={type,fullname:g('cg_fn').value,mst:g('cg_mst').value,addr:g('cg_addr').value,email:g('cg_email').value,
+  const origType=(cache.partners[sn]||{}).type||'';
+  const types=_readCheckedTypes('cg_type_cb');
+  // Sà Lan không nằm trong 4 checkbox (Carrier/Shipper/Forwarder/Nhà cung cấp) — giữ nguyên type gốc, không chặn lưu
+  if(!types.length && origType!=='salan'){toast('Chọn ít nhất 1 loại đối tác','error');return;}
+  const type=types.length?types[0]:origType; // Tương thích ngược: các chỗ cũ đọc field .type đơn sẽ lấy vai trò đầu tiên
+  const isShipper=types.indexOf('shipper')>-1;
+  const rec={type,types:types.length?types:[type],fullname:g('cg_fn').value,mst:g('cg_mst').value,addr:g('cg_addr').value,email:g('cg_email').value,
     invEmail:g('cg_invEmail')?.value||'',contact:g('cg_contact').value,phone:g('cg_phone').value,
-    remark:g('cg_remark')?.value||'',updatedAt:Date.now()};
-  if(type==='shipper'){
+    mailToName:g('cg_mailToName')?.value||'',remark:g('cg_remark')?.value||'',updatedAt:Date.now()};
+  if(isShipper){
     rec.enName=g('cg_enName')?.value||''; rec.enShort=g('cg_enShort')?.value||''; rec.enAddr=g('cg_enAddr')?.value||'';
     rec.bankAcc=g('cg_bankAcc')?.value||''; rec.bankName=g('cg_bankName')?.value||''; rec.acctName=g('cg_acctName')?.value||'';
     rec.swift=g('cg_swift')?.value||''; rec.bankAddr=g('cg_bankAddr')?.value||''; rec.stamp=g('cg_stamp')?.value||'';
@@ -12777,6 +12831,10 @@ function sendEmailDN(id, tt){
   const cp=cache.partners[cneeKey]||{};
   const partyPartner=cache.partners[currentParty]||{};
   const toEmail=partyPartner.email||cp.email||'';
+  // Tên hiển thị trên mail: Shipper dùng tên tiếng Anh viết tắt, các loại khác dùng "Tên xuất hiện trên mail" khai báo trong CRM
+  const partyDisplayName=_partnerHasType(partyPartner,'shipper')
+    ? (partyPartner.enShort||currentParty||shipperKey)
+    : (partyPartner.mailToName||currentParty||shipperKey);
   // Luôn CC 2 email nội bộ COCOSEA cho mọi Debit Note
   const ccFixed='cocosea.bd@gmail.com, cocosea.acc@gmail.com';
   const ccEmail=sp.email?(sp.email+', '+ccFixed):ccFixed;
@@ -12794,7 +12852,7 @@ function sendEmailDN(id, tt){
   const cellR='padding:7px 10px;border:1px solid #000;font-size:12.5px;vertical-align:top';
   const bodyHtml=
     '<div style="font-size:19px;font-weight:800;margin-bottom:12px">[Debit Notification]</div>'+
-    '<div style="margin-bottom:4px"><strong>To: ['+(currentParty||shipperKey).toUpperCase()+']</strong></div>'+
+    '<div style="margin-bottom:4px"><strong>To: ['+(partyDisplayName).toUpperCase()+']</strong></div>'+
     '<div>Dear Valued Customer,</div>'+
     '<div style="margin-bottom:10px">Please help to find attached file for debit note of below shipment:</div>'+
     '<table style="border-collapse:collapse;width:100%;max-width:680px">'+
@@ -12829,7 +12887,7 @@ function sendEmailDN(id, tt){
 
   function finish(allAttachments){
     closeOv('invOv'); // đóng popup Invoice/DN trước khi mở popup soạn email
-    _openEmailModal({title:'Send Debit note → '+(currentParty||shipperKey),to:toEmail,cc:ccEmail,subject:subject,bodyHtml:bodyHtml,attachments:allAttachments});
+    _openEmailModal({title:'Send Debit note → '+partyDisplayName,to:toEmail,cc:ccEmail,subject:subject,bodyHtml:bodyHtml,attachments:allAttachments});
   }
 
   // Tự động tạo file PDF Debit Note — vẽ trực tiếp từ DỮ LIỆU bằng jsPDF + autoTable
@@ -13577,7 +13635,7 @@ function openCalTaskModal(id, presetDate, presetTime){
   const readOnly = !isNew && !_calIsAdmin();
   const dis = readOnly?'disabled':'';
   window._calEditingId=id;
-  const custOpts='<option value=""></option>'+Object.keys(cache.partners||{}).filter(function(k){return cache.partners[k].type==='shipper';}).sort().map(function(k){return '<option value="'+_calEsc(k)+'">'+_calEsc(k)+'</option>';}).join('');
+  const custOpts='<option value=""></option>'+Object.keys(cache.partners||{}).filter(function(k){return _partnerHasType(cache.partners[k],'shipper');}).sort().map(function(k){return '<option value="'+_calEsc(k)+'">'+_calEsc(k)+'</option>';}).join('');
   let ov=g('calTaskOv');
   if(!ov){ov=document.createElement('div');ov.id='calTaskOv';ov.className='ov';document.body.appendChild(ov);}
   ov.className='ov';
@@ -14025,7 +14083,7 @@ function _matchShipperToPartner(companyName, mst){
   if(mstTrim){
     for(const key in partners){
       const p=partners[key];
-      if(p.type==='shipper' && (p.mst||'').toString().trim()===mstTrim){
+      if(_partnerHasType(p,'shipper') && (p.mst||'').toString().trim()===mstTrim){
         return {key:key, method:'mst'};
       }
     }
@@ -16720,7 +16778,7 @@ function openOceanEdit(id){
       <div class="fi"><label class="lbl">Carrier</label>
         <select id="oCarrier">
           <option value="">— Chọn Carrier —</option>
-          ${Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>`<option${p.shortname===(r.carrier||'')?' selected':''}>${p.shortname}</option>`).join('')}
+          ${Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>`<option${p.shortname===(r.carrier||'')?' selected':''}>${p.shortname}</option>`).join('')}
         </select>
       </div>
       <div class="fi"><label class="lbl">Valid From</label><input type="date" id="oValidFrom" value="${r.validFrom||today}"/></div>
@@ -16888,7 +16946,7 @@ function renderQuoteList(){
 
 function newQuotation(){
   // Ask which shipper, then open the form
-  const shippers=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname).sort();
+  const shippers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname).sort();
   if(!shippers.length){toast('Chưa có shipper nào trong Đối tác','error');return;}
   const opts=shippers.map(function(s){return '<option>'+s+'</option>';}).join('');
   g('combineOv').innerHTML='<div class="modal" style="max-width:420px"><div class="mhdr"><div class="mtitle">Chọn khách hàng</div><button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
@@ -16935,8 +16993,8 @@ function renderQuoteForm(){
   if(!window._qLocal)window._qLocal={};
   if(!window._qService)window._qService={};
   if(!window._qPods)window._qPods=[];
-  const shippers=Object.values(cache.partners).filter(p=>p.type==='shipper').map(p=>p.shortname).sort();
-  const carriers=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname).sort();
+  const shippers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname).sort();
+  const carriers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname).sort();
   const today=new Date().toISOString().slice(0,10);
   const valid30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
 
@@ -17142,7 +17200,7 @@ function quoteRenderOcean(){
     return;
   }
 
-  const carriers=Object.values(cache.partners).filter(p=>p.type==='carrier').map(p=>p.shortname).sort();
+  const carriers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname).sort();
   const valid30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
 
   box.innerHTML=window._qPods.map(function(grp,gi){
@@ -19815,7 +19873,7 @@ window._vesselSearch=window._vesselSearch||'';
 function _vesFmtDate(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return s;return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).replace(/ /g,'-');}
 
 function _carrierList(){
-  return Object.values(cache.partners).filter(function(p){return p.type==='carrier';}).map(function(p){return p.shortname;}).sort();
+  return Object.values(cache.partners).filter(function(p){return _partnerHasType(p,'carrier');}).map(function(p){return p.shortname;}).sort();
 }
 
 // Lưu 1 field của voyage và đồng bộ sang các lô hàng tương ứng
@@ -22730,10 +22788,10 @@ function exportSOA(){
     });
     if(!itemRows)itemRows='<tr><td colspan="7" style="'+tdStyle+';text-align:center;color:#999">Không có dịch vụ</td></tr>';
     var grand=d.totalYes+d.totalNo;
-    dnPages+='<div style="page-break-before:always;padding-top:4px">'
+    dnPages+='<div style="'+(idx===0?'page-break-before:always;':'margin-top:16px;')+'page-break-inside:avoid;padding-top:4px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #0F6E56;padding-bottom:8px;margin-bottom:10px">'
         +'<div><div style="font-size:15px;font-weight:800;color:#0F6E56">DEBIT NOTE</div>'
-          +'<div style="font-size:10px;color:#666">DN No: <strong>'+d.dnNo+'</strong> &nbsp;|&nbsp; Tỷ giá: <strong>1 USD = '+Math.round(d.roe).toLocaleString()+' VND</strong></div></div>'
+          +'<div style="font-size:10px;color:#666">DN No: <strong>'+d.dnNo+'</strong></div></div>'
         +'<div style="text-align:right;font-size:10px;color:#666">Lô '+(idx+1)+'/'+lotData.length+'</div>'
       +'</div>'
       +'<table style="border-collapse:collapse;width:100%;margin-bottom:10px"><tr>'
@@ -22780,7 +22838,7 @@ function exportSOA(){
       +'<div style="border:'+bd+';border-radius:6px;padding:10px 14px">'
         +'<div style="font-size:9.5px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Period</div>'
         +'<div style="font-weight:600;font-size:13px">'+dateRange+'</div>'
-        +'<div style="font-size:11px;color:#666;margin-top:4px">'+lots.length+' lô hàng · ROE: '+roe.toLocaleString()+'</div>'
+        +'<div style="font-size:11px;color:#666;margin-top:4px">'+lots.length+' lô hàng</div>'
       +'</div>'
     +'</div>'
     // Bảng tổng hợp công nợ (gộp chung — không chia bảng A/B nữa)
