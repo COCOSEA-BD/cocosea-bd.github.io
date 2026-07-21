@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.51';
+window.APP_BUILD='v2.52';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -12885,39 +12885,51 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
     doc.text('• Invoice will be issued after your confirmation.',ML+13,y+11.6);
     y+=17;
 
-    // BANK ACCOUNT
-    sectionHdr('Bank Account');
+    // BANK ACCOUNT — 2 card cạnh nhau theo mẫu (Chủ TK / Số TK / Ngân hàng / Chi nhánh), luôn nguyên khối 1 trang
     const banksData=window._bankAccounts||{company:[],personal:[]};
     const coAccs=(Array.isArray(banksData)?banksData:(banksData.company||[])).filter(b=>b.showOnDN);
     const persAccs=(Array.isArray(banksData)?[]:(banksData.personal||[])).filter(b=>b.showOnDN);
-    const bankBody=[];
-    if(coAccs.length){
-      bankBody.push([{content:'TÀI KHOẢN CÔNG TY',colSpan:3,styles:{fillColor:[255,255,255],textColor:PRIMARY,fontStyle:'bold',fontSize:7.5}}]);
-      coAccs.forEach(function(b){bankBody.push([b.beneficiary||'',b.account||'',b.bank||'']);});
+    // Tách "Ngân hàng ... - CN ..." thành Ngân hàng + Chi nhánh (display-only)
+    function _splitBank(s){var m=String(s||'').match(/^(.*?)\s*[-–]\s*(CN\s+.+)$/);return m?{bank:m[1],br:m[2]}:{bank:s||'—',br:'—'};}
+    var colGap=5, colW=(CW-colGap)/2;
+    var accH=4*5.4+2.5; // 4 dòng nhãn-giá trị / account
+    var nCo=Math.max(coAccs.length,1), nPs=Math.max(persAccs.length,1);
+    var bkCardH=7+Math.max(nCo,nPs)*accH+2;
+    // Guard: toàn bộ section (header 8.5 + card + 6 + brand bar 10) phải nằm gọn trong trang
+    if(y+8.5+bkCardH+16>287){ doc.addPage(); y=20; }
+    sectionHdr('Bank Account');
+    function _bankCard(x,title,hdrColor,accs){
+      doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.15);
+      doc.setFillColor(255,255,255); doc.roundedRect(x,y,colW,bkCardH,1.5,1.5,'FD');
+      doc.setFillColor(hdrColor[0],hdrColor[1],hdrColor[2]);
+      doc.roundedRect(x,y,colW,7,1.5,1.5,'F'); doc.rect(x,y+3.5,colW,3.5,'F');
+      doc.setFont('Roboto','bold'); doc.setFontSize(7.5); doc.setTextColor(255,255,255);
+      doc.text(title,x+3,y+4.8);
+      var yy=y+7+3.6;
+      var list=accs.length?accs:[null];
+      list.forEach(function(b,bi){
+        var sb=_splitBank(b&&b.bank);
+        var rows=[['Chủ tài khoản',b?(b.beneficiary||'—'):'Chưa cấu hình'],
+                  ['Số tài khoản',b?(b.account||'—'):'—'],
+                  ['Ngân hàng',b?sb.bank:'—'],
+                  ['Chi nhánh',b?sb.br:'—']];
+        rows.forEach(function(rw){
+          doc.setFont('Roboto','normal'); doc.setFontSize(7); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
+          doc.text(rw[0],x+3,yy);
+          doc.setFont('Roboto','bold'); doc.setFontSize(7.3); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+          var v=doc.splitTextToSize(String(rw[1]),colW-27);
+          doc.text(v[0]||'—',x+25,yy);
+          yy+=5.4;
+        });
+        if(bi<list.length-1){ doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.line(x+3,yy-2.7,x+colW-3,yy-2.7); yy+=2.5; }
+      });
     }
-    if(persAccs.length){
-      bankBody.push([{content:'TÀI KHOẢN CÁ NHÂN',colSpan:3,styles:{fillColor:[255,255,255],textColor:PRIMARY,fontStyle:'bold',fontSize:7.5}}]);
-      persAccs.forEach(function(b){bankBody.push([b.beneficiary||'',b.account||'',b.bank||'']);});
-    }
-    if(!bankBody.length) bankBody.push(['Chưa cấu hình tài khoản ngân hàng','','']);
-    doc.autoTable({startY:y,margin:{left:ML,right:MR},
-      head:[['Beneficiary','Account Number','Bank']],
-      body:bankBody,theme:'grid',
-      headStyles:{font:'Roboto',fillColor:LIGHTBG,textColor:NAVY,fontStyle:'bold',fontSize:7.5},
-      styles:{font:'Roboto',fontSize:8,cellPadding:2,lineColor:BORDERC,lineWidth:0.1},
-      columnStyles:{1:{fontStyle:'bold'}}});
-    y=doc.lastAutoTable.finalY+6;
+    _bankCard(ML,'TÀI KHOẢN CÔNG TY',PRIMARY,coAccs);
+    _bankCard(ML+colW+colGap,'TÀI KHOẢN CÁ NHÂN',NAVY,persAccs);
+    y+=bkCardH+6;
 
-    // FOOTER theo mẫu: hàng contact rồi brand bar
-    if(y>266){ doc.addPage(); y=20; }
-    doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2);
-    doc.line(ML,y,PW-MR,y); y+=4.5;
-    doc.setFont('Roboto','normal'); doc.setFontSize(7.5); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
-    doc.text('www.cocosea.vn',ML+2,y);
-    doc.text('info@cocosea.vn',PW/2,y,{align:'center'});
-    doc.text('(+84) 28 9999 1688',PW-MR-2,y,{align:'right'});
-    y+=4.5;
-
+    // FOOTER: brand bar (bỏ hàng contact theo yêu cầu)
+    if(y>276){ doc.addPage(); y=20; }
     rr(ML,y,CW,10,NAVY,'F');
     doc.setFont('Roboto','bold'); doc.setFontSize(10); doc.setTextColor(255,255,255);
     doc.text('COCOSEA CO., LTD',ML+5,y+6.5);
@@ -22823,6 +22835,9 @@ function _partyMatchesShipper(svParty, sh, sp){
 window._partyMatchesShipper=_partyMatchesShipper;
 
 function exportSOA(){
+  // Chuẩn hóa Unicode NFC khi HIỂN THỊ — fix lỗi dấu tiếng Việt tách rời/lệch với chữ hoa
+  // khi dữ liệu được nhập/paste ở dạng decomposed (NFD). Display-only, không đổi data gốc.
+  var _nfc=function(s){try{return String(s==null?'':s).normalize('NFC');}catch(e){return s;}};
   var filterShipper=g('cnReportShipper')?.value||'';
   var from=g('cnFrom')?.value||'';
   var to=g('cnTo')?.value||'';
@@ -23122,7 +23137,7 @@ function exportSOA(){
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
     +'<title>SOA - '+filterShipper+(from||to?(' - '+(from||'...')+'_to_'+(to||'...')):'')+'</title>'
     +'<style>*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-    +'body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a2e2a;padding:26px;background:#fff}'
+    +'body{font-family:\'Segoe UI\',Roboto,Arial,Helvetica,sans-serif;font-size:12px;color:#1a2e2a;padding:26px;background:#fff;line-height:1.4}'
     +'table{border-collapse:collapse;width:100%}'
     +'@media print{body{padding:0}@page{margin:10mm;size:A4 portrait}}</style>'
     +'</head><body>'
@@ -23148,9 +23163,9 @@ function exportSOA(){
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">'
       +'<div style="border:'+bd+';border-radius:10px;padding:12px 16px;background:#fff;box-shadow:0 1px 3px rgba(16,58,111,.06)">'
         +'<div style="font-size:9px;color:#98A2B3;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Customer</div>'
-        +'<div style="font-weight:800;font-size:14px;color:#103A6F">'+(sp.fullname||filterShipper)+'</div>'
+        +'<div style="font-weight:700;font-size:14px;color:#103A6F;line-height:1.6">'+_nfc(sp.fullname||filterShipper)+'</div>'
         +(sp.mst?'<div style="font-size:10.5px;color:#667085;margin-top:3px">MST: '+sp.mst+'</div>':'')
-        +(sp.addr?'<div style="font-size:10.5px;color:#667085;margin-top:1px">'+sp.addr+'</div>':'')
+        +(sp.addr?'<div style="font-size:10.5px;color:#667085;margin-top:1px">'+_nfc(sp.addr)+'</div>':'')
       +'</div>'
       +'<div style="border:'+bd+';border-radius:10px;padding:12px 16px;background:#fff;box-shadow:0 1px 3px rgba(16,58,111,.06)">'
         +'<div style="font-size:9px;color:#98A2B3;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Reporting Period</div>'
@@ -23756,7 +23771,7 @@ async function exportExcelDebt(){
           margins:{left:0.3,right:0.3,top:0.4,bottom:0.4,header:0.2,footer:0.2}},
         views:[{showGridLines:false}]
       });
-      ws.columns=[{width:5},{width:16},{width:15},{width:12},{width:14},{width:13},{width:14},{width:11},{width:20},{width:17},{width:10},{width:15}];
+      ws.columns=[{width:6},{width:22},{width:19},{width:13},{width:16},{width:14},{width:17},{width:13},{width:14},{width:18},{width:12},{width:18}];
       const LC=12;
       function thinB(color){return {top:{style:'thin',color:{argb:color||C.border}},left:{style:'thin',color:{argb:color||C.border}},bottom:{style:'thin',color:{argb:color||C.border}},right:{style:'thin',color:{argb:color||C.border}}};}
       function mergeRow(r1,r2,label,opt){
@@ -23771,7 +23786,7 @@ async function exportExcelDebt(){
       }
 
       // ===== HEADER theo form mẫu: logo + tên cty (trái) | title + badge kỳ (giữa) | KH/MST/Địa chỉ (phải) =====
-      if(_logoImgId!==null){ try{ws.addImage(_logoImgId,{tl:{col:0.12,row:0.12},ext:{width:44,height:44}});}catch(e){} }
+      if(_logoImgId!==null){ try{ws.addImage(_logoImgId,{tl:{col:0.15,row:0.15},ext:{width:38,height:38}});}catch(e){} }
       ws.getRow(1).height=24; ws.getRow(2).height=17; ws.getRow(3).height=16;
       ws.mergeCells(1,2,1,4);
       {const c=ws.getCell(1,2);c.value='COCOSEA CO., LTD';c.font={bold:true,size:15,color:{argb:C.secondary}};c.alignment={horizontal:'left',vertical:'middle'};}
