@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.54';
+window.APP_BUILD='v2.55';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2459,6 +2459,7 @@ function renderLot(tt){
       <option value="vst_no">Chưa VST</option>
     </select>
     <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);flex-shrink:0">
+      <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,7)" style="font-size:11px;padding:3px 8px">-1wk</button>
       <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,14)" style="font-size:11px;padding:3px 8px">-2wk</button>
       <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,30)" style="font-size:11px;padding:3px 8px">-1mo</button>
       <button class="btn sm" data-tt="${tt}" onclick="resetAllFilters(this.dataset.tt)" style="font-size:11px;padding:3px 8px;color:var(--text-secondary)" title="Xóa tất cả bộ lọc"><i class="ti ti-refresh" style="font-size:11px"></i> Reset</button>
@@ -5120,6 +5121,12 @@ async function saveLot(){
   else if(rec.transships===undefined)rec.transships=[];
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
   if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; if(!rec.jobNo) rec.jobNo=getNextJobNo(rec.loaiHang||'XK - Xuất khẩu'); }
+  else if(existing&&rec.loaiHang&&rec.loaiHang!==existing.loaiHang){
+    // Đổi Type Shipment (XK/IM/LS) trên lô đã có → cấp lại jobNo mới theo type mới.
+    // Các phần UI dựa vào tiền tố jobNo (vd Trạng thái Bill chỉ hiện khi jobNo bắt đầu bằng "XK",
+    // xem dòng ~2682) sẽ tự động đổi theo đúng type mới nhờ đây, không cần sửa gì thêm ở nơi khác.
+    rec.jobNo=getNextJobNo(rec.loaiHang);
+  }
   const docId=lotIdx||genId();
   const isNew=!lotIdx;
   // Xây dựng diff chi tiết CÁC TRƯỜNG ĐÃ THAY ĐỔI (so với existing) để ghi vào Lịch sử —
@@ -5138,6 +5145,9 @@ async function saveLot(){
     // Booking (multi-booking) thay đổi
     if(JSON.stringify(existing.bookings||[])!==JSON.stringify(rec.bookings||[])){
       diffLines.push('Booking: đã cập nhật danh sách booking ('+(rec.bookings||[]).length+' booking)');
+    }
+    if(existing.jobNo!==rec.jobNo){
+      diffLines.push('Job ID: '+(existing.jobNo||'(trống)')+' → '+(rec.jobNo||'(trống)')+' (cấp lại do đổi Type Shipment)');
     }
   }
   const detailText=isNew?'':(diffLines.length?diffLines.join('\n'):'Lưu lại (không có trường nào thay đổi)');
@@ -5171,7 +5181,7 @@ async function saveLot(){
   try {
     await fsSet(colName(currentTab), docId, rec);
     logLotEvent(docId,currentTab,isNew?'create':'update',isNew?'Tạo lô hàng mới':'Cập nhật thông tin lô hàng',detailText);
-    toast('Đã lưu lô hàng');
+    toast(!isNew&&existing&&existing.jobNo!==rec.jobNo?'Đã lưu — Job ID mới: '+rec.jobNo:'Đã lưu lô hàng');
     closeOv('lotOv');
   } catch(e){ toast('Lỗi: '+e.message,'error'); }
   setLoading(false);
@@ -5913,10 +5923,10 @@ function svcRowHTML(s, sv){
 
 function onSvcFinishToggle(){ /* live toggle - state saved on Lưu dịch vụ */ }
 
-function _svcNccEmail(svcKey){
+function _svcNccEmail(svcKey, overrideName){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const sv=(r.svcs||{})[svcKey]||{};
-  const nccName=sv.svcSupplier||'';
+  const nccName=overrideName||sv.svcSupplier||'';
   const ncc=cache.partners[nccName]||{};
   // Tên hiển thị trên mail: ưu tiên "Tên xuất hiện trên mail" khai báo trong CRM, dự phòng shortname
   const displayName=ncc.mailToName||nccName;
@@ -6477,6 +6487,7 @@ function _truckingEmailRow(idx){
     whName:row.wh,
     whLocation:row.whLocation||row.wh,
     whContact:row.whContact,
+    ncc:row.ncc||'', // NCC đã chọn riêng cho dòng này (ô "Chọn NCC" trong bảng Trucking) — ưu tiên hơn NCC mặc định ở tab Dịch vụ
     note:'Cont: '+(row.contNo||'—')+(row.truckNo?' | Xe: '+row.truckNo:'')
   };
   openTruckingPopupWithCtx(window._truckingEmailCtx, r);
@@ -6876,7 +6887,11 @@ async function saveTruckInfo(){
 window.saveTruckInfo=saveTruckInfo;
 
 function sendTruckingEmail(){
-  const info=_svcNccEmail('trucking');
+  // Ưu tiên NCC đã chọn riêng cho dòng Trucking đang thao tác (nếu bấm icon mail từ 1 dòng cụ thể
+  // trong bảng Trucking — xem _truckingEmailRow()); nếu không có, dùng NCC mặc định ở tab Dịch vụ.
+  const rowNcc=(window._truckingEmailCtx&&window._truckingEmailCtx.ncc)||'';
+  window._truckingEmailCtx=null; // dùng xong xóa ngay — tránh rò rỉ sang lần mở popup khác không qua dòng nào
+  const info=_svcNccEmail('trucking', rowNcc);
   const r=info.r;
   if(!info.nccName){toast('Chưa chọn NCC cho dịch vụ Trucking','error');return;}
   if(!info.email){toast('NCC "'+info.nccName+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
