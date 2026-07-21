@@ -883,7 +883,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.52';
+window.APP_BUILD='v2.53';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2421,6 +2421,10 @@ function _wsRefreshSidebar(tt){
   if(document.body.classList.contains('xuat-lotmode'))return; // đang xem chi tiết lô hàng — không đụng vào DOM danh sách
   const sideEl=document.querySelector('.ws-side');
   if(sideEl)sideEl.outerHTML=_wsSidebarHTML(tt);
+  // outerHTML tạo lại DOM mới cho kpiVst_/vstWarnBar_ (rỗng/placeholder) — phải tính lại ngay,
+  // nếu không KPI VST sẽ kẹt ở "—" cho tới khi người dùng bấm nút tải lại thủ công.
+  computeShipmentKpis(tt);
+  renderVstWarning(tt);
 }
 window._wsRefreshSidebar=_wsRefreshSidebar;
 
@@ -2446,7 +2450,7 @@ function renderLot(tt){
     </div>
   </div>
   <div class="toolbar">
-    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Tên tàu, Số Cont..." oninput="renderLotTable('${tt}')"/></div>
+    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Tên tàu, Số Cont, Số tờ khai..." oninput="renderLotTable('${tt}')"/></div>
     <select id="fst_${tt}" style="width:150px" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả</option>
       <option value="locked">Đã khóa</option>
@@ -2602,7 +2606,7 @@ function renderLotTable(tt){
       const allBkNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return(b.bookingNo||'').toLowerCase();}):[(r.bookingNo||'').toLowerCase()]);
       if(allBkNos.some(b=>b.includes(q)))return true;
       // Tìm trong các field chính (thay vì Object.values toàn bộ lot)
-      const hay=((r.bookingNo||'')+' '+(r.jobNo||'')+' '+(r.mblNo||'')+' '+(r.shipper||r.supplier||'')+' '+(r.pod||'')+' '+(r.pol||'')+' '+(r.carrier||'')+' '+(r.status||'')+' '+(r.vessel||'')+' '+(r.voy||'')).toLowerCase();
+      const hay=((r.bookingNo||'')+' '+(r.jobNo||'')+' '+(r.mblNo||'')+' '+(r.shipper||r.supplier||'')+' '+(r.pod||'')+' '+(r.pol||'')+' '+(r.carrier||'')+' '+(r.status||'')+' '+(r.vessel||'')+' '+(r.voy||'')+' '+(r.soTkhai||'')).toLowerCase();
       if(hay.includes(q))return true;
       // Tìm theo SỐ CONTAINER (containers[] + bookingConts theo từng booking)
       let contStr='';
@@ -12756,21 +12760,20 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
     doc.text('STATEMENT OF CHARGES  •  Currency: VND',PW-MR,y+5,{align:'right'});
     y+=9; hr(y); y+=8;
 
-    // 3 CARD: DEBIT NO / DEBIT DATE / BOOKING NO
-    const cardGap=4, cardW=(CW-cardGap*2)/3, cardH=13;
-    function infoCard(x,label,val,accent){
-      rr(x,y,cardW,cardH,LIGHTGRAY,'F');
-      doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2); doc.roundedRect(x,y,cardW,cardH,1.5,1.5,'S');
-      doc.setFillColor(accent[0],accent[1],accent[2]); doc.roundedRect(x,y,1.6,cardH,0.8,0.8,'F');
-      doc.setFont('Roboto','bold'); doc.setFontSize(7); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
-      doc.text(label,x+5,y+5.5);
-      doc.setFont('Roboto','bold'); doc.setFontSize(11.5); doc.setTextColor(accent[0],accent[1],accent[2]);
-      doc.text(String(val||'-'),x+5,y+11.5);
-    }
-    infoCard(ML,'DEBIT NO',dnNo,PRIMARY);
-    infoCard(ML+cardW+cardGap,'DEBIT DATE',debitDate,NAVY);
-    infoCard(ML+(cardW+cardGap)*2,'BOOKING NO',r.bookingNo,NAVY);
-    y+=cardH+8;
+    // 1 CARD GỌN: DEBIT NO + DEBIT DATE trên cùng 1 dòng (đã bỏ card Booking No theo yêu cầu)
+    const cardH2=11;
+    rr(ML,y,CW,cardH2,LIGHTGRAY,'F');
+    doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2); doc.roundedRect(ML,y,CW,cardH2,1.5,1.5,'S');
+    doc.setFillColor(PRIMARY[0],PRIMARY[1],PRIMARY[2]); doc.roundedRect(ML,y,1.6,cardH2,0.8,0.8,'F');
+    var midX=ML+CW*0.5;
+    doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2); doc.line(midX,y+2.5,midX,y+cardH2-2.5);
+    doc.setFont('Roboto','bold'); doc.setFontSize(7); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
+    doc.text('DEBIT NO',ML+5,y+4.3); doc.text('DEBIT DATE',midX+6,y+4.3);
+    doc.setFont('Roboto','bold'); doc.setFontSize(11); doc.setTextColor(PRIMARY[0],PRIMARY[1],PRIMARY[2]);
+    doc.text(String(dnNo||'-'),ML+5,y+9);
+    doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+    doc.text(String(debitDate||'-'),midX+6,y+9);
+    y+=cardH2+8;
 
     function sectionHdr(label, rightText){
       rr(ML,y,CW,6.5,NAVY,'F');
@@ -16231,7 +16234,7 @@ window.renderVstWarning=renderVstWarning;
 let _vstWarnInterval=null;
 function _startVstWarnAutoRefresh(tt){
   if(_vstWarnInterval)clearInterval(_vstWarnInterval);
-  _vstWarnInterval=setInterval(function(){renderVstWarning('xuat');renderVstWarning('nhap');},60000);
+  _vstWarnInterval=setInterval(function(){renderVstWarning('xuat');renderVstWarning('nhap');computeShipmentKpis('xuat');computeShipmentKpis('nhap');},60000);
 }
 
 function toggleCurrentLotLock(){toggleLotLock(detailId,detailTt);}
