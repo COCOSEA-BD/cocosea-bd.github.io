@@ -346,19 +346,53 @@ function loadServices(){
     }
     // Ensure every service has a code
     SVCS.forEach(function(s){if(!s.code)s.code=genSvcCode(s.name,SVCS.filter(function(x){return x!==s;}));});
+    var _catalogDirty=false;
+
+    // ── Dọn dẹp dịch vụ trùng CODE (vd lỡ tạo ra 2 dòng cùng mã "BIL") ──
+    // Ưu tiên GIỮ dòng không phải "custom" (built-in) hoặc dòng xuất hiện trước, xóa các dòng
+    // trùng code phía sau. Chạy mỗi lần load để tự sửa nếu dữ liệu từng bị trùng.
+    (function _dedupByCode(){
+      var seen={}, kept=[];
+      SVCS.forEach(function(s){
+        var codeU=(s.code||'').toUpperCase();
+        if(codeU && seen[codeU]!==undefined){ _catalogDirty=true; return; } // bỏ dòng trùng code phía sau
+        if(codeU) seen[codeU]=true;
+        kept.push(s);
+      });
+      if(kept.length!==SVCS.length) SVCS=kept;
+    })();
+
     // Migrate: đảm bảo 2 dịch vụ chứng từ Bill/Phyto luôn có trong danh mục thật (Firestore) —
     // cần cho tính năng "Theo dõi tiến độ chứng từ". fumi/co đã có sẵn từ trước nên không cần thêm.
-    // Chỉ chạy 1 lần: sau khi thêm sẽ lưu lại catalog nên các lần load sau sẽ không vào nhánh này nữa.
+    // QUAN TRỌNG: dò theo CODE trước (không phân biệt hoa/thường) — nếu user đã có sẵn dịch vụ
+    // cùng code (dù key khác, vd tự tạo tay từ trước) thì KHÔNG được thêm mới, tránh trùng code.
     var _docSvcDefaults=[{key:'bill',name:'Bill (Vận đơn)',code:'BIL'},{key:'phyto',name:'Phyto (Kiểm dịch thực vật)',code:'PHY'}];
-    var _addedDocSvc=false;
     _docSvcDefaults.forEach(function(req){
-      if(!SVCS.find(function(s){return s.key===req.key;})){ SVCS.push(Object.assign({default:false,custom:false},req)); _addedDocSvc=true; }
+      var existsByCode=SVCS.find(function(s){return (s.code||'').toUpperCase()===req.code;});
+      var existsByKey=SVCS.find(function(s){return s.key===req.key;});
+      if(!existsByCode && !existsByKey){ SVCS.push(Object.assign({default:false,custom:false},req)); _catalogDirty=true; }
     });
-    if(_addedDocSvc && typeof saveServices==='function') saveServices().catch(function(){});
+    if(_catalogDirty && typeof saveServices==='function') saveServices().catch(function(){});
     if(typeof detailId!=='undefined'&&detailId&&detailTab==='svc'&&typeof openDetail==='function'){/* refresh later */}
   }).catch(function(){});
 }
 window.loadServices=loadServices;
+
+// Tìm key thực tế của 1 dịch vụ trong danh mục theo CODE (không phân biệt hoa/thường).
+// Dùng để tra ra đúng key mà user ĐANG DÙNG cho 1 mã chứng từ, thay vì giả định key cố định —
+// vì user có thể đã tự tạo dịch vụ trùng code từ trước với key khác (vd 'custom_169...').
+function _svcKeyByCode(code){
+  const found=SVCS.find(function(s){return (s.code||'').toUpperCase()===(code||'').toUpperCase();});
+  return found?found.key:null;
+}
+window._svcKeyByCode=_svcKeyByCode;
+
+// Danh sách chứng từ mặc định khi bật "Theo dõi tiến độ chứng từ" lần đầu — tính ĐỘNG theo code
+// (BIL/PHY/FUM/COO) thay vì key cố định, để luôn trỏ đúng dịch vụ thật user đang dùng.
+function _docTrackDefaultKeys(){
+  return ['BIL','PHY','FUM','COO'].map(_svcKeyByCode).filter(Boolean);
+}
+window._docTrackDefaultKeys=_docTrackDefaultKeys;
 
 // Persist the current SVCS catalog to Firestore
 async function saveServices(){
@@ -626,7 +660,7 @@ let SVCS=[
   {key:'bill',name:'Bill (Vận đơn)',code:'BIL',default:false},{key:'phyto',name:'Phyto (Kiểm dịch thực vật)',code:'PHY',default:false},
 ];
 // Danh sách chứng từ mặc định khi bật "Theo dõi tiến độ chứng từ" lần đầu cho 1 lô hàng
-const DOCTRACK_DEFAULT_KEYS=['bill','phyto','fumi','co'];
+// (Danh sách chứng từ mặc định giờ tính động — xem hàm _docTrackDefaultKeys() dò theo code, khai báo cùng loadServices())
 // Auto-generate a 3-letter code from a service name
 function genSvcCode(name, existing){
   let base=(name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z]/g,'').toUpperCase();
@@ -895,7 +929,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.58';
+window.APP_BUILD='v2.59';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2786,6 +2820,27 @@ function renderLotTable(tt){
             +`<div style="font-size:8px;color:var(--text-tertiary);font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Booking Party: ${bp}">Booking: ${bpSn}</div>`
             +chip(val)
           +`</td>`;
+        }
+        // ── Carrier: nếu lô có trucking, thêm dòng tóm tắt "Trucking NxTYPE" bên dưới badge
+        if(c.k==='carrier'){
+          const val=r[c.k]||'';
+          const truckList=r.truckings||[];
+          let truckSummary='';
+          if(truckList.length){
+            const groups={};
+            truckList.forEach(function(t){
+              const tc=(t.typeCont||'').trim()||'—';
+              const v=parseInt(t.vol)||1;
+              groups[tc]=(groups[tc]||0)+v;
+            });
+            truckSummary=Object.keys(groups).map(function(tc){return groups[tc]+'x'+tc;}).join(', ');
+          }
+          const truckLine=truckSummary?`<div style="font-size:9.5px;color:#B45309;font-weight:700;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="Trucking: ${truckSummary}"><i class="ti ti-truck" style="font-size:9px"></i> Trucking ${truckSummary}</div>`:'';
+          if(!val) return`<td style="text-align:center">${truckLine||'—'}</td>`;
+          const cpt=partnersRef[val];
+          const csn=cpt&&(cpt.shortname||cpt.name||'');
+          const hasCPartner=!!cpt;
+          return`<td style="max-width:150px;text-align:center"><div onclick="${hasCPartner?`event.stopPropagation();_gotoPartnerFromList('${val.replace(/'/g,"\\'")}')`:''}" style="display:inline-flex;max-width:100%;padding:3px 10px;border-radius:20px;border:1.2px dashed #1a4b8c;background:#E8F0FA;color:#1a4b8c;font-weight:700;font-size:11px;letter-spacing:.2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transform:rotate(-1deg)${hasCPartner?';cursor:pointer':''}" title="${hasCPartner?'Mở CRM: '+val:val}">${csn||val}</div>${truckLine}</td>`;
         }
         // ── Partner: Carrier/FWD — dạng badge "con dấu hải quan" (viền chấm, nghiêng nhẹ)
         if(c.partner){
@@ -16465,7 +16520,7 @@ async function toggleDocTrackEnabled(id, tt, checked){
     const r=cache[tt].find(x=>x._id===id)||{};
     const payload={docTrackEnabled:checked,updatedAt:Date.now()};
     // Lần đầu bật (chưa từng có danh sách) → khởi tạo mặc định Bill/Phyto/Fumi/C.O
-    if(checked && !(r.docTrackKeys&&r.docTrackKeys.length)) payload.docTrackKeys=DOCTRACK_DEFAULT_KEYS.slice();
+    if(checked && !(r.docTrackKeys&&r.docTrackKeys.length)) payload.docTrackKeys=_docTrackDefaultKeys();
     await fsSet(colName(tt),id,payload);
     const idx=cache[tt].findIndex(x=>x._id===id);
     if(idx>=0)Object.assign(cache[tt][idx],payload);
