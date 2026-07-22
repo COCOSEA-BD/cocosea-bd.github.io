@@ -388,9 +388,10 @@ function _svcKeyByCode(code){
 window._svcKeyByCode=_svcKeyByCode;
 
 // Danh sách chứng từ mặc định khi bật "Theo dõi tiến độ chứng từ" lần đầu — tính ĐỘNG theo code
-// (BIL/PHY/FUM/COO) thay vì key cố định, để luôn trỏ đúng dịch vụ thật user đang dùng.
+// (PHY/FUM/COO) thay vì key cố định, để luôn trỏ đúng dịch vụ thật user đang dùng.
+// Không gồm BIL — theo yêu cầu chỉ theo dõi Phyto/Fumi/C.O mặc định.
 function _docTrackDefaultKeys(){
-  return ['BIL','PHY','FUM','COO'].map(_svcKeyByCode).filter(Boolean);
+  return ['PHY','FUM','COO'].map(_svcKeyByCode).filter(Boolean);
 }
 window._docTrackDefaultKeys=_docTrackDefaultKeys;
 
@@ -929,7 +930,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.60';
+window.APP_BUILD='v2.61';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2508,7 +2509,7 @@ function renderLot(tt){
     </div>
   </div>
   <div class="toolbar">
-    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Tên tàu, Số Cont, Số tờ khai..." oninput="renderLotTable('${tt}')"/></div>
+    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Booking Party, Số tờ khai..." oninput="renderLotTable('${tt}')"/></div>
     <select id="fst_${tt}" style="width:150px" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả</option>
       <option value="locked">Đã khóa</option>
@@ -2665,7 +2666,7 @@ function renderLotTable(tt){
       const allBkNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return(b.bookingNo||'').toLowerCase();}):[(r.bookingNo||'').toLowerCase()]);
       if(allBkNos.some(b=>b.includes(q)))return true;
       // Tìm trong các field chính (thay vì Object.values toàn bộ lot)
-      const hay=((r.bookingNo||'')+' '+(r.jobNo||'')+' '+(r.mblNo||'')+' '+(r.shipper||r.supplier||'')+' '+(r.pod||'')+' '+(r.pol||'')+' '+(r.carrier||'')+' '+(r.status||'')+' '+(r.vessel||'')+' '+(r.voy||'')+' '+(r.soTkhai||'')).toLowerCase();
+      const hay=((r.bookingNo||'')+' '+(r.jobNo||'')+' '+(r.mblNo||'')+' '+(r.shipper||r.supplier||'')+' '+(r.bookingParty||'')+' '+(r.pod||'')+' '+(r.pol||'')+' '+(r.carrier||'')+' '+(r.status||'')+' '+(r.vessel||'')+' '+(r.voy||'')+' '+(r.soTkhai||'')).toLowerCase();
       if(hay.includes(q))return true;
       // Tìm theo SỐ CONTAINER (containers[] + bookingConts theo từng booking)
       let contStr='';
@@ -2773,7 +2774,7 @@ function renderLotTable(tt){
           const vstCell=!r.vstEnabled
             ?`<button class="btn sm" onclick="openVstPopup('${r._id}','${tt}')" style="font-size:11px;opacity:.6">+VST</button>`
             :`<button class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" onclick="openVstPopup('${r._id}','${tt}')" style="cursor:pointer;font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</button>`;
-          // Hàng dưới: trạng thái gửi chứng từ — 0 chứng từ tick = "Chưa gửi Ctừ"; 1 phần = hiện code các chứng từ ĐÃ tick; tất cả = "Đã gửi Cty"
+          // Hàng dưới: trạng thái gửi chứng từ — 0 chứng từ tick = "Chưa gửi Ctừ"; 1 phần = hiện code các chứng từ CÒN THIẾU (chưa tick); tất cả = "Đã gửi Ctu"
           let docCell;
           if(!r.docTrackEnabled||!(r.docTrackKeys&&r.docTrackKeys.length)){
             docCell=`<button class="btn sm" onclick="openDocTrackPopup('${r._id}','${tt}')" style="font-size:10px;opacity:.55;padding:1px 7px">+Ctừ</button>`;
@@ -2782,10 +2783,13 @@ function renderLotTable(tt){
             if(sentKeys.length===0){
               docCell=`<button class="bdg bdg-r" onclick="openDocTrackPopup('${r._id}','${tt}')" style="cursor:pointer;font-size:10px;padding:1px 7px">Chưa gửi Ctừ</button>`;
             } else if(sentKeys.length===r.docTrackKeys.length){
-              docCell=`<button class="bdg bdg-g" onclick="openDocTrackPopup('${r._id}','${tt}')" style="cursor:pointer;font-size:10px;padding:1px 7px">Đã gửi Cty</button>`;
+              docCell=`<button class="bdg bdg-g" onclick="openDocTrackPopup('${r._id}','${tt}')" style="cursor:pointer;font-size:10px;padding:1px 7px">Đã gửi Ctu</button>`;
             } else {
-              docCell=`<span onclick="openDocTrackPopup('${r._id}','${tt}')" style="cursor:pointer;display:inline-flex;gap:3px;flex-wrap:wrap;justify-content:center">`
-                +sentKeys.map(function(k){const s=_docTrackSvcInfo(k);return `<span class="bdg bdg-g" style="font-size:9.5px;padding:1px 6px">${(s.code||'').toUpperCase()}</span>`;}).join('')
+              // Hiện chứng từ CÒN THIẾU (chưa tick) — dễ thấy ngay cần làm gì tiếp, thay vì phải suy ra từ cái đã xong
+              const remainKeys=r.docTrackKeys.filter(function(k){return sentKeys.indexOf(k)<0;});
+              docCell=`<span onclick="openDocTrackPopup('${r._id}','${tt}')" style="cursor:pointer;display:inline-flex;gap:3px;flex-wrap:wrap;justify-content:center;align-items:center">`
+                +`<span style="font-size:8.5px;color:var(--text-tertiary);font-weight:700">Còn</span>`
+                +remainKeys.map(function(k){const s=_docTrackSvcInfo(k);return `<span class="bdg bdg-r" style="font-size:9.5px;padding:1px 6px">${(s.code||'').toUpperCase()}</span>`;}).join('')
               +`</span>`;
             }
           }
@@ -19826,13 +19830,13 @@ function renderDocMaker(){
     </div>
     <input type="hidden" id="dm_date"/>
     <div style="margin-bottom:10px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-      <div style="flex:0 0 130px"><label class="lbl">POD (EN)</label><input type="text" id="dm_pod" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
-      <div style="flex:1;min-width:220px">
+      <div style="flex:0 0 170px"><label class="lbl">POD (EN)</label><input type="text" id="dm_pod" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
+      <div>
         <label class="lbl">Type Bill</label>
-        <div class="cal-seg" id="dm_billTypeGroup" style="width:100%">
-          <button type="button" onclick="dmSetBillType(this,'Original')" data-val="Original" style="flex:1">Original</button>
-          <button type="button" onclick="dmSetBillType(this,'Surrendered')" data-val="Surrendered" class="on" style="flex:1">Surrendered</button>
-          <button type="button" onclick="dmSetBillType(this,'Seaway')" data-val="Seaway" style="flex:1">Seaway</button>
+        <div class="cal-seg" id="dm_billTypeGroup">
+          <button type="button" onclick="dmSetBillType(this,'Original')" data-val="Original" style="padding:6px 10px;font-size:11.5px">Original</button>
+          <button type="button" onclick="dmSetBillType(this,'Surrendered')" data-val="Surrendered" class="on" style="padding:6px 10px;font-size:11.5px">Surrendered</button>
+          <button type="button" onclick="dmSetBillType(this,'Seaway')" data-val="Seaway" style="padding:6px 10px;font-size:11.5px">Seaway</button>
         </div>
         <input type="hidden" id="dm_billType" value="Surrendered"/>
       </div>
