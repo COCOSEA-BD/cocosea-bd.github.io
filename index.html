@@ -930,7 +930,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.61';
+window.APP_BUILD='v2.63';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3348,6 +3348,7 @@ function renderDetailPanel(r,tt){
             +'<td style="'+tdStyle+'"><select id="fpinv_'+s.key+'" style="font-size:12px;width:72px">'+invOpts+'</select></td>'
             +'<td style="'+tdStyle+'"><select id="fpparty_'+s.key+'" style="font-size:11px;width:120px"><option value="">— Party —</option>'+( (function(){var r2=cache[detailTt].find(x=>x._id===detailId)||{};var opts=[];var seen={};function addOpt(name){if(!name||seen[name])return;seen[name]=1;opts.push('<option'+(sv.party===name?' selected':'')+'>'+name+'</option>');}
             addOpt(r2.shipper||r2.supplier);
+            addOpt(r2.bookingParty);
             addOpt(r2.carrier);
             // Include all NCC (svcSupplier) chosen in the Dịch vụ tab
             var allSvcs=r2.svcs||{};
@@ -3714,22 +3715,24 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
         <button class="btn pri" onclick="addTruckingRow()"><i class="ti ti-plus"></i> Thêm cont</button>
       </div>
       <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;min-width:1100px">
+      <table style="width:100%;border-collapse:collapse;min-width:1350px">
         <thead><tr>
           <th style="${tdH};width:32px">#</th>
-          <th style="${tdH}">Booking No</th>
+          <th style="${tdH};width:105px">Booking No</th>
           <th style="${tdH};width:50px">Vol</th>
-          <th style="${tdH};width:75px">Type Cont</th>
-          <th style="${tdH}">Kho đóng hàng</th>
-          <th style="${tdH}">Full Return</th>
-          <th style="${tdH}">Route</th>
-          <th style="${tdH}">NCC</th>
-          <th style="${tdH};width:125px">Ngày đóng</th>
-          <th style="${tdH}">Số cont</th>
-          <th style="${tdH}">Số xe</th>
-          <th style="${tdH};width:60px"></th>
+          <th style="${tdH};width:70px">Type Cont</th>
+          <th style="${tdH};width:130px">Kho đóng hàng</th>
+          <th style="${tdH};width:130px">Full Return</th>
+          <th style="${tdH};width:150px">Route</th>
+          <th style="${tdH};width:130px">NCC</th>
+          <th style="${tdH};width:118px">Ngày đóng</th>
+          <th style="${tdH};width:110px">Số cont</th>
+          <th style="${tdH};width:90px">Seal</th>
+          <th style="${tdH};width:65px">Tare</th>
+          <th style="${tdH};width:90px">Số xe</th>
+          <th style="${tdH};width:70px"></th>
         </tr></thead>
-        <tbody id="truckingsBody">${rowsHtml||'<tr><td colspan="12" style="text-align:center;padding:24px;color:var(--text-secondary);font-size:12px"><i class="ti ti-truck" style="font-size:24px;opacity:.3;display:block;margin-bottom:6px"></i>Chưa có dữ liệu — bấm "Thêm cont" để bắt đầu</td></tr>'}</tbody>
+        <tbody id="truckingsBody">${rowsHtml||'<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text-secondary);font-size:12px"><i class="ti ti-truck" style="font-size:24px;opacity:.3;display:block;margin-bottom:6px"></i>Chưa có dữ liệu — bấm "Thêm cont" để bắt đầu</td></tr>'}</tbody>
       </table>
       </div>
     </div>`;
@@ -4287,7 +4290,7 @@ async function saveContSealAll(){
       updatedAt:Date.now(),updatedBy:currentUser.email
     });
 
-    // ── Đồng bộ số cont vào Tab Trucking (booking nào có hasTruck=true)
+    // ── Đồng bộ số cont/seal/tare/ngày + Full Return vào Tab Trucking (booking nào có hasTruck=true)
     const currentTruckings=r.truckings||[];
     if(currentTruckings.length){
       const updatedTruckings=currentTruckings.map(function(trk){
@@ -4295,19 +4298,31 @@ async function saveContSealAll(){
         const bkNo=((trk.bookingNo||'').trim())||((r.bookingNo||'').trim());
         const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
         const bkData=bookingConts[bkKey];
-        if(!bkData||!bkData.containers||!bkData.containers.length)return trk;
-        // Tìm tất cả trucking row cho cùng booking (normalize giống nhau)
-        const trksForBk=currentTruckings.filter(function(t){
-          return (((t.bookingNo||'').trim())||(r.bookingNo||'')).trim()===bkNo;
-        });
-        const truckIdx=trksForBk.indexOf(trk);
-        if(truckIdx<0)return trk;
-        const cont=bkData.containers[truckIdx];
-        if(!cont||!cont.no)return trk;
-        return Object.assign({},trk,{contNo:cont.no.trim().toUpperCase()});
+        if(!bkData)return trk;
+        const frVal=(bkData.tkhaiList&&bkData.tkhaiList[0]&&bkData.tkhaiList[0].fullReturn)||'';
+        let patch={};
+        if(frVal)patch.fullReturn=frVal; // Full Return đồng bộ theo booking, áp dụng cho mọi dòng trucking của booking đó
+        if(bkData.containers&&bkData.containers.length){
+          // Tìm tất cả trucking row cho cùng booking (normalize giống nhau) để khớp đúng vị trí cont
+          const trksForBk=currentTruckings.filter(function(t){
+            return (((t.bookingNo||'').trim())||(r.bookingNo||'')).trim()===bkNo;
+          });
+          const truckIdx=trksForBk.indexOf(trk);
+          const cont=truckIdx>=0?bkData.containers[truckIdx]:null;
+          if(cont&&cont.no){
+            patch.contNo=cont.no.trim().toUpperCase();
+            if(cont.seal)patch.seal=cont.seal;
+            if(cont.tare!=null&&cont.tare!=='')patch.tare=cont.tare;
+            if(cont.date)patch.date=cont.date;
+          }
+        }
+        return Object.keys(patch).length?Object.assign({},trk,patch):trk;
       });
       // Chỉ save nếu có thay đổi
-      const changed=updatedTruckings.some(function(t,i){return t.contNo!==(currentTruckings[i]||{}).contNo;});
+      const changed=updatedTruckings.some(function(t,i){
+        const o=currentTruckings[i]||{};
+        return t.contNo!==o.contNo||t.seal!==o.seal||t.tare!==o.tare||t.date!==o.date||t.fullReturn!==o.fullReturn;
+      });
       if(changed){
         await db.collection(colName(detailTt)).doc(detailId).update({truckings:updatedTruckings,updatedAt:Date.now()});
       }
@@ -6474,6 +6489,8 @@ function _truckingTableRowHtml(row,i,bkList,polDefault){
     +'<td style="'+td+';min-width:120px"><select id="trk_ncc_'+i+'" style="'+sel+'">'+nccOpts+'</select></td>'
     +'<td style="'+td+'"><input type="date" id="trk_date_'+i+'" value="'+(row.date||'')+'" style="'+inp+'"/></td>'
     +'<td style="'+td+'"><input type="text" id="trk_cont_'+i+'" value="'+(row.contNo||'').replace(/"/g,'&quot;')+'" placeholder="ABCU1234567" style="'+inp+'"/></td>'
+    +'<td style="'+td+'"><input type="text" id="trk_seal_'+i+'" value="'+(row.seal||'').replace(/"/g,'&quot;')+'" placeholder="Seal" style="'+inp+'"/></td>'
+    +'<td style="'+td+'"><input type="number" id="trk_tare_'+i+'" value="'+(row.tare!=null&&row.tare!==''?row.tare:'')+'" placeholder="0" style="'+inp+';text-align:right"/></td>'
     +'<td style="'+td+'"><input type="text" id="trk_truck_'+i+'" value="'+(row.truckNo||'').replace(/"/g,'&quot;')+'" placeholder="51A-12345" style="'+inp+'"/></td>'
     +'<td style="'+td+';white-space:nowrap;text-align:center">'
       +'<button class="rac" onclick="showTruckingEport('+i+')" title="Khai Eport" style="color:#e07000;font-size:13px"><i class="ti ti-file-export"></i></button>'
@@ -6512,6 +6529,8 @@ function _readTruckingRows(){
       route:(row.querySelector('[id^="trk_route_"]')||{}).value||'từ Vĩnh Long đến Hồ Chí Minh',
       date:(row.querySelector('[id^="trk_date_"]')||{}).value||'',
       contNo:(row.querySelector('[id^="trk_cont_"]')||{}).value||'',
+      seal:(row.querySelector('[id^="trk_seal_"]')||{}).value||'',
+      tare:(row.querySelector('[id^="trk_tare_"]')||{}).value||'',
       truckNo:(row.querySelector('[id^="trk_truck_"]')||{}).value||''
     };
   });
@@ -6527,7 +6546,7 @@ function addTruckingRow(){
   const defType=r.typeCont||'';
   // Default NCC từ dịch vụ Trucking trong tab Dịch vụ
   const defNcc=(r.svcs&&r.svcs.trucking&&r.svcs.trucking.svcSupplier)||'';
-  const newRow={bookingNo:defBk,vol:1,typeCont:defType,wh:'',fullReturn:polDefault,route:'từ Vĩnh Long đến Hồ Chí Minh',ncc:defNcc,date:'',contNo:'',truckNo:''};
+  const newRow={bookingNo:defBk,vol:1,typeCont:defType,wh:'',fullReturn:polDefault,route:'từ Vĩnh Long đến Hồ Chí Minh',ncc:defNcc,date:'',contNo:'',seal:'',tare:'',truckNo:''};
   const tbody=g('truckingsBody'); if(!tbody)return;
   if(tbody.querySelector('td[colspan]'))tbody.innerHTML='';
   const tr=document.createElement('tr');
@@ -6565,15 +6584,27 @@ async function saveTruckings(){
       if(!byBk[bkKey])byBk[bkKey]=[];
       byBk[bkKey].push(t);
     });
-    // Cập nhật contNo trong bookingConts từ trucking rows
+    // Cập nhật contNo/seal/tare/date trong bookingConts từ trucking rows (đồng bộ theo từng cont, khớp theo vị trí trong booking)
     Object.keys(byBk).forEach(function(bkKey){
       if(!bookingConts[bkKey])bookingConts[bkKey]={containers:[]};
       const bkConts=bookingConts[bkKey].containers||[];
       byBk[bkKey].forEach(function(t,i){
         if(!bkConts[i])bkConts[i]={};
         if(t.contNo)bkConts[i].no=t.contNo; // Link contNo sang Cont/Seal
+        if(t.seal)bkConts[i].seal=t.seal;
+        if(t.tare!=null&&t.tare!=='')bkConts[i].tare=parseFloat(t.tare)||0;
+        if(t.date)bkConts[i].date=t.date; // Ngày đóng hàng — cùng field 'date' với Cont/Seal
       });
       bookingConts[bkKey].containers=bkConts;
+      // Full Return — theo từng booking (không phải theo từng cont), lấy từ dòng trucking đầu tiên
+      // của booking đó có giá trị, ghi vào tkhaiList[0] — đúng nơi getBookingInfo()/Khai Eport đọc ra.
+      const frVal=(byBk[bkKey].find(function(t){return t.fullReturn;})||{}).fullReturn;
+      if(frVal){
+        const tkList=bookingConts[bkKey].tkhaiList||[];
+        if(!tkList[0])tkList[0]={sotk:'',macc:'',pl:'',fullReturn:''};
+        tkList[0].fullReturn=frVal;
+        bookingConts[bkKey].tkhaiList=tkList;
+      }
     });
     const payload={truckings:rows,bookingConts:bookingConts,updatedAt:Date.now(),updatedBy:currentUser.email};
     await fsSet(colName(detailTt),detailId,payload);
@@ -19583,7 +19614,8 @@ function showEportModal(title, text){
       <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>
     </div>
     <div style="padding:14px 18px;background:var(--bg-secondary)">
-      <textarea id="eportText" rows="16" readonly style="font-family:'Courier New',monospace;font-size:12.5px;line-height:1.75;resize:vertical;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:.85rem 1rem;color:var(--text-primary);width:100%;box-sizing:border-box;outline:none">${text}</textarea>
+      <textarea id="eportText" rows="16" style="font-family:'Courier New',monospace;font-size:12.5px;line-height:1.75;resize:vertical;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:.85rem 1rem;color:var(--text-primary);width:100%;box-sizing:border-box;outline:none">${text}</textarea>
+      <div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px"><i class="ti ti-pencil" style="font-size:11px"></i> Có thể chỉnh sửa trực tiếp trước khi copy</div>
     </div>
     <div style="background:#f0f5ff;border-top:1px solid var(--border-light);padding:10px 18px;display:flex;gap:8px;justify-content:flex-end;align-items:center">
       <span id="eportCopied" style="font-size:12px;color:var(--green);font-weight:600;opacity:0;transition:opacity .3s;margin-right:auto">✓ Đã copy!</span>
@@ -19903,6 +19935,7 @@ function renderDocMaker(){
     <button class="btn" id="dmBtnInvCont" onclick="dmExport('INV_CONT')" disabled style="opacity:.4;color:#7c3aed;border-color:#7c3aed"><i class="ti ti-container"></i> INV THEO CONT</button>
     <button class="btn" id="dmBtnPkl" onclick="dmExport('PKL')" disabled style="opacity:.4"><i class="ti ti-package"></i> PACKING LIST</button>
     <button class="btn" id="dmBtnCont" onclick="dmExport('CONTRACT')" disabled style="opacity:.4"><i class="ti ti-file-contract"></i> CONTRACT</button>
+    <button class="btn" id="dmBtnContCont" onclick="dmExport('CONTRACT_CONT')" disabled style="opacity:.4;color:#7c3aed;border-color:#7c3aed"><i class="ti ti-file-contract"></i> CONTRACT THEO CONT</button>
     <button class="btn" id="dmBtnInvTk" onclick="dmExport('INV_TK')" disabled style="opacity:.4"><i class="ti ti-receipt-2"></i> INV T.KHAI</button>
     <button class="btn" id="dmBtnSI" onclick="dmExport('SI')" disabled style="opacity:.4"><i class="ti ti-send"></i> SI</button>
     <button class="btn" id="dmBtnSIHede" onclick="dmExportSIHede()" disabled style="opacity:.4;color:var(--green);border-color:var(--green)"><i class="ti ti-file-spreadsheet"></i> SI (HEDE)</button>
@@ -20206,7 +20239,7 @@ function dmPreview(){
   const d=dmGetData();
   if(!d){toast('Chưa chọn lô hàng','error');return;}
   if(!d.sName){toast('Shipper chưa có tên tiếng Anh — vào Đối tác để nhập','error');return;}
-  ['dmBtnInv','dmBtnInvCont','dmBtnPkl','dmBtnCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
+  ['dmBtnInv','dmBtnInvCont','dmBtnPkl','dmBtnCont','dmBtnContCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
   g('dmPreviewBox').innerHTML=
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">'
@@ -20273,8 +20306,8 @@ function _dmGoodsTable(d){
     +'<th class="c">UNIT PRICE(USD/'+d.unit+')<br>'+d.priceLabel+' '+d.pod+'</th>'
     +'<th class="c">AMOUNT<br>(USD)</th>'
     +'</tr></thead><tbody>'
-    +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+d.qty.toLocaleString()+'</td><td class="c">'+d.unitPrice+'</td><td class="r">'+f2(d.amount)+'</td></tr>'
-    +'</tbody><tfoot><tr><td colspan="2" class="c b">TOTAL</td><td class="c b">'+d.qty.toLocaleString()+'</td><td></td><td class="r b">'+f2(d.amount)+'</td></tr></tfoot>'
+    +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+d.qty.toLocaleString()+'</td><td class="c">'+d.unitPrice+'</td><td class="c">'+f2(d.amount)+'</td></tr>'
+    +'</tbody><tfoot><tr><td colspan="2" class="c b">TOTAL</td><td class="c b">'+d.qty.toLocaleString()+'</td><td></td><td class="c b">'+f2(d.amount)+'</td></tr></tfoot>'
     +'</table>';
 }
 function _dmSign(d){
@@ -20312,8 +20345,8 @@ function _dmGoodsTableByCont(d){
     +'<th class="c">UNIT PRICE(USD/'+priceTypeLabel+')<br>'+d.priceLabel+' '+d.pod+'</th>'
     +'<th class="c">AMOUNT<br>(USD)</th>'
     +'</tr></thead><tbody>'
-    +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+contQtyLabel+'</td><td class="c">'+f2(d.totalNW)+' KGS</td><td class="c">'+d.unitPrice+'</td><td class="r">'+f2(amount)+'</td></tr>'
-    +'</tbody><tfoot><tr><td colspan="3" class="c b">TOTAL</td><td class="c b">'+f2(d.totalNW)+' KGS</td><td></td><td class="r b">'+f2(amount)+'</td></tr></tfoot>'
+    +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+contQtyLabel+'</td><td class="c">'+f2(d.totalNW)+' KGS</td><td class="c">'+d.unitPrice+'</td><td class="c">'+f2(amount)+'</td></tr>'
+    +'</tbody><tfoot><tr><td colspan="3" class="c b">TOTAL</td><td class="c b">'+f2(d.totalNW)+' KGS</td><td></td><td class="c b">'+f2(amount)+'</td></tr></tfoot>'
     +'</table>';
 }
 
@@ -20387,6 +20420,31 @@ function _dmContract(d){
     +_dmBank(d)
     +'<p style="margin:6px 0">This Purchase Contract is made between the Seller and the Buyer where by the Seller agree to sell and the Buyer agree to buy the under-mentioned goods according to the terms and conditions stipulated below:</p>'
     +_dmGoodsTable(d)
+    +'<div style="margin-top:8px;font-size:11.5px;line-height:1.5">'
+    +'<p class="b" style="text-decoration:underline">1. Commodity and Description:</p>'
+    +'<p>Origin: Vietnam</p><p>Only Shipment:</p><p>Transshipment: Allowed.x Partial Shipment: Allowed.</p>'
+    +'<p>Port of Discharge :&nbsp;&nbsp;&nbsp; '+d.pod+'</p>'
+    +'<p class="b" style="text-decoration:underline;margin-top:4px">2. Payment  Terms:</p>'
+    +'<p>1) TT 100% in advance</p><p>2) Scan documents will be sent after Seller received the remaining by TT.</p><p>3) Actual weight at the port of loading to be final for payment .</p>'
+    +'<p class="b" style="text-decoration:underline;margin-top:4px">3. Documentation requirements:</p>'
+    +'<p>1) Original Bill of Loading in 3 original (or copy, in case original B/L Surrendered).</p><p>2) Commercial Invoice and Packing List in 3 original;</p><p>3) Certificate of Origin (Form E) the original page only;</p><p>4) Phytosanitary Certificate (1 Original and 1 Copy);</p>'
+    +'<p class="b" style="margin-top:4px">4. Shipment : within '+_dmEndOfMonth((d.r&&d.r.etd)||d.contractDate||d.invoiceDate||d.date||d.dateRaw)+'</p>'
+    +'</div>'
+    +'<table class="nb" style="width:100%;margin-top:24px"><tr><td class="c b" style="width:50%">FOR THE BUYER</td><td class="c b">FOR THE SELLER</td></tr><tr><td class="c" style="height:120px;vertical-align:top;padding-top:8px"><div class="b">'+(d.cnee||'')+'</div></td><td class="c" style="vertical-align:top"><div class="b">'+(d.sShort||d.sName)+'</div>'+(d.sStamp?'<img src="'+d.sStamp+'" style="max-width:196px;max-height:138px;object-fit:contain"/>':'')+'</td></tr></table>'
+    +'</body></html>';
+}
+
+// Contract theo cont: giống hệt _dmContract, chỉ khác bảng hàng hóa/đơn giá dùng kiểu "theo cont"
+// (tách số lượng cont theo loại + Quantity = tổng N.W, Unit Price = USD/loại cont) — như _dmInvoiceByCont.
+function _dmContractByCont(d){
+  const compactCSS='<style>tr{height:auto !important}body{font-size:10.5px !important;padding:14px 20px !important}h1{font-size:13px !important}.title{font-size:13px !important;margin:8px 0 !important}td,th{padding:3px 5px !important}.nb td{padding:1px 3px !important}p{margin:1px 0 !important;line-height:1.35 !important}table{margin:4px 0 !important}@media print{body{padding:8px 12px !important}@page{margin:8mm;size:A4}}</style>';
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+_dmCSS()+compactCSS+'<title>CONTRACT '+d.contractNo+'</title></head><body>'
+    +_dmTop(d)+'<div class="title">CONTRACT</div>'+_dmDocNos(d,false)
+    +_dmParties(d,true)
+    +'<table class="nb" style="width:100%;margin:6px 0"><tr><td class="lbl" style="width:130px">SHIPMENT FROM</td><td style="width:14px">:</td><td>'+d.pol+'</td></tr><tr><td class="lbl">SHIPMENT TO</td><td>:</td><td>'+d.pod+'</td></tr></table>'
+    +_dmBank(d)
+    +'<p style="margin:6px 0">This Purchase Contract is made between the Seller and the Buyer where by the Seller agree to sell and the Buyer agree to buy the under-mentioned goods according to the terms and conditions stipulated below:</p>'
+    +_dmGoodsTableByCont(d)
     +'<div style="margin-top:8px;font-size:11.5px;line-height:1.5">'
     +'<p class="b" style="text-decoration:underline">1. Commodity and Description:</p>'
     +'<p>Origin: Vietnam</p><p>Only Shipment:</p><p>Transshipment: Allowed.x Partial Shipment: Allowed.</p>'
@@ -23088,16 +23146,16 @@ function dmExport(type){
   if(!d){toast('Chưa có dữ liệu','error');return;}
   const bill=_dmBill(d), cnee=_dmCneeName(d);
   // Tên file 1 chứng từ = Loại chứng từ + số bill + tên Cnee
-  const typeLabel={'INV':'Invoice','INV_CONT':'InvoiceByCont','PKL':'PackingList','CONTRACT':'Contract','INV_TK':'InvoiceToKhai','SI':'SI'};
+  const typeLabel={'INV':'Invoice','INV_CONT':'InvoiceByCont','PKL':'PackingList','CONTRACT':'Contract','CONTRACT_CONT':'ContractByCont','INV_TK':'InvoiceToKhai','SI':'SI'};
   function fname(t){return [typeLabel[t]||t,_dmSafe(bill),_dmSafe(cnee)].filter(Boolean).join('_');}
-  const map={'INV':[_dmInvoice(d),fname('INV')],'INV_CONT':[_dmInvoiceByCont(d),fname('INV_CONT')],'PKL':[_dmPKL2(d),fname('PKL')],'CONTRACT':[_dmContract(d),fname('CONTRACT')],'INV_TK':[_dmInvTK(d),fname('INV_TK')],'SI':[_dmSI(d),fname('SI')]};
+  const map={'INV':[_dmInvoice(d),fname('INV')],'INV_CONT':[_dmInvoiceByCont(d),fname('INV_CONT')],'PKL':[_dmPKL2(d),fname('PKL')],'CONTRACT':[_dmContract(d),fname('CONTRACT')],'CONTRACT_CONT':[_dmContractByCont(d),fname('CONTRACT_CONT')],'INV_TK':[_dmInvTK(d),fname('INV_TK')],'SI':[_dmSI(d),fname('SI')]};
   const entry=map[type];if(!entry)return;
   const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
   w.document.write(entry[0]);w.document.close();w.focus();w.document.title=entry[1];
   setTimeout(function(){w.print();},600);
   toast('Đã mở: '+entry[1]+' — Ctrl+P → Save as PDF');
   // Auto-save a copy to the lot's Document tab
-  const typeMap={'INV':'invoice','INV_CONT':'invoice','PKL':'pkl','CONTRACT':'contract','INV_TK':'invoice','SI':'si'};
+  const typeMap={'INV':'invoice','INV_CONT':'invoice','PKL':'pkl','CONTRACT':'contract','CONTRACT_CONT':'contract','INV_TK':'invoice','SI':'si'};
   saveDocToLot(typeMap[type]||type.toLowerCase(), entry[0], entry[1]);
 }
 
@@ -23112,6 +23170,7 @@ function dmMergePdf(){
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="INV_CONT" style="width:16px;height:16px"/> <i class="ti ti-container"></i> Invoice theo Cont</label>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="PKL" checked style="width:16px;height:16px"/> <i class="ti ti-package"></i> Packing List</label>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="CONTRACT" style="width:16px;height:16px"/> <i class="ti ti-file-contract"></i> Contract</label>'
+    +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="CONTRACT_CONT" style="width:16px;height:16px"/> <i class="ti ti-file-contract"></i> Contract theo Cont</label>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="mergeChk" value="INV_TK" style="width:16px;height:16px"/> <i class="ti ti-receipt-2"></i> INV Tờ khai</label>'
     +'<label style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer"><input type="checkbox" class="mergeChk" value="SI" style="width:16px;height:16px"/> <i class="ti ti-send"></i> SI</label>'
     +'</div>'
@@ -23124,7 +23183,7 @@ function dmDoMerge(){
   const chosen=Array.from(document.querySelectorAll('.mergeChk:checked')).map(function(x){return x.value;});
   if(!chosen.length){toast('Chọn ít nhất 1 chứng từ','error');return;}
   closeOv('combineOv');
-  const builders={'INV':_dmInvoice,'INV_CONT':_dmInvoiceByCont,'PKL':_dmPKL2,'CONTRACT':_dmContract,'INV_TK':_dmInvTK,'SI':_dmSI};
+  const builders={'INV':_dmInvoice,'INV_CONT':_dmInvoiceByCont,'PKL':_dmPKL2,'CONTRACT':_dmContract,'CONTRACT_CONT':_dmContractByCont,'INV_TK':_dmInvTK,'SI':_dmSI};
   // Extract <body> inner from each doc + collect their <style>, put each on its own page
   function extractParts(html){
     const styleMatch=html.match(/<style[\s\S]*?<\/style>/gi)||[];
