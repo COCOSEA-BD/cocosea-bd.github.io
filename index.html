@@ -395,6 +395,55 @@ function _docTrackDefaultKeys(){
 }
 window._docTrackDefaultKeys=_docTrackDefaultKeys;
 
+// ── COM/KB — Hoa hồng (helper dùng chung: Fill giá tab, Costing tab, Phải trả NCC) ──
+// COM = hoa hồng Sale line, lấy người liên hệ có tick "Nhận hoa hồng" từ CRM của Carrier trong lô.
+// KB  = hoa hồng Booking Party/Shipper, lấy từ CRM của Booking Party VÀ Shipper trong lô (gộp, khử trùng).
+function _comKbEligibleContacts(partnerKey){
+  const p=partnerKey&&cache.partners&&cache.partners[partnerKey];
+  if(!p||!p.contacts)return [];
+  return p.contacts.filter(function(c){return c.receiveCommission&&c.name;}).map(function(c){
+    return Object.assign({},c,{_partner:partnerKey});
+  });
+}
+function _comKbContactsFor(kind,r){
+  if(kind==='com') return _comKbEligibleContacts(r.carrier||'');
+  // kind==='kb': gộp contact đủ điều kiện của Booking Party VÀ Shipper, khử trùng theo tên+partner
+  const keys=[r.bookingParty,r.shipper||r.supplier].filter(Boolean);
+  const uniqKeys=keys.filter(function(k,i){return keys.indexOf(k)===i;});
+  const seen={};
+  const out=[];
+  uniqKeys.forEach(function(pk){
+    _comKbEligibleContacts(pk).forEach(function(c){
+      const dedupKey=pk+'|'+c.name;
+      if(seen[dedupKey])return;
+      seen[dedupKey]=1;
+      out.push(c);
+    });
+  });
+  return out;
+}
+// Thành tiền = Số tiền (đơn giá) × Vol
+function _comKbThanhTien(amount,vol){
+  return Math.round((parseFloat(amount)||0)*(parseFloat(vol)||0)*100)/100;
+}
+// Số tiền thực chi (VND):
+// - Phương thức "20%": thanhTien × tỷ giá lô (r.roe, từ tab Invoice) × 0.8
+// - Phương thức "tygia20000": thanhTien × 20.000 (tỷ giá cố định, không trừ %)
+// - Nếu Curr đã là VND: không nhân tỷ giá lần nữa (chỉ áp dụng hệ số 0.8 nếu phương thức 20%)
+function _comKbThucChi(thanhTien,cur,method,roe){
+  const tt=parseFloat(thanhTien)||0;
+  if((cur||'USD')==='VND'){
+    return Math.round(method==='20pct'?tt*0.8:tt);
+  }
+  const rate=method==='20pct'?(parseFloat(roe)||26390):20000;
+  const factor=method==='20pct'?0.8:1;
+  return Math.round(tt*rate*factor);
+}
+window._comKbEligibleContacts=_comKbEligibleContacts;
+window._comKbContactsFor=_comKbContactsFor;
+window._comKbThanhTien=_comKbThanhTien;
+window._comKbThucChi=_comKbThucChi;
+
 // Persist the current SVCS catalog to Firestore
 async function saveServices(){
   const list=SVCS.map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
@@ -930,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.63';
+window.APP_BUILD='v2.64';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3358,7 +3407,8 @@ function renderDetailPanel(r,tt){
         }).join('');
         bodyHtml=hdr+rows2+'</tbody></table>'
           +'<div id="fpTot" style="margin-top:.75rem;padding:8px 12px;background:var(--bg-secondary);border-radius:8px;font-size:12px;border:1px solid var(--border-light);display:flex;gap:1.5rem;flex-wrap:wrap"></div>'
-          +'<div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailFillPrice()"><i class="ti ti-check"></i> Lưu giá</button></div>';
+          +'<div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailFillPrice()"><i class="ti ti-check"></i> Lưu giá</button></div>'
+          +_comKbBoxHtml(r2);
       }
     }
   }
@@ -3440,7 +3490,16 @@ function renderDetailPanel(r,tt){
         const base=(it.price||it.amt||0)*(it.qty||1);
         totalCostPreVatVND+=(it.cur||'VND')==='VND'?base:Math.round(base*costingROE);
       });
-      // Lợi nhuận = Doanh thu (trước VAT) - Chi phí (trước VAT)
+      // COM/KB (hoa hồng) — cộng vào chi phí đầu vào bằng đúng Số tiền thực chi (đã quy đổi VND sẵn)
+      const comKbAll=[].concat((r.comKb&&r.comKb.com)||[],(r.comKb&&r.comKb.kb)||[]);
+      let totalComKbVND=0;
+      comKbAll.forEach(function(row){
+        const tt=_comKbThanhTien(row.amount,row.vol);
+        totalComKbVND+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||26390);
+      });
+      totalCostVND+=totalComKbVND;
+      totalCostPreVatVND+=totalComKbVND; // hoa hồng không có khái niệm VAT riêng — tính thẳng vào chi phí trước VAT
+      // Lợi nhuận = Doanh thu (trước VAT) - Chi phí (trước VAT, đã gồm COM/KB)
       const totalProfitVND=totalRevVND-totalCostPreVatVND;
       const marginPct=totalRevVND>0?Math.round(totalProfitVND/totalRevVND*100):0;
       // Keep allCurs for per-section totals display
@@ -3591,6 +3650,32 @@ function renderDetailPanel(r,tt){
         +'</tfoot>'
         +'</table></div>'
         +'<div id="costingTotals" style="padding:6px 10px;background:var(--bg-secondary);border-radius:6px;border:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary);margin-bottom:1rem"></div>'
+
+        // COM/KB — box RIÊNG, tách biệt khỏi phần Chi phí đầu vào ở trên (dữ liệu chỉ xem, sửa ở tab Fill giá)
+        +(comKbAll.length?(
+          '<div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem;display:flex;align-items:center;gap:6px"><i class="ti ti-gift" style="font-size:13px"></i>COM/KB — Hoa hồng (xem tại tab Fill giá)</div>'
+          +'<div style="border:1.5px solid #7c3aed40;border-radius:8px;overflow:hidden;margin-bottom:1rem">'
+            +'<table style="width:100%;border-collapse:collapse;font-size:12px">'
+            +'<thead><tr style="background:#7c3aed12">'
+              +'<th style="'+thS+'">Loại</th><th style="'+thS+'">Người nhận</th><th style="'+thS+';text-align:right">Thành tiền</th><th style="'+thS+'">PT tính</th><th style="'+thS+';text-align:right;color:var(--red)">Thực chi (VND)</th>'
+            +'</tr></thead><tbody>'
+            +[].concat(
+              ((r.comKb&&r.comKb.com)||[]).map(function(row){return Object.assign({},row,{_kind:'COM'});}),
+              ((r.comKb&&r.comKb.kb)||[]).map(function(row){return Object.assign({},row,{_kind:'KB'});})
+            ).map(function(row){
+              const tt=_comKbThanhTien(row.amount,row.vol);
+              const tc=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||26390);
+              return '<tr>'
+                +'<td style="'+tdS+'"><span class="bdg bdg-purple" style="font-size:10px">'+row._kind+'</span></td>'
+                +'<td style="'+tdS+'">'+(row.recipient||'—')+(row.recipientPartner?' <span style="color:var(--text-tertiary);font-size:10.5px">('+row.recipientPartner+')</span>':'')+'</td>'
+                +'<td style="'+tdS+';text-align:right">'+(tt?tt.toLocaleString():'—')+' '+(row.cur||'USD')+'</td>'
+                +'<td style="'+tdS+';font-size:11px">'+(row.method==='20pct'?'20%':'Tỷ giá 20.000')+'</td>'
+                +'<td style="'+tdS+';text-align:right;font-weight:700;color:var(--red)">'+(tc?tc.toLocaleString()+' đ':'—')+'</td>'
+              +'</tr>';
+            }).join('')
+            +'</tbody><tfoot><tr style="background:#7c3aed12"><td colspan="4" style="'+tdS+';text-align:right;font-weight:700">Tổng COM/KB (VND):</td><td style="'+tdS+';text-align:right;font-weight:800;color:var(--red)">'+totalComKbVND.toLocaleString()+' đ</td></tr></tfoot>'
+            +'</table></div>'
+        ):'')
 
         // Profit summary
         +'<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem;display:flex;align-items:center;gap:6px"><i class="ti ti-coin" style="font-size:13px;color:var(--blue)"></i>Tổng kết lợi nhuận</div>'
@@ -4875,6 +4960,157 @@ function refreshCneeOptions(){
   cneeEl.innerHTML=cnees.length?('<option value="">— Chọn Cnee —</option>'+cnees.map(function(cn){return '<option'+(cn.name===cur?' selected':'')+'>'+cn.name+'</option>';}).join('')):'<option value="">(Shipper chưa có Cnee)</option>';
 }
 window.refreshCneeOptions=refreshCneeOptions;
+
+// ═══ COM/KB — Hoa hồng Sale line (COM) & Booking Party/Shipper (KB) ═══
+// Data model trên lô: r.comKb = {com:[{recipient,recipientPartner,amount,vol,cur,method,remark}], kb:[...]}
+// "Thành tiền" và "Số tiền thực chi" luôn TÍNH LẠI (không lưu trùng lặp) từ amount/vol/cur/method + r.roe.
+function _comKbBoxHtml(r){
+  const roe=r.roe||26390;
+  const comContacts=_comKbContactsFor('com',r);
+  const kbContacts=_comKbContactsFor('kb',r);
+  const comRows=(r.comKb&&r.comKb.com)||[];
+  const kbRows=(r.comKb&&r.comKb.kb)||[];
+  function section(kind,title,sub,contacts,rows){
+    const hint=contacts.length
+      ?''
+      :'<div style="font-size:11px;color:var(--text-tertiary);padding:6px 10px;background:var(--bg-secondary);border-radius:6px;margin-bottom:6px"><i class="ti ti-info-circle"></i> '+sub+' chưa có người liên hệ nào tick "Nhận hoa hồng" trong CRM.</div>';
+    const theadS='padding:6px 8px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary);border-bottom:1px solid var(--border-light);background:var(--bg-secondary);white-space:nowrap';
+    const rowsHtml=rows.map(function(row,i){return _comKbRowHtml(kind,row,i,contacts,roe);}).join('');
+    return '<div style="margin-bottom:14px">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+        +'<span style="font-size:12px;font-weight:700;color:var(--text-primary)">'+title+' <span style="font-weight:400;color:var(--text-secondary);font-size:11px">— '+sub+'</span></span>'
+        +'<button class="btn sm" onclick="addComKbRow(\''+kind+'\')"'+(contacts.length?'':' disabled style="opacity:.4"')+'><i class="ti ti-plus"></i> Thêm người nhận</button>'
+      +'</div>'
+      +hint
+      +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:820px">'
+        +'<thead><tr>'
+          +'<th style="'+theadS+'">Người nhận</th>'
+          +'<th style="'+theadS+';width:90px">Số tiền</th>'
+          +'<th style="'+theadS+';width:65px">Vol</th>'
+          +'<th style="'+theadS+';width:65px">Curr</th>'
+          +'<th style="'+theadS+';width:100px">Thành tiền</th>'
+          +'<th style="'+theadS+';width:130px">Phương thức tính</th>'
+          +'<th style="'+theadS+';width:120px">Số tiền thực chi</th>'
+          +'<th style="'+theadS+'">Remark</th>'
+          +'<th style="'+theadS+';width:32px"></th>'
+        +'</tr></thead>'
+        +'<tbody id="comkbBody_'+kind+'">'+(rowsHtml||'<tr><td colspan="9" style="text-align:center;padding:14px;color:var(--text-tertiary);font-size:11.5px">Chưa có người nhận nào — bấm "Thêm người nhận"</td></tr>')+'</tbody>'
+      +'</table></div>'
+    +'</div>';
+  }
+  return '<div style="margin-top:1.75rem;padding-top:1.25rem;border-top:2px dashed var(--border-light)">'
+    +'<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-gift" style="font-size:13px;color:#7c3aed"></i>COM / KB — Hoa hồng</div>'
+    +section('com','COM','hoa hồng Sale line — theo Carrier '+(r.carrier?('«'+r.carrier+'»'):'(lô chưa có Carrier)'),comContacts,comRows)
+    +section('kb','KB','hoa hồng Booking Party/Shipper — theo '+([r.bookingParty,r.shipper||r.supplier].filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;}).map(function(v){return '«'+v+'»';}).join(', ')||'(lô chưa có Booking Party/Shipper)'),kbContacts,kbRows)
+    +'<div style="display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveComKb()" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-check"></i> Lưu COM/KB</button></div>'
+  +'</div>';
+}
+
+function _comKbRowHtml(kind,row,i,contacts,roe){
+  row=row||{};
+  const inp='font-size:12px;width:100%;box-sizing:border-box;border:1px solid var(--border-light);border-radius:6px;padding:4px 6px;background:var(--bg-primary)';
+  const td='border-bottom:1px solid var(--border-light);padding:5px 6px;vertical-align:middle';
+  // Đảm bảo người nhận đã lưu trước đó (dù sau này hết tick "Nhận hoa hồng") vẫn hiện trong dropdown để không mất dữ liệu
+  const allOpts=contacts.slice();
+  if(row.recipient&&!allOpts.find(function(c){return c.name===row.recipient&&c._partner===row.recipientPartner;})){
+    allOpts.push({name:row.recipient,_partner:row.recipientPartner,_stale:true});
+  }
+  const recipOpts='<option value="">— Chọn người nhận —</option>'+allOpts.map(function(c){
+    const val=c.name+'||'+(c._partner||'');
+    const sel=(c.name===row.recipient&&c._partner===row.recipientPartner)?' selected':'';
+    return '<option value="'+val.replace(/"/g,'&quot;')+'"'+sel+'>'+c.name+(c._stale?' (đã bỏ tick)':'')+'</option>';
+  }).join('');
+  const cur=row.cur||'USD';
+  const method=row.method||'20pct';
+  const thanhTien=_comKbThanhTien(row.amount,row.vol);
+  const thucChi=_comKbThucChi(thanhTien,cur,method,roe);
+  const curOpts=CURRENCIES.map(function(c){return '<option'+(c===cur?' selected':'')+'>'+c+'</option>';}).join('');
+  return '<tr data-comkb-row>'
+    +'<td style="'+td+';min-width:160px"><select id="cmb_'+kind+'_recip_'+i+'" style="'+inp+'" onchange="updComKbRow(\''+kind+'\','+i+')">'+recipOpts+'</select></td>'
+    +'<td style="'+td+'"><input type="number" id="cmb_'+kind+'_amt_'+i+'" value="'+(row.amount!=null&&row.amount!==''?row.amount:'')+'" placeholder="0" min="0" oninput="updComKbRow(\''+kind+'\','+i+')" style="'+inp+';text-align:right"/></td>'
+    +'<td style="'+td+'"><input type="number" id="cmb_'+kind+'_vol_'+i+'" value="'+(row.vol!=null&&row.vol!==''?row.vol:'')+'" placeholder="Vol lô" min="0" oninput="updComKbRow(\''+kind+'\','+i+')" style="'+inp+';text-align:right"/></td>'
+    +'<td style="'+td+'"><select id="cmb_'+kind+'_cur_'+i+'" onchange="updComKbRow(\''+kind+'\','+i+')" style="'+inp+'">'+curOpts+'</select></td>'
+    +'<td style="'+td+';text-align:right;font-weight:600;color:var(--blue)" id="cmb_'+kind+'_tt_'+i+'">'+(thanhTien?thanhTien.toLocaleString():'—')+'</td>'
+    +'<td style="'+td+'"><select id="cmb_'+kind+'_method_'+i+'" onchange="updComKbRow(\''+kind+'\','+i+')" style="'+inp+'"><option value="20pct"'+(method==='20pct'?' selected':'')+'>20% (ROE lô × 0.8)</option><option value="tygia"'+(method==='tygia'?' selected':'')+'>Tỷ giá 20.000</option></select></td>'
+    +'<td style="'+td+';text-align:right;font-weight:700;color:var(--red)" id="cmb_'+kind+'_tc_'+i+'">'+(thucChi?thucChi.toLocaleString()+' đ':'—')+'</td>'
+    +'<td style="'+td+'"><input type="text" id="cmb_'+kind+'_remark_'+i+'" value="'+(row.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="'+inp+'"/></td>'
+    +'<td style="'+td+';text-align:center"><button class="rac red" onclick="_comKbDelRow(\''+kind+'\','+i+')" title="Xóa dòng"><i class="ti ti-trash"></i></button></td>'
+  +'</tr>';
+}
+
+// Cập nhật live Thành tiền + Số tiền thực chi khi sửa 1 dòng (không cần lưu mới thấy)
+function updComKbRow(kind,i){
+  const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
+  const roe=r.roe||26390;
+  const amt=parseFloat(g('cmb_'+kind+'_amt_'+i)?.value)||0;
+  const vol=parseFloat(g('cmb_'+kind+'_vol_'+i)?.value)||0;
+  const cur=g('cmb_'+kind+'_cur_'+i)?.value||'USD';
+  const method=g('cmb_'+kind+'_method_'+i)?.value||'20pct';
+  const thanhTien=_comKbThanhTien(amt,vol);
+  const thucChi=_comKbThucChi(thanhTien,cur,method,roe);
+  const ttEl=g('cmb_'+kind+'_tt_'+i); if(ttEl)ttEl.textContent=thanhTien?thanhTien.toLocaleString():'—';
+  const tcEl=g('cmb_'+kind+'_tc_'+i); if(tcEl)tcEl.textContent=thucChi?thucChi.toLocaleString()+' đ':'—';
+}
+window.updComKbRow=updComKbRow;
+
+function addComKbRow(kind){
+  const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
+  const contacts=_comKbContactsFor(kind,r);
+  if(!contacts.length){toast('Chưa có người liên hệ nào tick "Nhận hoa hồng" — vào CRM để thêm trước','error');return;}
+  const existing=_readComKbRows(kind)||[];
+  const lotVol=parseInt(r.vol)||(r.bookings&&r.bookings.length?r.bookings.reduce(function(s,b){return s+(parseInt(b.vol)||0);},0):0)||1;
+  const idx=existing.length;
+  const tbody=g('comkbBody_'+kind); if(!tbody)return;
+  if(tbody.querySelector('td[colspan]'))tbody.innerHTML='';
+  const tr=document.createElement('tr');
+  tr.setAttribute('data-comkb-row','');
+  tr.innerHTML=_comKbRowHtml(kind,{vol:lotVol,cur:'USD',method:'20pct'},idx,contacts,r.roe||26390).replace(/^<tr[^>]*>/,'').replace(/<\/tr>$/,'');
+  tbody.appendChild(tr);
+}
+window.addComKbRow=addComKbRow;
+
+function _comKbDelRow(kind,idx){
+  const tbody=g('comkbBody_'+kind); if(!tbody)return;
+  const rows=Array.from(tbody.querySelectorAll('[data-comkb-row]'));
+  if(rows[idx])rows[idx].remove();
+}
+window._comKbDelRow=_comKbDelRow;
+
+function _readComKbRows(kind){
+  const tbody=g('comkbBody_'+kind); if(!tbody)return null;
+  const rows=Array.from(tbody.querySelectorAll('[data-comkb-row]'));
+  return rows.map(function(row){
+    const recipSel=row.querySelector('[id^="cmb_'+kind+'_recip_"]');
+    const recipVal=recipSel?recipSel.value:'';
+    const parts=recipVal.split('||');
+    return {
+      recipient:parts[0]||'',
+      recipientPartner:parts[1]||'',
+      amount:parseFloat((row.querySelector('[id^="cmb_'+kind+'_amt_"]')||{}).value)||0,
+      vol:parseFloat((row.querySelector('[id^="cmb_'+kind+'_vol_"]')||{}).value)||0,
+      cur:(row.querySelector('[id^="cmb_'+kind+'_cur_"]')||{}).value||'USD',
+      method:(row.querySelector('[id^="cmb_'+kind+'_method_"]')||{}).value||'20pct',
+      remark:(row.querySelector('[id^="cmb_'+kind+'_remark_"]')||{}).value||''
+    };
+  }).filter(function(row){return row.recipient;}); // bỏ dòng chưa chọn người nhận
+}
+
+async function saveComKb(){
+  const com=_readComKbRows('com')||[];
+  const kb=_readComKbRows('kb')||[];
+  setLoading(true,'Đang lưu COM/KB...');
+  try{
+    await fsSet(colName(detailTt),detailId,{comKb:{com:com,kb:kb},updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã lưu COM/KB — '+(com.length+kb.length)+' người nhận');
+    const fresh=cache[detailTt].find(function(x){return x._id===detailId;});
+    if(fresh){fresh.comKb={com:com,kb:kb};}
+    renderDetailPanel(cache[detailTt].find(function(x){return x._id===detailId;})||{},detailTt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveComKb=saveComKb;
+
+
 
 function openLot(id, tt){
   lotIdx=id; currentTab=tt;
@@ -8859,6 +9095,31 @@ function _tcSupplierBreakdown(filterOpts){
       byPartner[supplierKey].total[cur]=(byPartner[supplierKey].total[cur]||0)+amt;
     });
   });
+  // COM/KB (hoa hồng) — nhóm theo tên người nhận, coi như 1 "nhà cung cấp" cần chi trả.
+  // Số tiền dùng đúng "Số tiền thực chi" (đã quy đổi VND), không cần convert thêm.
+  allR.forEach(function(r){
+    if(fo.from&&(r.etd||'')<fo.from)return;
+    if(fo.to&&(r.etd||'')>fo.to)return;
+    ['com','kb'].forEach(function(kind){
+      const rowsCk=(r.comKb&&r.comKb[kind])||[];
+      rowsCk.forEach(function(row,idx){
+        if(!row.recipient)return;
+        if(fo.supplier&&row.recipient!==fo.supplier)return;
+        const tt=_comKbThanhTien(row.amount,row.vol);
+        const amt=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||26390);
+        if(!amt)return;
+        const recipientKey=row.recipient;
+        if(!byPartner[recipientKey])byPartner[recipientKey]={partner:recipientKey,lots:[],total:{}};
+        byPartner[recipientKey].lots.push({
+          tt:r._tt,lotId:r._id,svcKey:'comkb:'+kind+':'+idx,bookingNo:r.bookingNo||r.jobNo||'',jobNo:r.jobNo||'',
+          name:(kind==='com'?'Hoa hồng COM':'Hoa hồng KB')+(row.remark?' — '+row.remark:''),amt,cur:'VND',date:r.etd||'',finish:true,
+          shipper:r.shipper||r.supplier||'',
+          paidStatus:row.apPaidStatus||'unpaid',paidDate:row.apPaidDate||'',paidBank:row.apPaidBank||'',remark:row.remark||''
+        });
+        byPartner[recipientKey].total.VND=(byPartner[recipientKey].total.VND||0)+amt;
+      });
+    });
+  });
   return Object.values(byPartner).sort(function(a,b){return a.partner.localeCompare(b.partner);});
 }
 let tcApAutoOpen=false;
@@ -9715,6 +9976,25 @@ async function savePayStatusDetail(){
         }
         await db.collection(colN).doc(ctx.lotId).set({costing:Object.assign({},r.costing||{},{items,updatedAt:Date.now()}),updatedAt:Date.now()},{merge:true});
         if(cr&&cr.costing)cr.costing.items=items;
+      } else if(ctx.svcKey.startsWith('comkb:')){
+        // Hoa hồng COM/KB — key dạng "comkb:<com|kb>:<index>"
+        const parts=ctx.svcKey.split(':');
+        const kind=parts[1], idx=parseInt(parts[2]);
+        const comKb=JSON.parse(JSON.stringify(r.comKb||{com:[],kb:[]}));
+        const rows=comKb[kind]||[];
+        if(rows[idx]){
+          const rowTt=_comKbThanhTien(rows[idx].amount,rows[idx].vol);
+          const newCashTxId=await _syncPayToCashBook({
+            existingTxId:rows[idx].apCashTxId||null, status, txType:'chi', account:bank, amount, date,
+            category:'Trả nhà cung cấp — Hoa hồng '+kind.toUpperCase(), description:(ctx.label||'Hoa hồng')+' — '+(r.bookingNo||r.jobNo||''),
+            partnerRef:(typeof tcSupPartner!=='undefined'?tcSupPartner:null)||rows[idx].recipient||null,
+            lotRef:{lotId:ctx.lotId,tt:ctx.tt,bookingNo:r.bookingNo||r.jobNo||''}
+          });
+          rows[idx].apPaidStatus=status;rows[idx].apPaidDate=date;rows[idx].apPaidBank=bank;rows[idx].apCashTxId=newCashTxId;
+          comKb[kind]=rows;
+        }
+        await db.collection(colN).doc(ctx.lotId).set({comKb:comKb,updatedAt:Date.now()},{merge:true});
+        if(cr)cr.comKb=comKb;
       } else {
         const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
         if(!svcs[ctx.svcKey])svcs[ctx.svcKey]={};
@@ -11241,6 +11521,13 @@ function renderCrmContactsTab(p){
         +'<div><label class="lbl">Số điện thoại</label><input type="text" id="cc_phone" value="'+(c.phone||'').replace(/"/g,'&quot;')+'" placeholder="09xx xxx xxx"/></div>'
         +'<div><label class="lbl">Email</label><input type="email" id="cc_email" value="'+(c.email||'').replace(/"/g,'&quot;')+'" placeholder="email@..."/></div>'
         +'<div style="grid-column:1/-1"><label class="lbl">Ghi chú</label><textarea id="cc_note" rows="2" style="font-size:12px;resize:vertical">'+(c.note||'')+'</textarea></div>'
+        +'<div style="grid-column:1/-1;padding-top:4px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="cc_receiveCommission" '+(c.receiveCommission?'checked':'')+' onchange="g(\'cc_commissionBox\').style.display=this.checked?\'grid\':\'none\'" style="width:16px;height:16px;cursor:pointer"/><span class="lbl" style="margin:0">Nhận hoa hồng (COM/KB)</span></label></div>'
+        +'<div id="cc_commissionBox" style="grid-column:1/-1;display:'+(c.receiveCommission?'grid':'none')+';grid-template-columns:1fr 1fr;gap:8px;padding:10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;margin-top:2px">'
+          +'<div><label class="lbl">Chủ tài khoản</label><input type="text" id="cc_bankAccName" value="'+(c.bankAccName||'').replace(/"/g,'&quot;')+'" placeholder="Tên trên thẻ ngân hàng"/></div>'
+          +'<div><label class="lbl">Số tài khoản</label><input type="text" id="cc_bankAccNo" value="'+(c.bankAccNo||'').replace(/"/g,'&quot;')+'"/></div>'
+          +'<div><label class="lbl">Ngân hàng</label><input type="text" id="cc_bankName" value="'+(c.bankName||'').replace(/"/g,'&quot;')+'" placeholder="VD: Vietcombank"/></div>'
+          +'<div><label class="lbl">Chi nhánh</label><input type="text" id="cc_bankBranch" value="'+(c.bankBranch||'').replace(/"/g,'&quot;')+'"/></div>'
+        +'</div>'
       +'</div>'
       +'<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">'
         +'<button class="btn red" onclick="deleteCrmContactAt('+_crmContactEditIdx+')"><i class="ti ti-trash"></i> Xóa người này</button>'
@@ -11254,7 +11541,7 @@ function renderCrmContactsTab(p){
       return '<div onclick="openCrmContactEdit('+i+')" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;background:var(--bg-primary)">'
         +'<div style="min-width:0;display:flex;align-items:center;gap:10px">'
           +'<div style="width:30px;height:30px;border-radius:50%;background:var(--blue-bg);color:var(--blue-text);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;flex-shrink:0">'+(c.name||'?').slice(0,2).toUpperCase()+'</div>'
-          +'<div><div style="font-size:12.5px;font-weight:700">'+(c.name||'(chưa có tên)')+(c.position?' <span style="font-weight:400;color:var(--text-secondary)">— '+c.position+'</span>':'')+'</div>'
+          +'<div><div style="font-size:12.5px;font-weight:700">'+(c.name||'(chưa có tên)')+(c.position?' <span style="font-weight:400;color:var(--text-secondary)">— '+c.position+'</span>':'')+(c.receiveCommission?' <span class="bdg bdg-g" style="font-size:9px;padding:1px 6px"><i class="ti ti-cash"></i> COM/KB</span>':'')+'</div>'
           +'<div style="font-size:10.5px;color:var(--text-secondary)">'+[c.phone,c.email].filter(Boolean).join(' • ')+'</div></div>'
         +'</div>'
         +'<i class="ti ti-chevron-right" style="color:var(--text-tertiary);flex-shrink:0"></i>'
@@ -11275,10 +11562,12 @@ function openCrmContactEdit(i){_crmContactEditIdx=i;renderCrmDetailBody();}
 function closeCrmContactEdit(){captureCrmContactEdit();_crmContactEditIdx=-1;renderCrmDetailBody();}
 function captureCrmContactEdit(){
   if(_crmContactEditIdx<0||!g('cc_name'))return;
-  _crmContacts[_crmContactEditIdx]={name:g('cc_name').value.trim(),position:g('cc_position').value.trim(),phone:g('cc_phone').value.trim(),email:g('cc_email').value.trim(),note:g('cc_note').value.trim()};
+  _crmContacts[_crmContactEditIdx]={name:g('cc_name').value.trim(),position:g('cc_position').value.trim(),phone:g('cc_phone').value.trim(),email:g('cc_email').value.trim(),note:g('cc_note').value.trim(),
+    receiveCommission:!!(g('cc_receiveCommission')&&g('cc_receiveCommission').checked),
+    bankAccName:(g('cc_bankAccName')?.value||'').trim(),bankAccNo:(g('cc_bankAccNo')?.value||'').trim(),bankName:(g('cc_bankName')?.value||'').trim(),bankBranch:(g('cc_bankBranch')?.value||'').trim()};
 }
 function applyCrmContactEdit(){captureCrmContactEdit();_crmContactEditIdx=-1;renderCrmDetailBody();}
-function addCrmContactAndEdit(){_crmContacts.push({name:'',position:'',phone:'',email:'',note:''});_crmContactEditIdx=_crmContacts.length-1;renderCrmDetailBody();}
+function addCrmContactAndEdit(){_crmContacts.push({name:'',position:'',phone:'',email:'',note:'',receiveCommission:false,bankAccName:'',bankAccNo:'',bankName:'',bankBranch:''});_crmContactEditIdx=_crmContacts.length-1;renderCrmDetailBody();}
 function deleteCrmContactAt(i){if(!confirm('Xóa người liên hệ này?'))return;_crmContacts.splice(i,1);_crmContactEditIdx=-1;renderCrmDetailBody();}
 async function saveCrmContacts(){
   captureCrmContactEdit();
