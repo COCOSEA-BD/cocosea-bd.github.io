@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.65';
+window.APP_BUILD='v2.66';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2558,13 +2558,20 @@ function renderLot(tt){
     </div>
   </div>
   <div class="toolbar">
-    <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Booking Party, Số tờ khai..." oninput="renderLotTable('${tt}')"/></div>
+    <div style="display:flex;flex-direction:column;gap:5px">
+      <div class="search-wrap"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Booking Party, Số tờ khai..." oninput="renderLotTable('${tt}')"/></div>
+      <div style="display:flex;gap:5px">
+        <button class="btn sm" data-tt="${tt}" onclick="setStatusQuickFilter(this.dataset.tt,'vst_no')" style="font-size:10.5px;padding:3px 8px;color:#B91C1C;border-color:#B91C1C55"><i class="ti ti-alert-triangle" style="font-size:11px"></i> Chưa VST</button>
+        <button class="btn sm" data-tt="${tt}" onclick="setStatusQuickFilter(this.dataset.tt,'doc_pending')" style="font-size:10.5px;padding:3px 8px;color:#B45309;border-color:#B4530955"><i class="ti ti-file-alert" style="font-size:11px"></i> Chưa gửi Ctừ</button>
+      </div>
+    </div>
     <select id="fst_${tt}" style="width:150px" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả</option>
       <option value="locked">Đã khóa</option>
       <option value="unlocked">Chưa khóa</option>
       <option value="vst_yes">Đã VST</option>
       <option value="vst_no">Chưa VST</option>
+      <option value="doc_pending">Chưa gửi Ctừ</option>
     </select>
     <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);flex-shrink:0">
       <button class="btn sm" data-tt="${tt}" onclick="setQuickFilter(this.dataset.tt,7)" style="font-size:11px;padding:3px 8px">-1wk</button>
@@ -2639,6 +2646,14 @@ function setQuickFilter(tt, days){
   renderLotTable(tt);
 }
 
+// Nút lọc nhanh theo trạng thái (Chưa VST / Chưa gửi Ctừ) — bấm lần 2 vào nút đang bật sẽ bỏ lọc
+function setStatusQuickFilter(tt, value){
+  const el=g('fst_'+tt); if(!el)return;
+  el.value=(el.value===value)?'':value;
+  renderLotTable(tt);
+}
+window.setStatusQuickFilter=setStatusQuickFilter;
+
 function getDefaultEtdFrom(){
   const d=new Date(); d.setDate(d.getDate()-2);
   return d.toISOString().slice(0,10);
@@ -2702,6 +2717,7 @@ function renderLotTable(tt){
     if(fs==='unlocked'&&r.locked)return false;
     if(fs==='vst_yes'&&!(r.vstEnabled&&r.vstConfirmed))return false;
     if(fs==='vst_no'&&!(r.vstEnabled&&!r.vstConfirmed))return false;
+    if(fs==='doc_pending'&&!(r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length))return false;
     if(etdFrom&&r.etd&&r.etd<etdFrom)return false;
     if(etdTo&&r.etd&&r.etd>etdTo)return false;
     if(sfShipper&&!(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper))return false;
@@ -3164,6 +3180,11 @@ function renderDetailPanel(r,tt){
           const allSent=sentN===keys.length;
           return`<span class="bdg ${allSent?'bdg-g':(sentN>0?'bdg-a':'bdg-r')}" style="font-weight:700">${sentN}/${keys.length} đã gửi</span>`;
         })()}
+      </div>
+      <div class="detail-vst-toggle" style="cursor:pointer" onclick="openChangeTypeShipmentPopup('${r._id}','${tt}')">
+        <i class="ti ti-replace" style="font-size:15px;color:var(--text-secondary)"></i>
+        <span>Type Shipment</span>
+        <span class="bdg bdg-b" style="font-weight:700">${r.loaiHang||'—'}</span>
       </div>
       ${can('deleteLot')?`<button class="btn red" onclick="delLot('${r._id}','${tt}')" style="margin-left:auto"><i class="ti ti-trash"></i> Xóa lô hàng</button>`:''}
     </div>
@@ -5132,7 +5153,7 @@ function openLot(id, tt){
     const full=(c.k==='tenHang'||c.k==='pol'||c.k==='pod')?' full':'';
     if(c.type==='select'){
       if(c.k==='loaiHang'){
-        return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><div style="display:flex;gap:4px;align-items:center"><select id="f_${c.k}" style="font-size:12px;flex:1">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select><button type="button" class="btn sm" onclick="_cycleLoaiHangField()" title="Đổi qua lại Type Shipment" style="padding:4px 7px;flex-shrink:0"><i class="ti ti-arrows-right-left"></i></button></div></div>`;
+        return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><div style="display:flex;gap:4px;align-items:center"><select id="f_${c.k}" style="font-size:12px;flex:1">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select><button type="button" class="btn sm pri" onclick="saveLoaiHangQuick()" title="Chọn Type Shipment ở ô bên trái rồi bấm Lưu — áp dụng ngay, cấp lại Job ID theo type mới" style="padding:4px 10px;flex-shrink:0;white-space:nowrap"><i class="ti ti-device-floppy"></i> Lưu</button></div></div>`;
       }
       if(c.compact){
         return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><select id="f_${c.k}" style="font-size:12px">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
@@ -17011,6 +17032,73 @@ async function doAddDocTrackKey(id, tt, key){
 }
 window.doAddDocTrackKey=doAddDocTrackKey;
 
+// ── Đổi Type Shipment — popup chọn rõ loại cần đổi (thay vì cycle mù qua từng loại) ──
+// Lưu sẽ cấp lại Job ID theo type mới. Các thuộc tính gắn theo tiền tố Job ID (vd Trạng thái Bill
+// chỉ áp dụng cho job XK — xem dòng renderLotTable ~2790) LUÔN được tính động từ r.jobNo hiện tại
+// mỗi lần render, nên tự động cập nhật đúng ngay khi Job ID đổi — không cần sửa gì thêm ở nơi khác.
+const TYPE_SHIPMENT_OPTS=['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service'];
+function openChangeTypeShipmentPopup(id,tt){
+  const r=cache[tt].find(function(x){return x._id===id;}); if(!r)return;
+  const current=r.loaiHang||TYPE_SHIPMENT_OPTS[0];
+  window._changeTypeChoice=current;
+  let ov=g('changeTypeOv');
+  if(!ov){ov=document.createElement('div');ov.id='changeTypeOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:420px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-replace" style="margin-right:6px"></i>Đổi Type Shipment</div>'
+    +'<button class="rac" onclick="closeOv(\'changeTypeOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px">'
+      +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:12px">Hiện tại: <b>'+current+'</b> — Job ID: <b>'+(r.jobNo||'—')+'</b></div>'
+      +'<div id="changeTypeOpts" style="display:flex;flex-direction:column;gap:6px">'
+        +TYPE_SHIPMENT_OPTS.map(function(o){
+          const isCur=o===current;
+          return '<label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid '+(isCur?'var(--green)':'var(--border-light)')+';border-radius:8px;cursor:pointer" data-val="'+o+'" onclick="_changeTypeChoose(this)">'
+            +'<input type="radio" name="changeTypeRadio" '+(isCur?'checked':'')+' style="width:16px;height:16px;pointer-events:none"/>'
+            +'<span style="font-size:13px;font-weight:600">'+o+'</span>'
+          +'</label>';
+        }).join('')
+      +'</div>'
+      +'<div style="font-size:11px;color:var(--amber-text);background:var(--amber-bg);padding:8px 10px;border-radius:8px;margin-top:12px"><i class="ti ti-alert-triangle"></i> Đổi type sẽ cấp lại Job ID mới theo type vừa chọn. Các thuộc tính gắn theo type (vd Trạng thái Bill chỉ áp dụng cho job XK) sẽ tự cập nhật theo Job ID mới.</div>'
+    +'</div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'changeTypeOv\')">Hủy</button><button class="btn pri" data-id="'+id+'" data-tt="'+tt+'" onclick="saveChangeTypeShipment(this.dataset.id,this.dataset.tt)"><i class="ti ti-check"></i> Lưu</button></div>'
+  +'</div>';
+  openOv('changeTypeOv');
+}
+window.openChangeTypeShipmentPopup=openChangeTypeShipmentPopup;
+
+function _changeTypeChoose(lbl){
+  window._changeTypeChoice=lbl.dataset.val;
+  const wrap=g('changeTypeOpts'); if(!wrap)return;
+  Array.from(wrap.children).forEach(function(l){
+    const isSel=l===lbl;
+    l.style.borderColor=isSel?'var(--green)':'var(--border-light)';
+    l.querySelector('input').checked=isSel;
+  });
+}
+window._changeTypeChoose=_changeTypeChoose;
+
+async function saveChangeTypeShipment(id,tt){
+  if(!can('editLot')){toast('Không có quyền','error');return;}
+  const r=cache[tt].find(function(x){return x._id===id;}); if(!r)return;
+  const newType=window._changeTypeChoice||r.loaiHang;
+  if(newType===r.loaiHang){toast('Chưa chọn type khác với hiện tại');return;}
+  setLoading(true,'Đang đổi Type Shipment...');
+  try{
+    const oldType=r.loaiHang||'—', oldJobNo=r.jobNo||'—';
+    const newJobNo=getNextJobNo(newType);
+    const payload={loaiHang:newType,jobNo:newJobNo,updatedAt:Date.now()};
+    await fsSet(colName(tt),id,payload);
+    Object.assign(r,payload);
+    logLotEvent(id,tt,'update','Đổi Type Shipment','Type Shipment: '+oldType+' → '+newType+' | Job ID: '+oldJobNo+' → '+newJobNo+' (cấp lại tự động)');
+    closeOv('changeTypeOv');
+    toast('Đã đổi Type Shipment — Job ID mới: '+newJobNo);
+    renderLotTable(tt);
+    if(detailId===id)renderDetailPanel(cache[tt].find(function(x){return x._id===id;})||{},tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.saveChangeTypeShipment=saveChangeTypeShipment;
+
 
 // Bảng cảnh báo: lô đã bật theo dõi VST, chưa xác nhận, và còn ≤2h tới giờ Cut Off CY (hoặc đã quá giờ)
 // + lô đã bật theo dõi chứng từ, còn thiếu chứng từ, và đã qua ETD từ 4 ngày trở lên.
@@ -19376,12 +19464,29 @@ window.exportCostingExcel=exportCostingExcel;
 /* ═══════════════════════════════════════════
    INTERNAL JOB NUMBER GENERATION
 ═══════════════════════════════════════════ */
-// Đổi qua lại Type Shipment (loaiHang) ngay trong form đang mở — bấm 1 nút thay vì mở dropdown
-function _cycleLoaiHangField(){
-  const sel=g('f_loaiHang'); if(!sel||!sel.options.length)return;
-  sel.selectedIndex=(sel.selectedIndex+1)%sel.options.length;
+// Lưu ngay Type Shipment (loaiHang) khi đang sửa lô đã có — không cần đợi Lưu cả form.
+// Cấp lại Job ID theo type mới ngay lập tức; các phần UI dựa vào tiền tố Job ID (vd Trạng thái Bill
+// chỉ hiện khi Job ID bắt đầu bằng "XK") sẽ tự động cập nhật theo vì luôn đọc tiền tố tại thời điểm hiển thị.
+async function saveLoaiHangQuick(){
+  const sel=g('f_loaiHang'); if(!sel)return;
+  const newVal=sel.value;
+  if(!lotIdx){toast('Lô mới chưa lưu — Job ID sẽ được cấp khi bấm "Lưu" lô hàng','error');return;}
+  if(!can('editLot')){toast('Không có quyền','error');return;}
+  const r=cache[currentTab].find(function(x){return x._id===lotIdx;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  if(newVal===(r.loaiHang||'')){toast('Type Shipment không đổi');return;}
+  try{
+    const oldJobNo=r.jobNo, oldType=r.loaiHang;
+    const newJobNo=getNextJobNo(newVal);
+    await fsSet(colName(currentTab),lotIdx,{loaiHang:newVal,jobNo:newJobNo,updatedAt:Date.now(),updatedBy:currentUser.email});
+    Object.assign(r,{loaiHang:newVal,jobNo:newJobNo});
+    if(typeof logLotEvent==='function')logLotEvent(lotIdx,currentTab,'update','Đổi Type Shipment','Type Shipment: '+(oldType||'(trống)')+' → '+newVal+'\nJob ID: '+(oldJobNo||'(trống)')+' → '+newJobNo+' (cấp lại do đổi Type Shipment)');
+    toast('Đã đổi Type Shipment — Job ID mới: '+newJobNo);
+    renderLotTable(currentTab);
+    if(typeof detailId!=='undefined'&&detailId===lotIdx&&typeof renderDetailPanel==='function')renderDetailPanel(r,currentTab);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
 }
-window._cycleLoaiHangField=_cycleLoaiHangField;
+window.saveLoaiHangQuick=saveLoaiHangQuick;
 function getNextJobNo(loaiHang){
   const prefix = loaiHang==='LS - Local Service'?'LS':loaiHang==='IM - Nhập khẩu'?'IM':'XK';
   // Collect all existing job numbers for this prefix
