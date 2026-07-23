@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.69';
+window.APP_BUILD='v2.70';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1935,7 +1935,7 @@ function goTab(t){
     g('detailPanel').classList.remove('open');
     g('detailBackdrop').classList.remove('open');
   }
-  ['home','xuat','notes','nhap','deadline','thu-chi','doi-tac','vessel','salesupport','cocoquote','contract','marketdata','users','docs','ocean','quote','settings','service-report'].forEach(id=>{
+  ['home','xuat','notes','nhap','deadline','thu-chi','doi-tac','vessel','salesupport','cocoquote','contract','marketdata','users','docs','ocean','quote','settings','service-report','job-report'].forEach(id=>{
     g('page-'+id).style.display=id===t?'':'none';
   });
   // Highlight đúng mục sidebar cha cho các trang đã gộp (Costing→Finance, Contract→CRM, Ocean/Quote/Coconut→Sale Support)
@@ -1944,7 +1944,7 @@ function goTab(t){
   document.querySelectorAll('.sb-item').forEach(function(el){el.classList.remove('active');});
   g('sb-'+activeSb)?.classList.add('active');
   g('sb-users')?.classList.toggle('active', t==='users');
-  const titles={'home':'DASHBOARD','xuat':'Shipment List','notes':'COCO NOTES','nhap':'Nhập khẩu','deadline':'Task Progress','thu-chi':'Finance','doi-tac':'CRM','vessel':'Vessel tool','salesupport':'Sale Support','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation','service-report':'Service Report'};
+  const titles={'home':'DASHBOARD','xuat':'Shipment List','notes':'COCO NOTES','nhap':'Nhập khẩu','deadline':'Task Progress','thu-chi':'Finance','doi-tac':'CRM','vessel':'Vessel tool','salesupport':'Sale Support','cocoquote':'Coconut tool — Báo giá Xơ dừa / Mụn dừa','contract':'Contract List','users':'User','quote':'Quotation','service-report':'Service Report','job-report':'Job Report'};
   document.title=titles[t]||t;
   if(t==='home') renderHomePage();
   if(t==='xuat'||t==='nhap') renderLot(t);
@@ -1962,6 +1962,7 @@ function goTab(t){
   if(t==='service-report') renderServiceReport();
   if(t==='ocean'){ renderOcean(); _injectBackBtn('page-ocean','Sale Support','salesupport'); }
   if(t==='quote'){ renderQuote(); _injectBackBtn('page-quote','Sale Support','salesupport'); }
+  if(t==='job-report'){ renderJobReportPage(); _injectBackBtn('page-job-report','Sale Support','salesupport'); }
   if(t==='settings') renderSettings();
 }
 
@@ -12645,7 +12646,10 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 /* UA */
 .ua{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;position:relative}
 .ua::after{content:'';position:absolute;bottom:0;right:0;width:11px;height:11px;border-radius:50%;background:#22C55E;border:2px solid var(--cs-navy-2)}
-.tn-glass-btn{width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);backdrop-filter:blur(8px);color:var(--cs-gray);display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;flex-shrink:0;transition:all .25s ease;position:relative}
+.tn-glass-btn{width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);backdrop-filter:blur(8px);color:var(--cs-gray);align-items:center;justify-content:center;font-size:16px;cursor:pointer;flex-shrink:0;transition:all .25s ease;position:relative}
+/* display riêng theo từng nút — tránh .tn-glass-btn ép display:flex đè lên display:none của .tn-hamburger
+   (đây chính là lý do nút menu bị hiện sai ở cả màn desktop, nơi nó không có tác dụng gì) */
+.tn-theme-btn{display:flex}
 .tn-glass-btn:hover{background:rgba(92,225,230,.12);border-color:rgba(92,225,230,.4);color:#fff;transform:scale(1.08);box-shadow:0 4px 16px -4px rgba(92,225,230,.5)}
 /* LOADING OVERLAY */
 #loadingOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999;align-items:center;justify-content:center;flex-direction:column;gap:12px}
@@ -12897,6 +12901,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
       <div id="page-costing-report" style="display:none"></div>
       <div id="page-ocean" style="display:none"></div>
       <div id="page-quote" style="display:none"></div>
+      <div id="page-job-report" style="display:none"></div>
       <div id="page-settings" style="display:none"></div>
       <div id="page-service-report" style="display:none">
         <div class="cal-pagehead" style="margin-bottom:1rem">
@@ -13097,6 +13102,232 @@ function openJobReport(tt){
   openOv('jobReportOv');
 }
 window.openJobReport=openJobReport;
+
+// ═══ JOB REPORT — trang đầy đủ (Sale Support), gồm 2 tab ═══
+// Tab 1 "Xuất báo cáo": y hệt tính năng cũ (chọn shipper + khoảng thời gian, xuất PDF/Excel) — đưa
+// nguyên form vào trang thay vì popup, TÁI DÙNG y nguyên _jobReportData()/_jobReportExport() (không đổi id field).
+// Tab 2 "So sánh Shipper": tính năng MỚI — so sánh sản lượng/doanh thu/lợi nhuận/tỷ lệ LN giữa các shipper.
+window._jobReportTab=window._jobReportTab||'export';
+function renderJobReportPage(){
+  const pg=g('page-job-report'); if(!pg)return;
+  pg.innerHTML='<div class="cal-pagehead" style="margin-bottom:1rem">'
+    +'<div><div class="cal-pagehead-title"><i class="ti ti-report" style="font-size:20px;color:#C1553E"></i>Job Report</div>'
+    +'<div class="cal-pagehead-sub">Báo cáo lô hàng theo shipper, và so sánh hiệu quả kinh doanh giữa các shipper.</div></div>'
+    +'<div class="cal-seg">'
+      +'<button onclick="_jobReportSwitchTab(\'export\')" class="'+(window._jobReportTab==='export'?'on':'')+'"><i class="ti ti-file-export"></i> Xuất báo cáo</button>'
+      +'<button onclick="_jobReportSwitchTab(\'compare\')" class="'+(window._jobReportTab==='compare'?'on':'')+'"><i class="ti ti-chart-pie"></i> So sánh Shipper</button>'
+    +'</div>'
+  +'</div>'
+  +'<div id="jobReportBody"></div>';
+  if(window._jobReportTab==='compare') _jobReportRenderCompare();
+  else _jobReportRenderExport();
+}
+window.renderJobReportPage=renderJobReportPage;
+function _jobReportSwitchTab(tab){ window._jobReportTab=tab; renderJobReportPage(); }
+window._jobReportSwitchTab=_jobReportSwitchTab;
+
+// ── Tab 1: Xuất báo cáo (y hệt form popup cũ, giờ nằm hẳn trong trang) ──
+function _jobReportRenderExport(){
+  const body=g('jobReportBody'); if(!body)return;
+  const allR=[...cache.xuat,...cache.nhap];
+  const shippers=[...new Set(allR.map(function(r){return r.shipper||r.supplier||'';}).filter(Boolean))].sort();
+  const shipperOpts='<option value="">— Tất cả shipper —</option>'+shippers.map(function(s){return '<option value="'+s.replace(/"/g,'&quot;')+'">'+s+'</option>';}).join('');
+  const today=new Date().toISOString().slice(0,10);
+  const d=new Date(); d.setMonth(d.getMonth()-1); const monthAgo=d.toISOString().slice(0,10);
+  body.innerHTML='<div class="table-card" style="padding:1.25rem;max-width:640px">'
+    +'<div class="fg">'
+      +'<div class="fi full"><label class="lbl">Shipper</label><select id="jr_shipper">'+shipperOpts+'</select></div>'
+      +'<div class="fi"><label class="lbl">Loại</label><select id="jr_loai"><option value="all">Xuất + Nhập</option><option value="xuat">Chỉ Xuất</option><option value="nhap">Chỉ Nhập</option></select></div>'
+      +'<div class="fi"><label class="lbl">&nbsp;</label><div style="font-size:11px;color:var(--text-tertiary);padding-top:8px">Lọc theo ETD</div></div>'
+      +'<div class="fi"><label class="lbl">ETD từ</label><input type="date" id="jr_from" value="'+monthAgo+'"/></div>'
+      +'<div class="fi"><label class="lbl">ETD đến</label><input type="date" id="jr_to" value="'+today+'"/></div>'
+    +'</div>'
+    +'<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:.5rem">'
+      +'<button class="btn" onclick="_jobReportExport(\'pdf\')" style="color:#b91c1c;border-color:#b91c1c"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>'
+      +'<button class="btn pri" onclick="_jobReportExport(\'excel\')" style="background:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
+    +'</div>'
+  +'</div>';
+}
+
+// ── Tab 2: So sánh Shipper (MỚI) ──
+// Dùng ĐÚNG công thức Doanh thu/Chi phí như runCostingReport() (Costing Report) để số liệu luôn khớp
+// với báo cáo lợi nhuận đã có sẵn trong app — không phát minh công thức mới.
+function _jobReportCompareData(){
+  const from=g('jrc_from')?.value||'';
+  const to=g('jrc_to')?.value||'';
+  const loai=g('jrc_loai')?.value||'all';
+  const roe=26390;
+  function cvVND(amt,cur){return cur==='VND'?amt:Math.round((amt||0)*roe);}
+  let lots=[];
+  if(loai==='all'||loai==='xuat')lots=lots.concat((cache.xuat||[]).map(function(r){return Object.assign({},r,{_tt:'xuat'});}));
+  if(loai==='all'||loai==='nhap')lots=lots.concat((cache.nhap||[]).map(function(r){return Object.assign({},r,{_tt:'nhap'});}));
+  lots=lots.filter(function(r){
+    if(from&&(r.etd||'')<from)return false;
+    if(to&&(r.etd||'')>to)return false;
+    return true;
+  });
+  const byShipper={};
+  lots.forEach(function(r){
+    const sh=r.shipper||r.supplier||'(Không rõ)';
+    if(!byShipper[sh])byShipper[sh]={shipper:sh,lotCount:0,contUnits:{},contTotal:0,revVND:0,costVND:0};
+    const s=byShipper[sh];
+    s.lotCount++;
+    const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{vol:r.vol,typeCont:r.typeCont}];
+    bookings.forEach(function(bk){
+      const v=parseFloat(bk.vol)||0;
+      const tc=(bk.typeCont||'').trim()||'—';
+      s.contUnits[tc]=(s.contUnits[tc]||0)+v;
+      s.contTotal+=v;
+    });
+    // Doanh thu = tổng Debit Note (chưa VAT) — cùng công thức Costing Report
+    const svcs=r.svcs||{};
+    Object.keys(svcs).forEach(function(k){
+      const sv=svcs[k];
+      if(!sv||!sv.on||sv.invoice==='Waived')return;
+      const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+      s.revVND+=cvVND(amt, sv.cur||'USD');
+    });
+    // Chi phí trước VAT — cùng công thức Costing Report
+    Object.keys(svcs).forEach(function(k){
+      const sv=svcs[k];
+      if(!sv||!sv.on||!sv.cost)return;
+      const costAmt=(sv.cost||0)*(sv.svcQty||1);
+      s.costVND+=cvVND(costAmt, sv.svcCur||sv.cur||'VND');
+    });
+    (r.costing&&r.costing.items||[]).forEach(function(it){
+      const amt=it.price?it.price*(it.qty||1):(it.amt||0);
+      s.costVND+=cvVND(amt, it.cur||'VND');
+    });
+  });
+  return Object.values(byShipper).map(function(s){
+    const profitVND=s.revVND-s.costVND;
+    const marginPct=s.revVND>0?Math.round(profitVND/s.revVND*1000)/10:0;
+    const contDetail=Object.keys(s.contUnits).sort().map(function(u){return (Math.round(s.contUnits[u]*10)/10)+'x'+u;}).join(', ');
+    return Object.assign({},s,{profitVND:profitVND,marginPct:marginPct,contDetail:contDetail});
+  }).sort(function(a,b){return b.revVND-a.revVND;});
+}
+
+function _jobReportRenderCompare(){
+  const body=g('jobReportBody'); if(!body)return;
+  if(!window._jrcMetric)window._jrcMetric='rev';
+  const today=new Date().toISOString().slice(0,10);
+  const d=new Date(); d.setMonth(d.getMonth()-3); const threeMoAgo=d.toISOString().slice(0,10);
+  if(g('jrc_from')===null){ /* lần đầu — dùng giá trị mặc định dưới đây khi render input */ }
+  const fromVal=g('jrc_from')?.value||threeMoAgo;
+  const toVal=g('jrc_to')?.value||today;
+  const loaiVal=g('jrc_loai')?.value||'all';
+
+  body.innerHTML='<div class="table-card" style="padding:1.1rem 1.25rem;margin-bottom:1rem">'
+    +'<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">'
+      +'<div class="fi"><label class="lbl">Loại</label><select id="jrc_loai" onchange="_jobReportRenderCompare()"><option value="all"'+(loaiVal==='all'?' selected':'')+'>Xuất + Nhập</option><option value="xuat"'+(loaiVal==='xuat'?' selected':'')+'>Chỉ Xuất</option><option value="nhap"'+(loaiVal==='nhap'?' selected':'')+'>Chỉ Nhập</option></select></div>'
+      +'<div class="fi"><label class="lbl">ETD từ</label><input type="date" id="jrc_from" value="'+fromVal+'" onchange="_jobReportRenderCompare()"/></div>'
+      +'<div class="fi"><label class="lbl">ETD đến</label><input type="date" id="jrc_to" value="'+toVal+'" onchange="_jobReportRenderCompare()"/></div>'
+      +'<button class="btn pri" onclick="_jobReportRenderCompare()" style="background:#C1553E;border-color:#C1553E"><i class="ti ti-refresh"></i> Chạy so sánh</button>'
+      +'<button class="btn" onclick="_jobReportCompareExportExcel()" style="margin-left:auto"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
+    +'</div>'
+  +'</div>'
+  +'<div id="jrcResult"></div>';
+
+  const data=_jobReportCompareData();
+  const resBox=g('jrcResult'); if(!resBox)return;
+  if(!data.length){resBox.innerHTML='<div class="empty-state"><i class="ti ti-mood-empty"></i>Không có dữ liệu trong khoảng thời gian này.</div>';return;}
+
+  const grandRev=data.reduce(function(s,d){return s+d.revVND;},0);
+  const grandProfit=data.reduce(function(s,d){return s+d.profitVND;},0);
+  const grandCont=data.reduce(function(s,d){return s+d.contTotal;},0);
+  const fmt=function(v){return Math.round(v).toLocaleString()+' đ';};
+  const fmtCont=function(v){return (Math.round(v*10)/10)+' cont';};
+
+  // 4 stat card tổng quan
+  const stats=[
+    {label:'Số Shipper',val:data.length,icon:'building',color:'#1a4b8c'},
+    {label:'Tổng doanh thu',val:fmt(grandRev),icon:'cash',color:'#0F766E'},
+    {label:'Tổng lợi nhuận',val:fmt(grandProfit),icon:'trending-up',color:grandProfit>=0?'#16A34A':'#DC2626'},
+    {label:'Tổng sản lượng',val:fmtCont(grandCont),icon:'container',color:'#C99A3C'}
+  ];
+  let html='<div class="cal-stats" style="margin-bottom:1rem">'+stats.map(function(s){
+    return '<div class="cal-stat"><div class="cal-stat-icon" style="background:'+s.color+'18;color:'+s.color+'"><i class="ti ti-'+s.icon+'"></i></div>'
+      +'<div class="cal-stat-body"><div class="cal-stat-val" style="font-size:16px">'+s.val+'</div><div class="cal-stat-lbl">'+s.label+'</div></div></div>';
+  }).join('')+'</div>';
+
+  // 2 biểu đồ: tròn (thị phần doanh thu) + cột (so sánh theo chỉ số chọn được)
+  const metricMap={rev:{label:'Doanh thu',get:function(d){return d.revVND;}},profit:{label:'Lợi nhuận',get:function(d){return d.profitVND;}},margin:{label:'Tỷ lệ lợi nhuận (%)',get:function(d){return d.marginPct;}},cont:{label:'Sản lượng (Cont)',get:function(d){return d.contTotal;}}};
+  const mSel=window._jrcMetric;
+  const barData=data.map(function(d){return {label:d.shipper,value:Math.max(0,metricMap[mSel].get(d))};});
+  const barFmt=mSel==='margin'?function(v){return v.toFixed(1)+'%';}:(mSel==='cont'?fmtCont:fmt);
+  const pieData=data.map(function(d){return {label:d.shipper,value:Math.max(0,d.revVND)};});
+
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:1rem">'
+    +'<div class="table-card" style="padding:1.1rem">'
+      +'<div style="font-size:12.5px;font-weight:700;color:var(--text-primary);margin-bottom:.75rem"><i class="ti ti-chart-pie" style="color:#0F766E"></i> Thị phần doanh thu theo Shipper</div>'
+      +_mdSvgPieChart(pieData,7,fmt,grandRev)
+    +'</div>'
+    +'<div class="table-card" style="padding:1.1rem">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;flex-wrap:wrap;gap:8px">'
+        +'<div style="font-size:12.5px;font-weight:700;color:var(--text-primary)"><i class="ti ti-chart-bar" style="color:#0F766E"></i> So sánh giữa các Shipper</div>'
+        +'<select onchange="window._jrcMetric=this.value;_jobReportRenderCompare()" style="font-size:11.5px;width:170px">'
+          +Object.keys(metricMap).map(function(k){return '<option value="'+k+'"'+(k===mSel?' selected':'')+'>Theo '+metricMap[k].label+'</option>';}).join('')
+        +'</select>'
+      +'</div>'
+      +_mdSvgBarChart(barData,10,barFmt,null)
+    +'</div>'
+  +'</div>';
+
+  // Bảng chi tiết — mặc định sắp theo Doanh thu giảm dần để thấy ngay khách hàng trọng tâm
+  const thS='padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:700;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap';
+  const tdS='padding:8px 10px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+  html+='<div class="table-card"><div class="table-wrap"><table style="width:100%;border-collapse:collapse">'
+    +'<thead><tr>'
+      +'<th style="'+thS+'">#</th><th style="'+thS+'">Shipper</th><th style="'+thS+';text-align:center">Số lô</th>'
+      +'<th style="'+thS+'">Sản lượng (Cont)</th><th style="'+thS+';text-align:right">Doanh thu</th>'
+      +'<th style="'+thS+';text-align:right">Chi phí</th><th style="'+thS+';text-align:right">Lợi nhuận</th>'
+      +'<th style="'+thS+';text-align:right">Tỷ lệ LN</th>'
+    +'</tr></thead><tbody>'
+    +data.map(function(d,i){
+      const bg=i%2===0?'var(--zebra-a)':'var(--zebra-b)';
+      const profitColor=d.profitVND>=0?'var(--green)':'var(--red)';
+      return '<tr style="background:'+bg+'">'
+        +'<td style="'+tdS+';color:var(--text-tertiary)">'+(i+1)+'</td>'
+        +'<td style="'+tdS+';font-weight:700;cursor:pointer;color:var(--blue)" onclick="_gotoPartnerFromList(\''+d.shipper.replace(/'/g,"\\'")+'\')">'+d.shipper+'</td>'
+        +'<td style="'+tdS+';text-align:center">'+d.lotCount+'</td>'
+        +'<td style="'+tdS+'">'+(d.contDetail||'—')+'</td>'
+        +'<td style="'+tdS+';text-align:right;font-weight:600">'+fmt(d.revVND)+'</td>'
+        +'<td style="'+tdS+';text-align:right;color:var(--text-secondary)">'+fmt(d.costVND)+'</td>'
+        +'<td style="'+tdS+';text-align:right;font-weight:700;color:'+profitColor+'">'+fmt(d.profitVND)+'</td>'
+        +'<td style="'+tdS+';text-align:right;font-weight:700;color:'+profitColor+'">'+d.marginPct.toFixed(1)+'%</td>'
+      +'</tr>';
+    }).join('')
+    +'</tbody></table></div></div>';
+
+  resBox.innerHTML=html;
+}
+window._jobReportRenderCompare=_jobReportRenderCompare;
+
+// Xuất Excel bảng so sánh shipper — dùng ExcelJS đã có sẵn trong app
+async function _jobReportCompareExportExcel(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const data=_jobReportCompareData();
+  if(!data.length){toast('Không có dữ liệu để xuất','error');return;}
+  setLoading(true,'Đang tạo file Excel...');
+  try{
+    const wb=new ExcelJS.Workbook();
+    const ws=wb.addWorksheet('So sánh Shipper');
+    ws.columns=[{width:6},{width:32},{width:10},{width:22},{width:18},{width:18},{width:18},{width:12}];
+    ws.addRow(['#','Shipper','Số lô','Sản lượng (Cont)','Doanh thu (VND)','Chi phí (VND)','Lợi nhuận (VND)','Tỷ lệ LN (%)']).font={bold:true};
+    data.forEach(function(d,i){
+      ws.addRow([i+1,d.shipper,d.lotCount,d.contDetail,d.revVND,d.costVND,d.profitVND,d.marginPct]);
+    });
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/octet-stream'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='SoSanhShipper_'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel so sánh Shipper');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._jobReportCompareExportExcel=_jobReportCompareExportExcel;
 
 function _jobReportData(){
   const shipper=g('jr_shipper')?.value||'';
@@ -21226,7 +21457,7 @@ function renderSaleSupport(){
     {t:'quote',icon:'ti-file-dollar',title:'Quotation',desc:'Tạo và quản lý báo giá gửi khách hàng',color:'var(--green)'},
     {t:'ocean',icon:'ti-anchor',title:'Ocean Freight',desc:'Bảng giá cước biển theo tuyến, hãng tàu',color:'#1a4b8c'},
     {t:'cocoquote',icon:'ti-calculator',title:'Coconut Tool',desc:'Báo giá Xơ dừa / Mụn dừa',color:'var(--gold-dark)'},
-    {action:"openJobReport('xuat')",icon:'ti-report',title:'Job Report',desc:'Báo cáo lô hàng theo shipper & khoảng thời gian',color:'var(--coral-dark,#C1553E)'},
+    {t:'job-report',icon:'ti-report',title:'Job Report',desc:'Báo cáo lô hàng & so sánh hiệu quả giữa các shipper',color:'var(--coral-dark,#C1553E)'},
   ];
   pg.innerHTML='<div style="font-weight:700;font-size:15px;margin-bottom:.25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-briefcase" style="font-size:19px;color:var(--gold-dark)"></i>Sale Support</div>'
     +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:1.25rem">Công cụ hỗ trợ báo giá, bán hàng và báo cáo — chọn 1 mục bên dưới để bắt đầu.</div>'
