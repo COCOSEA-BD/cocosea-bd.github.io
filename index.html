@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.64';
+window.APP_BUILD='v2.65';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7717,13 +7717,16 @@ function runDebtReport(){
           const noOk=noApplicable&&st.noInvPaid;
           const totalApplicable=(yesApplicable?1:0)+(noApplicable?1:0);
           const paidCount=(yesOk?1:0)+(noOk?1:0);
-          // Lưu số tiền đã thanh toán thực tế của dòng này lên chính object r — để phần tổng kết
-          // (grandPaidVND) TÁI SỬ DỤNG giá trị này thay vì tính lại, đảm bảo LUÔN khớp với badge hiển thị.
-          r._arRowPaidVND=(yesOk?rowTotalVND:0)+(noOk?rowTotalNoVND:0);
+          // Số tiền ĐÃ THANH TOÁN THỰC TẾ — lấy đúng số tiền đã nhập ở tab Invoice (dnPayments[party].inv/noInv.amount),
+          // clamp theo Tổng để không hiện vượt quá dù lỡ nhập thừa. KHÔNG suy diễn "status=paid thì cộng đủ cả Tổng"
+          // — đây chính là nguyên nhân gây hiển thị sai số tiền khi trạng thái đã đánh dấu "paid" nhưng số tiền
+          // nhập vào chỉ là một phần (2 field độc lập nhau ở tab Invoice).
+          r._arRowPaidVND=Math.min(rowTotalVND,st.paidYesVND)+Math.min(rowTotalNoVND,st.paidNoVND);
           let badgeLabel,badgeColor;
+          const totalDueVND=rowTotalVND+rowTotalNoVND;
           if(totalApplicable===0){badgeLabel='—';badgeColor='var(--text-tertiary)';}
-          else if(paidCount===totalApplicable){badgeLabel='Đã TT';badgeColor='var(--green)';}
-          else if(paidCount===0){badgeLabel='Chưa TT';badgeColor='var(--red)';}
+          else if(paidCount===totalApplicable&&r._arRowPaidVND>=totalDueVND){badgeLabel='Đã TT';badgeColor='var(--green)';}
+          else if(r._arRowPaidVND<=0){badgeLabel='Chưa TT';badgeColor='var(--red)';}
           else {
             const paidAmt=r._arRowPaidVND;
             badgeLabel='Một phần — '+paidAmt.toLocaleString()+' đ';badgeColor='#b45309';
@@ -24247,11 +24250,16 @@ function _computeArRowStatus(r, filterShipper, sh, sp){
     partyKeysUsed.add(svParty||'(Không party)');
   });
   let invPaidAll=true, noInvPaidAll=true, hasInvRecord=false, hasNoInvRecord=false;
+  // Số tiền ĐÃ THANH TOÁN THỰC TẾ — lấy trực tiếp từ dnPayments[party].inv/noInv.amount.
+  // KHÔNG suy diễn từ status: trạng thái có thể đã đánh dấu "paid" trong khi số tiền nhập vào
+  // (ô "Đã thanh toán" ở tab Invoice) chỉ là một phần — 2 field này độc lập với nhau.
+  let paidYesVND=0, paidNoVND=0;
   partyKeysUsed.forEach(function(pk){
     const pmd=dnPm[pk];
     if(pmd&&pmd.inv&&pmd.inv.status){
       // Có bản ghi RÕ RÀNG cho phần Có HĐ trong dnPayments mới — dùng trực tiếp, tin cậy tuyệt đối.
       hasInvRecord=true; if(pmd.inv.status!=='paid')invPaidAll=false;
+      paidYesVND+=pmd.inv.amount||0;
     } else if(!pmd&&legacyPay[pk]){
       // CHỈ dùng field dnPayStatus (legacy) khi lô này CHƯA TỪNG có cấu trúc dnPayments mới cho
       // party này (pmd hoàn toàn không tồn tại) — ví dụ lô cũ trước khi có tách Có HĐ/Không HĐ.
@@ -24259,10 +24267,14 @@ function _computeArRowStatus(r, filterShipper, sh, sp){
       // đã bị đồng bộ sai trong quá khứ (coi "chưa thao tác" là "OK") — nguồn gốc lỗi báo "Đã TT"
       // sai khi mới chỉ thanh toán 1 phần.
       hasInvRecord=true; if(legacyPay[pk]!=='paid')invPaidAll=false;
+      // Legacy không có field amount riêng — coi như đã thanh toán đủ nếu status='paid' (hành vi cũ)
     }
-    if(pmd&&pmd.noInv&&pmd.noInv.status){ hasNoInvRecord=true; if(pmd.noInv.status!=='paid')noInvPaidAll=false; }
+    if(pmd&&pmd.noInv&&pmd.noInv.status){
+      hasNoInvRecord=true; if(pmd.noInv.status!=='paid')noInvPaidAll=false;
+      paidNoVND+=pmd.noInv.amount||0;
+    }
   });
-  return {invPaid:hasInvRecord&&invPaidAll, noInvPaid:hasNoInvRecord&&noInvPaidAll};
+  return {invPaid:hasInvRecord&&invPaidAll, noInvPaid:hasNoInvRecord&&noInvPaidAll, paidYesVND:paidYesVND, paidNoVND:paidNoVND};
 }
 window._computeArRowStatus=_computeArRowStatus;
 
