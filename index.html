@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.76';
+window.APP_BUILD='v2.77';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -24410,38 +24410,18 @@ function exportSOA(){
       lineItems.push({name:sv.customName||s.name,qty:sv.qty||1,unit:sv.unit||'',price:sv.price||0,cur:sv.cur||'USD',amtVND:amtVND,vatPct:vatPct,vatAmt:vatAmt,total:amtVND+vatAmt,type:isYes?'cty':'cn'});
     });
     // Payment: tách riêng inv (có HĐ) và noInv (không HĐ)
-    // QUAN TRỌNG: quyết định "đã TT" dựa vào field .status==='paid' TRỰC TIẾP, KHÔNG dựa vào
-    // số tiền .amount (vì amount có thể =0 nếu lúc đánh dấu paid người dùng để trống số tiền —
-    // số tiền chỉ dùng để HIỂN THỊ, không dùng để xác định đã/chưa thanh toán)
-    var dnPmts=r.dnPayments||{};
-    var invEntries=[],noInvEntries=[];
-    Object.values(dnPmts).forEach(function(p){
-      if(p&&p.inv&&p.inv.status)invEntries.push(p.inv);
-      if(p&&p.noInv&&p.noInv.status)noInvEntries.push(p.noInv);
-    });
-    var invAllPaid=invEntries.length>0&&invEntries.every(function(x){return x.status==='paid';});
-    var noInvAllPaid=noInvEntries.length>0&&noInvEntries.every(function(x){return x.status==='paid';});
-    var invHasData=invEntries.length>0, noInvHasData=noInvEntries.length>0;
-    // Fallback legacy dnPayStatus — CHỈ áp dụng khi lô này HOÀN TOÀN CHƯA CÓ bản ghi dnPayments
-    // nào (Object.keys(dnPmts).length===0) — KHÔNG áp dụng chỉ vì invEntries rỗng, vì party CÓ
-    // THỂ đã có bản ghi dnPayments nhưng .inv chưa từng thao tác (inv:{}) — nếu dùng invHasData
-    // để quyết định, sẽ vô tình dùng field dnPayStatus (có thể đã bị ghi sai trước đây) để suy
-    // ra "đã thanh toán" cho phần Có HĐ dù thực tế chưa ai đánh dấu — đây là lỗi đã gặp phải.
-    if(Object.keys(dnPmts).length===0){
-      var psMap=r.dnPayStatus||{};
-      var psVals=Object.values(psMap);
-      if(psVals.length){invHasData=true;invAllPaid=psVals.every(function(v){return v==='paid';});}
-    }
-    var invPaidAmt=0; invEntries.forEach(function(x){if(x.status==='paid')invPaidAmt+=parseFloat(x.amount)||0;});
-    var noInvPaidAmt=0; noInvEntries.forEach(function(x){if(x.status==='paid')noInvPaidAmt+=parseFloat(x.amount)||0;});
+    // HỢP NHẤT với báo cáo trên màn hình: gọi lại CHÍNH XÁC _computeArRowStatus() (đã xác nhận đúng
+    // ở Debts > Báo cáo công nợ theo Shipper) thay vì tự duy trì 1 bản tính riêng — tránh 2 luồng
+    // tính cùng dữ liệu dnPayments nhưng ra kết quả khác nhau (đây là nguyên nhân SOA/Excel từng
+    // "không ghi nhận" thanh toán 1 phần dù màn hình đã hiện đúng).
+    var arSt=_computeArRowStatus(r,filterShipper,sh3,sp4);
+    var invHasData=true, noInvHasData=true; // luôn true — hàm dưới tự trả 'unpaid' đúng khi không có bản ghi/paidAmt=0
+    var invAllPaid=arSt.invPaid, noInvAllPaid=arSt.noInvPaid;
+    var invPaidAmt=arSt.paidYesVND, noInvPaidAmt=arSt.paidNoVND;
     function _fmtPay(allPaid,hasData,paidAmt,total){
-      if(!hasData)return {status:'unpaid',display:'Chưa TT',paid:0};
-      // So sánh ĐÚNG số tiền thực với tổng để quyết định nhãn — không chỉ dựa vào status (allPaid),
-      // vì status có thể đã đánh dấu "paid" trong khi số tiền nhập vào chỉ là một phần (2 field độc
-      // lập nhau ở tab Invoice). Đây là lỗi khiến SOA/Excel từng "không ghi nhận" thanh toán 1 phần.
-      if(paidAmt>0&&total>0&&paidAmt<total)return {status:'partial',display:'Một phần — '+Math.round(paidAmt).toLocaleString()+' đ',paid:paidAmt};
-      if(allPaid||(paidAmt>0&&paidAmt>=total)){var amt=paidAmt>0?paidAmt:total;return {status:'paid',display:'Đã TT'+(amt>1000?' '+Math.round(amt).toLocaleString()+' đ':''),paid:amt};}
-      if(paidAmt>0)return {status:'partial',display:'Một phần — '+Math.round(paidAmt).toLocaleString()+' đ',paid:paidAmt};
+      const st=_arPayStatus(allPaid,paidAmt,total);
+      if(st.status==='partial')return {status:'partial',display:'Một phần — '+Math.round(st.amt).toLocaleString()+' đ',paid:st.amt};
+      if(st.status==='paid')return {status:'paid',display:'Đã TT'+(st.amt>1000?' '+Math.round(st.amt).toLocaleString()+' đ':''),paid:st.amt};
       return {status:'unpaid',display:'Chưa TT',paid:0};
     }
     var invPs=_fmtPay(invAllPaid,invHasData,invPaidAmt,preYes+vatYes);
@@ -24876,6 +24856,16 @@ function _computeArRowStatus(r, filterShipper, sh, sp){
 }
 window._computeArRowStatus=_computeArRowStatus;
 
+// Chuẩn hóa trạng thái thanh toán (paid/partial/unpaid) từ số tiền thực — dùng CHUNG cho SOA (PDF)
+// và Excel, để cả 2 nơi xuất luôn nhất quán tuyệt đối với báo cáo trên màn hình (đều bắt nguồn từ
+// _computeArRowStatus() ở trên). Không còn duy trì 2 luồng tính riêng dễ lệch nhau.
+function _arPayStatus(paidFlag,paidAmt,total){
+  if(paidAmt>0&&total>0&&paidAmt<total)return {status:'partial',amt:paidAmt};
+  if(paidFlag||(paidAmt>0&&paidAmt>=total))return {status:'paid',amt:(paidAmt>0?paidAmt:total)};
+  return {status:'unpaid',amt:0};
+}
+window._arPayStatus=_arPayStatus;
+
 function _dnPayStatusSplit(r, totalYesVND, totalNoVND, partyKeys){
   // partyKeys: mảng các key party cần kiểm tra (khi lô có nhiều party, lọc đúng bên đang xem)
   // Nếu không truyền → kiểm tra TẤT CẢ party (hành vi cũ, backward-compatible)
@@ -25301,9 +25291,19 @@ async function exportExcelDebt(){
         // Also try: the party key that is NOT the filter shipper (so we pick the right one)
         // If filterShipper is set, use the party that matches; else use first non-empty
         var dnNo=(matchedDnKey&&dnMap2[matchedDnKey])||dnKeys.reduce(function(best,k){return dnMap2[k]?dnMap2[k]:best;},'')|| r.dnNo||'—';
-        // Payment status: tách riêng Có HĐ (inv) / Không HĐ (noInv) — đồng bộ với SOA PDF và báo cáo trên màn hình
-        // (trước đây dùng chung 1 trạng thái gộp từ dnPayStatus legacy → sai khi 1 bên đã TT, bên kia chưa)
-        const payStatusSplit=_dnPayStatusSplit(r,totalYesVND,totalNoVND);
+        // Payment status: tách riêng Có HĐ (inv) / Không HĐ (noInv) — HỢP NHẤT với SOA PDF và báo
+        // cáo trên màn hình bằng cách gọi lại CHÍNH XÁC _computeArRowStatus()+_arPayStatus() thay vì
+        // duy trì 1 hàm tính riêng (_dnPayStatusSplit cũ) dễ lệch khỏi 2 nơi kia.
+        const arSt2=_computeArRowStatus(r,filterShipper,sh,sp);
+        const invSt2=_arPayStatus(arSt2.invPaid,arSt2.paidYesVND,totalYesVND);
+        const noInvSt2=_arPayStatus(arSt2.noInvPaid,arSt2.paidNoVND,totalNoVND);
+        function _payLabel(st,total){
+          if(total<=0)return '—';
+          if(st.status==='partial')return 'Một phần — '+Math.round(st.amt).toLocaleString()+' đ';
+          if(st.status==='paid')return 'Đã thanh toán';
+          return 'Chưa thanh toán';
+        }
+        const payStatusSplit={inv:_payLabel(invSt2,totalYesVND),invAmt:totalYesVND>0?invSt2.amt:0,noInv:_payLabel(noInvSt2,totalNoVND),noInvAmt:totalNoVND>0?noInvSt2.amt:0};
         if(totalYesVND>0)dataRows.push({dn:dnNo,job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',tenHang:r.tenHang||'',pre:preYes,vat:vatYes,amt:totalYesVND,tk:'Công ty',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.inv,payAmt:payStatusSplit.invAmt,type:'co'});
         if(totalNoVND>0)dataRows.push({dn:dnNo+'(CN)',job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',tenHang:r.tenHang||'',pre:preNo,vat:vatNo,amt:totalNoVND,tk:'Cá nhân',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.noInv,payAmt:payStatusSplit.noInvAmt,type:'cn'});
       });
