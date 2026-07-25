@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.73';
+window.APP_BUILD='v2.74';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5164,6 +5164,148 @@ window.saveComKb=saveComKb;
 
 
 
+// Trích 1 nhóm field theo danh sách key — giữ nguyên cặp rowStart/rowEnd nếu bất kỳ field nào bên trong
+// thuộc nhóm này (các cặp rowStart/rowEnd hiện tại luôn nằm trọn trong 1 section nên không bị xé lẻ).
+function _lotColsForSection(cols, keys){
+  const out=[]; let buf=null;
+  cols.forEach(function(c){
+    if(c.type==='rowStart'){ buf=[c]; return; }
+    if(c.type==='rowEnd'){
+      buf.push(c);
+      const inner=buf.slice(1,-1);
+      if(inner.some(function(f){return keys.indexOf(f.k)>=0;})) out.push.apply(out,buf);
+      buf=null; return;
+    }
+    if(buf){ buf.push(c); return; }
+    if(keys.indexOf(c.k)>=0) out.push(c);
+  });
+  return out;
+}
+window._lotColsForSection=_lotColsForSection;
+
+// Render HTML cho 1 field — logic GIỮ NGUYÊN 100% so với bản gốc (chỉ tách ra thành hàm riêng để
+// gọi lại được theo từng nhóm/section thay vì luôn luôn render phẳng toàn bộ 1 lần).
+function _lotFieldHtml(c, r, ctx){
+  const val=r[c.k]||'';
+  const full=(c.k==='tenHang'||c.k==='pol'||c.k==='pod')?' full':'';
+  const initCargo=ctx.initCargo, initCont=ctx.initCont, pC=ctx.pC, pS=ctx.pS, pF=ctx.pF, pAll=ctx.pAll;
+  if(c.type==='select'){
+    if(c.k==='loaiHang'){
+      return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><div style="display:flex;gap:4px;align-items:center"><select id="f_${c.k}" style="font-size:12px;flex:1">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select><button type="button" class="btn sm pri" onclick="saveLoaiHangQuick()" title="Chọn Type Shipment ở ô bên trái rồi bấm Lưu — áp dụng ngay, cấp lại Job ID theo type mới" style="padding:4px 10px;flex-shrink:0;white-space:nowrap"><i class="ti ti-device-floppy"></i> Lưu</button></div></div>`;
+    }
+    if(c.compact){
+      return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><select id="f_${c.k}" style="font-size:12px">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+    }
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+  }
+  if(c.type==='cutoffField'){
+    const etdVal=r['etd']||'';
+    const defaultVal=r[c.k]||calcDefaultCutoff(etdVal,-2,'11:00');
+    return`<div class="fi${full}"><label class="lbl">${c.l} <span style="font-size:9px;color:var(--text-tertiary)">(mặc định ETD-2 11:00)</span></label><input type="text" id="f_${c.k}" value="${defaultVal}" placeholder="yyyy-mm-dd 11:00"/></div>`;
+  }
+  if(c.type==='icd'){
+    const icdVal=r[c.k]||'';
+    const icdOpts='<option value="">— Chọn ICD —</option>'+ICD_LIST.map(p=>`<option${p===icdVal?' selected':''}>${p}</option>`).join('');
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${icdOpts}</select></div>`;
+  }
+  if(c.type==='rowStart') return'<div style="display:flex;gap:8px;align-items:flex-end;grid-column:1/-1">';
+  if(c.type==='rowEnd') return'</div>';
+  if(c.type==='bookingBlock'){
+    const bklist=r.bookings&&r.bookings.length?r.bookings:[{bookingNo:r.bookingNo||'',vol:r.vol||'',typeCont:r.typeCont||''}];
+    return buildBookingBlockHtml(bklist,r.mblNo||'');
+  }
+  if(c.type==='textarea'){
+    return`<div class="fi${full}" style="grid-column:1/-1"><label class="lbl">${c.l}</label><textarea id="f_${c.k}" rows="2" style="resize:vertical;font-size:12px">${val||''}</textarea></div>`;
+  }
+  if(c.type==='port'){
+    const portKey=c.k;
+    const countryKey=portKey+'Country';
+    const savedCountry=r[countryKey]||'';
+    const portsForCountry=savedCountry&&PORTS_BY_COUNTRY[savedCountry]?PORTS_BY_COUNTRY[savedCountry]:PORTS;
+    const countryOpts='<option value="">— Chọn quốc gia —</option>'+PORT_COUNTRIES.map(cn=>`<option${cn===savedCountry?' selected':''}>${cn}</option>`).join('');
+    const portOpts='<option value="">— Chọn cảng —</option>'+portsForCountry.map(p=>`<option${p===val?' selected':''}>${p}</option>`).join('');
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><select id="f_${countryKey}" onchange="updatePortOptions('${portKey}','${countryKey}')" style="font-size:12px">${countryOpts}</select><select id="f_${portKey}">${portOpts}</select></div></div>`;
+  }
+  if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
+  if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
+  if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;let onch=(c.k==='shipper'||c.k==='supplier')?' onchange="refreshCneeOptions()"':'';if(c.k==='carrier')onch=' onchange="onCarrierChangeVessel()"';return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"${onch}><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
+  const SPECIAL_COMPACT=['cnee','cargoType','typeCont','port','icd','cutoffField','date','select','bookingBlock'];
+  if(c.compact && !SPECIAL_COMPACT.includes(c.type) && c.k!=='tenHang' && c.k!=='consignee'){
+    return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:150px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
+  }
+  if(c.type==='transshipBlock'){
+    const ts=r.transships||[];
+    const tsRowHtml=function(p,i){
+      const tsCountry=p.country||'';
+      const tsPorts=(tsCountry&&PORTS_BY_COUNTRY[tsCountry])?PORTS_BY_COUNTRY[tsCountry]:PORTS;
+      const cOptsRow='<option value="">— Quốc gia —</option>'+PORT_COUNTRIES.map(function(cn){return '<option'+(cn===tsCountry?' selected':'')+'>'+cn+'</option>';}).join('');
+      const pOptsRow='<option value="">— Chọn cảng —</option>'+tsPorts.map(function(pt){return '<option'+(pt===p.port?' selected':'')+'>'+pt+'</option>';}).join('');
+      return '<div style="display:flex;gap:5px;margin-bottom:5px;align-items:center" data-ts-lot-row>'
+        +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px">'+cOptsRow+'</select>'
+        +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="port" style="flex:1.5;font-size:12px">'+pOptsRow+'</select>'
+        +'<input type="number" data-ts-lot-i="'+i+'" data-ts-lot-k="tt" value="'+(p.tt!=null?p.tt:'')+'" min="0" placeholder="T/T" title="Transit time ngày" style="width:50px;font-size:12px;text-align:center"/>'
+        +'<input type="date" data-ts-lot-i="'+i+'" data-ts-lot-k="eta" value="'+(p.eta||'')+'" style="width:130px;font-size:12px"/>'
+        +'<button class="rac red" onclick="lotTsDelRow('+i+')" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>'
+      +'</div>';
+    }
+    const rowsHtml=ts.map(function(p,i){return tsRowHtml(p,i);}).join('');
+    const hdRow=ts.length?'<div style="display:flex;gap:5px;margin-bottom:3px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase"><div style="flex:1">Quốc gia</div><div style="flex:1.5">Cảng chuyển tải</div><div style="width:50px;text-align:center">T/T</div><div style="width:130px">ETA</div><div style="width:32px"></div></div>':'';
+    const emptyMsg=ts.length?'':'<div style="font-size:12px;color:var(--text-tertiary);padding:4px 0">Tàu direct (không chuyển tải)</div>';
+    return '<div class="fi full" style="grid-column:1/-1">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+        +'<label class="lbl" style="color:#e07000;font-weight:700"><i class="ti ti-transfer" style="font-size:12px"></i> Cảng chuyển tải <span style="font-weight:400;color:var(--text-tertiary)">(optional)</span></label>'
+        +'<button class="btn sm" onclick="lotTsAddRow()" style="font-size:11.5px"><i class="ti ti-plus"></i> Thêm cảng</button>'
+      +'</div>'
+      +hdRow
+      +'<div id="lotTransshipList">'+rowsHtml+emptyMsg+'</div>'
+    +'</div>';
+  }
+  if(c.type==='cnee'){
+    const shKey=r.shipper||r.supplier||'';
+    const sp2=cache.partners[shKey]||{};
+    const cnees=sp2.cnees||[];
+    const opts=cnees.map(function(cn){return `<option${cn.name===val?' selected':''}>${cn.name}</option>`;}).join('');
+    const wrapStyle=c.compact?'display:inline-flex;flex-direction:column;gap:2px;flex:2;min-width:200px;max-width:320px':'';
+    const divClass=c.compact?'':'fi'+full;
+    return`<div ${wrapStyle?`style="${wrapStyle}"`:`class="${divClass}"`}><label class="lbl" ${c.compact?'style="font-size:9.5px"':''}>${c.l}</label><select id="f_${c.k}">${cnees.length?'<option value="">— Chọn Cnee —</option>'+opts:'<option value="">(Chọn Shipper trước)</option>'}</select></div>`;
+  }
+  if(c.k==='tenHang'){
+    const names=window._cargoNames||[];
+    const thWrap=c.compact?'display:inline-flex;flex-direction:column;gap:2px;flex:2;min-width:150px;max-width:220px':'';
+    const thDiv=c.compact?`style="${thWrap}"`:`class="fi${full}"`;
+    const thLbl=c.compact?'style="font-size:9.5px"':'';
+    if(names.length){
+      const opts=names.map(n=>{const nm=n.name||n;return `<option${nm===val?' selected':''}>${nm}</option>`;}).join('');
+      return`<div ${thDiv}><label class="lbl" ${thLbl}>${c.l}</label><select id="f_${c.k}"><option value="">— Chọn tên hàng —</option>${opts}</select></div>`;
+    }
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"/></div>`;
+  }
+  if(c.k==='vessel'){
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label>`
+      +`<select id="f_vesselPick" onchange="onVesselPick()" style="margin-bottom:4px;font-size:12px"><option value="">— Chọn tàu từ Vessel tool —</option></select>`
+      +`<input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" placeholder="Tên tàu"/></div>`;
+  }
+  return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"${c.k==='etd'?' oninput="updateEtdCutoffs()"':''}/></div>`;
+}
+window._lotFieldHtml=_lotFieldHtml;
+
+// Định nghĩa 6 section — mỗi section gồm: icon, tiêu đề, phụ đề (cho sidebar bước), và danh sách key field.
+const LOT_SECTIONS=[
+  {id:'sec-general',icon:'ti-file-info',color:'#2E90FA',title:'Thông tin chung',sub:'Loại hàng, Booking, Shipper',
+    keys:['loaiHang','cargoType','bookingParty','shipper','supplier','tenHang','cnee','consignee','status']},
+  {id:'sec-booking',icon:'ti-bookmark',color:'#2E90FA',title:'Booking Numbers',sub:'Số booking, MBL, Vol, Cont',
+    keys:['_bookingBlock']},
+  {id:'sec-transport',icon:'ti-truck',color:'#16C6B7',title:'Thông tin vận chuyển',sub:'Carrier, Vessel, Voyage',
+    keys:['carrier','fwd','vessel','voy']},
+  {id:'sec-time',icon:'ti-calendar-time',color:'#22C55E',title:'Thời gian',sub:'ETD, ETA, Cut off',
+    keys:['etd','eta','cutoffCY','cutoffSI']},
+  {id:'sec-port',icon:'ti-map-pin',color:'#7C3AED',title:'Cảng & Địa điểm',sub:'POL, POD, ICD, Kho',
+    keys:['pol','icd','pod','cyLocation','wh']},
+  {id:'sec-cargo',icon:'ti-package',color:'#F59E0B',title:'Hàng hóa & Ghi chú',sub:'Chuyển tải, ghi chú',
+    keys:['_transshipBlock','remark']}
+];
+window.LOT_SECTIONS=LOT_SECTIONS;
+
 function openLot(id, tt){
   lotIdx=id; currentTab=tt;
   const cols=tt==='xuat'?XCOLS:NCOLS;
@@ -5173,123 +5315,85 @@ function openLot(id, tt){
   window._lotEditSnapshot=id?{id:id,tt:tt,updatedAt:r.updatedAt||0}:null;
   g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'Shipment List':'nhập khẩu');
   g('lotSub').textContent=id?(r.bookingNo||''):'';
-  const pC=Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname);
-  const pS=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname);
-  const pF=Object.values(cache.partners).filter(p=>_partnerHasType(p,'fwd')).map(p=>p.shortname);
-  const pAll=Object.values(cache.partners).map(p=>p.shortname);
-  const initCargo=r.cargoType||'Hàng khô';
-  const initCont=r.typeCont||'';
-  g('lotFields').innerHTML=cols.map(c=>{
-    const val=r[c.k]||'';
-    const full=(c.k==='tenHang'||c.k==='pol'||c.k==='pod')?' full':'';
-    if(c.type==='select'){
-      if(c.k==='loaiHang'){
-        return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><div style="display:flex;gap:4px;align-items:center"><select id="f_${c.k}" style="font-size:12px;flex:1">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select><button type="button" class="btn sm pri" onclick="saveLoaiHangQuick()" title="Chọn Type Shipment ở ô bên trái rồi bấm Lưu — áp dụng ngay, cấp lại Job ID theo type mới" style="padding:4px 10px;flex-shrink:0;white-space:nowrap"><i class="ti ti-device-floppy"></i> Lưu</button></div></div>`;
-      }
-      if(c.compact){
-        return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:140px"><label class="lbl" style="font-size:9.5px">${c.l}</label><select id="f_${c.k}" style="font-size:12px">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
-      }
-      return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${(c.opts||[]).map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
-    }
-    if(c.type==='cutoffField'){
-      const etdVal=r['etd']||'';
-      const defaultVal=r[c.k]||calcDefaultCutoff(etdVal,-2,'11:00');
-      return`<div class="fi${full}"><label class="lbl">${c.l} <span style="font-size:9px;color:var(--text-tertiary)">(mặc định ETD-2 11:00)</span></label><input type="text" id="f_${c.k}" value="${defaultVal}" placeholder="yyyy-mm-dd 11:00"/></div>`;
-    }
-    if(c.type==='icd'){
-      const icdVal=r[c.k]||'';
-      const icdOpts='<option value="">— Chọn ICD —</option>'+ICD_LIST.map(p=>`<option${p===icdVal?' selected':''}>${p}</option>`).join('');
-      return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}">${icdOpts}</select></div>`;
-    }
-    if(c.type==='rowStart') return'<div style="display:flex;gap:8px;align-items:flex-end;grid-column:1/-1">';
-    if(c.type==='rowEnd') return'</div>';
-    if(c.type==='bookingBlock'){
-      // Multi-booking UI - rendered via buildBookingBlock
-      const bklist=r.bookings&&r.bookings.length?r.bookings:[{bookingNo:r.bookingNo||'',vol:r.vol||'',typeCont:r.typeCont||''}];
-      return buildBookingBlockHtml(bklist,r.mblNo||'');
-    }
-    if(c.type==='textarea'){
-      return`<div class="fi${full}" style="grid-column:1/-1"><label class="lbl">${c.l}</label><textarea id="f_${c.k}" rows="2" style="resize:vertical;font-size:12px">${val||''}</textarea></div>`;
-    }
-    if(c.type==='port'){
-      const portKey=c.k; // 'pol' or 'pod'
-      const countryKey=portKey+'Country'; // 'polCountry' or 'podCountry'
-      const savedCountry=r[countryKey]||'';
-      const portsForCountry=savedCountry&&PORTS_BY_COUNTRY[savedCountry]?PORTS_BY_COUNTRY[savedCountry]:PORTS;
-      const countryOpts='<option value="">— Chọn quốc gia —</option>'+PORT_COUNTRIES.map(cn=>`<option${cn===savedCountry?' selected':''}>${cn}</option>`).join('');
-      const portOpts='<option value="">— Chọn cảng —</option>'+portsForCountry.map(p=>`<option${p===val?' selected':''}>${p}</option>`).join('');
-      return`<div class="fi${full}"><label class="lbl">${c.l}</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><select id="f_${countryKey}" onchange="updatePortOptions('${portKey}','${countryKey}')" style="font-size:12px">${countryOpts}</select><select id="f_${portKey}">${portOpts}</select></div></div>`;
-    }
-    if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
-    if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
-    if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;let onch=(c.k==='shipper'||c.k==='supplier')?' onchange="refreshCneeOptions()"':'';if(c.k==='carrier')onch=' onchange="onCarrierChangeVessel()"';return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"${onch}><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
-    // Compact wrapper: only apply to plain text inputs, not special types
-    const SPECIAL_COMPACT=['cnee','cargoType','typeCont','port','icd','cutoffField','date','select','bookingBlock'];
-    if(c.compact && !SPECIAL_COMPACT.includes(c.type) && c.k!=='tenHang' && c.k!=='consignee'){
-      return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:150px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
-    }
-    if(c.type==='transshipBlock'){
-      const ts=r.transships||[];
-      const tsRowHtml=function(p,i){
-        const tsCountry=p.country||'';
-        const tsPorts=(tsCountry&&PORTS_BY_COUNTRY[tsCountry])?PORTS_BY_COUNTRY[tsCountry]:PORTS;
-        const cOptsRow='<option value="">— Quốc gia —</option>'+PORT_COUNTRIES.map(function(cn){return '<option'+(cn===tsCountry?' selected':'')+'>'+cn+'</option>';}).join('');
-        const pOptsRow='<option value="">— Chọn cảng —</option>'+tsPorts.map(function(pt){return '<option'+(pt===p.port?' selected':'')+'>'+pt+'</option>';}).join('');
-        return '<div style="display:flex;gap:5px;margin-bottom:5px;align-items:center" data-ts-lot-row>'
-          +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px">'+cOptsRow+'</select>'
-          +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="port" style="flex:1.5;font-size:12px">'+pOptsRow+'</select>'
-          +'<input type="number" data-ts-lot-i="'+i+'" data-ts-lot-k="tt" value="'+(p.tt!=null?p.tt:'')+'" min="0" placeholder="T/T" title="Transit time ngày" style="width:50px;font-size:12px;text-align:center"/>'
-          +'<input type="date" data-ts-lot-i="'+i+'" data-ts-lot-k="eta" value="'+(p.eta||'')+'" style="width:130px;font-size:12px"/>'
-          +'<button class="rac red" onclick="lotTsDelRow('+i+')" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>'
-        +'</div>';
-      }
-      const rowsHtml=ts.map(function(p,i){return tsRowHtml(p,i);}).join('');
-      const hdRow=ts.length?'<div style="display:flex;gap:5px;margin-bottom:3px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase"><div style="flex:1">Quốc gia</div><div style="flex:1.5">Cảng chuyển tải</div><div style="width:50px;text-align:center">T/T</div><div style="width:130px">ETA</div><div style="width:32px"></div></div>':'';
-      const emptyMsg=ts.length?'':'<div style="font-size:12px;color:var(--text-tertiary);padding:4px 0">Tàu direct (không chuyển tải)</div>';
-      return '<div class="fi full" style="grid-column:1/-1">'
-        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
-          +'<label class="lbl" style="color:#e07000;font-weight:700"><i class="ti ti-transfer" style="font-size:12px"></i> Cảng chuyển tải <span style="font-weight:400;color:var(--text-tertiary)">(optional)</span></label>'
-          +'<button class="btn sm" onclick="lotTsAddRow()" style="font-size:11.5px"><i class="ti ti-plus"></i> Thêm cảng</button>'
-        +'</div>'
-        +hdRow
-        +'<div id="lotTransshipList">'+rowsHtml+emptyMsg+'</div>'
-      +'</div>';
-    }
-      // Cnee dropdown from selected shipper's cnees
-    if(c.type==='cnee'){
-      const shKey=r.shipper||r.supplier||'';
-      const sp2=cache.partners[shKey]||{};
-      const cnees=sp2.cnees||[];
-      const opts=cnees.map(function(cn){return `<option${cn.name===val?' selected':''}>${cn.name}</option>`;}).join('');
-      const wrapStyle=c.compact?'display:inline-flex;flex-direction:column;gap:2px;flex:2;min-width:200px;max-width:320px':'';
-      const divClass=c.compact?'':'fi'+full;
-      return`<div ${wrapStyle?`style="${wrapStyle}"`:`class="${divClass}"`}><label class="lbl" ${c.compact?'style="font-size:9.5px"':''}>${c.l}</label><select id="f_${c.k}">${cnees.length?'<option value="">— Chọn Cnee —</option>'+opts:'<option value="">(Chọn Shipper trước)</option>'}</select></div>`;
-    }
-    if(c.k==='tenHang'){
-      const names=window._cargoNames||[];
-      const thWrap=c.compact?'display:inline-flex;flex-direction:column;gap:2px;flex:2;min-width:150px;max-width:220px':'';
-      const thDiv=c.compact?`style="${thWrap}"`:`class="fi${full}"`;
-      const thLbl=c.compact?'style="font-size:9.5px"':'';
-      if(names.length){
-        const opts=names.map(n=>{const nm=n.name||n;return `<option${nm===val?' selected':''}>${nm}</option>`;}).join('');
-        return`<div ${thDiv}><label class="lbl" ${thLbl}>${c.l}</label><select id="f_${c.k}"><option value="">— Chọn tên hàng —</option>${opts}</select></div>`;
-      }
-      return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"/></div>`;
-    }
-    if(c.k==='vessel'){
-      // Vessel field: dropdown picker (lọc theo Carrier) + ô tên tàu
-      return`<div class="fi${full}"><label class="lbl">${c.l}</label>`
-        +`<select id="f_vesselPick" onchange="onVesselPick()" style="margin-bottom:4px;font-size:12px"><option value="">— Chọn tàu từ Vessel tool —</option></select>`
-        +`<input type="text" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" placeholder="Tên tàu"/></div>`;
-    }
-    return`<div class="fi${full}"><label class="lbl">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}"${c.k==='etd'?' oninput="updateEtdCutoffs()"':''}/></div>`;
+  const ctx={
+    pC:Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname),
+    pS:Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname),
+    pF:Object.values(cache.partners).filter(p=>_partnerHasType(p,'fwd')).map(p=>p.shortname),
+    pAll:Object.values(cache.partners).map(p=>p.shortname),
+    initCargo:r.cargoType||'Hàng khô',
+    initCont:r.typeCont||''
+  };
+  // Dựng từng section thành 1 card, gom lại thành nội dung bên phải
+  g('lotFields').innerHTML=LOT_SECTIONS.map(function(sec){
+    const secCols=_lotColsForSection(cols,sec.keys);
+    if(!secCols.length)return ''; // vd NCOLS không có 1 vài key XCOLS-only, section rỗng thì bỏ qua
+    const fieldsHtml=secCols.map(function(c){return _lotFieldHtml(c,r,ctx);}).join('');
+    return '<div class="lot-section-card" id="'+sec.id+'">'
+      +'<div class="lot-section-hdr" style="color:'+sec.color+'"><i class="ti '+sec.icon+'"></i>'+sec.title+'</div>'
+      +'<div class="fg">'+fieldsHtml+'</div>'
+    +'</div>';
   }).join('');
+  // Sidebar bước — bám theo đúng section vừa dựng ở trên (kể cả section rỗng bị bỏ qua)
+  g('lotStepSidebar').innerHTML=LOT_SECTIONS.map(function(sec,i){
+    const has=!!g(sec.id);
+    if(!has)return '';
+    return '<button type="button" class="lot-step-btn'+(i===0?' on':'')+'" data-sec="'+sec.id+'" onclick="_lotStepGo(\''+sec.id+'\')">'
+      +'<span class="lot-step-num">'+(i+1)+'</span>'
+      +'<span><span class="lot-step-title">'+sec.title+'</span><div class="lot-step-sub">'+sec.sub+'</div></span>'
+    +'</button>';
+  }).join('');
+  // Nút Xóa lô hàng ở footer — chỉ hiện khi đang SỬA lô đã có (không hiện khi tạo mới) và có quyền
+  const delBtn=g('lotDelBtn');
+  if(delBtn)delBtn.style.display=(id&&typeof can==='function'&&can('deleteLot'))?'':'none';
   openOv('lotOv');
+  // Cuộn về đầu + kích hoạt scrollspy mỗi lần mở form
+  const scrollBox=g('lotFieldsScroll'); if(scrollBox){scrollBox.scrollTop=0; _lotBindScrollSpy();}
   if(typeof populateVesselPicker==='function')populateVesselPicker();
   // Ensure cnee dropdown is populated & the saved value re-selected when editing
   if(id){const _cn=g('f_cnee');if(_cn&&r.cnee){if(typeof refreshCneeOptions==='function')refreshCneeOptions();_cn.value=r.cnee;}}
 }
 
+// Bấm 1 bước ở sidebar → cuộn mượt tới đúng card tương ứng bên phải
+function _lotStepGo(secId){
+  const el=g(secId), box=g('lotFieldsScroll');
+  if(!el||!box)return;
+  box.scrollTo({top:el.offsetTop-8,behavior:'smooth'});
+}
+window._lotStepGo=_lotStepGo;
+
+// Scrollspy: cuộn nội dung tới đâu thì tô sáng đúng bước đó ở sidebar — chỉ hỗ trợ điều hướng,
+// KHÔNG khóa/ép người dùng phải đi tuần tự (mọi field vẫn luôn truy cập được, Lưu vẫn lưu tất cả 1 lần).
+function _lotBindScrollSpy(){
+  const box=g('lotFieldsScroll'); if(!box)return;
+  if(box._lotSpyBound)return; // chỉ gắn listener 1 lần cho mỗi lần mở form (tránh chồng listener)
+  box._lotSpyBound=true;
+  box.addEventListener('scroll',function(){
+    const cards=Array.from(box.querySelectorAll('.lot-section-card'));
+    let activeId=cards[0]&&cards[0].id;
+    for(const c of cards){ if(c.offsetTop-box.scrollTop<=90) activeId=c.id; }
+    box.querySelectorAll('.lot-step-btn').forEach(function(b){b.classList.toggle('on',b.dataset.sec===activeId);});
+  });
+}
+window._lotBindScrollSpy=_lotBindScrollSpy;
+
+// Xóa lô hàng NGAY TỪ form đang sửa — tái dùng nguyên hàm delLot() có sẵn (không đổi logic xóa),
+// chỉ thêm bước kiểm tra sau khi delLot() chạy xong: nếu lô đã thực sự bị xóa khỏi cache thì mới
+// đóng form lại (delLot tự có confirm + kiểm tra dịch vụ còn hoạt động, có thể bị hủy/từ chối).
+async function _lotModalDelete(){
+  if(!lotIdx)return;
+  await delLot(lotIdx,currentTab);
+  const stillExists=(cache[currentTab]||[]).some(function(x){return x._id===lotIdx;});
+  if(!stillExists)closeOv('lotOv');
+}
+window._lotModalDelete=_lotModalDelete;
+
+// Phím tắt: Ctrl+S = Hủy đóng mặc định trình duyệt + gọi saveLot() có sẵn; Ctrl+Enter = tương tự.
+// Chỉ có tác dụng khi modal lô hàng đang mở — không ảnh hưởng phím tắt ở nơi khác trong app.
+document.addEventListener('keydown',function(e){
+  const ov=g('lotOv'); if(!ov||!ov.classList.contains('open'))return;
+  if((e.ctrlKey||e.metaKey)&&(e.key==='s'||e.key==='S')){ e.preventDefault(); saveLot(); }
+  else if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){ e.preventDefault(); saveLot(); }
+});
 function lotTsAddRow(){
   const list=g('lotTransshipList'); if(!list)return;
   const existing=list.querySelectorAll('[data-ts-lot-row]').length;
@@ -12655,6 +12759,53 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .fi{display:flex;flex-direction:column;gap:4px}.fi.full{grid-column:1/-1}
 .lbl{font-size:10.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.4px}
 .mftr{display:flex;justify-content:flex-end;gap:8px;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border-light)}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MODAL THÊM/SỬA LÔ HÀNG — redesign: sidebar bước + card nhóm field.
+   Toàn bộ scoped trong .lot-modal-v2 — KHÔNG đụng CSS input/select/textarea
+   global, không đụng .modal/.mhdr/.mftr dùng chung cho các popup khác.
+═══════════════════════════════════════════════════════════════════════ */
+:root{--lot-teal:#16C6B7;--lot-teal-dark:#0DAA9C;--lot-blue:#2E90FA;--lot-ink:#1E293B;--lot-sub:#64748B;--lot-line:#E8EDF3;--lot-bg:#F5F9FC;}
+#lotOv .modal.lot-modal-v2{max-width:1240px;width:94vw;height:90vh;padding:0;border-radius:24px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.16);display:flex;flex-direction:column;border:none}
+.lot-modal-hdr{display:flex;align-items:center;gap:14px;padding:20px 26px;border-bottom:1px solid var(--lot-line);flex-shrink:0}
+.lot-modal-hdr-ic{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,var(--lot-teal),var(--lot-teal-dark));display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;flex-shrink:0;box-shadow:0 6px 16px -4px rgba(13,170,156,.5)}
+.lot-modal-hdr .mtitle{font-size:17px;font-weight:700;color:var(--lot-ink)}
+.lot-modal-hdr .msub{font-size:12px;color:var(--lot-sub);margin-top:2px}
+.lot-modal-body{display:flex;flex:1;min-height:0}
+.lot-step-sidebar{width:230px;flex-shrink:0;border-right:1px solid var(--lot-line);padding:16px 12px;overflow-y:auto;background:var(--lot-bg)}
+.lot-step-btn{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;padding:10px 10px;border-radius:12px;border:none;background:transparent;cursor:pointer;margin-bottom:2px;transition:background .15s ease}
+.lot-step-btn:hover{background:rgba(22,198,183,.08)}
+.lot-step-btn.on{background:rgba(22,198,183,.12)}
+.lot-step-num{width:26px;height:26px;border-radius:50%;background:#fff;border:1.5px solid var(--lot-line);color:var(--lot-sub);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s ease}
+.lot-step-btn.on .lot-step-num{background:var(--lot-teal);border-color:var(--lot-teal);color:#fff;box-shadow:0 0 0 4px rgba(22,198,183,.18)}
+.lot-step-btn.filled .lot-step-num{background:#22C55E;border-color:#22C55E;color:#fff}
+.lot-step-btn.filled.on .lot-step-num{background:var(--lot-teal);border-color:var(--lot-teal)}
+.lot-step-title{font-size:13px;font-weight:700;color:var(--lot-ink);line-height:1.3}
+.lot-step-btn.on .lot-step-title{color:var(--lot-teal-dark)}
+.lot-step-sub{font-size:10.5px;color:var(--lot-sub);margin-top:1px;line-height:1.3}
+.lot-modal-content{flex:1;overflow-y:auto;padding:22px 28px;scroll-behavior:smooth}
+.lot-section-card{border:1px solid var(--lot-line);border-radius:18px;padding:22px;margin-bottom:20px;box-shadow:0 2px 10px -4px rgba(20,40,60,.05);scroll-margin-top:12px}
+.lot-section-hdr{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px}
+.lot-section-hdr i{font-size:16px}
+.lot-modal-ftr{display:flex;align-items:center;gap:10px;padding:16px 26px;border-top:1px solid var(--lot-line);flex-shrink:0;background:#fff}
+.lot-modal-v2 .btn.pri.lot-save-btn{background:linear-gradient(135deg,var(--lot-teal),var(--lot-teal-dark));border:none;box-shadow:0 6px 16px -4px rgba(13,170,156,.45)}
+/* Input trong modal này to/thoáng hơn theo yêu cầu — CHỈ áp dụng trong phạm vi modal, không ảnh hưởng nơi khác */
+.lot-modal-v2 input,.lot-modal-v2 select,.lot-modal-v2 textarea{height:44px;border-radius:12px;border:1px solid #DDE5ED;padding:8px 13px;font-size:13px;box-sizing:border-box}
+.lot-modal-v2 textarea{height:auto;min-height:76px}
+.lot-modal-v2 input:focus,.lot-modal-v2 select:focus,.lot-modal-v2 textarea:focus{border-color:var(--lot-teal);box-shadow:0 0 0 3px rgba(22,198,183,.15)}
+.lot-modal-v2 .lbl{font-size:11px;font-weight:700;color:var(--lot-sub);text-transform:none;letter-spacing:0;margin-bottom:3px;display:block}
+@media(max-width:980px){
+  #lotOv .modal.lot-modal-v2{width:98vw;height:94vh;border-radius:16px}
+  .lot-step-sidebar{width:170px;padding:10px 6px}
+  .lot-step-sub{display:none}
+  .lot-modal-content{padding:16px}
+}
+@media(max-width:680px){
+  .lot-modal-body{flex-direction:column}
+  .lot-step-sidebar{width:100%;display:flex;overflow-x:auto;overflow-y:visible;border-right:none;border-bottom:1px solid var(--lot-line);padding:8px}
+  .lot-step-btn{flex-direction:column;align-items:center;text-align:center;min-width:78px;gap:4px}
+  .lot-step-title{font-size:10px}
+}
 /* SVC */
 .svc-hdr{display:grid;grid-template-columns:20px 155px 1fr 95px 95px 85px 28px;gap:6px;padding:3px 8px;font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px}
 .svc-row-grid{display:grid;grid-template-columns:20px 155px 1fr 95px 95px 85px 28px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:var(--radius-md);padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)}
@@ -12979,10 +13130,24 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 
 <!-- MODALS -->
 <div class="ov" id="lotOv">
-  <div class="modal" style="max-width:700px">
-    <div class="mhdr"><div><div class="mtitle" id="lotTitle"></div><div class="msub" id="lotSub"></div></div><div class="mhdr-btns"><button class="rac" title="Thu gọn" onclick="event.stopPropagation();toggleMinOv('lotOv')"><i class="ti ti-minus"></i></button><button class="rac" title="Đóng" onclick="closeOv('lotOv')"><i class="ti ti-x"></i></button></div></div>
-    <div class="fg" id="lotFields"></div>
-    <div class="mftr"><button class="btn" onclick="closeOv('lotOv')">Hủy</button><button class="btn pri" onclick="saveLot()"><i class="ti ti-check"></i> Lưu vào Firestore</button></div>
+  <div class="modal lot-modal-v2">
+    <div class="lot-modal-hdr">
+      <div class="lot-modal-hdr-ic"><i class="ti ti-package"></i></div>
+      <div style="flex:1;min-width:0"><div class="mtitle" id="lotTitle"></div><div class="msub" id="lotSub"></div></div>
+      <div class="mhdr-btns"><button class="rac" title="Thu gọn" onclick="event.stopPropagation();toggleMinOv('lotOv')"><i class="ti ti-minus"></i></button><button class="rac" title="Đóng" onclick="closeOv('lotOv')"><i class="ti ti-x"></i></button></div>
+    </div>
+    <div class="lot-modal-body">
+      <nav class="lot-step-sidebar" id="lotStepSidebar"></nav>
+      <div class="lot-modal-content" id="lotFieldsScroll">
+        <div id="lotFields"></div>
+      </div>
+    </div>
+    <div class="lot-modal-ftr">
+      <button class="btn red" id="lotDelBtn" onclick="_lotModalDelete()" style="display:none"><i class="ti ti-trash"></i> Xóa lô hàng</button>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="closeOv('lotOv')">Hủy</button>
+      <button class="btn pri lot-save-btn" onclick="saveLot()"><i class="ti ti-check"></i> Lưu &amp; Đóng</button>
+    </div>
   </div>
 </div>
 
