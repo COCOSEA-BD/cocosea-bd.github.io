@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.78';
+window.APP_BUILD='v2.79';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5329,7 +5329,7 @@ function openLot(id, tt){
     const secCols=_lotColsForSection(cols,sec.keys);
     if(!secCols.length)return ''; // vd NCOLS không có 1 vài key XCOLS-only, section rỗng thì bỏ qua
     const fieldsHtml=secCols.map(function(c){return _lotFieldHtml(c,r,ctx);}).join('');
-    const span2=(i===0||i===1)?' span2':'';
+    const span2=''; // Không còn card nào full-width — để CSS grid tự ghép cặp 2/hàng, card 1+2 giờ nằm cạnh nhau
     return '<div class="lot-section-card'+span2+'" id="'+sec.id+'">'
       +'<div class="lot-section-hdr" style="color:'+sec.color+'"><i class="ti '+sec.icon+'"></i>'+(i+1)+'. '+sec.title+'</div>'
       +'<div class="fg">'+fieldsHtml+'</div>'
@@ -12771,7 +12771,8 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .lot-modal-v2 .fi{gap:2px}
 /* Cặp field compact (rowStart/rowEnd) trong modal này: cho tự co giãn nhưng không vượt quá 320px/field
    để tránh dropdown bị kéo quá rộng khi card chiếm hết chiều ngang lớn của layout mới */
-.lot-modal-v2 .lot-section-card>div[style*="display:flex"]>div{max-width:320px}
+.lot-modal-v2 .lot-section-card div[style*="display:flex"]>div{max-width:320px}
+.lot-modal-v2 .lot-section-card div[style*="display:flex"]>div.fi{flex:1;max-width:none}
 /* Bảng Booking Numbers gọn — header 1 dòng + các dòng dữ liệu, không lặp lại label mỗi dòng */
 .bk-table-hdr{display:grid;grid-template-columns:26px 1fr 70px 100px 90px 34px;gap:8px;padding:0 2px 4px;font-size:10px;font-weight:700;color:var(--lot-sub);text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--lot-line);margin-bottom:4px}
 .bk-row-table{display:grid;grid-template-columns:26px 1fr 70px 100px 90px 34px;gap:8px;align-items:center;padding:3px 2px}
@@ -25462,6 +25463,40 @@ async function exportExcelDebt(){
       totalRow('TỔNG CÁ NHÂN',preCN,vatCN,totalCN,'plain');
       totalRow('GRAND TOTAL',grandPre,grandVat,grandTotal,'grand');
       rIdx++;
+
+      // ===== 3 card thanh toán chi tiết — Công ty / Cá nhân / Tổng cộng cần TT — GIỐNG HỆT bố cục 3 card ở PDF =====
+      // Dùng đúng payAmt của từng dòng (đã tính thống nhất qua _computeArRowStatus ở trên) để cộng lại
+      // theo Công ty/Cá nhân — không tính lại theo cách khác, tránh lệch với PDF/màn hình.
+      var gCtyPaid3=coRows.reduce(function(s,r){return s+(r.payAmt||0);},0);
+      var gCNPaid3=cnRows.reduce(function(s,r){return s+(r.payAmt||0);},0);
+      var gCtyRem3=Math.max(0,totalCo-gCtyPaid3);
+      var gCNRem3=Math.max(0,totalCN-gCNPaid3);
+      var grandRem3=gCtyRem3+gCNRem3;
+      var payTop=rIdx;
+      ws.getRow(payTop).height=16; ws.getRow(payTop+1).height=22; ws.getRow(payTop+2).height=15; ws.getRow(payTop+3).height=15;
+      function payCard(c1,c2,title,titleColor,bgColor,total,paid,rem,showPaid){
+        ws.mergeCells(payTop,c1,payTop,c2);
+        var tc=ws.getCell(payTop,c1); tc.value=title; tc.font={bold:true,size:9.5,color:{argb:titleColor}};
+        tc.alignment={horizontal:'left',vertical:'middle',indent:1};
+        ws.mergeCells(payTop+1,c1,payTop+1,c2);
+        var vc=ws.getCell(payTop+1,c1); vc.value=total; vc.numFmt='#,##0" đ"';
+        vc.font={bold:true,size:15,color:{argb:titleColor}}; vc.alignment={horizontal:'left',vertical:'middle',indent:1};
+        var rowPaid=payTop+2, rowRem=payTop+3;
+        if(showPaid){
+          ws.mergeCells(rowPaid,c1,rowPaid,c1+1); var lp=ws.getCell(rowPaid,c1); lp.value='Đã TT:'; lp.font={size:9,color:{argb:C.textGray}}; lp.alignment={horizontal:'left',vertical:'middle',indent:1};
+          ws.mergeCells(rowPaid,c1+2,rowPaid,c2); var pc=ws.getCell(rowPaid,c1+2); pc.value=paid; pc.numFmt='#,##0" đ"'; pc.font={bold:true,size:9.5,color:{argb:C.textDark}}; pc.alignment={horizontal:'right',vertical:'middle'};
+        }
+        ws.mergeCells(rowRem,c1,rowRem,c1+1); var lr=ws.getCell(rowRem,c1); lr.value='Còn lại:'; lr.font={size:9,color:{argb:C.textGray}}; lr.alignment={horizontal:'left',vertical:'middle',indent:1};
+        ws.mergeCells(rowRem,c1+2,rowRem,c2); var rc=ws.getCell(rowRem,c1+2); rc.value=rem; rc.numFmt='#,##0" đ"'; rc.font={bold:true,size:9.5,color:{argb:'FFDC2626'}}; rc.alignment={horizontal:'right',vertical:'middle'};
+        for(var rr4=payTop;rr4<=rowRem;rr4++)for(var cc4=c1;cc4<=c2;cc4++){
+          ws.getCell(rr4,cc4).fill={type:'pattern',pattern:'solid',fgColor:{argb:bgColor}};
+          ws.getCell(rr4,cc4).border=thinB();
+        }
+      }
+      payCard(1,4,'TỔNG THANH TOÁN CÔNG TY','FF0F766E','FFECFDF5',totalCo,gCtyPaid3,gCtyRem3,true);
+      payCard(5,8,'TỔNG THANH TOÁN CÁ NHÂN','FF103A6F','FFEFF6FF',totalCN,gCNPaid3,gCNRem3,true);
+      payCard(9,12,'TỔNG CỘNG CẦN THANH TOÁN','FFF59E0B','FFFFFBEB',grandRem3,0,grandRem3,false);
+      rIdx=payTop+5;
 
       // Bank info: 2 card song song (Công ty trái / Cá nhân phải)
       var banks2w=window._bankAccounts||{company:[],personal:[]};
