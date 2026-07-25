@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.79';
+window.APP_BUILD='v2.81';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2615,7 +2615,8 @@ function renderLot(tt){
       <input type="date" id="etdTo_${tt}" value="${getDefaultEtdTo()}" onchange="renderLotTable('${tt}')" style="width:128px;font-size:11.5px;padding:5px 7px"/>
       <button class="btn sm" onclick="clearEtdFilter('${tt}')" title="Tất cả"><i class="ti ti-calendar-off"></i></button>
     </div>
-    <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'} style="margin-left:auto;flex-shrink:0"><i class="ti ti-plus"></i> Thêm lô hàng</button>
+    <button class="btn" onclick="openBulkLot('${tt}')" ${can('addLot')?'':'disabled'} style="margin-left:auto;flex-shrink:0;color:#0F766E;border-color:#0F766E"><i class="ti ti-stack-2"></i> Thêm hàng loạt</button>
+    <button class="btn pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'} style="flex-shrink:0"><i class="ti ti-plus"></i> Thêm lô hàng</button>
   </div>
   <div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>
   <div id="lotStatusBar_${tt}" style="position:sticky;bottom:0;margin-top:4px;padding:7px 14px;background:#0F1E2E;color:#cbd5e1;border-radius:8px;font-size:12.5px;display:flex;align-items:center;gap:16px;box-shadow:0 -2px 10px rgba(0,0,0,.1);z-index:5">
@@ -5357,6 +5358,271 @@ async function _lotSaveAndNew(){
   if(savedOk) setTimeout(function(){ openLot(null,tt); },60);
 }
 window._lotSaveAndNew=_lotSaveAndNew;
+
+// ═══ THÊM HÀNG LOẠT LÔ HÀNG ═══
+// Điều kiện dùng: các lô cùng Booking Party, Shipper, FWD, Vessel, Carrier — các field này (+ hầu hết
+// field khác) điền CHUNG 1 lần. Mỗi DÒNG trong bảng = 1 LÔ HÀNG RIÊNG (Job ID riêng), chỉ khác nhau ở:
+// Booking No / MBL / Vol / Type Cont / Trucking / Tên hàng / CNEE / POD (cho phép sửa riêng nếu cần).
+//
+// AN TOÀN DỮ LIỆU: KHÔNG viết lại logic tạo lô hàng — mỗi dòng được tạo bằng cách điền vào ĐÚNG
+// form Thêm lô hàng đơn (#lotOv, ẩn đi) rồi gọi lại CHÍNH XÁC saveLot() có sẵn (auto-seed dịch vụ mặc
+// định, sinh trucking, v.v — nguyên vẹn 100% như tạo 1 lô hàng bình thường).
+window._bulkRows=window._bulkRows||[];
+
+function openBulkLot(tt){
+  window._bulkTt=tt;
+  window._bulkRows=[_bulkNewRow()];
+  const pC=Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname);
+  const pS=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname);
+  const pF=Object.values(cache.partners).filter(p=>_partnerHasType(p,'fwd')).map(p=>p.shortname);
+  const pAll=Object.values(cache.partners).map(p=>p.shortname);
+  window._bulkPartnerOpts={pC:pC,pS:pS,pF:pF,pAll:pAll};
+  _bulkRenderForm();
+  openOv('bulkLotOv');
+}
+window.openBulkLot=openBulkLot;
+
+function _bulkNewRow(){
+  return {bookingNo:'',mblNo:'',vol:1,typeCont:'',hasTruck:false,tenHang:'',cnee:'',pod:''};
+}
+
+function _bulkSelOpts(list,val){
+  return '<option value="">— Chọn —</option>'+(list||[]).map(function(o){return '<option'+(o===val?' selected':'')+'>'+o+'</option>';}).join('');
+}
+
+function _bulkRenderForm(){
+  const box=g('bulkLotFields'); if(!box)return;
+  const opts=window._bulkPartnerOpts||{pC:[],pS:[],pF:[],pAll:[]};
+  const isXuat=window._bulkTt==='xuat';
+  const shipperLbl=isXuat?'Shipper':'Supplier';
+  const cargoOpts=['Hàng khô','Hàng lạnh','LCL'];
+  const contTypesAll=['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
+  const countryOpts=(typeof PORT_COUNTRIES!=='undefined'?PORT_COUNTRIES:[]);
+  box.innerHTML=
+    '<div class="lot-section-card span2" style="margin-bottom:14px">'
+      +'<div class="lot-section-hdr" style="color:#0F766E"><i class="ti ti-file-info"></i>Thông tin dùng chung (áp dụng cho mọi lô hàng bên dưới)</div>'
+      +'<div class="fg">'
+        +'<div class="fi"><label class="lbl">Type Shipment</label><select id="bulk_loaiHang"><option>'+(isXuat?'XK - Xuất khẩu':'IM - Nhập khẩu')+'</option><option>LS - Local Service</option></select></div>'
+        +'<div class="fi"><label class="lbl">Loại hàng</label><select id="bulk_cargoType">'+cargoOpts.map(function(o){return '<option>'+o+'</option>';}).join('')+'</select></div>'
+        +'<div class="fi"><label class="lbl">Booking Party</label><select id="bulk_bookingParty">'+_bulkSelOpts(opts.pAll)+'</select></div>'
+        +'<div class="fi"><label class="lbl">'+shipperLbl+'</label><select id="bulk_shipper">'+_bulkSelOpts(opts.pS.length?opts.pS:opts.pAll)+'</select></div>'
+        +'<div class="fi"><label class="lbl">Carrier</label><select id="bulk_carrier">'+_bulkSelOpts(opts.pC)+'</select></div>'
+        +'<div class="fi"><label class="lbl">FWD</label><select id="bulk_fwd">'+_bulkSelOpts(opts.pF)+'</select></div>'
+        +'<div class="fi"><label class="lbl">Vessel</label><input type="text" id="bulk_vessel" placeholder="Tên tàu"/></div>'
+        +'<div class="fi"><label class="lbl">Voy</label><input type="text" id="bulk_voy"/></div>'
+        +'<div class="fi"><label class="lbl">ETD</label><input type="date" id="bulk_etd"/></div>'
+        +'<div class="fi"><label class="lbl">ETA</label><input type="date" id="bulk_eta"/></div>'
+        +'<div class="fi"><label class="lbl">Cut Off CY</label><input type="text" id="bulk_cutoffCY" placeholder="yyyy-mm-dd 11:00"/></div>'
+        +'<div class="fi"><label class="lbl">Cut Off SI</label><input type="text" id="bulk_cutoffSI" placeholder="yyyy-mm-dd 11:00"/></div>'
+        +'<div class="fi"><label class="lbl">POL — Quốc gia</label><select id="bulk_polCountry" onchange="_bulkUpdatePorts(\'pol\')"><option value="">— Chọn —</option>'+countryOpts.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select></div>'
+        +'<div class="fi"><label class="lbl">POL — Cảng</label><select id="bulk_pol"><option value="">— Chọn quốc gia trước —</option></select></div>'
+        +'<div class="fi"><label class="lbl">POD — Quốc gia (mặc định)</label><select id="bulk_podCountry" onchange="_bulkUpdatePorts(\'pod\')"><option value="">— Chọn —</option>'+countryOpts.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select></div>'
+        +'<div class="fi"><label class="lbl">POD — Cảng (mặc định, sửa được riêng từng dòng)</label><select id="bulk_pod"><option value="">— Chọn quốc gia trước —</option></select></div>'
+        +'<div class="fi"><label class="lbl">ICD</label><select id="bulk_icd"><option value="">— Chọn ICD —</option>'+(typeof ICD_LIST!=='undefined'?ICD_LIST:[]).map(function(p){return '<option>'+p+'</option>';}).join('')+'</select></div>'
+        +'<div class="fi"><label class="lbl">CY Location</label><input type="text" id="bulk_cyLocation"/></div>'
+        +'<div class="fi"><label class="lbl">WH (Warehouse)</label><input type="text" id="bulk_wh"/></div>'
+        +'<div class="fi full" style="grid-column:1/-1"><label class="lbl">Ghi chú chung</label><textarea id="bulk_remark" rows="2"></textarea></div>'
+      +'</div>'
+    +'</div>'
+    +'<div class="lot-section-card span2">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+        +'<div class="lot-section-hdr" style="color:#103A6F;margin-bottom:0"><i class="ti ti-list-numbers"></i>Danh sách lô hàng — mỗi dòng = 1 lô hàng riêng</div>'
+        +'<button class="btn sm" onclick="_bulkAddRow()"><i class="ti ti-plus"></i> Thêm dòng</button>'
+      +'</div>'
+      +'<div class="bk-table-hdr" style="grid-template-columns:26px 1fr 90px 60px 90px 70px 1.2fr 1fr 1fr 34px">'
+        +'<div></div><div>Booking No</div><div>MBL No</div><div>VOL</div><div>Type Cont</div><div>Trucking</div><div>Tên hàng</div><div>CNEE</div><div>POD</div><div></div>'
+      +'</div>'
+      +'<div id="bulkRowsBody">'+window._bulkRows.map(function(r,i){return _bulkRowHtml(r,i);}).join('')+'</div>'
+    +'</div>';
+}
+window._bulkRenderForm=_bulkRenderForm;
+
+function _bulkUpdatePorts(kind){
+  const countryEl=g('bulk_'+kind+'Country'), portEl=g('bulk_'+kind);
+  if(!countryEl||!portEl)return;
+  const country=countryEl.value;
+  const list=(country&&typeof PORTS_BY_COUNTRY!=='undefined'&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:(typeof PORTS!=='undefined'?PORTS:[]);
+  portEl.innerHTML='<option value="">— Chọn cảng —</option>'+list.map(function(p){return '<option>'+p+'</option>';}).join('');
+}
+window._bulkUpdatePorts=_bulkUpdatePorts;
+
+function _bulkRowHtml(row,i){
+  const contOpts=['20DC','40HC','20RF','40RF','LCL','20OT','40OT'].map(function(t){return '<option'+(t===(row.typeCont||'40HC')?' selected':'')+'>'+t+'</option>';}).join('');
+  const shKey=g('bulk_shipper')?g('bulk_shipper').value:'';
+  const sp2=(shKey&&cache.partners[shKey])||{};
+  const cnees=sp2.cnees||[];
+  const cneeOpts='<option value="">'+(cnees.length?'— Chọn CNEE —':'(Chọn Shipper trước)')+'</option>'+cnees.map(function(c){return '<option'+(c.name===row.cnee?' selected':'')+'>'+c.name+'</option>';}).join('');
+  const podDefault=g('bulk_pod')?g('bulk_pod').value:'';
+  const podCountryDefault=g('bulk_podCountry')?g('bulk_podCountry').value:'';
+  const podList=(podCountryDefault&&typeof PORTS_BY_COUNTRY!=='undefined'&&PORTS_BY_COUNTRY[podCountryDefault])?PORTS_BY_COUNTRY[podCountryDefault]:(typeof PORTS!=='undefined'?PORTS:[]);
+  const podVal=row.pod||podDefault;
+  const podOpts='<option value="">— Chọn cảng —</option>'+podList.map(function(p){return '<option'+(p===podVal?' selected':'')+'>'+p+'</option>';}).join('');
+  return '<div class="bk-row-table" data-bulk-i="'+i+'" style="grid-template-columns:26px 1fr 90px 60px 90px 70px 1.2fr 1fr 1fr 34px">'
+    +'<div class="bk-num">'+(i+1)+'</div>'
+    +'<input type="text" class="bulk-bookingNo" value="'+(row.bookingNo||'').replace(/"/g,'&quot;')+'" placeholder="Booking No"/>'
+    +'<input type="text" class="bulk-mblNo" value="'+(row.mblNo||'').replace(/"/g,'&quot;')+'" placeholder="MBL No"/>'
+    +'<input type="number" class="bulk-vol" value="'+(row.vol||1)+'" min="1" style="text-align:right"/>'
+    +'<select class="bulk-typeCont">'+contOpts+'</select>'
+    +'<label class="bk-truck-toggle"><input type="checkbox" class="bulk-hasTruck" '+(row.hasTruck?'checked':'')+' style="width:15px;height:15px;cursor:pointer"/></label>'
+    +'<input type="text" class="bulk-tenHang" value="'+(row.tenHang||'').replace(/"/g,'&quot;')+'" placeholder="(theo chung nếu để trống)"/>'
+    +'<select class="bulk-cnee">'+cneeOpts+'</select>'
+    +'<select class="bulk-pod">'+podOpts+'</select>'
+    +'<button type="button" class="rac red" onclick="_bulkDelRow('+i+')" title="Xóa dòng"><i class="ti ti-trash"></i></button>'
+  +'</div>';
+}
+
+function _bulkAddRow(){
+  window._bulkRows=_bulkReadRows();
+  window._bulkRows.push(_bulkNewRow());
+  const body=g('bulkRowsBody'); if(!body)return;
+  body.innerHTML=window._bulkRows.map(function(r,i){return _bulkRowHtml(r,i);}).join('');
+}
+window._bulkAddRow=_bulkAddRow;
+
+function _bulkDelRow(i){
+  window._bulkRows=_bulkReadRows();
+  window._bulkRows.splice(i,1);
+  if(!window._bulkRows.length)window._bulkRows=[_bulkNewRow()];
+  const body=g('bulkRowsBody'); if(!body)return;
+  body.innerHTML=window._bulkRows.map(function(r,i2){return _bulkRowHtml(r,i2);}).join('');
+}
+window._bulkDelRow=_bulkDelRow;
+
+function _bulkReadRows(){
+  const body=g('bulkRowsBody'); if(!body)return window._bulkRows||[];
+  return Array.from(body.querySelectorAll('[data-bulk-i]')).map(function(row){
+    return {
+      bookingNo:(row.querySelector('.bulk-bookingNo')||{}).value||'',
+      mblNo:(row.querySelector('.bulk-mblNo')||{}).value||'',
+      vol:parseInt((row.querySelector('.bulk-vol')||{}).value)||1,
+      typeCont:(row.querySelector('.bulk-typeCont')||{}).value||'40HC',
+      hasTruck:!!(row.querySelector('.bulk-hasTruck')||{}).checked,
+      tenHang:(row.querySelector('.bulk-tenHang')||{}).value||'',
+      cnee:(row.querySelector('.bulk-cnee')||{}).value||'',
+      pod:(row.querySelector('.bulk-pod')||{}).value||''
+    };
+  });
+}
+
+// ═══ Tạo hàng loạt — điền vào form đơn (#lotOv, ẩn) rồi gọi lại saveLot() cho từng dòng ═══
+async function _bulkCreateLots(){
+  const tt=window._bulkTt||'xuat';
+  const rows=_bulkReadRows().filter(function(r){return (r.bookingNo||'').trim();});
+  if(!rows.length){toast('Cần ít nhất 1 dòng có Booking No','error');return;}
+
+  const shared={
+    loaiHang:(g('bulk_loaiHang')||{}).value||'',
+    cargoType:(g('bulk_cargoType')||{}).value||'',
+    bookingParty:(g('bulk_bookingParty')||{}).value||'',
+    shipperVal:(g('bulk_shipper')||{}).value||'',
+    carrier:(g('bulk_carrier')||{}).value||'',
+    fwd:(g('bulk_fwd')||{}).value||'',
+    vessel:(g('bulk_vessel')||{}).value||'',
+    voy:(g('bulk_voy')||{}).value||'',
+    etd:(g('bulk_etd')||{}).value||'',
+    eta:(g('bulk_eta')||{}).value||'',
+    cutoffCY:(g('bulk_cutoffCY')||{}).value||'',
+    cutoffSI:(g('bulk_cutoffSI')||{}).value||'',
+    polCountry:(g('bulk_polCountry')||{}).value||'',
+    pol:(g('bulk_pol')||{}).value||'',
+    podCountry:(g('bulk_podCountry')||{}).value||'',
+    pod:(g('bulk_pod')||{}).value||'',
+    icd:(g('bulk_icd')||{}).value||'',
+    cyLocation:(g('bulk_cyLocation')||{}).value||'',
+    wh:(g('bulk_wh')||{}).value||'',
+    remark:(g('bulk_remark')||{}).value||''
+  };
+  if(!shared.loaiHang){toast('Chưa chọn Type Shipment','error');return;}
+
+  const btn=g('bulkCreateBtn');
+  if(btn){btn.disabled=true;btn.textContent='Đang tạo...';}
+  setLoading(true,'Đang tạo '+rows.length+' lô hàng...');
+
+  // Mở form đơn NGẦM (không hiện) để lấy đúng bộ field #f_xxx, rồi đóng ngay — DOM field vẫn còn
+  // nguyên trong #lotOv (closeOv chỉ ẩn bằng CSS, không xóa DOM) để tái dùng ở vòng lặp bên dưới.
+  openLot(null,tt);
+  closeOv('lotOv');
+
+  // Bọc TẠM getNextJobNo trong lúc chạy hàng loạt — vì saveLot() không cập nhật cache đồng bộ ngay
+  // sau khi lưu (chỉ dựa vào Firestore realtime listener, có độ trễ), nên gọi saveLot() liên tiếp
+  // nhiều lần rất dễ bị cấp TRÙNG Job ID cho các lô khác nhau. Bọc lại để tự tránh trùng NGAY TRONG
+  // batch này, không đụng vào hàm getNextJobNo() gốc (khôi phục nguyên vẹn ở cuối, kể cả khi lỗi).
+  const origGetNextJobNo=window.getNextJobNo;
+  const batchUsed=new Set();
+  const placeholders=[];
+  window.getNextJobNo=function(loaiHangArg){
+    let jn=origGetNextJobNo(loaiHangArg);
+    while(batchUsed.has(jn)){
+      cache[tt].push({jobNo:jn,_bulkPlaceholder:true});
+      placeholders.push(jn);
+      jn=origGetNextJobNo(loaiHangArg);
+    }
+    batchUsed.add(jn);
+    cache[tt].push({jobNo:jn,_bulkPlaceholder:true});
+    placeholders.push(jn);
+    return jn;
+  };
+
+  let okCount=0, failRows=[];
+  try{
+    for(let i=0;i<rows.length;i++){
+      const row=rows[i];
+      try{
+        // Field dùng chung
+        if(g('f_loaiHang'))g('f_loaiHang').value=shared.loaiHang;
+        if(g('f_cargoType'))g('f_cargoType').value=shared.cargoType;
+        if(g('f_bookingParty'))g('f_bookingParty').value=shared.bookingParty;
+        if(g('f_shipper'))g('f_shipper').value=shared.shipperVal;
+        if(g('f_supplier'))g('f_supplier').value=shared.shipperVal;
+        if(g('f_carrier'))g('f_carrier').value=shared.carrier;
+        if(g('f_fwd'))g('f_fwd').value=shared.fwd;
+        if(g('f_vessel'))g('f_vessel').value=shared.vessel;
+        if(g('f_voy'))g('f_voy').value=shared.voy;
+        if(g('f_etd'))g('f_etd').value=shared.etd;
+        if(g('f_eta'))g('f_eta').value=shared.eta;
+        if(g('f_cutoffCY'))g('f_cutoffCY').value=shared.cutoffCY;
+        if(g('f_cutoffSI'))g('f_cutoffSI').value=shared.cutoffSI;
+        if(g('f_polCountry'))g('f_polCountry').value=shared.polCountry;
+        if(g('f_pol'))g('f_pol').value=shared.pol;
+        if(g('f_podCountry'))g('f_podCountry').value=shared.podCountry;
+        if(g('f_icd'))g('f_icd').value=shared.icd;
+        if(g('f_cyLocation'))g('f_cyLocation').value=shared.cyLocation;
+        if(g('f_wh'))g('f_wh').value=shared.wh;
+        if(g('f_remark'))g('f_remark').value=shared.remark;
+        // Field riêng từng dòng
+        if(g('f_tenHang'))g('f_tenHang').value=row.tenHang||'';
+        if(g('f_cnee'))g('f_cnee').value=row.cnee||'';
+        if(g('f_pod'))g('f_pod').value=row.pod||shared.pod;
+        if(g('f_mblNo'))g('f_mblNo').value=row.mblNo||'';
+        // Booking block: dựng lại đúng 1 dòng cho lô NÀY (dùng đúng bookingRowHtml có sẵn)
+        const bkBody=g('bookingRows');
+        if(bkBody){
+          const tr=document.createElement('div');
+          tr.setAttribute('data-bki','0');
+          tr.className='bk-row bk-row-table';
+          tr.innerHTML=bookingRowHtml({bookingNo:row.bookingNo,vol:row.vol,typeCont:row.typeCont,hasTruck:row.hasTruck},0,['20DC','40HC','20RF','40RF','LCL','20OT','40OT']).replace(/^<div[^>]*>/,'').replace(/<\/div>$/,'');
+          bkBody.innerHTML=''; bkBody.appendChild(tr);
+        }
+        if(typeof updateTotalVol==='function')updateTotalVol();
+        await saveLot();
+        okCount++;
+      }catch(eRow){ failRows.push((row.bookingNo||'(trống)')+': '+eRow.message); }
+    }
+  } finally {
+    window.getNextJobNo=origGetNextJobNo;
+    cache[tt]=(cache[tt]||[]).filter(function(r){return !r._bulkPlaceholder;});
+  }
+
+  setLoading(false);
+  if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-check"></i> Tạo lô hàng';}
+  closeOv('bulkLotOv');
+  if(okCount)toast('Đã tạo '+okCount+'/'+rows.length+' lô hàng'+(failRows.length?' — '+failRows.length+' lô lỗi':''));
+  if(failRows.length)toast('Lỗi: '+failRows.join(' | '),'error');
+  renderLotTable(tt);
+}
+window._bulkCreateLots=_bulkCreateLots;
+
+
 
 // Xóa lô hàng NGAY TỪ form đang sửa — tái dùng nguyên hàm delLot() có sẵn (không đổi logic xóa),
 // chỉ thêm bước kiểm tra sau khi delLot() chạy xong: nếu lô đã thực sự bị xóa khỏi cache thì mới
@@ -13132,6 +13398,20 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
   </div>
 </div>
 
+<div class="ov" id="bulkLotOv">
+  <div class="modal lot-modal-v2" style="max-width:1400px">
+    <div class="lot-modal-hdr">
+      <div class="lot-modal-hdr-ic"><i class="ti ti-stack-2"></i></div>
+      <div style="min-width:0"><div class="mtitle">Thêm hàng loạt lô hàng</div><div class="msub">Điền thông tin dùng chung 1 lần, mỗi dòng bên dưới sẽ tạo thành 1 lô hàng riêng (Job ID riêng)</div></div>
+      <div class="lot-modal-hdr-actions">
+        <button class="btn" onclick="closeOv('bulkLotOv')">Hủy</button>
+        <button class="btn pri lot-save-btn" id="bulkCreateBtn" onclick="_bulkCreateLots()"><i class="ti ti-check"></i> Tạo lô hàng</button>
+      </div>
+    </div>
+    <div class="lot-modal-content" id="bulkLotFields" style="max-height:78vh"></div>
+  </div>
+</div>
+
 <div class="ov" id="svcOv">
   <div class="modal" style="max-width:580px">
     <div class="mhdr"><div><div class="mtitle" id="svcTitle"></div><div class="msub" id="svcSub"></div></div><div class="mhdr-btns"><button class="rac" title="Thu gọn" onclick="event.stopPropagation();toggleMinOv('svcOv')"><i class="ti ti-minus"></i></button><button class="rac" title="Đóng" onclick="closeOv('svcOv')"><i class="ti ti-x"></i></button></div></div>
@@ -13585,7 +13865,7 @@ async function _jobReportExcel(data,sp){
   // Logo dừa cho header — display-only, lỗi thì bỏ qua
   var _xlsLogoB64=null;
   try{
-    var _lr=await fetch(new URL('icons/icon-192.png',location.href).href);
+    var _lr=await fetch(new URL('icons/icon-navy-192.png',location.href).href);
     if(_lr&&_lr.ok){
       var _lb=await _lr.arrayBuffer();var _u8=new Uint8Array(_lb);var _bin='';
       for(var _li=0;_li<_u8.length;_li++)_bin+=String.fromCharCode(_u8[_li]);
@@ -14071,7 +14351,7 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
   // Logo dừa: fetch 1 lần rồi cache vào window._dnLogoUrl (null = đã thử nhưng thất bại → vẽ không logo)
   if(window._dnLogoUrl!==undefined){ _build(window._dnLogoUrl); return; }
   try{
-    fetch(new URL('icons/icon-192.png',location.href).href).then(function(res){ return res.ok?res.blob():null; }).then(function(b){
+    fetch(new URL('icons/icon-navy-192.png',location.href).href).then(function(res){ return res.ok?res.blob():null; }).then(function(b){
       if(!b){ window._dnLogoUrl=null; _build(null); return; }
       var fr=new FileReader();
       fr.onload=function(){ window._dnLogoUrl=fr.result; _build(fr.result); };
@@ -24584,14 +24864,15 @@ function exportSOA(){
     var bkgNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):(r.bookingNo||'—'));
     var itemRows='';
     d.lineItems.forEach(function(li,i){
+      var slDisp=(li.unit==='Cont'&&r.typeCont)?(li.qty+'x'+r.typeCont):(li.qty+' '+li.unit);
       itemRows+='<tr style="background:'+(i%2===0?'#fff':'#f8f8f6')+'">'
         +'<td style="'+tdStyle+';text-align:center;color:#666">'+(i+1)+'</td>'
         +'<td style="'+tdStyle+'">'+li.name+'<span style="font-size:9px;color:#999;margin-left:4px">['+(li.type==='cty'?'Cty':'CN')+']</span></td>'
-        +'<td style="'+tdStyle+';text-align:center">'+li.qty+' '+li.unit+'</td>'
-        +'<td style="'+tdStyle+';text-align:right">'+fmt(li.price)+' '+li.cur+'</td>'
-        +'<td style="'+tdStyle+';text-align:right">'+fmt(li.amtVND)+'</td>'
-        +'<td style="'+tdStyle+';text-align:right;color:#b45309">'+(li.vatPct?li.vatPct+'%':'—')+'</td>'
-        +'<td style="'+tdStyle+';text-align:right;font-weight:600;color:#0F6E56">'+fmt(li.total)+'</td>'
+        +'<td style="'+tdStyle+';text-align:center;white-space:nowrap">'+slDisp+'</td>'
+        +'<td style="'+tdStyle+';text-align:right;white-space:nowrap">'+fmt(li.price)+' '+li.cur+'</td>'
+        +'<td style="'+tdStyle+';text-align:right;white-space:nowrap">'+fmt(li.amtVND)+'</td>'
+        +'<td style="'+tdStyle+';text-align:right;white-space:nowrap;color:#b45309">'+(li.vatPct?li.vatPct+'%':'—')+'</td>'
+        +'<td style="'+tdStyle+';text-align:right;white-space:nowrap;font-weight:600;color:#0F6E56">'+fmt(li.total)+'</td>'
       +'</tr>';
     });
     if(!itemRows)itemRows='<tr><td colspan="7" style="'+tdStyle+';text-align:center;color:#999">Không có dịch vụ</td></tr>';
@@ -24606,14 +24887,16 @@ function exportSOA(){
         +'<td style="'+tdStyle+';width:50%;background:#F7F8FA"><strong>Booking:</strong> '+bkgNos+'<br><strong>MBL:</strong> '+(r.mblNo||'—')+'<br><strong>Tên hàng:</strong> '+(r.tenHang||'—')+'</td>'
         +'<td style="'+tdStyle+';width:50%;background:#F7F8FA"><strong>Vessel:</strong> '+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+'<br><strong>ETD:</strong> '+fd(r.etd)+'<br><strong>Route:</strong> '+(r.pol||'—')+' → '+(r.pod||'—')+'</td>'
       +'</tr></table>'
-      +'<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#103A6F">'
+      +'<table style="border-collapse:collapse;width:100%;table-layout:fixed">'
+        +'<colgroup><col style="width:4%"/><col style="width:34%"/><col style="width:10%"/><col style="width:15%"/><col style="width:15%"/><col style="width:6%"/><col style="width:16%"/></colgroup>'
+        +'<thead><tr style="background:#103A6F">'
         +'<th style="'+thStyle+';text-align:center">#</th>'
         +'<th style="'+thStyle+';text-align:left">Hạng mục</th>'
-        +'<th style="'+thStyle+';text-align:center">SL</th>'
-        +'<th style="'+thStyle+';text-align:right">Đơn giá</th>'
-        +'<th style="'+thStyle+';text-align:right">Thành tiền (VND)</th>'
-        +'<th style="'+thStyle+';text-align:right">VAT</th>'
-        +'<th style="'+thStyle+';text-align:right">Tổng (VND)</th>'
+        +'<th style="'+thStyle+';text-align:center;white-space:nowrap">SL</th>'
+        +'<th style="'+thStyle+';text-align:right;white-space:nowrap">Đơn giá</th>'
+        +'<th style="'+thStyle+';text-align:right;white-space:nowrap">Thành tiền (VND)</th>'
+        +'<th style="'+thStyle+';text-align:right;white-space:nowrap">VAT</th>'
+        +'<th style="'+thStyle+';text-align:right;white-space:nowrap">Tổng (VND)</th>'
       +'</tr></thead><tbody>'+itemRows+'</tbody>'
       +'<tfoot>'
         +'<tr style="background:#F7F8FA;font-weight:700"><td colspan="6" style="'+tdStyle+';text-align:right">TT Công ty (có VAT)</td><td style="'+tdStyle+';text-align:right;color:#0F766E">'+fmt(d.totalYes)+'</td></tr>'
@@ -24662,7 +24945,7 @@ function exportSOA(){
     // HEADER: logo dừa + company trái — title + period badge giữa — SOA meta phải (theo form mẫu)
     +'<div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;border-bottom:3px solid #0F766E;padding-bottom:12px;margin-bottom:16px;gap:12px">'
       +'<div style="display:flex;align-items:center;gap:9px">'
-        +(function(){try{var u=new URL('icons/icon-192.png',location.href).href;return '<img src="'+u+'" style="width:38px;height:38px;border-radius:9px" onerror="this.style.display=\'none\'"/>';}catch(e){return '';}})()
+        +(function(){try{var u=new URL('icons/icon-navy-192.png',location.href).href;return '<img src="'+u+'" style="width:38px;height:38px;border-radius:9px" onerror="this.style.display=\'none\'"/>';}catch(e){return '';}})()
         +'<div><div style="font-size:16px;font-weight:800;color:#103A6F;white-space:nowrap">COCOSEA CO., LTD</div>'
         +'<div style="font-size:10px;color:#0F766E;margin-top:2px;white-space:nowrap">Keep Going . Keep Growing</div></div>'
       +'</div>'
@@ -25247,7 +25530,7 @@ async function exportExcelDebt(){
   // Logo dừa cho header — display-only, lỗi thì bỏ qua
   var _xlsLogoB64=null;
   try{
-    var _lr=await fetch(new URL('icons/icon-192.png',location.href).href);
+    var _lr=await fetch(new URL('icons/icon-navy-192.png',location.href).href);
     if(_lr&&_lr.ok){
       var _lb=await _lr.arrayBuffer();var _u8=new Uint8Array(_lb);var _bin='';
       for(var _li=0;_li<_u8.length;_li++)_bin+=String.fromCharCode(_u8[_li]);
