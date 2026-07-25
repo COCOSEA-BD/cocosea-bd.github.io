@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.74';
+window.APP_BUILD='v2.76';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5323,58 +5323,40 @@ function openLot(id, tt){
     initCargo:r.cargoType||'Hàng khô',
     initCont:r.typeCont||''
   };
-  // Dựng từng section thành 1 card, gom lại thành nội dung bên phải
-  g('lotFields').innerHTML=LOT_SECTIONS.map(function(sec){
+  // Dựng từng section thành 1 card trong lưới 2 cột — Thông tin chung + Booking Numbers chiếm cả hàng
+  // (span2), các card còn lại tự động ghép cặp 2/hàng nhờ CSS grid auto-flow (không cần tính toán vị trí).
+  g('lotFields').innerHTML=LOT_SECTIONS.map(function(sec,i){
     const secCols=_lotColsForSection(cols,sec.keys);
     if(!secCols.length)return ''; // vd NCOLS không có 1 vài key XCOLS-only, section rỗng thì bỏ qua
     const fieldsHtml=secCols.map(function(c){return _lotFieldHtml(c,r,ctx);}).join('');
-    return '<div class="lot-section-card" id="'+sec.id+'">'
-      +'<div class="lot-section-hdr" style="color:'+sec.color+'"><i class="ti '+sec.icon+'"></i>'+sec.title+'</div>'
+    const span2=(i===0||i===1)?' span2':'';
+    return '<div class="lot-section-card'+span2+'" id="'+sec.id+'">'
+      +'<div class="lot-section-hdr" style="color:'+sec.color+'"><i class="ti '+sec.icon+'"></i>'+(i+1)+'. '+sec.title+'</div>'
       +'<div class="fg">'+fieldsHtml+'</div>'
     +'</div>';
-  }).join('');
-  // Sidebar bước — bám theo đúng section vừa dựng ở trên (kể cả section rỗng bị bỏ qua)
-  g('lotStepSidebar').innerHTML=LOT_SECTIONS.map(function(sec,i){
-    const has=!!g(sec.id);
-    if(!has)return '';
-    return '<button type="button" class="lot-step-btn'+(i===0?' on':'')+'" data-sec="'+sec.id+'" onclick="_lotStepGo(\''+sec.id+'\')">'
-      +'<span class="lot-step-num">'+(i+1)+'</span>'
-      +'<span><span class="lot-step-title">'+sec.title+'</span><div class="lot-step-sub">'+sec.sub+'</div></span>'
-    +'</button>';
   }).join('');
   // Nút Xóa lô hàng ở footer — chỉ hiện khi đang SỬA lô đã có (không hiện khi tạo mới) và có quyền
   const delBtn=g('lotDelBtn');
   if(delBtn)delBtn.style.display=(id&&typeof can==='function'&&can('deleteLot'))?'':'none';
   openOv('lotOv');
-  // Cuộn về đầu + kích hoạt scrollspy mỗi lần mở form
-  const scrollBox=g('lotFieldsScroll'); if(scrollBox){scrollBox.scrollTop=0; _lotBindScrollSpy();}
+  const scrollBox=g('lotFields'); if(scrollBox)scrollBox.scrollTop=0;
   if(typeof populateVesselPicker==='function')populateVesselPicker();
   // Ensure cnee dropdown is populated & the saved value re-selected when editing
   if(id){const _cn=g('f_cnee');if(_cn&&r.cnee){if(typeof refreshCneeOptions==='function')refreshCneeOptions();_cn.value=r.cnee;}}
 }
 
-// Bấm 1 bước ở sidebar → cuộn mượt tới đúng card tương ứng bên phải
-function _lotStepGo(secId){
-  const el=g(secId), box=g('lotFieldsScroll');
-  if(!el||!box)return;
-  box.scrollTo({top:el.offsetTop-8,behavior:'smooth'});
+// "Lưu & Thêm mới" — chỉ QUAN SÁT hành vi sẵn có của saveLot() (nó tự đóng modal khi lưu THÀNH CÔNG),
+// không sửa saveLot(). Nếu modal đã đóng sau khi saveLot() chạy xong → lưu thành công → mở lại form
+// trống cùng loại (Xuất/Nhập) để nhập lô tiếp theo. Nếu saveLot() từ chối lưu (validate lỗi, xung đột
+// dữ liệu bị hủy...) thì modal vẫn mở → không làm gì thêm, người dùng tự sửa rồi lưu lại.
+async function _lotSaveAndNew(){
+  const tt=currentTab;
+  await saveLot();
+  const ov=g('lotOv');
+  const savedOk=ov&&!ov.classList.contains('open');
+  if(savedOk) setTimeout(function(){ openLot(null,tt); },60);
 }
-window._lotStepGo=_lotStepGo;
-
-// Scrollspy: cuộn nội dung tới đâu thì tô sáng đúng bước đó ở sidebar — chỉ hỗ trợ điều hướng,
-// KHÔNG khóa/ép người dùng phải đi tuần tự (mọi field vẫn luôn truy cập được, Lưu vẫn lưu tất cả 1 lần).
-function _lotBindScrollSpy(){
-  const box=g('lotFieldsScroll'); if(!box)return;
-  if(box._lotSpyBound)return; // chỉ gắn listener 1 lần cho mỗi lần mở form (tránh chồng listener)
-  box._lotSpyBound=true;
-  box.addEventListener('scroll',function(){
-    const cards=Array.from(box.querySelectorAll('.lot-section-card'));
-    let activeId=cards[0]&&cards[0].id;
-    for(const c of cards){ if(c.offsetTop-box.scrollTop<=90) activeId=c.id; }
-    box.querySelectorAll('.lot-step-btn').forEach(function(b){b.classList.toggle('on',b.dataset.sec===activeId);});
-  });
-}
-window._lotBindScrollSpy=_lotBindScrollSpy;
+window._lotSaveAndNew=_lotSaveAndNew;
 
 // Xóa lô hàng NGAY TỪ form đang sửa — tái dùng nguyên hàm delLot() có sẵn (không đổi logic xóa),
 // chỉ thêm bước kiểm tra sau khi delLot() chạy xong: nếu lô đã thực sự bị xóa khỏi cache thì mới
@@ -5481,18 +5463,16 @@ function bookingRowHtml(b, i, contTypes){
   const opts=contTypes||['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
   const typeOpts=opts.map(t=>`<option${t===(b.typeCont||'40HC')?' selected':''}>${t}</option>`).join('');
   const hasTruck=b.hasTruck===true||b.hasTruck==='true';
-  return `<div class="bk-row" data-bki="${i}" style="display:grid;grid-template-columns:1fr 70px 130px 90px 30px;gap:6px;align-items:end;margin-bottom:5px">
-    <div><label class="lbl" style="font-size:9.5px">Booking No</label><input type="text" class="bk-no" value="${(b.bookingNo||'').replace(/"/g,'&quot;')}" placeholder="Booking No" style="font-size:12px"/></div>
-    <div><label class="lbl" style="font-size:9.5px">Vol</label><input type="number" class="bk-vol" value="${b.vol||''}" min="1" placeholder="1" oninput="updateTotalVol()" style="font-size:12px;text-align:right"/></div>
-    <div><label class="lbl" style="font-size:9.5px">Type Cont</label><select class="bk-type" style="font-size:12px">${typeOpts}</select></div>
-    <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
-      <label class="lbl" style="font-size:9.5px">Trucking</label>
-      <label style="display:flex;align-items:center;justify-content:center;height:32px;cursor:pointer;gap:5px">
-        <input type="checkbox" class="bk-truck" ${hasTruck?'checked':''} style="width:16px;height:16px;accent-color:#1a4b8c;cursor:pointer"/>
-        <span style="font-size:10.5px;font-weight:600;color:${hasTruck?'#1a4b8c':'var(--text-tertiary)'}">${hasTruck?'Có':'Không'}</span>
-      </label>
-    </div>
-    <button type="button" onclick="removeBookingRow(${i})" class="rac red" style="font-size:12px;margin-bottom:3px" title="Xóa booking này"><i class="ti ti-trash"></i></button>
+  return `<div class="bk-row bk-row-table" data-bki="${i}">
+    <div class="bk-num">${i+1}</div>
+    <input type="text" class="bk-no" value="${(b.bookingNo||'').replace(/"/g,'&quot;')}" placeholder="Booking No"/>
+    <input type="number" class="bk-vol" value="${b.vol||''}" min="1" placeholder="1" oninput="updateTotalVol()" style="text-align:right"/>
+    <select class="bk-type">${typeOpts}</select>
+    <label class="bk-truck-toggle">
+      <input type="checkbox" class="bk-truck" ${hasTruck?'checked':''} style="width:16px;height:16px;accent-color:var(--lot-teal-dark, #1a4b8c);cursor:pointer"/>
+      <span style="font-size:10.5px;font-weight:600;color:${hasTruck?'var(--lot-teal-dark, #1a4b8c)':'var(--text-tertiary)'}">${hasTruck?'Có':'Không'}</span>
+    </label>
+    <button type="button" onclick="removeBookingRow(${i})" class="rac red" title="Xóa booking này"><i class="ti ti-trash"></i></button>
   </div>`;
 }
 
@@ -5500,15 +5480,15 @@ function buildBookingBlockHtml(bklist, mblNo){
   const contTypes=['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
   const rows=bklist.map((b,i)=>bookingRowHtml(b,i,contTypes)).join('');
   const totalVol=bklist.reduce((s,b)=>s+(parseInt(b.vol)||0),0);
-  return `<div class="fi full" style="grid-column:1/-1;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;padding:10px 12px;margin-bottom:4px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-    <div style="font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.4px"><i class="ti ti-bookmark" style="font-size:13px"></i> Booking Numbers</div>
+  return `<div class="fi full" style="grid-column:1/-1">
+  <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
     <button type="button" onclick="addBookingRow()" class="btn sm" style="font-size:11px"><i class="ti ti-plus"></i> Thêm Booking</button>
   </div>
+  <div class="bk-table-hdr"><div></div><div>Booking No</div><div>VOL</div><div>Type Cont</div><div>Trucking</div><div></div></div>
   <div id="bookingRows">${rows}</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;padding-top:6px;border-top:1px dashed var(--border-light)">
-    <div><label class="lbl" style="font-size:9.5px">MBL No</label><input type="text" id="f_mblNo" value="${(mblNo||'').replace(/"/g,'&quot;')}" placeholder="MBL No" style="font-size:12px"/></div>
-    <div><label class="lbl" style="font-size:9.5px">Total Vol <span style="color:var(--text-tertiary)">(tự tính)</span></label><input type="text" id="f_totalVol" value="${totalVol||''}" readonly style="font-size:12px;background:var(--bg-tertiary);color:var(--text-secondary)"/></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--lot-line,var(--border-light))">
+    <div><label class="lbl">MBL No</label><input type="text" id="f_mblNo" value="${(mblNo||'').replace(/"/g,'&quot;')}" placeholder="Nhập MBL No"/></div>
+    <div><label class="lbl">Total Vol <span style="color:var(--text-tertiary);text-transform:none;font-weight:400">(tự tính)</span></label><input type="text" id="f_totalVol" value="${totalVol||''}" readonly style="background:var(--bg-tertiary,#F5F7FB);color:var(--text-secondary)"/></div>
   </div>
 </div>`;
 }
@@ -12761,50 +12741,50 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .mftr{display:flex;justify-content:flex-end;gap:8px;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border-light)}
 
 /* ═══════════════════════════════════════════════════════════════════════
-   MODAL THÊM/SỬA LÔ HÀNG — redesign: sidebar bước + card nhóm field.
+   MODAL THÊM/SỬA LÔ HÀNG v2 — gọn trong 1 trang, lưới 2 cột dày đặc.
    Toàn bộ scoped trong .lot-modal-v2 — KHÔNG đụng CSS input/select/textarea
    global, không đụng .modal/.mhdr/.mftr dùng chung cho các popup khác.
 ═══════════════════════════════════════════════════════════════════════ */
-:root{--lot-teal:#16C6B7;--lot-teal-dark:#0DAA9C;--lot-blue:#2E90FA;--lot-ink:#1E293B;--lot-sub:#64748B;--lot-line:#E8EDF3;--lot-bg:#F5F9FC;}
-#lotOv .modal.lot-modal-v2{max-width:1240px;width:94vw;height:90vh;padding:0;border-radius:24px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.16);display:flex;flex-direction:column;border:none}
-.lot-modal-hdr{display:flex;align-items:center;gap:14px;padding:20px 26px;border-bottom:1px solid var(--lot-line);flex-shrink:0}
-.lot-modal-hdr-ic{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,var(--lot-teal),var(--lot-teal-dark));display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;flex-shrink:0;box-shadow:0 6px 16px -4px rgba(13,170,156,.5)}
-.lot-modal-hdr .mtitle{font-size:17px;font-weight:700;color:var(--lot-ink)}
-.lot-modal-hdr .msub{font-size:12px;color:var(--lot-sub);margin-top:2px}
-.lot-modal-body{display:flex;flex:1;min-height:0}
-.lot-step-sidebar{width:230px;flex-shrink:0;border-right:1px solid var(--lot-line);padding:16px 12px;overflow-y:auto;background:var(--lot-bg)}
-.lot-step-btn{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;padding:10px 10px;border-radius:12px;border:none;background:transparent;cursor:pointer;margin-bottom:2px;transition:background .15s ease}
-.lot-step-btn:hover{background:rgba(22,198,183,.08)}
-.lot-step-btn.on{background:rgba(22,198,183,.12)}
-.lot-step-num{width:26px;height:26px;border-radius:50%;background:#fff;border:1.5px solid var(--lot-line);color:var(--lot-sub);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s ease}
-.lot-step-btn.on .lot-step-num{background:var(--lot-teal);border-color:var(--lot-teal);color:#fff;box-shadow:0 0 0 4px rgba(22,198,183,.18)}
-.lot-step-btn.filled .lot-step-num{background:#22C55E;border-color:#22C55E;color:#fff}
-.lot-step-btn.filled.on .lot-step-num{background:var(--lot-teal);border-color:var(--lot-teal)}
-.lot-step-title{font-size:13px;font-weight:700;color:var(--lot-ink);line-height:1.3}
-.lot-step-btn.on .lot-step-title{color:var(--lot-teal-dark)}
-.lot-step-sub{font-size:10.5px;color:var(--lot-sub);margin-top:1px;line-height:1.3}
-.lot-modal-content{flex:1;overflow-y:auto;padding:22px 28px;scroll-behavior:smooth}
-.lot-section-card{border:1px solid var(--lot-line);border-radius:18px;padding:22px;margin-bottom:20px;box-shadow:0 2px 10px -4px rgba(20,40,60,.05);scroll-margin-top:12px}
-.lot-section-hdr{display:flex;align-items:center;gap:9px;margin-bottom:16px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px}
-.lot-section-hdr i{font-size:16px}
-.lot-modal-ftr{display:flex;align-items:center;gap:10px;padding:16px 26px;border-top:1px solid var(--lot-line);flex-shrink:0;background:#fff}
-.lot-modal-v2 .btn.pri.lot-save-btn{background:linear-gradient(135deg,var(--lot-teal),var(--lot-teal-dark));border:none;box-shadow:0 6px 16px -4px rgba(13,170,156,.45)}
-/* Input trong modal này to/thoáng hơn theo yêu cầu — CHỈ áp dụng trong phạm vi modal, không ảnh hưởng nơi khác */
-.lot-modal-v2 input,.lot-modal-v2 select,.lot-modal-v2 textarea{height:44px;border-radius:12px;border:1px solid #DDE5ED;padding:8px 13px;font-size:13px;box-sizing:border-box}
-.lot-modal-v2 textarea{height:auto;min-height:76px}
-.lot-modal-v2 input:focus,.lot-modal-v2 select:focus,.lot-modal-v2 textarea:focus{border-color:var(--lot-teal);box-shadow:0 0 0 3px rgba(22,198,183,.15)}
-.lot-modal-v2 .lbl{font-size:11px;font-weight:700;color:var(--lot-sub);text-transform:none;letter-spacing:0;margin-bottom:3px;display:block}
-@media(max-width:980px){
-  #lotOv .modal.lot-modal-v2{width:98vw;height:94vh;border-radius:16px}
-  .lot-step-sidebar{width:170px;padding:10px 6px}
-  .lot-step-sub{display:none}
-  .lot-modal-content{padding:16px}
+:root{--lot-teal:#14B8A6;--lot-teal-dark:#0F766E;--lot-blue:#2E90FA;--lot-ink:#1E293B;--lot-sub:#667085;--lot-line:#D9E4EC;--lot-bg:#F8FAFC;}
+#lotOv .modal.lot-modal-v2{max-width:1560px;width:96vw;max-height:94vh;padding:0;border-radius:22px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.16);display:flex;flex-direction:column;border:none;background:#FAFCFE}
+.lot-modal-hdr{display:flex;align-items:center;gap:12px;padding:12px 22px;border-bottom:1px solid var(--lot-line);flex-shrink:0;flex-wrap:wrap}
+.lot-modal-hdr-ic{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--lot-teal),var(--lot-teal-dark));display:flex;align-items:center;justify-content:center;color:#fff;font-size:17px;flex-shrink:0;box-shadow:0 6px 16px -4px rgba(15,118,110,.5)}
+.lot-modal-hdr .mtitle{font-size:15px;font-weight:700;color:var(--lot-ink)}
+.lot-modal-hdr .msub{font-size:11px;color:var(--lot-sub);margin-top:0}
+.lot-modal-hdr-actions{display:flex;align-items:center;gap:7px;margin-left:auto;flex-wrap:wrap}
+.lot-modal-content{flex:1;overflow-y:auto;padding:14px 22px;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start}
+.lot-section-card{border:1px solid var(--lot-line);border-radius:14px;padding:11px 14px;background:#fff;box-shadow:0 2px 8px -4px rgba(20,40,60,.05)}
+.lot-section-card.span2{grid-column:1/-1}
+.lot-section-hdr{display:flex;align-items:center;gap:7px;margin-bottom:9px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:var(--lot-teal-dark)}
+.lot-section-hdr i{font-size:14px}
+.lot-modal-ftr{display:flex;align-items:center;justify-content:flex-start;gap:14px;padding:6px 22px;border-top:1px solid var(--lot-line);flex-shrink:0;background:#fff;font-size:10.5px;color:var(--lot-sub)}
+.lot-modal-ftr kbd{background:var(--lot-bg);border:1px solid var(--lot-line);border-radius:5px;padding:1px 6px;font-family:inherit;font-size:10px;font-weight:700;color:var(--lot-ink)}
+.lot-modal-v2 .btn.pri.lot-save-btn{background:linear-gradient(135deg,var(--lot-teal),var(--lot-teal-dark));border:none;box-shadow:0 6px 16px -4px rgba(15,118,110,.45)}
+.lot-modal-v2 .btn.lot-savenew-btn{border-color:var(--lot-teal);color:var(--lot-teal-dark)}
+/* Input trong modal này gọn/thoáng theo yêu cầu — CHỈ áp dụng trong phạm vi modal, không ảnh hưởng nơi khác */
+.lot-modal-v2 input,.lot-modal-v2 select,.lot-modal-v2 textarea{height:36px;border-radius:9px;border:1px solid #DDE5ED;padding:5px 10px;font-size:12.5px;box-sizing:border-box;transition:border-color .15s,box-shadow .15s}
+.lot-modal-v2 textarea{height:auto;min-height:52px}
+.lot-modal-v2 input:hover,.lot-modal-v2 select:hover{border-color:var(--lot-teal)}
+.lot-modal-v2 input:focus,.lot-modal-v2 select:focus,.lot-modal-v2 textarea:focus{border-color:var(--lot-teal);box-shadow:0 0 0 3px rgba(20,184,166,.15)}
+.lot-modal-v2 .lbl{font-size:10px;font-weight:700;color:var(--lot-sub);text-transform:none;letter-spacing:0;margin-bottom:2px;display:block}
+.lot-modal-v2 .fg{gap:7px}
+.lot-modal-v2 .fi{gap:2px}
+/* Cặp field compact (rowStart/rowEnd) trong modal này: cho tự co giãn nhưng không vượt quá 320px/field
+   để tránh dropdown bị kéo quá rộng khi card chiếm hết chiều ngang lớn của layout mới */
+.lot-modal-v2 .lot-section-card>div[style*="display:flex"]>div{max-width:320px}
+/* Bảng Booking Numbers gọn — header 1 dòng + các dòng dữ liệu, không lặp lại label mỗi dòng */
+.bk-table-hdr{display:grid;grid-template-columns:26px 1fr 70px 100px 90px 34px;gap:8px;padding:0 2px 4px;font-size:10px;font-weight:700;color:var(--lot-sub);text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--lot-line);margin-bottom:4px}
+.bk-row-table{display:grid;grid-template-columns:26px 1fr 70px 100px 90px 34px;gap:8px;align-items:center;padding:3px 2px}
+.bk-row-table .bk-num{font-size:11.5px;color:var(--lot-sub);font-weight:700;text-align:center}
+.bk-truck-toggle{display:flex;align-items:center;justify-content:center;gap:5px;height:36px;cursor:pointer}
+@media(max-width:1180px){
+  .lot-modal-content{grid-template-columns:1fr}
+  .lot-section-card{grid-column:1/-1!important}
 }
 @media(max-width:680px){
-  .lot-modal-body{flex-direction:column}
-  .lot-step-sidebar{width:100%;display:flex;overflow-x:auto;overflow-y:visible;border-right:none;border-bottom:1px solid var(--lot-line);padding:8px}
-  .lot-step-btn{flex-direction:column;align-items:center;text-align:center;min-width:78px;gap:4px}
-  .lot-step-title{font-size:10px}
+  #lotOv .modal.lot-modal-v2{width:100vw;height:100vh;max-height:100vh;border-radius:0}
+  .lot-modal-hdr-actions{width:100%;justify-content:flex-start}
+  .bk-table-hdr,.bk-row-table{grid-template-columns:22px 1fr 55px 85px 70px 30px;font-size:11px}
 }
 /* SVC */
 .svc-hdr{display:grid;grid-template-columns:20px 155px 1fr 95px 95px 85px 28px;gap:6px;padding:3px 8px;font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.3px}
@@ -13133,20 +13113,20 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
   <div class="modal lot-modal-v2">
     <div class="lot-modal-hdr">
       <div class="lot-modal-hdr-ic"><i class="ti ti-package"></i></div>
-      <div style="flex:1;min-width:0"><div class="mtitle" id="lotTitle"></div><div class="msub" id="lotSub"></div></div>
-      <div class="mhdr-btns"><button class="rac" title="Thu gọn" onclick="event.stopPropagation();toggleMinOv('lotOv')"><i class="ti ti-minus"></i></button><button class="rac" title="Đóng" onclick="closeOv('lotOv')"><i class="ti ti-x"></i></button></div>
-    </div>
-    <div class="lot-modal-body">
-      <nav class="lot-step-sidebar" id="lotStepSidebar"></nav>
-      <div class="lot-modal-content" id="lotFieldsScroll">
-        <div id="lotFields"></div>
+      <div style="min-width:0"><div class="mtitle" id="lotTitle"></div><div class="msub" id="lotSub"></div></div>
+      <div class="lot-modal-hdr-actions">
+        <button class="btn" onclick="closeOv('lotOv')">Hủy</button>
+        <button class="btn lot-savenew-btn" onclick="_lotSaveAndNew()"><i class="ti ti-copy-plus"></i> Lưu &amp; Thêm mới</button>
+        <button class="btn pri lot-save-btn" onclick="saveLot()"><i class="ti ti-check"></i> Lưu &amp; Đóng</button>
+        <button class="rac" title="Thu gọn" onclick="event.stopPropagation();toggleMinOv('lotOv')"><i class="ti ti-minus"></i></button>
+        <button class="rac" title="Đóng" onclick="closeOv('lotOv')"><i class="ti ti-x"></i></button>
       </div>
     </div>
+    <div class="lot-modal-content" id="lotFields"></div>
     <div class="lot-modal-ftr">
-      <button class="btn red" id="lotDelBtn" onclick="_lotModalDelete()" style="display:none"><i class="ti ti-trash"></i> Xóa lô hàng</button>
-      <div style="flex:1"></div>
-      <button class="btn" onclick="closeOv('lotOv')">Hủy</button>
-      <button class="btn pri lot-save-btn" onclick="saveLot()"><i class="ti ti-check"></i> Lưu &amp; Đóng</button>
+      <span id="lotDelWrap"><button class="btn red sm" id="lotDelBtn" onclick="_lotModalDelete()" style="display:none"><i class="ti ti-trash"></i> Xóa lô hàng</button></span>
+      <span style="margin-left:auto"></span>
+      <span>Phím tắt: <kbd>Ctrl</kbd>+<kbd>Enter</kbd> Lưu &amp; Đóng</span>
     </div>
   </div>
 </div>
@@ -24456,8 +24436,12 @@ function exportSOA(){
     var noInvPaidAmt=0; noInvEntries.forEach(function(x){if(x.status==='paid')noInvPaidAmt+=parseFloat(x.amount)||0;});
     function _fmtPay(allPaid,hasData,paidAmt,total){
       if(!hasData)return {status:'unpaid',display:'Chưa TT',paid:0};
-      if(allPaid){var amt=paidAmt>0?paidAmt:total;return {status:'paid',display:'Đã TT'+(amt>1000?' '+Math.round(amt).toLocaleString()+' đ':''),paid:amt};}
-      if(paidAmt>0)return {status:'partial',display:'Đã TT '+Math.round(paidAmt).toLocaleString()+' đ',paid:paidAmt};
+      // So sánh ĐÚNG số tiền thực với tổng để quyết định nhãn — không chỉ dựa vào status (allPaid),
+      // vì status có thể đã đánh dấu "paid" trong khi số tiền nhập vào chỉ là một phần (2 field độc
+      // lập nhau ở tab Invoice). Đây là lỗi khiến SOA/Excel từng "không ghi nhận" thanh toán 1 phần.
+      if(paidAmt>0&&total>0&&paidAmt<total)return {status:'partial',display:'Một phần — '+Math.round(paidAmt).toLocaleString()+' đ',paid:paidAmt};
+      if(allPaid||(paidAmt>0&&paidAmt>=total)){var amt=paidAmt>0?paidAmt:total;return {status:'paid',display:'Đã TT'+(amt>1000?' '+Math.round(amt).toLocaleString()+' đ':''),paid:amt};}
+      if(paidAmt>0)return {status:'partial',display:'Một phần — '+Math.round(paidAmt).toLocaleString()+' đ',paid:paidAmt};
       return {status:'unpaid',display:'Chưa TT',paid:0};
     }
     var invPs=_fmtPay(invAllPaid,invHasData,invPaidAmt,preYes+vatYes);
@@ -24907,6 +24891,12 @@ function _dnPayStatusSplit(r, totalYesVND, totalNoVND, partyKeys){
   const noInvEntries=entries.filter(function(p){return p&&p.noInv&&p.noInv.status;});
   let invPaid=invEntries.length>0&&invEntries.every(function(p){return p.inv.status==='paid';});
   let noInvPaid=noInvEntries.length>0&&noInvEntries.every(function(p){return p.noInv.status==='paid';});
+  // Số tiền ĐÃ THANH TOÁN THỰC TẾ — cộng .amount của các entry có status='paid'. Đây là điểm
+  // TRƯỚC ĐÂY BỊ THIẾU: hàm này chỉ trả nhị phân Đã TT/Chưa TT dựa vào status, không hề xét số
+  // tiền — khiến 1 lô mới thanh toán 1 phần (status='paid' nhưng amount<Tổng) bị Excel/SOA hiển
+  // thị NHẦM thành "Đã thanh toán" (đủ), làm mất hoàn toàn thông tin đã TT một phần.
+  let invPaidAmt=0; invEntries.forEach(function(p){if(p.inv.status==='paid')invPaidAmt+=parseFloat(p.inv.amount)||0;});
+  let noInvPaidAmt=0; noInvEntries.forEach(function(p){if(p.noInv.status==='paid')noInvPaidAmt+=parseFloat(p.noInv.amount)||0;});
   // Fallback legacy dnPayStatus — CHỈ áp dụng khi lô này HOÀN TOÀN CHƯA CÓ bản ghi dnPayments nào
   // cho các party liên quan (entries rỗng hoàn toàn = lô cũ, chưa từng tách Có HĐ/Không HĐ).
   // KHÔNG áp dụng khi party ĐÃ có bản ghi dnPayments (dù .inv rỗng/chưa thao tác) — vì field
@@ -24924,9 +24914,18 @@ function _dnPayStatusSplit(r, totalYesVND, totalNoVND, partyKeys){
   }
   const hasYes=totalYesVND===undefined||totalYesVND>0;
   const hasNo=totalNoVND===undefined||totalNoVND>0;
+  // Xác định nhãn theo ĐÚNG số tiền thực (không chỉ status) — khớp cách _computeArRowStatus() đã
+  // sửa cho báo cáo trên màn hình, để SOA/Excel/màn hình LUÔN đồng nhất với nhau.
+  function _label(paidFlag,paidAmt,total){
+    if(paidAmt>0&&total>0&&paidAmt<total)return{text:'Một phần — '+Math.round(paidAmt).toLocaleString()+' đ',amt:paidAmt};
+    if(paidFlag||(paidAmt>0&&paidAmt>=total))return{text:'Đã thanh toán',amt:(paidAmt>0?paidAmt:total)};
+    return{text:'Chưa thanh toán',amt:0};
+  }
+  const invL=_label(invPaid,invPaidAmt,totalYesVND||0);
+  const noInvL=_label(noInvPaid,noInvPaidAmt,totalNoVND||0);
   return{
-    inv:!hasYes?'—':(invPaid?'Đã thanh toán':'Chưa thanh toán'),
-    noInv:!hasNo?'—':(noInvPaid?'Đã thanh toán':'Chưa thanh toán')
+    inv:!hasYes?'—':invL.text, invAmt:!hasYes?0:invL.amt,
+    noInv:!hasNo?'—':noInvL.text, noInvAmt:!hasNo?0:noInvL.amt
   };
 }
 window._dnPayStatusSplit=_dnPayStatusSplit;
@@ -25305,8 +25304,8 @@ async function exportExcelDebt(){
         // Payment status: tách riêng Có HĐ (inv) / Không HĐ (noInv) — đồng bộ với SOA PDF và báo cáo trên màn hình
         // (trước đây dùng chung 1 trạng thái gộp từ dnPayStatus legacy → sai khi 1 bên đã TT, bên kia chưa)
         const payStatusSplit=_dnPayStatusSplit(r,totalYesVND,totalNoVND);
-        if(totalYesVND>0)dataRows.push({dn:dnNo,job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',tenHang:r.tenHang||'',pre:preYes,vat:vatYes,amt:totalYesVND,tk:'Công ty',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.inv,type:'co'});
-        if(totalNoVND>0)dataRows.push({dn:dnNo+'(CN)',job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',tenHang:r.tenHang||'',pre:preNo,vat:vatNo,amt:totalNoVND,tk:'Cá nhân',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.noInv,type:'cn'});
+        if(totalYesVND>0)dataRows.push({dn:dnNo,job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',tenHang:r.tenHang||'',pre:preYes,vat:vatYes,amt:totalYesVND,tk:'Công ty',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.inv,payAmt:payStatusSplit.invAmt,type:'co'});
+        if(totalNoVND>0)dataRows.push({dn:dnNo+'(CN)',job:r.jobNo||r.bookingNo,hbl:r.mblNo||'',tenHang:r.tenHang||'',pre:preNo,vat:vatNo,amt:totalNoVND,tk:'Cá nhân',sender:sh,cont:contStr,date:etdFmt,pay:payStatusSplit.noInv,payAmt:payStatusSplit.noInvAmt,type:'cn'});
       });
       if(!dataRows.length)return;
       var coRows=dataRows.filter(r=>r.type==='co');
@@ -25373,7 +25372,7 @@ async function exportExcelDebt(){
 
       // ===== Summary strip 5 card theo mẫu: TỔNG CỘNG NỢ / ĐÃ THANH TOÁN / CÒN NỢ / SỐ CONTAINER / NGÀY LẬP BẢNG KÊ =====
       // paid & cònNợ: chỉ tính để HIỂN THỊ từ dataRows đã dựng — không ảnh hưởng số liệu công nợ
-      var paidTotal=dataRows.reduce(function(s,rw){return s+(rw.pay==='Đã thanh toán'?rw.amt:0);},0);
+      var paidTotal=dataRows.reduce(function(s,rw){return s+(rw.payAmt||0);},0);
       var remainTotal=grandTotal-paidTotal;
       ws.getRow(5).height=14; ws.getRow(6).height=24;
       var cards=[
@@ -25429,8 +25428,9 @@ async function exportExcelDebt(){
         rr.getCell(6).font={size:9.5,color:{argb:C.warning}};
         const tkC=rr.getCell(8); tkC.font={bold:true,size:9,color:{argb:row.tk==='Công ty'?C.secondary:C.purple}};
         const isPaid=row.pay==='Đã thanh toán';
-        const payC=rr.getCell(12); payC.font={bold:true,size:9,color:{argb:isPaid?'FF16A34A':'FFDC2626'}};
-        payC.fill={type:'pattern',pattern:'solid',fgColor:{argb:isPaid?'FFF0FDF4':'FFFEF2F2'}};
+        const isPartial=row.pay&&row.pay.indexOf('Một phần')===0;
+        const payC=rr.getCell(12); payC.font={bold:true,size:9,color:{argb:isPaid?'FF16A34A':isPartial?'FFB45309':'FFDC2626'}};
+        payC.fill={type:'pattern',pattern:'solid',fgColor:{argb:isPaid?'FFF0FDF4':isPartial?'FFFFFBEB':'FFFEF2F2'}};
         rIdx++;
       });
 
