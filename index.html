@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.82';
+window.APP_BUILD='v2.83';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3192,7 +3192,45 @@ function renderDetailPanel(r,tt){
 
   if(detailTab==='info'){
     const allCols=tt==='xuat'?XCOLS:NCOLS;
-    const skipList=['bookingNo','status','cutoffCY','cutoffSI','polCountry','podCountry','loaiHang','remark'];
+    // Render 1 field dạng chỉ xem (read-only) — logic hiển thị GIỮ NGUYÊN y hệt bản cũ (badge typeCont/
+    // cargoType/status, cutoff fallback tính mặc định...), chỉ khác là được gọi theo từng nhóm card
+    // thay vì luôn render phẳng 1 danh sách dài.
+    function _dInfoField(c){
+      if(c.type==='rowStart'||c.type==='rowEnd'||c.type==='bookingBlock'||c.type==='transshipBlock')return '';
+      let val=r[c.k]||'—';
+      if(c.k==='typeCont'&&r[c.k]){const isRf=r[c.k].includes('R');val=`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${r[c.k]}</span>`;}
+      else if(c.k==='cargoType'&&r[c.k]){val=`<span class="bdg ${r[c.k]==='Hàng lạnh'?'bdg-b':'bdg-a'}">${r[c.k]}</span>`;}
+      else if(c.k==='status'){val=`<span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>`;}
+      else if(c.k==='cutoffCY')val=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00')||'—';
+      else if(c.k==='cutoffSI')val=r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00')||'—';
+      else if(c.k==='loaiHang'&&r.loaiHang)val=`<span style="font-weight:700;color:var(--blue)">${r.loaiHang}</span>`;
+      if(c.k==='remark'){
+        if(!r.remark)return '';
+        return `<div class="detail-field" style="grid-column:1/-1;background:#FFFBE6;border-color:#F0D060"><div class="detail-label" style="color:#856A00">${c.l}</div><div class="detail-val" style="white-space:pre-line;color:#1a1a18">${r.remark}</div></div>`;
+      }
+      return `<div class="detail-field"><div class="detail-label">${c.l}</div><div class="detail-val">${val}</div></div>`;
+    }
+    function _dSecCols(keys){ return _lotColsForSection(allCols,keys).map(_dInfoField).filter(Boolean).join(''); }
+    // Booking Numbers — tóm tắt từng booking (chi tiết cont/seal đầy đủ xem ở tab Cont/Seal riêng)
+    const bkList=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:r.vol,typeCont:r.typeCont,hasTruck:r.hasTruck}];
+    const bkHtml=bkList.map(function(b,i){
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 2px'+(i<bkList.length-1?';border-bottom:1px dashed var(--border-light)':'')+'">'
+        +'<span style="font-size:10.5px;color:var(--text-tertiary);width:14px">'+(i+1)+'</span>'
+        +'<span style="font-weight:700;font-size:12.5px;color:var(--blue);flex:1;word-break:break-all">'+(b.bookingNo||'—')+'</span>'
+        +'<span class="bdg bdg-gr" style="font-size:10.5px;white-space:nowrap">'+(b.vol||1)+'x'+(b.typeCont||'—')+'</span>'
+        +(b.hasTruck?'<span class="bdg bdg-b" style="font-size:10px;white-space:nowrap"><i class="ti ti-truck"></i></span>':'')
+      +'</div>';
+    }).join('')+(r.mblNo?'<div class="detail-field" style="margin-top:8px"><div class="detail-label">MBL No</div><div class="detail-val">'+r.mblNo+'</div></div>':'');
+    // Cảng chuyển tải — lấy từ vessel record, giữ nguyên logic cũ
+    const vesForTs=(cache.vessels||[]).find(function(v){return v.vessel===r.vessel&&(!r.voy||v.voy===r.voy);});
+    const tsList=(vesForTs&&vesForTs.transships)||[];
+    const tsHtml=tsList.length?('<div style="margin-bottom:8px"><div class="detail-label" style="margin-bottom:5px"><i class="ti ti-transfer" style="font-size:11px"></i> Cảng chuyển tải</div>'
+      +tsList.map(function(p){return '<div style="display:flex;align-items:center;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px dashed var(--border-light)">'
+        +'<span style="font-weight:600;color:#b05a00">'+(p.port||'—')+'</span>'
+        +(p.tt!=null&&p.tt!==''?'<span style="font-size:11px;color:var(--text-secondary)">T/T: <b>'+p.tt+' ngày</b></span>':'')
+        +(p.eta?'<span style="font-size:11px;color:var(--text-secondary)">ETA: <b>'+fmtDMY(p.eta)+'</b></span>':'')
+      +'</div>';}).join('')+'</div>'):'<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px">Tàu direct (không chuyển tải)</div>';
+
     bodyHtml=`
     <!-- Toolbar hành động — đưa lên đầu để thao tác nhanh không cần cuộn -->
     <div class="detail-actionbar">
@@ -3224,55 +3262,35 @@ function renderDetailPanel(r,tt){
       ${can('deleteLot')?`<button class="btn red" onclick="delLot('${r._id}','${tt}')" style="margin-left:auto"><i class="ti ti-trash"></i> Xóa lô hàng</button>`:''}
     </div>
     ${r.locked?'<div style="margin:-4px 0 .8rem"><span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:500"><i class="ti ti-lock" style="font-size:14px"></i>Lô hàng đã được khóa — chỉ Admin mới mở được</span></div>':''}
-    <div class="detail-grid">
-      ${allCols.filter(c=>!skipList.includes(c.k)).map(c=>{
-        let val=r[c.k]||'—';
-        if(c.k==='typeCont'&&r[c.k]){const isRf=r[c.k].includes('R');val=`<span class="bdg ${isRf?'bdg-b':'bdg-gr'}">${r[c.k]}</span>`;}
-        else if(c.k==='cargoType'&&r[c.k]){val=`<span class="bdg ${r[c.k]==='Hàng lạnh'?'bdg-b':'bdg-a'}">${r[c.k]}</span>`;}
-        else if(c.k==='status'){val=`<span class="bdg ${SB[r[c.k]]||'bdg-gr'}">${r[c.k]||'—'}</span>`;}
-        return`<div class="detail-field"><div class="detail-label">${c.l}</div><div class="detail-val">${val}</div></div>`;
-      }).join('')}
-    </div>
-    <!-- ICD / CY / WH / Remark -->
-    ${(r.icd||r.cyLocation||r.wh)?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px">
-      ${r.icd?`<div style="padding:5px 12px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><div style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">ICD</div><div style="font-size:12px;font-weight:600">${r.icd}</div></div>`:''}
-      ${r.cyLocation?`<div style="padding:5px 12px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><div style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">CY</div><div style="font-size:12px">${r.cyLocation}</div></div>`:''}
-      ${r.wh?`<div style="padding:5px 12px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><div style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">WH</div><div style="font-size:12px">${r.wh}</div></div>`:''}
-    </div>`:''}
-    ${r.remark?`<div style="margin-top:8px;padding:8px 12px;border-radius:8px;background:#FFFBE6;border:1px solid #F0D060"><div style="font-size:9.5px;color:#856A00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Ghi chú</div><div style="font-size:12px;color:#1a1a18">${r.remark}</div></div>`:''}
-    <!-- Job No + Loai Hang -->
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-      ${r.jobNo?`<div style="padding:5px 14px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><span style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Số quản lý</span><div style="font-size:14px;font-weight:800;color:var(--blue)">${r.jobNo}</div></div>`:''}
-      ${r.loaiHang?`<div style="padding:5px 14px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-light)"><span style="font-size:9.5px;color:var(--text-secondary);font-weight:600;text-transform:uppercase">Loại lô hàng</span><div style="font-size:12px;font-weight:700;color:var(--text-primary)">${r.loaiHang}</div></div>`:''}
-    </div>
-    <!-- Cut Off section -->
-    ${(r.cutoffCY||r.cutoffSI||r.etd)?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-      <div style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:8px;padding:.6rem .85rem">
-        <div style="font-size:9.5px;color:#856a00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Cut Off CY</div>
-        <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
+    <div class="dcard-wrap">
+      <div class="dcard span2">
+        <div class="dcard-hdr" style="color:#2E90FA"><i class="ti ti-file-info"></i>1. Thông tin chung</div>
+        <div class="detail-grid">${_dSecCols(['loaiHang','cargoType','bookingParty','shipper','supplier','tenHang','cnee','consignee','status'])}</div>
       </div>
-      <div style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);border-radius:8px;padding:.6rem .85rem">
-        <div style="font-size:9.5px;color:#856a00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Cut Off SI</div>
-        <div style="font-size:13px;font-weight:600;color:#1a1a18">${r.cutoffSI||calcDefaultCutoff(r.etd,-2,'11:00')||'—'}</div>
+      <div class="dcard span2">
+        <div class="dcard-hdr" style="color:#2E90FA"><i class="ti ti-bookmark"></i>2. Booking Numbers</div>
+        ${bkHtml}
       </div>
-    </div>`:''}
-    <!-- Cảng chuyển tải -->
-    ${(()=>{
-      // Lấy transships từ vessel record
-      const ves=(cache.vessels||[]).find(function(v){return v.vessel===r.vessel&&(!r.voy||v.voy===r.voy);});
-      const ts=(ves&&ves.transships)||[];
-      if(!ts.length)return '';
-      return '<div style="margin-top:10px;background:rgba(224,112,0,.06);border:1px solid rgba(224,112,0,.25);border-radius:8px;padding:.65rem .85rem">'
-        +'<div style="font-size:9.5px;color:#b05a00;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;display:flex;align-items:center;gap:4px"><i class="ti ti-transfer" style="font-size:11px"></i> Cảng chuyển tải</div>'
-        +ts.map(function(p){return '<div style="display:flex;align-items:center;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px dashed rgba(0,0,0,.07)">'
-          +'<span style="font-weight:600;color:#b05a00">'+(p.port||'—')+'</span>'
-          +(p.tt!=null&&p.tt!==''?'<span style="font-size:11px;color:var(--text-secondary)">T/T: <b>'+p.tt+' ngày</b></span>':'')
-          +(p.eta?'<span style="font-size:11px;color:var(--text-secondary)">ETA: <b>'+fmtDMY(p.eta)+'</b></span>':'')
-        +'</div>';}).join('')
-      +'</div>';
-    })()}
+      <div class="dcard">
+        <div class="dcard-hdr" style="color:#16C6B7"><i class="ti ti-truck"></i>3. Thông tin vận chuyển</div>
+        <div class="detail-grid">${_dSecCols(['carrier','fwd','vessel','voy'])}</div>
+      </div>
+      <div class="dcard">
+        <div class="dcard-hdr" style="color:#22C55E"><i class="ti ti-calendar-time"></i>4. Thời gian</div>
+        <div class="detail-grid">${_dSecCols(['etd','eta','cutoffCY','cutoffSI'])}</div>
+      </div>
+      <div class="dcard">
+        <div class="dcard-hdr" style="color:#7C3AED"><i class="ti ti-map-pin"></i>5. Cảng &amp; Địa điểm</div>
+        <div class="detail-grid">${_dSecCols(['pol','icd','pod','cyLocation','wh'])}</div>
+      </div>
+      <div class="dcard">
+        <div class="dcard-hdr" style="color:#F59E0B"><i class="ti ti-package"></i>6. Hàng hóa &amp; Ghi chú</div>
+        ${tsHtml}
+        <div class="detail-grid">${_dSecCols(['remark'])}</div>
+      </div>
+    </div>
     <!-- Status quick buttons -->
-    ${can('editLot')&&!r.locked?`<div style="margin-top:.75rem">
+    ${can('editLot')&&!r.locked?`<div style="margin-top:.9rem">
       <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Trạng thái lô hàng</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${['Confirm','Standby','Done','Cancel'].map(s=>`<button onclick="quickSetStatus('${r._id}','${tt}','${s}')" style="padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:2px solid ${r.status===s?'transparent':'#ddd'};background:${r.status===s?(s==='Confirm'?'#dc3545':s==='Standby'?'#ffc107':s==='Done'?'#198754':'#0d6efd'):(s==='Confirm'?'rgba(220,53,69,.1)':s==='Standby'?'rgba(255,193,7,.1)':s==='Done'?'rgba(25,135,84,.1)':'rgba(13,110,253,.1)')};color:${s==='Confirm'?'#dc3545':s==='Standby'?'#856404':s==='Done'?'#198754':'#0d6efd'}">${s}</button>`).join('')}
@@ -12988,6 +13006,12 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .detail-field{background:var(--bg-secondary);border-radius:8px;padding:.6rem .85rem;border:0.5px solid var(--border-light)}
 .detail-label{font-size:10px;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
 .detail-val{font-size:12.5px;font-weight:500;color:var(--text-primary)}
+.dcard-wrap{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:.9rem}
+.dcard{border:1px solid var(--border-light);border-radius:14px;padding:14px 16px;background:var(--bg-primary);box-shadow:var(--shadow-sm)}
+.dcard.span2{grid-column:1/-1}
+.dcard-hdr{display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.3px}
+.dcard-hdr i{font-size:14px}
+@media(max-width:900px){.dcard-wrap{grid-template-columns:1fr}.dcard{grid-column:1/-1!important}}
 /* OVERLAYS */
 .ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;align-items:flex-start;justify-content:center;padding:2rem 1rem;overflow-y:auto}
 .ov.open{display:flex}
@@ -13104,7 +13128,7 @@ body.xuat-lotmode #dpanelTabbar{display:none!important;}
 #xuat-lot-view{display:none;overflow-y:auto;min-height:calc(100vh - 88px);}
 #xuat-lot-view.active{display:block;}
 #xuat-list-view{display:block;overflow-y:auto;}
-#xuat-tabbar-wrap{background:#f1f3f5;border-bottom:2px solid #ced4da;box-shadow:0 2px 8px rgba(0,0,0,.08);}
+#xuat-tabbar-wrap{background:#f1f3f5;border-bottom:2px solid #ced4da;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px;}
 body.xuat-lotmode #dpanelTabbar{display:none!important;}
 body.xuat-lotmode #xuat-list-view{display:none!important;}
 
