@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.85';
+window.APP_BUILD='v2.86';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -18807,11 +18807,11 @@ function renderQuoteList(){
     return '<div style="margin-bottom:1.25rem">'
       +'<div style="font-size:12px;font-weight:700;color:#185FA5;text-transform:uppercase;letter-spacing:.4px;margin-bottom:.5rem;padding-bottom:4px;border-bottom:2px solid #E6F1FB"><i class="ti ti-building" style="font-size:13px"></i> '+sh+' <span style="color:var(--text-tertiary);font-weight:500">('+items.length+')</span></div>'
       +'<div style="display:flex;flex-direction:column;gap:6px">'+items.map(function(x){
-        const pods=(x.pods||[]).map(function(p){return p.pod;}).filter(Boolean).join(', ');
+        const pods=((x.type==='package'?x.pkgPods:x.pods)||[]).map(function(p){return p.pod;}).filter(Boolean).join(', ');
         const dt=x.savedAt?new Date(x.savedAt).toLocaleDateString('vi-VN'):'';
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border:1px solid var(--border-light);border-radius:10px;background:var(--bg-primary)">'
           +'<div onclick="openQuotation(\''+x._id+'\')" style="cursor:pointer;flex:1;min-width:0">'
-            +'<div style="font-weight:700;font-size:13px;color:#0C2C52">'+(x.no||'—')+' <span style="font-weight:500;color:var(--text-secondary);font-size:11.5px">'+(x.date||'')+'</span></div>'
+            +'<div style="font-weight:700;font-size:13px;color:#0C2C52">'+(x.no||'—')+(x.type==='package'?' <span class="bdg bdg-purple" style="font-size:9.5px;vertical-align:middle">TRỌN GÓI</span>':'')+' <span style="font-weight:500;color:var(--text-secondary);font-size:11.5px">'+(x.date||'')+'</span></div>'
             +'<div style="font-size:11.5px;color:var(--text-secondary)">'+(x.pol||'')+(pods?' → '+pods:'')+(x.commodity?' • '+x.commodity:'')+'</div>'
           +'</div>'
           +'<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">'
@@ -18825,33 +18825,52 @@ function renderQuoteList(){
 }
 
 function newQuotation(){
-  // Ask which shipper, then open the form
+  // Ask which shipper + loại báo giá, then open đúng form
   const shippers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname).sort();
   if(!shippers.length){toast('Chưa có shipper nào trong Đối tác','error');return;}
   const opts=shippers.map(function(s){return '<option>'+s+'</option>';}).join('');
-  g('combineOv').innerHTML='<div class="modal" style="max-width:420px"><div class="mhdr"><div class="mtitle">Chọn khách hàng</div><button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
-    +'<div class="fg"><div class="fi full"><label class="lbl">Khách hàng (Shipper)</label><select id="newQuoteShipper">'+opts+'</select></div></div>'
+  g('combineOv').innerHTML='<div class="modal" style="max-width:420px"><div class="mhdr"><div class="mtitle">Tạo báo giá mới</div><button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="fg">'
+      +'<div class="fi full"><label class="lbl">Loại báo giá</label><select id="newQuoteType">'
+        +'<option value="detail">Chi tiết (Ocean Freight / Local Charge / Service)</option>'
+        +'<option value="package">Trọn gói — Dịch vụ xuất khẩu trọn gói</option>'
+      +'</select></div>'
+      +'<div class="fi full"><label class="lbl">Khách hàng (Shipper)</label><select id="newQuoteShipper">'+opts+'</select></div>'
+    +'</div>'
     +'<div class="mftr"><button class="btn" onclick="closeOv(\'combineOv\')">Hủy</button><button class="btn pri" onclick="startNewQuote()"><i class="ti ti-arrow-right"></i> Tạo báo giá</button></div></div>';
   openOv('combineOv');
 }
 
 function startNewQuote(){
   const sh=g('newQuoteShipper')?.value||'';
+  const type=g('newQuoteType')?.value||'detail';
   closeOv('combineOv');
   window._qEditId=null;
-  window._qTypes={};window._qLocal={};window._qService={};window._qPods=[];
+  window._qFormType=type;
   window._qPresetCustomer=sh;
-  renderQuoteForm();
+  if(type==='package'){
+    window._qPkgPods=[];
+    renderPkgQuoteForm();
+  } else {
+    window._qTypes={};window._qLocal={};window._qService={};window._qPods=[];
+    renderQuoteForm();
+  }
 }
 
 function openQuotation(id){
   const q=_quotesCache.find(function(x){return x._id===id;});
   if(!q){toast('Không tìm thấy báo giá','error');return;}
   window._qEditId=id;
-  window._qTypes=q.types||{};window._qLocal=q.local||{};window._qService=q.service||{};window._qPods=q.pods||[];
+  window._qFormType=q.type==='package'?'package':'detail';
   window._qPresetCustomer=q.customer||'';
   window._qLoaded=q;
-  renderQuoteForm();
+  if(window._qFormType==='package'){
+    window._qPkgPods=q.pkgPods||[];
+    renderPkgQuoteForm();
+  } else {
+    window._qTypes=q.types||{};window._qLocal=q.local||{};window._qService=q.service||{};window._qPods=q.pods||[];
+    renderQuoteForm();
+  }
 }
 
 async function deleteQuotation(id){
@@ -19039,6 +19058,266 @@ function renderQuoteForm(){
   quoteRecalc();
 }
 window.renderQuoteForm=renderQuoteForm;
+
+/* ═══════════════════════════════════════════════════════════════
+   BÁO GIÁ TRỌN GÓI — Dịch vụ xuất khẩu trọn gói theo POD
+   Dùng chung danh sách/lưu trữ với Quotation (collection 'quotes', q.type='package')
+   Tái dùng style .qt-* của form Chi tiết để đồng bộ giao diện.
+═══════════════════════════════════════════════════════════════ */
+function renderPkgQuoteForm(){
+  const pg=g('page-quote'); if(!pg)return;
+  if(!window._qPkgPods)window._qPkgPods=[];
+  const shippers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname).sort();
+  const today=new Date().toISOString().slice(0,10);
+
+  pg.innerHTML=`
+<style>
+  .qt-wrap{max-width:1100px;margin:0 auto;font-family:'Segoe UI',system-ui,sans-serif}
+  .qt-hero{background:linear-gradient(135deg,#103A6F 0%,#0F766E 100%);border-radius:16px;padding:1.5rem 1.75rem;color:#fff;margin-bottom:1.25rem;position:relative;overflow:hidden}
+  .qt-hero::after{content:'';position:absolute;right:-30px;top:-30px;width:160px;height:160px;background:rgba(255,255,255,.06);border-radius:50%}
+  .qt-hero::before{content:'';position:absolute;right:40px;bottom:-50px;width:120px;height:120px;background:rgba(255,255,255,.04);border-radius:50%}
+  .qt-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:14px;padding:1.25rem 1.4rem;margin-bottom:1.1rem;box-shadow:0 1px 3px rgba(12,44,82,.04)}
+  .qt-card-hd{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700;color:#103A6F;text-transform:uppercase;letter-spacing:.6px;margin-bottom:1rem;padding-bottom:.6rem;border-bottom:2px solid #E6F1FB}
+  .qt-card-hd .qt-ic{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#0F766E,#103A6F);display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px}
+  .qt-grid{display:grid;gap:12px}
+  .qt-grid-3{grid-template-columns:repeat(3,1fr)}
+  .qt-grid-2{grid-template-columns:repeat(2,1fr)}
+  .qt-fld label{display:block;font-size:10.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+  .qt-fld input,.qt-fld select,.qt-fld textarea{width:100%;box-sizing:border-box;font-size:12.5px;padding:8px 11px;border:1px solid var(--border-light);border-radius:9px;background:var(--bg-secondary);transition:border .15s}
+  .qt-fld input:focus,.qt-fld select:focus,.qt-fld textarea:focus{outline:none;border-color:#0F766E;background:#fff}
+  .qt-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .qt-table th{background:#103A6F;color:#fff;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;padding:9px 11px;text-align:left}
+  .qt-table th:first-child{border-radius:8px 0 0 0}
+  .qt-table th:last-child{border-radius:0 8px 0 0}
+  .qt-table td{padding:6px 9px;border-bottom:1px solid var(--border-light)}
+  .qt-table input,.qt-table select{width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid var(--border-light);border-radius:7px;background:var(--bg-secondary)}
+  .qt-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-top:1.25rem}
+  .qt-btn{display:flex;align-items:center;gap:7px;padding:11px 18px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--border-light);background:var(--bg-primary);color:var(--text-primary);transition:all .15s}
+  .qt-btn:hover{transform:translateY(-1px);box-shadow:0 3px 8px rgba(12,44,82,.12)}
+  .qt-btn.primary{background:linear-gradient(135deg,#0F766E,#103A6F);color:#fff;border:none}
+  .qt-btn.green{background:#0F6E56;color:#fff;border:none}
+  @media(max-width:880px){.qt-grid-3,.qt-grid-2{grid-template-columns:1fr}}
+</style>
+
+<div class="qt-wrap">
+  <div class="qt-hero">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1">
+      <div>
+        <div style="font-size:11px;font-weight:600;letter-spacing:1.5px;opacity:.8;text-transform:uppercase">Package Quotation</div>
+        <div style="font-size:23px;font-weight:800;margin-top:3px">Báo Giá Trọn Gói</div>
+        <div style="font-size:12px;opacity:.85;margin-top:4px">Dịch vụ xuất khẩu trọn gói theo tuyến POD</div>
+      </div>
+      <div style="text-align:right">
+        <button onclick="renderQuote()" style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;padding:8px 14px;border-radius:9px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px"><i class="ti ti-arrow-left"></i> Danh sách</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1. THÔNG TIN CHUNG -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-info-circle"></i></span>Thông tin chung</div>
+    <div class="qt-grid qt-grid-3">
+      <div class="qt-fld"><label>Quote No</label><input type="text" id="q_no" value="${quoteNextNo()}"/></div>
+      <div class="qt-fld"><label>Date</label><input type="date" id="q_date" value="${today}"/></div>
+      <div class="qt-fld"><label>Sales Person</label><input type="text" id="q_sales" value="${(currentProfile&&currentProfile.name)||''}" placeholder="Tên sales"/></div>
+      <div class="qt-fld"><label>Customer Name</label><select id="q_customer"><option value="">— Chọn khách hàng —</option>${shippers.map(s=>`<option${s===window._qPresetCustomer?' selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="qt-fld"><label>Commodity</label><input type="text" id="q_commodity" placeholder="VD: Coconut fiber"/></div>
+      <div class="qt-fld"><label>POL (Port of Loading)</label><input type="text" id="q_pol" value="HO CHI MINH, VIETNAM"/></div>
+    </div>
+  </div>
+
+  <!-- 2. DỊCH VỤ TRỌN GÓI THEO POD -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-package"></i></span>Dịch vụ xuất khẩu trọn gói
+      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Mỗi POD có thể nhiều hãng tàu / loại cont, giá đã bao gồm toàn bộ dịch vụ</span>
+    </div>
+    <div id="qPkgGroups"></div>
+    <button class="qt-btn" onclick="quoteAddPkgPod()" style="margin-top:6px"><i class="ti ti-plus"></i> Thêm POD</button>
+  </div>
+
+  <!-- 3. GHI CHÚ -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-note"></i></span>Ghi chú</div>
+    <div class="qt-grid qt-grid-2">
+      <div class="qt-fld"><label>Payment Term</label><input type="text" id="q_payment" placeholder="VD: TT in advance"/></div>
+      <div class="qt-fld"><label>Free Time</label><input type="text" id="q_freetime" placeholder="VD: 14 days at POD"/></div>
+      <div class="qt-fld" style="grid-column:1/-1"><label>Routing</label><input type="text" id="q_routing" placeholder="VD: HCMC → Nansha (direct)"/></div>
+      <div class="qt-fld" style="grid-column:1/-1"><label>Special Note</label><textarea id="q_note" rows="3" placeholder="Ghi chú đặc biệt..."></textarea></div>
+    </div>
+  </div>
+
+  <div class="qt-actions">
+    <button class="qt-btn" onclick="quoteSave(true)"><i class="ti ti-device-floppy"></i> Save Quote</button>
+    <button class="qt-btn primary" onclick="quoteExportPkgPDF()"><i class="ti ti-file-type-pdf"></i> Export PDF</button>
+    <button class="qt-btn green" onclick="quoteSendEmail()"><i class="ti ti-mail"></i> Send Email</button>
+  </div>
+</div>`;
+
+  if(window._qLoaded){
+    const q=window._qLoaded;
+    const setv=function(id,v){const el=g(id);if(el&&v!=null)el.value=v;};
+    setv('q_no',q.no);setv('q_date',q.date);setv('q_sales',q.sales);setv('q_commodity',q.commodity);
+    setv('q_pol',q.pol);
+    setv('q_payment',q.payment);setv('q_freetime',q.freetime);setv('q_routing',q.routing);setv('q_note',q.note);
+    window._qLoaded=null;
+  }
+  quoteRenderPkg();
+}
+window.renderPkgQuoteForm=renderPkgQuoteForm;
+
+function _qPkgEmptyRow(){ return {carrier:'',contType:'20DC',price:'',cur:'USD',desc:'',valid:''}; }
+function _qPkgEmptyGroup(){ return {pod:'',transit:'',rows:[_qPkgEmptyRow()]}; }
+
+function quoteRenderPkg(){
+  const box=g('qPkgGroups'); if(!box)return;
+  window._qPkgPods=window._qPkgPods||[];
+  if(!window._qPkgPods.length)window._qPkgPods.push(_qPkgEmptyGroup());
+  const carriers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname).sort();
+  const valid30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+
+  box.innerHTML=window._qPkgPods.map(function(grp,gi){
+    const rowsHtml=(grp.rows||[]).map(function(row,ri){
+      return '<tr>'
+        +'<td><select data-pod="'+gi+'" data-row="'+ri+'" data-f="carrier" onchange="quotePkgRow(this)"><option value="">— Carrier —</option>'+carriers.map(function(cr){return '<option'+(cr===row.carrier?' selected':'')+'>'+cr+'</option>';}).join('')+'</select></td>'
+        +'<td><select data-pod="'+gi+'" data-row="'+ri+'" data-f="contType" onchange="quotePkgRow(this)">'+QUOTE_CONT_TYPES.map(function(t){return '<option'+(t===row.contType?' selected':'')+'>'+t+'</option>';}).join('')+'</select></td>'
+        +'<td><input type="number" data-pod="'+gi+'" data-row="'+ri+'" data-f="price" value="'+(row.price||'')+'" placeholder="0" oninput="quotePkgRow(this)" style="text-align:right"/></td>'
+        +'<td><select data-pod="'+gi+'" data-row="'+ri+'" data-f="cur" onchange="quotePkgRow(this)">'+['USD','VND','CNY'].map(function(c){return '<option'+(c===(row.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('')+'</select></td>'
+        +'<td><input type="text" data-pod="'+gi+'" data-row="'+ri+'" data-f="desc" value="'+(row.desc||'').replace(/"/g,'&quot;')+'" placeholder="VD: Cước biển + THC + Bill + C/O + Fumigation" oninput="quotePkgRow(this)"/></td>'
+        +'<td><input type="date" data-pod="'+gi+'" data-row="'+ri+'" data-f="valid" value="'+(row.valid||valid30)+'" onchange="quotePkgRow(this)"/></td>'
+        +'<td style="text-align:center;width:30px"><button class="rac red" onclick="quoteDelPkgRow('+gi+','+ri+')" title="Xóa dòng" style="font-size:12px"><i class="ti ti-trash"></i></button></td>'
+      +'</tr>';
+    }).join('');
+    return '<div style="border:1px solid var(--border-light);border-radius:12px;padding:12px 14px;margin-bottom:12px;background:var(--bg-secondary)">'
+      +'<div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">'
+        +'<div class="qt-fld" style="flex:2;min-width:200px"><label>POD (Port of Discharge)</label><input type="text" data-pod="'+gi+'" data-f="pod" value="'+(grp.pod||'').replace(/"/g,'&quot;')+'" placeholder="VD: NANSHA, CHINA" oninput="quotePkgMeta(this)" style="background:#fff"/></div>'
+        +'<div class="qt-fld" style="flex:1;min-width:120px"><label>Transit Time</label><input type="text" data-pod="'+gi+'" data-f="transit" value="'+(grp.transit||'').replace(/"/g,'&quot;')+'" placeholder="5-7 days" oninput="quotePkgMeta(this)" style="background:#fff"/></div>'
+        +(window._qPkgPods.length>1?'<button class="rac red" onclick="quoteDelPkgPod('+gi+')" title="Xóa POD này" style="font-size:14px;margin-bottom:6px"><i class="ti ti-trash"></i></button>':'')
+      +'</div>'
+      +'<table class="qt-table"><thead><tr><th style="width:130px">Carrier</th><th style="width:90px">Loại Cont</th><th style="width:110px">Đơn giá</th><th style="width:70px">Curr</th><th>Mô tả (đã bao gồm)</th><th style="width:130px">Valid to</th><th></th></tr></thead>'
+      +'<tbody>'+rowsHtml+'</tbody></table>'
+      +'<button class="qt-btn" onclick="quoteAddPkgRow('+gi+')" style="margin-top:8px;padding:7px 12px;font-size:12px"><i class="ti ti-plus"></i> Thêm dòng giá</button>'
+    +'</div>';
+  }).join('');
+}
+window.quoteRenderPkg=quoteRenderPkg;
+
+function quotePkgMeta(el){ const gi=+el.dataset.pod; window._qPkgPods[gi][el.dataset.f]=el.value; }
+window.quotePkgMeta=quotePkgMeta;
+function quotePkgRow(el){ const gi=+el.dataset.pod, ri=+el.dataset.row; window._qPkgPods[gi].rows[ri][el.dataset.f]=el.value; }
+window.quotePkgRow=quotePkgRow;
+function quoteAddPkgPod(){ window._qPkgPods=window._qPkgPods||[]; window._qPkgPods.push(_qPkgEmptyGroup()); quoteRenderPkg(); }
+window.quoteAddPkgPod=quoteAddPkgPod;
+function quoteDelPkgPod(gi){ window._qPkgPods.splice(gi,1); if(!window._qPkgPods.length)window._qPkgPods.push(_qPkgEmptyGroup()); quoteRenderPkg(); }
+window.quoteDelPkgPod=quoteDelPkgPod;
+function quoteAddPkgRow(gi){ window._qPkgPods[gi].rows.push(_qPkgEmptyRow()); quoteRenderPkg(); }
+window.quoteAddPkgRow=quoteAddPkgRow;
+function quoteDelPkgRow(gi,ri){ window._qPkgPods[gi].rows.splice(ri,1); if(!window._qPkgPods[gi].rows.length)window._qPkgPods[gi].rows.push(_qPkgEmptyRow()); quoteRenderPkg(); }
+window.quoteDelPkgRow=quoteDelPkgRow;
+
+function quoteGatherPkg(){
+  return {
+    type:'package',
+    no:g('q_no')?.value||'',date:g('q_date')?.value||'',sales:g('q_sales')?.value||'',
+    customer:g('q_customer')?.value||'',commodity:g('q_commodity')?.value||'',
+    pol:g('q_pol')?.value||'',
+    pkgPods:window._qPkgPods||[],
+    payment:g('q_payment')?.value||'',freetime:g('q_freetime')?.value||'',routing:g('q_routing')?.value||'',note:g('q_note')?.value||'',
+    savedAt:Date.now()
+  };
+}
+window.quoteGatherPkg=quoteGatherPkg;
+
+// PDF Trọn gói — layout đồng bộ SOA (navy/teal, logo navy, card thông tin, bảng theo POD)
+function quoteBuildPkgHTML(q){
+  const sp=cache.partners[q.customer]||{};
+  const co=_coInfo();
+  const NAVY='#103A6F', TEAL='#0F766E', LIGHTBG='#F5F9FC', BORDERC='#D9E4EC';
+  let logoUrl='';
+  try{ logoUrl=new URL('icons/icon-navy-192.png',location.href).href; }catch(e){}
+  const f=function(v,c){ return v?parseFloat(v).toLocaleString()+' '+(c||'USD'):'—'; };
+
+  let podHTML='';
+  (q.pkgPods||[]).forEach(function(grp){
+    const rows=(grp.rows||[]).filter(function(r){return r.carrier||parseFloat(r.price)>0;});
+    if(!grp.pod&&!rows.length)return;
+    const rowsHtml=rows.map(function(r){
+      return '<tr>'
+        +'<td>'+(r.carrier||'—')+'</td>'
+        +'<td style="text-align:center;font-weight:700;color:'+TEAL+'">'+(r.contType||'')+'</td>'
+        +'<td style="text-align:right;font-weight:700;color:'+NAVY+'">'+f(r.price,r.cur)+'</td>'
+        +'<td>'+(r.desc||'—')+'</td>'
+        +'<td style="text-align:center;color:#666">'+(r.valid?_fmtDMY(r.valid):'—')+'</td>'
+      +'</tr>';
+    }).join('');
+    podHTML+='<div style="margin-bottom:16px">'
+      +'<div style="background:'+TEAL+';color:#fff;padding:7px 12px;border-radius:6px 6px 0 0;font-size:12px;font-weight:700">'
+        +(q.pol||'')+' &nbsp;→&nbsp; '+(grp.pod||'(POD)')+(grp.transit?' &nbsp;•&nbsp; Transit: '+grp.transit:'')
+      +'</div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="background:'+LIGHTBG+'">'
+        +'<th style="padding:7px 9px;text-align:left;border:1px solid '+BORDERC+';font-size:10px;text-transform:uppercase;color:'+NAVY+'">Carrier</th>'
+        +'<th style="padding:7px 9px;text-align:center;border:1px solid '+BORDERC+';font-size:10px;text-transform:uppercase;color:'+NAVY+'">Loại Cont</th>'
+        +'<th style="padding:7px 9px;text-align:right;border:1px solid '+BORDERC+';font-size:10px;text-transform:uppercase;color:'+NAVY+'">Đơn giá trọn gói</th>'
+        +'<th style="padding:7px 9px;text-align:left;border:1px solid '+BORDERC+';font-size:10px;text-transform:uppercase;color:'+NAVY+'">Đã bao gồm</th>'
+        +'<th style="padding:7px 9px;text-align:center;border:1px solid '+BORDERC+';font-size:10px;text-transform:uppercase;color:'+NAVY+'">Hiệu lực đến</th>'
+      +'</tr></thead><tbody>'+(rowsHtml||'<tr><td colspan="5" style="padding:10px;text-align:center;color:#999;border:1px solid '+BORDERC+'">Chưa có giá</td></tr>')+'</tbody></table>'
+    +'</div>';
+  });
+
+  const css='<style>'
+    +'body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a2e2a;padding:24px 30px;margin:0}'
+    +'td{padding:7px 9px;border:1px solid '+BORDERC+'}'
+    +'.hd{display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid '+NAVY+';padding-bottom:12px;margin-bottom:16px}'
+    +'.hd-l{display:flex;align-items:center;gap:10px}'
+    +'.hd-co{font-size:16px;font-weight:800;color:'+TEAL+'}'
+    +'.hd-slogan{font-size:9.5px;color:#667085;font-style:italic}'
+    +'.hd-r{text-align:right}'
+    +'.hd-title{font-size:19px;font-weight:800;color:'+NAVY+'}'
+    +'.hd-badge{display:inline-block;margin-top:4px;background:'+NAVY+';color:#fff;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700}'
+    +'.info{display:grid;grid-template-columns:1fr 1fr;gap:5px 24px;background:'+LIGHTBG+';border:1px solid '+BORDERC+';border-radius:8px;padding:12px 16px;margin-bottom:16px}'
+    +'.info div{padding:2px 0;font-size:11.5px}.info b{display:inline-block;width:110px;color:#667085;font-weight:600}'
+    +'.sec-t{font-size:11px;font-weight:800;color:'+NAVY+';text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;padding-left:8px;border-left:3px solid '+TEAL+'}'
+    +'.foot{margin-top:20px;padding-top:12px;border-top:2px solid '+NAVY+';font-size:10.5px;color:#667085}'
+    +'@media print{body{padding:12px}@page{margin:10mm;size:A4}}'
+  +'</style>';
+
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+css+'<title>Package Quotation '+q.no+'</title></head><body>'
+    +'<div class="hd">'
+      +'<div class="hd-l">'+(logoUrl?'<img src="'+logoUrl+'" style="width:36px;height:36px" onerror="this.style.display=\'none\'"/>':'')
+        +'<div><div class="hd-co">'+co.name+'</div><div class="hd-slogan">Keep Going . Keep Growing</div></div>'
+      +'</div>'
+      +'<div class="hd-r"><div class="hd-title">BÁO GIÁ TRỌN GÓI</div><div class="hd-badge">'+q.no+'</div></div>'
+    +'</div>'
+    +'<div class="info">'
+      +'<div><b>Khách hàng</b>'+(sp.fullname||q.customer||'—')+'</div>'
+      +'<div><b>Ngày báo giá</b>'+(q.date?_fmtDMY(q.date):'—')+'</div>'
+      +'<div><b>Sales</b>'+(q.sales||'—')+'</div>'
+      +'<div><b>POL</b>'+(q.pol||'—')+'</div>'
+      +'<div><b>Commodity</b>'+(q.commodity||'—')+'</div>'
+    +'</div>'
+    +'<div class="sec-t">Dịch vụ xuất khẩu trọn gói</div>'
+    +(podHTML||'<div style="text-align:center;color:#999;padding:1rem">Chưa có POD nào</div>')
+    +((q.payment||q.freetime||q.routing||q.note)?('<div class="sec-t">Ghi chú</div><div class="info">'
+      +(q.payment?'<div><b>Payment Term</b>'+q.payment+'</div>':'')
+      +(q.freetime?'<div><b>Free Time</b>'+q.freetime+'</div>':'')
+      +(q.routing?'<div style="grid-column:1/-1"><b>Routing</b>'+q.routing+'</div>':'')
+      +(q.note?'<div style="grid-column:1/-1"><b>Special Note</b>'+q.note+'</div>':'')
+    +'</div>'):'')
+    +'<div class="foot"><strong>'+co.name+'</strong><br>'+co.addr+'<br>MST: '+co.mst+' &nbsp;•&nbsp; Email: '+co.invEmail+'</div>'
+    +'</body></html>';
+}
+
+function quoteExportPkgPDF(){
+  const q=quoteGatherPkg();
+  if(!q.customer){toast('Chọn khách hàng trước','error');return;}
+  const html=quoteBuildPkgHTML(q);
+  const w=window.open('','_blank','width=1000,height=760,scrollbars=yes');
+  w.document.write(html);w.document.close();w.focus();w.document.title='PackageQuote_'+q.no;
+  setTimeout(function(){w.print();},600);
+  toast('Đã mở báo giá trọn gói — Ctrl+P để lưu PDF');
+}
+window.quoteExportPkgPDF=quoteExportPkgPDF;
+
+
 
 function quoteSwitchCargo(t){
   _quoteCargoTab=t;
@@ -19328,7 +19607,9 @@ function quoteGather(){
 }
 
 async function quoteSave(returnToList){
-  const q=quoteGather();
+  const isPkg=window._qFormType==='package';
+  const q=isPkg?quoteGatherPkg():quoteGather();
+  if(!isPkg)q.type='detail';
   if(!q.customer){toast('Chọn khách hàng trước','error');return false;}
   const id=window._qEditId||q.no||('QT_'+Date.now());
   q._id=id;
@@ -19430,10 +19711,11 @@ function quoteExportPDF(){
 }
 
 function quoteSendEmail(){
-  const q=quoteGather();
+  const isPkg=window._qFormType==='package';
+  const q=isPkg?quoteGatherPkg():quoteGather();
   const sp=cache.partners[q.customer]||{};
   const to=sp.email||'';
-  const pods=(q.pods||[]).map(function(p){return p.pod;}).filter(Boolean).join(', ');
+  const pods=((isPkg?q.pkgPods:q.pods)||[]).map(function(p){return p.pod;}).filter(Boolean).join(', ');
   const subject='Quotation '+q.no+' - '+(q.pol||'')+' to '+(pods||'destination');
   const body='Dear '+(sp.contact||'Sir/Madam')+',%0D%0A%0D%0APlease find our quotation '+q.no+' for your shipment from '+q.pol+' to '+pods+'.%0D%0A%0D%0ACommodity: '+q.commodity+'%0D%0A%0D%0ABest regards,%0D%0A'+(q.sales||'');
   window.location.href='mailto:'+to+'?subject='+encodeURIComponent(subject)+'&body='+body;
