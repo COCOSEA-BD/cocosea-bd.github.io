@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.88';
+window.APP_BUILD='v2.89';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6654,6 +6654,11 @@ function svcRowHTML(s, sv){
   const isCustom=s.custom||false;
   const svcStatus=sv.svcStatus||'';
   const cost=sv.cost||'';
+  // Khóa dòng dịch vụ: đã thanh toán NCC (apPaidStatus='paid') VÀ đang tick Finish — không cho sửa/
+  // gạt on-off/xóa nữa. Bỏ tick Finish (vẫn luôn bấm được) để mở khóa lại, chỉnh sửa xong tự tick lại
+  // nếu cần (Finish không tự bật lại, người dùng chủ động).
+  const locked=sv.apPaidStatus==='paid'&&!!sv.finish;
+  const lockedDis=locked?'disabled':'';
   const r0=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
   const defaultVol=parseInt(r0.vol)||1;
   const qty=sv.svcQty||defaultVol;
@@ -6686,32 +6691,32 @@ function svcRowHTML(s, sv){
     const svcVatAmt=sv.svcVatAmt||0;
     const totalWithVat=amtNum>0?(amtNum+svcVatAmt):0;
     const ocfCols='22px 58px 200px 90px 60px 56px 85px 90px 90px 46px 120px 82px 110px 40px 72px 78px 108px';
-    return`<div style="display:grid;grid-template-columns:${ocfCols};gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1.5px solid rgba(37,99,235,.3)" id="srow_${s.key}">
-      <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
+    return`<div style="display:grid;grid-template-columns:${ocfCols};gap:6px;align-items:center;background:${locked?'rgba(220,53,69,.04)':'var(--bg-secondary)'};border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1.5px solid ${locked?'rgba(220,53,69,.3)':'rgba(37,99,235,.3)'}" id="srow_${s.key}">
+      <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')" ${lockedDis} title="${locked?'Đã thanh toán — bỏ tick Finish để chỉnh sửa':''}"></button>
       ${codeCell}
-      <div style="display:flex;align-items:center;gap:3px;min-width:0"><span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${sv._name||s.name}</span></div>
-      <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" oninput="calcSvcAmt('${s.key}')" title="Đơn giá (cước NCC)"/>
-      <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
-      <select id="svcunit_${s.key}" data-key="${s.key}" ${sv.on?'':'disabled'} style="font-size:11px" onchange="autoSvcQtyByUnit(this.dataset.key)">${unitOptsRow}</select>
+      <div style="display:flex;align-items:center;gap:3px;min-width:0"><span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${sv._name||s.name}</span>${locked?`<i class="ti ti-lock" style="font-size:12px;color:var(--red)" title="Đã thanh toán — bỏ tick Finish để chỉnh sửa"></i>`:''}</div>
+      <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" oninput="calcSvcAmt('${s.key}')" title="Đơn giá (cước NCC)"/>
+      <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
+      <select id="svcunit_${s.key}" data-key="${s.key}" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px" onchange="autoSvcQtyByUnit(this.dataset.key)">${unitOptsRow}</select>
       <span id="samt_${s.key}" style="font-size:11px;font-weight:600;color:var(--red);text-align:right">${amt}</span>
-      <input type="number" id="svvatamt_${s.key}" value="${svcVatAmt||''}" placeholder="VAT" min="0" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box;color:#e07000" oninput="calcSvcAmt('${s.key}')" title="Số tiền VAT"/>
+      <input type="number" id="svvatamt_${s.key}" value="${svcVatAmt||''}" placeholder="VAT" min="0" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box;color:#e07000" oninput="calcSvcAmt('${s.key}')" title="Số tiền VAT"/>
       <span id="stamt_${s.key}" style="font-size:11.5px;font-weight:700;color:var(--red);text-align:right">${totalWithVat>0?totalWithVat.toLocaleString():'—'}</span>
-      <select id="svcur_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${curOpts}</select>
-      <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
+      <select id="svcur_${s.key}" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px">${curOpts}</select>
+      <select id="ssup_${s.key}" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
       ${showPrice?`<div style="display:flex;align-items:center">
         <input type="hidden" id="sstatus_${s.key}" value="${sv.apPaidStatus||'unpaid'}"/>
         <input type="hidden" id="spaiddate_${s.key}" value="${sv.apPaidDate||''}"/>
         <input type="hidden" id="spaidbank_${s.key}" value="${sv.apPaidBank||''}"/>
         <button id="spaidbadge_${s.key}" data-key="${s.key}" onclick="_openSvcPayPopup(this.dataset.key)" style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:${sv.apPaidStatus==='paid'?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)'};color:${sv.apPaidStatus==='paid'?'var(--green)':'var(--red)'};border:1px solid ${sv.apPaidStatus==='paid'?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)'};cursor:pointer;white-space:nowrap">${sv.apPaidStatus==='paid'?'Đã TT':'Chưa TT'}</button>
       </div>`:`<span style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:${sv.apPaidStatus==='paid'?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)'};color:${sv.apPaidStatus==='paid'?'var(--green)':'var(--red)'};text-align:center;white-space:nowrap">${sv.apPaidStatus==='paid'?'Đã TT':'Chưa TT'}</span>`}
-      <input type="text" id="sremark_${s.key}" value="${(sv.apRemark||'').replace(/"/g,'&quot;')}" placeholder="Remark" ${sv.on?'':'disabled'} style="font-size:11px"/>
-      <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer"/></div>
+      <input type="text" id="sremark_${s.key}" value="${(sv.apRemark||'').replace(/"/g,'&quot;')}" placeholder="Remark" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px"/>
+      <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer" title="${locked?'Bỏ tick để chỉnh sửa lại dòng này':'Đánh dấu hoàn tất'}"/></div>
       <div style="display:flex;justify-content:flex-end;gap:3px">
         ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)" title="Xem Debit Note"><i class="ti ti-file-check"></i></button>`:`<label class="rac" style="cursor:pointer;font-size:13px;color:var(--text-secondary)" title="Upload Debit Note"><i class="ti ti-upload"></i><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleSvcDnUpload(this,'${s.key}')"/></label>`}
-        <button class="rac red" onclick="removeSvc('${s.key}')" title="Xóa" style="font-size:13px"><i class="ti ti-trash"></i></button>
+        <button class="rac red" onclick="removeSvc('${s.key}')" ${lockedDis} title="${locked?'Đã thanh toán — bỏ tick Finish để xóa':'Xóa'}" style="font-size:13px"><i class="ti ti-trash"></i></button>
       </div>
       <label style="display:flex;align-items:center;justify-content:center;gap:3px;font-size:9px;color:var(--text-secondary);cursor:${sv.ocfConfirmed?'not-allowed':'pointer'}" title="Request Payment (OCF)">
-        <input type="checkbox" id="sreqpay_${s.key}" ${sv.reqPayment?'checked':''} ${(sv.on&&!sv.ocfConfirmed)?'':'disabled'} style="width:13px;height:13px;cursor:pointer"/> Req.Pay
+        <input type="checkbox" id="sreqpay_${s.key}" ${sv.reqPayment?'checked':''} ${(sv.on&&!sv.ocfConfirmed&&!locked)?'':'disabled'} style="width:13px;height:13px;cursor:pointer"/> Req.Pay
       </label>
       <span onclick="${ocfClickable?`_openOcfReviewPopup('${detailTt}','${detailId}','${s.key}')`:''}" style="font-size:9.5px;font-weight:700;padding:3px 7px;border-radius:5px;background:${ocfSt.bg};color:${ocfSt.color};white-space:nowrap;text-align:center;${ocfClickable?'cursor:pointer;text-decoration:underline':''}" title="${ocfClickable?'Click để xét duyệt':(sv.ocfReviseNote||'')}">${ocfSt.label}</span>
     </div>`;
@@ -6733,33 +6738,34 @@ function svcRowHTML(s, sv){
   const svcVatAmt=sv.svcVatAmt||0;
   const totalWithVat=amtNum>0?(amtNum+svcVatAmt):0;
   const gridCols='22px 58px 200px 90px 60px 56px 85px 90px 90px 46px 120px 82px 110px 40px 52px';
-  return`<div style="display:grid;grid-template-columns:${gridCols};gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
-    <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
+  return`<div style="display:grid;grid-template-columns:${gridCols};gap:6px;align-items:center;background:${locked?'rgba(220,53,69,.04)':'var(--bg-secondary)'};border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid ${locked?'rgba(220,53,69,.25)':'var(--border-light)'}" id="srow_${s.key}">
+    <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')" ${lockedDis} title="${locked?'Đã thanh toán — bỏ tick Finish để chỉnh sửa':''}"></button>
     ${codeCell}
     <div style="display:flex;align-items:center;gap:3px;min-width:0">
-      ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" style="font-size:12px;font-weight:600;flex:1;min-width:0;padding:3px 6px;border:1px solid var(--border-light);border-radius:5px"/>`:`<span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${s.name}</span>`}
+      ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" ${lockedDis} style="font-size:12px;font-weight:600;flex:1;min-width:0;padding:3px 6px;border:1px solid var(--border-light);border-radius:5px"/>`:`<span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${s.name}</span>`}
+      ${locked?`<i class="ti ti-lock" style="font-size:12px;color:var(--red)" title="Đã thanh toán — bỏ tick Finish để chỉnh sửa"></i>`:''}
     </div>
-    <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" oninput="calcSvcAmt('${s.key}')" title="Đơn giá"/>
-    <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
-    <select id="svcunit_${s.key}" data-key="${s.key}" ${sv.on?'':'disabled'} style="font-size:11px" onchange="autoSvcQtyByUnit(this.dataset.key)">${unitOptsRow}</select>
+    <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" oninput="calcSvcAmt('${s.key}')" title="Đơn giá"/>
+    <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
+    <select id="svcunit_${s.key}" data-key="${s.key}" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px" onchange="autoSvcQtyByUnit(this.dataset.key)">${unitOptsRow}</select>
     <span id="samt_${s.key}" style="font-size:11px;font-weight:600;color:var(--red);text-align:right">${amt}</span>
-    <input type="number" id="svvatamt_${s.key}" value="${svcVatAmt||''}" placeholder="VAT" min="0" ${sv.on?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box;color:#e07000" oninput="calcSvcAmt('${s.key}')" title="Số tiền VAT"/>
+    <input type="number" id="svvatamt_${s.key}" value="${svcVatAmt||''}" placeholder="VAT" min="0" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box;color:#e07000" oninput="calcSvcAmt('${s.key}')" title="Số tiền VAT"/>
     <span id="stamt_${s.key}" style="font-size:11.5px;font-weight:700;color:var(--red);text-align:right">${totalWithVat>0?totalWithVat.toLocaleString():'—'}</span>
-    <select id="svcur_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${curOpts}</select>
-    <select id="ssup_${s.key}" ${sv.on?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
+    <select id="svcur_${s.key}" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px">${curOpts}</select>
+    <select id="ssup_${s.key}" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px">${supplierOpts}</select>
     <div style="display:flex;align-items:center">
       <input type="hidden" id="sstatus_${s.key}" value="${sv.apPaidStatus||'unpaid'}"/>
       <input type="hidden" id="spaiddate_${s.key}" value="${sv.apPaidDate||''}"/>
       <input type="hidden" id="spaidbank_${s.key}" value="${sv.apPaidBank||''}"/>
       <button id="spaidbadge_${s.key}" data-key="${s.key}" onclick="_openSvcPayPopup(this.dataset.key)" style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px;background:${sv.apPaidStatus==='paid'?'rgba(40,167,69,.1)':'rgba(220,53,69,.08)'};color:${sv.apPaidStatus==='paid'?'var(--green)':'var(--red)'};border:1px solid ${sv.apPaidStatus==='paid'?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)'};cursor:pointer;white-space:nowrap">${sv.apPaidStatus==='paid'?('Đã TT'+(sv.apPaidDate?' · '+fmtDMY(sv.apPaidDate):'')):'Chưa TT'}</button>
     </div>
-    <input type="text" id="sremark_${s.key}" value="${(sv.apRemark||'').replace(/"/g,'&quot;')}" placeholder="Remark" ${sv.on?'':'disabled'} style="font-size:11px"/>
-    <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer"/></div>
+    <input type="text" id="sremark_${s.key}" value="${(sv.apRemark||'').replace(/"/g,'&quot;')}" placeholder="Remark" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px"/>
+    <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer" title="${locked?'Bỏ tick để chỉnh sửa lại dòng này':'Đánh dấu hoàn tất'}"/></div>
     <div style="display:flex;justify-content:flex-end;gap:3px">
       ${(s.key==='stuffing')?`<button class="rac" onclick="switchDetailTab('scy')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-package"></i></button>`:''}
       ${(s.key==='trucking')?`<button class="rac" onclick="switchDetailTab('trucking')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-truck"></i></button>`:''}
       ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)"><i class="ti ti-file-check"></i></button>`:`<label class="rac" style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><i class="ti ti-upload"></i><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleSvcDnUpload(this,'${s.key}')"/></label>`}
-      <button class="rac red" onclick="removeSvc('${s.key}')" style="font-size:13px"><i class="ti ti-trash"></i></button>
+      <button class="rac red" onclick="removeSvc('${s.key}')" ${lockedDis} title="${locked?'Đã thanh toán — bỏ tick Finish để xóa':'Xóa'}" style="font-size:13px"><i class="ti ti-trash"></i></button>
     </div>
   </div>`;
 }
@@ -7951,7 +7957,17 @@ function addCustomSvc(){
   const tg=g('tg_'+key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
 }
 
+// Kiểm tra dịch vụ có đang bị khóa không (đã thanh toán NCC + đang tick Finish) — dùng ở nhiều nơi
+// để chặn sửa/gạt/xóa, không chỉ dựa vào thuộc tính disabled trên HTML.
+function _svcRowLocked(key){
+  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+  const sv=r&&r.svcs&&r.svcs[key];
+  return !!(sv&&sv.apPaidStatus==='paid'&&sv.finish);
+}
+window._svcRowLocked=_svcRowLocked;
+
 function removeSvc(key){
+  if(_svcRowLocked(key)){toast('Dịch vụ đã thanh toán — bỏ tick Finish trước khi xóa','error');return;}
   // Khóa an toàn: chỉ xóa khi đã clear hết số tiền (Đơn giá & SL) của dòng
   const costEl=g('scost_'+key), qtyEl=g('sqty_'+key);
   const cost=costEl?parseFloat(costEl.value)||0:0;
@@ -7972,6 +7988,7 @@ function renameSvc(key, newName){
   const s=SVCS.find(x=>x.key===key); if(s) s.name=newName;
 }
 function toggleSvc(key){
+  if(_svcRowLocked(key)){toast('Dịch vụ đã thanh toán — bỏ tick Finish trước khi chỉnh sửa','error');return;}
   const tg=g('tg_'+key); const on=tg.classList.contains('on');
   tg.classList.toggle('on',!on); tg.classList.toggle('off',on);
   ['sd_','scost_','sqty_','svcunit_','svcur_','ssup_','sstatus_','sremark_'].forEach(function(p){const el=g(p+key);if(el)el.disabled=on;});
@@ -10488,6 +10505,10 @@ async function savePayStatusDetail(){
           lotRef:{lotId:detailId,tt:detailTt,bookingNo:rFs.bookingNo||rFs.jobNo||''}
         });
         svcs[ctx.key].apPaidStatus=status;
+        // Tự động tick Finish khi chuyển sang "Đã thanh toán" — khóa dòng dịch vụ này lại (không cho
+        // sửa/gạt/xóa) cho tới khi người dùng chủ động bỏ tick Finish. Không tự bỏ tick khi hủy TT
+        // (finish có thể đã được tick từ trước vì lý do khác, không liên quan việc thanh toán).
+        if(status==='paid')svcs[ctx.key].finish=true;
         svcs[ctx.key].apPaidDate=date;
         svcs[ctx.key].apPaidBank=bank;
         svcs[ctx.key].apCashTxId=newCashTxId;
@@ -10496,11 +10517,16 @@ async function savePayStatusDetail(){
       const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
       if(r&&r.svcs&&r.svcs[ctx.key]){
         r.svcs[ctx.key].apPaidStatus=status;
+        if(status==='paid')r.svcs[ctx.key].finish=true;
         r.svcs[ctx.key].apPaidDate=date;
         r.svcs[ctx.key].apPaidBank=bank;
         r.svcs[ctx.key].apCashTxId=newCashTxId;
       }
       toast('Đã lưu trạng thái thanh toán');
+      if(typeof renderDetailPanel==='function'){
+        const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+        if(fresh)renderDetailPanel(fresh,detailTt);
+      }
 
     } else if(ctx.type==='ap_cost'){
       // Costing rows (auto từ SVC và manual thêm mới)
