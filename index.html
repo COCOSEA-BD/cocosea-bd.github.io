@@ -784,7 +784,7 @@ const TASKS=[
   {key:'updn',label:'Up Debit Note'},{key:'price',label:'Fill giá dịch vụ'},
   {key:'send',label:'Gửi Debit Note cho khách hàng'},
 ];
-const SB={'Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã Fill giá':'bdg-tl','Đã Costing':'bdg-b','Đã gửi DN':'bdg-purple','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
+const SB={'Booking request':'bdg-a','Confirm':'bdg-red','Standby':'bdg-a','Done':'bdg-g','Cancel':'bdg-tl','Xóa CB':'bdg-red','Đã Fill giá':'bdg-tl','Đã Costing':'bdg-b','Đã gửi DN':'bdg-purple','Đã giao':'bdg-g','Đã nhận':'bdg-g','Đang vận chuyển':'bdg-b','Đang xử lý':'bdg-a','Đã nhập info':'bdg-tl','Đã lên debit':'bdg-purple'};
 // ── Xuat Lot Tab System ────────────────────────────────────────
 let _xPanelEl=null; // redirect renderDetailPanel target for xuat tabs
 let _xuatLotTabs=[]; // [{id,tt,label,dpTab}]
@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.87';
+window.APP_BUILD='v2.88';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1128,7 +1128,7 @@ const XCOLS=[
   {k:'pod',l:'POD',type:'port'},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
-  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
+  {k:'status',l:'Trạng thái',type:'select',opts:['Booking request','Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
 ];
 const NCOLS=[
   {k:'_rowStart',l:'',type:'rowStart'},{k:'loaiHang',l:'Type Shipment',type:'select',opts:['XK - Xuất khẩu','IM - Nhập khẩu','LS - Local Service'],compact:true},{k:'cargoType',l:'Loại hàng',type:'cargoType',compact:true},{k:'_rowEnd',l:'',type:'rowEnd'},
@@ -1144,7 +1144,7 @@ const NCOLS=[
   {k:'pod',l:'POD',type:'port'},
   {k:'cyLocation',l:'CY Location'},{k:'wh',l:'WH (Warehouse)'},
   {k:'remark',l:'Ghi chú / Remark',type:'textarea',full:true},
-  {k:'status',l:'Trạng thái',type:'select',opts:['Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
+  {k:'status',l:'Trạng thái',type:'select',opts:['Booking request','Confirm','Standby','Đã Fill giá','Đã Costing','Đã gửi DN','Done','Cancel','Xóa CB']}
 ];
 
 /* ─────────────────────────────────────────────
@@ -2603,6 +2603,7 @@ function renderLot(tt){
     <div style="width:1px;align-self:stretch;background:var(--border-light);flex-shrink:0;margin:0 2px"></div>
     <select id="fst_${tt}" style="width:150px;flex-shrink:0" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả</option>
+      <option value="booking_request">Booking request</option>
       <option value="locked">Đã khóa</option>
       <option value="unlocked">Chưa khóa</option>
       <option value="vst_yes">Đã VST</option>
@@ -2748,6 +2749,7 @@ function renderLotTable(tt){
   // ── Filter tối ưu: short-circuit sớm, không dùng Object.values() cho search
   const sortDir=(sortState[tt]||{dir:1}).dir;
   const rows=(cache[tt]||[]).filter(r=>{
+    if(fs==='booking_request'&&r.status!=='Booking request')return false;
     if(fs==='locked'&&!r.locked)return false;
     if(fs==='unlocked'&&r.locked)return false;
     if(fs==='vst_yes'&&!(r.vstEnabled&&r.vstConfirmed))return false;
@@ -3170,7 +3172,14 @@ function renderDetailPanel(r,tt){
   const canSeePricing=can('fillPrice')||can('viewCost')||can('viewInvoice');
   // Redirect if doc/cus somehow lands on pricing tab
   if(!canSeePricing && ['price','costing','invoice'].includes(detailTab)) detailTab='svc';
-  const tabs=[
+  // Booking request: CHỈ có 1 tab Chi tiết duy nhất — các tab khác (Cont/Seal, Dịch vụ, Trucking,
+  // SCY, Fill giá, Costing, Invoice, Document, History) chưa được tạo, ẩn hoàn toàn khỏi thanh tab
+  // cho tới khi lô được chuyển sang trạng thái khác (VD: Confirm) và lưu lại đủ thông tin ô 2.
+  const isBookingReq=r.status==='Booking request';
+  if(isBookingReq) detailTab='info';
+  const tabs=isBookingReq?[
+    {k:'info',label:'Details',icon:'ti-info-circle'}
+  ]:[
     {k:'info',label:'Details',icon:'ti-info-circle'},
     {k:'cont',label:'Cont/Seal',icon:'ti-container'},
     {k:'svc',label:'Services',icon:'ti-clipboard-list'},
@@ -3270,7 +3279,9 @@ function renderDetailPanel(r,tt){
       <div class="dcard">
         <div class="dcard-hdr" style="color:#2E90FA">
           <i class="ti ti-bookmark"></i>2. Booking Numbers
-          <button class="btn sm blu" onclick="openBookingEmail('${r._id}','${tt}')" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:600"><i class="ti ti-mail"></i> Email Booking</button>
+          ${r.status==='Booking request'
+            ?`<button class="btn sm" onclick="sendBookingRequestEmail('${r._id}','${tt}')" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:600;color:#e07000;border-color:#e07000"><i class="ti ti-send"></i> Email: Booking Request</button>`
+            :`<button class="btn sm blu" onclick="openBookingEmail('${r._id}','${tt}')" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:600"><i class="ti ti-mail"></i> Email Booking</button>`}
         </div>
         ${bkHtml}
       </div>
@@ -5823,6 +5834,40 @@ window.updateTotalVol=updateTotalVol;
 window.buildBookingBlockHtml=buildBookingBlockHtml;
 window.readBookingsFromForm=readBookingsFromForm;
 /* ═══ END MULTI-BOOKING ═══ */
+// Kiểm tra đủ thông tin bắt buộc ô 1/2/3/4/5 trước khi lưu — quy tắc:
+// - Trạng thái = "Booking request": chỉ cần đủ ô 1,3,4,5 (ô 2 - Booking Numbers không bắt buộc)
+// - Trạng thái khác: cần đủ cả ô 1,2,3,4,5
+// - Validation này CHỈ áp dụng cho lô MỚI tạo, hoặc lô đang/đã từng ở trạng thái Booking request —
+//   lô cũ bình thường (chưa từng liên quan Booking request) không bị chặn khi sửa/lưu lại.
+function _lotCheckRequired(rec,existing){
+  const isBookingReq=rec.status==='Booking request';
+  const wasBookingReq=existing&&existing.status==='Booking request';
+  const isNewLot=!existing;
+  if(!isNewLot && !wasBookingReq && !isBookingReq) return {ok:true};
+
+  const missing=[];
+  if(!rec.loaiHang) missing.push('Type Shipment (ô 1 - Thông tin chung)');
+  if(!rec.cargoType) missing.push('Loại hàng (ô 1 - Thông tin chung)');
+  if(!rec.bookingParty) missing.push('Booking Party (ô 1 - Thông tin chung)');
+  if(!(rec.shipper||rec.supplier)) missing.push('Shipper (ô 1 - Thông tin chung)');
+  if(!rec.tenHang) missing.push('Tên hàng (ô 1 - Thông tin chung)');
+  if(!(rec.cnee||rec.consignee)) missing.push('CNEE (ô 1 - Thông tin chung)');
+  if(!isBookingReq){
+    const bks=rec.bookings||[];
+    const hasValidBooking=bks.some(function(b){return b.bookingNo&&b.vol&&b.typeCont;});
+    if(!hasValidBooking) missing.push('Booking Numbers (ô 2)');
+  }
+  if(!rec.carrier) missing.push('Carrier (ô 3 - Vận chuyển)');
+  if(!rec.vessel) missing.push('Vessel (ô 3 - Vận chuyển)');
+  if(!rec.voy) missing.push('Voy (ô 3 - Vận chuyển)');
+  if(!rec.etd) missing.push('ETD (ô 4 - Thời gian)');
+  if(!rec.eta) missing.push('ETA (ô 4 - Thời gian)');
+  if(!rec.pol) missing.push('POL (ô 5 - Cảng & Địa điểm)');
+  if(!rec.pod) missing.push('POD (ô 5 - Cảng & Địa điểm)');
+
+  return {ok:missing.length===0,missing:missing};
+}
+
 async function saveLot(){
   const cols=currentTab==='xuat'?XCOLS:NCOLS;
   const existing=lotIdx?cache[currentTab].find(x=>x._id===lotIdx):null;
@@ -5859,6 +5904,15 @@ async function saveLot(){
     rec.bookingNo=bookings[0].bookingNo||rec.bookingNo||'';
     rec.vol=String(bookings.reduce((s,b)=>s+(parseInt(b.vol)||0),0)); // total vol
     rec.typeCont=bookings[0].typeCont||rec.typeCont||'40HC';
+  }
+  // Kiểm tra đủ thông tin bắt buộc theo trạng thái — CHỈ áp dụng cho lô MỚI tạo, hoặc khi lô đang/đã
+  // từng ở trạng thái "Booking request" (tạo mới ở trạng thái này, hoặc đang chuyển RA KHỎI trạng
+  // thái này sang Confirm/khác). Lô cũ bình thường (chưa từng là Booking request) sửa/lưu như trước,
+  // KHÔNG bị validation mới này chặn — tránh gián đoạn dữ liệu cũ đã có sẵn trước tính năng này.
+  const _chk=_lotCheckRequired(rec,existing);
+  if(!_chk.ok){
+    alert('Vui lòng điền đầy đủ thông tin bắt buộc trước khi lưu:\n\n- '+_chk.missing.join('\n- '));
+    return;
   }
   // Lô MỚI: seed dịch vụ mặc định — CHỈ theo cấu hình riêng của từng Shipper
   // (CRM › Dịch vụ mặc định), KHÔNG còn tự động thêm theo cờ "default" toàn hệ thống nữa
@@ -6952,6 +7006,50 @@ async function sendEmptyReleaseEmail(id,tt,bkIdx){
   _openEmailModal({title:'Email Duyệt lệnh → '+carrierKey, to:toEmail, cc:'cocosea.acc@gmail.com; cocosea.doc@gmail.com', subject:subject, bodyHtml:bodyHtml, attachments:_att?[_att]:[]});
 }
 window.sendEmptyReleaseEmail=sendEmptyReleaseEmail;
+
+// Email "Booking Request" — gửi cho Hãng tàu, dùng khi lô đang ở trạng thái Booking request
+// (thông tin Booking Numbers ở ô 2 có thể chưa đầy đủ, chỉ hiện những gì đã có).
+async function sendBookingRequestEmail(id,tt){
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;})||{};
+  const carrierKey=r.carrier||'';
+  const cp=cache.partners[carrierKey]||{};
+  let toEmail=cp.email||'';
+  if(!toEmail&&cp.contacts&&cp.contacts.length)toEmail=cp.contacts.map(function(c){return c.email;}).filter(Boolean).join(', ');
+  if(!carrierKey){toast('Lô hàng chưa chọn Hãng tàu (Carrier)','error');return;}
+  if(!toEmail){toast('Hãng tàu "'+carrierKey+'" chưa có email. Cập nhật trong Đối tác.','error');return;}
+  const co=_coInfo();
+  const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#f2f2f2;font-size:12.5px;width:170px;vertical-align:top';
+  const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
+  const bkNo=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):r.bookingNo)||'';
+  const volType=(r.vol?(r.vol+' x '+(r.typeCont||'')):'');
+  const stuffLoc=r.cyLocation?('Đóng bãi '+r.cyLocation):(r.wh?('Đóng bãi '+r.wh):'');
+  const bodyHtml=
+    '<table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" style="width:680px;max-width:680px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'+
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#103A6F" style="background-color:#103A6F;padding:12px 16px;border-radius:8px 8px 0 0">'+
+      '<div style="color:#fff200;font-size:17px;font-weight:800;letter-spacing:.3px">BOOKING REQUEST</div>'+
+    '</td></tr></table>'+
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px"><tr><td style="padding:14px 16px">'+
+    '<div style="margin-bottom:4px"><strong>To: ['+(cp.fullname||carrierKey).toUpperCase()+']</strong></div>'+
+    '<div style="margin-bottom:10px">Please help release booking with detail below:</div>'+
+    '<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'+
+      '<tr><td style="'+cellL+'">Shipper</td><td style="'+cellR+'"><strong>COCOSEA</strong></td></tr>'+
+      '<tr><td style="'+cellL+'">Booking Number</td><td style="'+cellR+'">'+(bkNo||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Loại cont</td><td style="'+cellR+'">'+volType+'</td></tr>'+
+      '<tr><td style="'+cellL+'">POL</td><td style="'+cellR+'">'+(r.pol||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">POD</td><td style="'+cellR+'">'+(r.pod||'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">ETD</td><td style="'+cellR+'">'+(r.etd?_fmtDMY(r.etd):'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Stuffing</td><td style="'+cellR+'">'+stuffLoc+'</td></tr>'+
+      '<tr><td style="'+cellL+'">Ghi chú</td><td style="'+cellR+'"></td></tr>'+
+    '</table>'+
+    '<div style="color:#c00;font-style:italic;margin-top:12px">Kính nhờ Quý hãng tàu hỗ trợ approved và release booking.</div>'+
+    _bookingEmailSignature()+
+    '</td></tr></table>'+
+    '</td></tr></table>';
+  const subject='Booking request'+(bkNo?(' - Booking: '+bkNo):'')+(volType?('- Vol: '+volType):'')+' /COCOSEA';
+  const _att=await _bookingFileAttachment(r);
+  _openEmailModal({title:'Email Booking Request → '+carrierKey, to:toEmail, cc:'cocosea.acc@gmail.com; cocosea.doc@gmail.com', subject:subject, bodyHtml:bodyHtml, attachments:_att?[_att]:[]});
+}
+window.sendBookingRequestEmail=sendBookingRequestEmail;
 
 function _openEmailModal(opts){
   // opts: {title, to, cc, subject, bodyHtml, attachments:[{filename,dataUrl}]}
@@ -14523,7 +14621,7 @@ function sendEmailDN(id, tt){
   const cellR='padding:7px 10px;border:1px solid #000;font-size:12.5px;vertical-align:top';
   const bodyHtml=
     '<table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" style="width:680px;max-width:680px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'+
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#0F1E2E" style="background-color:#0F1E2E;padding:12px 16px;border-radius:8px 8px 0 0">'+
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#103A6F" style="background-color:#103A6F;padding:12px 16px;border-radius:8px 8px 0 0">'+
       '<div style="color:#fff200;font-size:17px;font-weight:800;letter-spacing:.3px">DEBIT NOTIFICATION</div>'+
     '</td></tr></table>'+
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px"><tr><td style="padding:14px 16px">'+
