@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.91';
+window.APP_BUILD='v2.93';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3448,7 +3448,12 @@ function renderDetailPanel(r,tt){
     else {
       const svcs=r.svcs||{};
       const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
-      if(!allOn.length){bodyHtml='<div class="empty-state"><i class="ti ti-clipboard-list"></i>Chưa có dịch vụ nào được bật. Vào tab "Dịch vụ" để chọn trước.</div>';}
+      const isLocked=!!r.priceLocked;
+      const lockBar='<div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:8px;background:'+(isLocked?'rgba(220,53,69,.06)':'var(--bg-secondary)')+';border:1px solid '+(isLocked?'rgba(220,53,69,.25)':'var(--border-light)')+'">'
+        +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:'+(isLocked?'var(--red)':'var(--text-secondary)')+';font-weight:600"><i class="ti ti-'+(isLocked?'lock':'lock-open')+'" style="font-size:15px"></i>'+(isLocked?'Fill giá đã KHÓA — không thể chỉnh sửa/thêm mới cho tới khi Unlock':'Fill giá đang mở, có thể chỉnh sửa bình thường')+'</div>'
+        +'<button class="btn sm '+(isLocked?'pri':'')+'" onclick="toggleFillPriceLock(\''+r._id+'\',\''+tt+'\')" style="'+(isLocked?'':'color:var(--red);border-color:var(--red)')+'"><i class="ti ti-'+(isLocked?'lock-open':'lock')+'"></i> '+(isLocked?'Unlock':'Lock')+'</button>'
+      +'</div>';
+      if(!allOn.length){bodyHtml=lockBar+'<div class="empty-state"><i class="ti ti-clipboard-list"></i>Chưa có dịch vụ nào được bật. Vào tab "Dịch vụ" để chọn trước.</div>';}
       else {
         const thStyle='padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;background:var(--bg-secondary);white-space:nowrap';
         const thRStyle=thStyle+';text-align:right';
@@ -3493,10 +3498,11 @@ function renderDetailPanel(r,tt){
             return opts.join('');})())+'</select></td>'
             +'</tr>';
         }).join('');
-        bodyHtml=hdr+rows2+'</tbody></table>'
+        bodyHtml=lockBar+'<div id="fpLockWrap">'+hdr+rows2+'</tbody></table>'
           +'<div id="fpTot" style="margin-top:.75rem;padding:8px 12px;background:var(--bg-secondary);border-radius:8px;font-size:12px;border:1px solid var(--border-light);display:flex;gap:1.5rem;flex-wrap:wrap"></div>'
-          +'<div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailFillPrice()"><i class="ti ti-check"></i> Lưu giá</button></div>'
-          +_comKbBoxHtml(r2);
+          +'<div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" id="fpSaveBtn" onclick="saveDetailFillPrice()"><i class="ti ti-check"></i> Lưu giá</button></div>'
+          +_comKbBoxHtml(r2)
+        +'</div>';
       }
     }
   }
@@ -4020,7 +4026,10 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
   <div class="detail-body">${bodyHtml}</div>`;
 
   // After render, update fp total if on price tab
-  if(detailTab==='price') setTimeout(updDetailFpTotal, 50);
+  if(detailTab==='price'){
+    setTimeout(updDetailFpTotal, 50);
+    if(r.priceLocked) setTimeout(function(){_fpApplyLock();}, 60);
+  }
   if(detailTab==='costing') setTimeout(updateCostingTotal, 100);
   if(detailTab==='cont') setTimeout(function(){document.querySelectorAll('[class*="cno_"]').forEach(function(inp){if(inp.value)validateContNo(inp);});if(typeof checkDupContSeal==='function')checkDupContSeal();}, 80);
 
@@ -5013,8 +5022,34 @@ function updDetailFpTotal(){
   tot.innerHTML=html||'—';
 }
 
+// Disable TOÀN BỘ input/select/textarea/button bên trong khối Fill giá (bảng giá + COM/KB) —
+// dùng cách quét DOM sau khi render thay vì thêm "disabled" thủ công vào từng field, để không
+// bao giờ bỏ sót field nào (kể cả khi có dịch vụ mới được bật thêm ở tab Dịch vụ, sinh thêm dòng
+// mới trong bảng Fill giá — dòng mới đó cũng tự động nằm trong fpLockWrap nên tự bị khóa theo).
+function _fpApplyLock(){
+  const wrap=g('fpLockWrap'); if(!wrap)return;
+  wrap.querySelectorAll('input,select,textarea,button').forEach(function(el){ el.disabled=true; });
+  wrap.style.opacity='.65'; wrap.style.pointerEvents='none';
+}
+window._fpApplyLock=_fpApplyLock;
+
+async function toggleFillPriceLock(id,tt){
+  const r=cache[tt].find(function(x){return x._id===id;}); if(!r)return;
+  const newVal=!r.priceLocked;
+  setLoading(true,newVal?'Đang khóa Fill giá...':'Đang mở khóa Fill giá...');
+  try{
+    await fsSet(colName(tt),id,{priceLocked:newVal,updatedAt:Date.now(),updatedBy:currentUser.email});
+    r.priceLocked=newVal;
+    toast(newVal?'Đã khóa Fill giá':'Đã mở khóa Fill giá');
+    renderDetailPanel(r,tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.toggleFillPriceLock=toggleFillPriceLock;
+
 async function saveDetailFillPrice(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  if(r.priceLocked){toast('Fill giá đang bị khóa — Unlock trước khi lưu','error');return;}
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
   SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
     svcs[s.key].price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
@@ -5184,6 +5219,8 @@ function _readComKbRows(kind){
 }
 
 async function saveComKb(){
+  const rChk=cache[detailTt].find(x=>x._id===detailId)||{};
+  if(rChk.priceLocked){toast('Fill giá đang bị khóa — Unlock trước khi lưu COM/KB','error');return;}
   const com=_readComKbRows('com')||[];
   const kb=_readComKbRows('kb')||[];
   setLoading(true,'Đang lưu COM/KB...');
@@ -8247,7 +8284,16 @@ function runDebtReport(){
 
   const filtered=allR.filter(r=>{
     const sh=r.shipper||r.supplier||'';
-    const matchSh=!filterShipper||sh===filterShipper;
+    let matchSh=!filterShipper||sh===filterShipper;
+    // Lô có shipper CHÍNH khác filterShipper vẫn được tính, nếu có ít nhất 1 dịch vụ được set
+    // PARTY riêng (tab Invoice) khớp với filterShipper — VD: Shipper lô là HONGAN nhưng 1 dịch vụ
+    // đổi party sang CHENKUN thì khi chạy báo cáo cho CHENKUN, lô này vẫn phải xuất hiện.
+    if(filterShipper&&!matchSh){
+      const spF=cache.partners[filterShipper]||{};
+      matchSh=Object.values(r.svcs||{}).some(function(sv){
+        return sv.on&&sv.invoice!=='Waived'&&sv.party&&_partyMatchesShipper(sv.party,filterShipper,spF);
+      });
+    }
     const matchFrom=!from||!r.etd||(r.etd>=from);
     const matchTo=!to||!r.etd||(r.etd<=to);
     return matchSh&&matchFrom&&matchTo;
@@ -8268,7 +8314,10 @@ function runDebtReport(){
   // Group by shipper
   const byShipper={};
   filtered.forEach(function(r){
-    const sh=r.shipper||r.supplier||'(Không rõ)';
+    // Khi đang lọc theo 1 party cụ thể: LUÔN gom vào đúng nhóm filterShipper (kể cả khi
+    // r.shipper của lô là 1 giá trị khác — lô này xuất hiện ở đây là do có dịch vụ set party
+    // khớp filterShipper). Khi xem "Tất cả" (không lọc): vẫn gom theo r.shipper như cũ.
+    const sh=filterShipper||r.shipper||r.supplier||'(Không rõ)';
     if(!byShipper[sh])byShipper[sh]={rows:[],totalVND:0};
     byShipper[sh].rows.push(r);
     // Sum từ svcs — CHỈ lấy dịch vụ của đúng party này khi đang lọc theo 1 shipper
@@ -8292,7 +8341,9 @@ function runDebtReport(){
 
     const rows=data.rows.map(function(r){
       const svcs=r.svcs||{};
-      const sh2=r.shipper||r.supplier||'';
+      // Dùng đúng party ĐANG XEM (filterShipper) khi có lọc — không phải r.shipper của lô, để
+      // tính đúng số tiền/trạng thái TT cho CHÍNH party này (có thể khác shipper chính của lô).
+      const sh2=filterShipper||r.shipper||r.supplier||'';
       const sp3=cache.partners[sh2]||{};
       function partyOk(sv){
         if(!filterShipper)return true;
@@ -8334,7 +8385,7 @@ function runDebtReport(){
         +'<td style="'+tdS+';color:var(--orange);font-weight:600">'+rowTotalNoVND.toLocaleString()+' VND</td>'
         +'<td style="'+tdS+';color:var(--text-primary);font-weight:700">'+rowTotalAllVND.toLocaleString()+' VND</td>'
         +(function(){
-          const sh2=r.shipper||r.supplier||'';
+          const sh2=filterShipper||r.shipper||r.supplier||'';
           const sp3=cache.partners[sh2]||{};
           const st=_computeArRowStatus(r,filterShipper,sh2,sp3);
           const yesApplicable=rowTotalVND>0;
@@ -8386,7 +8437,7 @@ function runDebtReport(){
   let grandVND=0, grandNoVND=0;
   filtered.forEach(function(r){
     const svcs=r.svcs||{};
-    const sh3=r.shipper||r.supplier||'';
+    const sh3=filterShipper||r.shipper||r.supplier||'';
     const sp3=cache.partners[sh3]||{};
     Object.values(svcs).forEach(function(sv){
       if(!sv.on||sv.invoice==='Waived')return;
@@ -25315,7 +25366,17 @@ function exportSOA(){
   var allR=[...cache.xuat.map(r=>Object.assign({},r,{loai:'Xuất'})),...cache.nhap.map(r=>Object.assign({},r,{loai:'Nhập'}))];
   var lots=allR.filter(function(r){
     var sh=r.shipper||r.supplier||'';
-    return sh===filterShipper&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
+    var matchSh=sh===filterShipper;
+    // Lô có shipper CHÍNH khác filterShipper vẫn tính, nếu có dịch vụ set party riêng (tab
+    // Invoice) khớp với filterShipper — VD: Shipper lô là HONGAN nhưng 1 dịch vụ đổi party
+    // sang CHENKUN thì khi xuất SOA cho CHENKUN, lô này vẫn phải xuất hiện.
+    if(!matchSh){
+      var spF=cache.partners[filterShipper]||{};
+      matchSh=Object.values(r.svcs||{}).some(function(sv){
+        return sv.on&&sv.invoice!=='Waived'&&sv.party&&_partyMatchesShipper(sv.party,filterShipper,spF);
+      });
+    }
+    return matchSh&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
   }).sort(function(a,b){return (b.etd||'').localeCompare(a.etd||'');}); // ETD trễ (lớn) hơn ở trên
   if(!lots.length){toast('Không có dữ liệu cho shipper này','error');return;}
   var sp=cache.partners[filterShipper]||{};
@@ -25330,8 +25391,8 @@ function exportSOA(){
   // Compute per-lot split: company (invoice=Yes) and personal (invoice=No)
   var lotData=lots.map(function(r){
     var svcs=r.svcs||{};
-    var sh3=r.shipper||r.supplier||'';
-    var sp4=cache.partners[sh3]||{};
+    var sh3=filterShipper;
+    var sp4=sp;
     var lotRoe=parseFloat(r.roe)||roe; // Tỷ giá RIÊNG của lô này (đã lưu lúc Fill giá) — không dùng chung 1 tỷ giá cho mọi lô
     var preYes=0,vatYes=0,preNo=0,vatNo=0;
     var lineItems=[];
@@ -26194,13 +26255,23 @@ async function exportExcelDebt(){
   var allR=[...cache.xuat.map(r=>Object.assign({},r,{loai:'Xuất'})),...cache.nhap.map(r=>Object.assign({},r,{loai:'Nhập'}))];
   var filtered=allR.filter(r=>{
     var sh=r.shipper||r.supplier||'';
-    return (!filterShipper||sh===filterShipper)&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
+    var matchSh=!filterShipper||sh===filterShipper;
+    // Lô có shipper CHÍNH khác filterShipper vẫn tính, nếu có dịch vụ set party riêng (tab
+    // Invoice) khớp với filterShipper (VD: Shipper lô là HONGAN nhưng 1 dịch vụ đổi party
+    // sang CHENKUN) — đúng theo yêu cầu chạy công nợ theo party thực tế, không theo field Shipper.
+    if(filterShipper&&!matchSh){
+      var spF=cache.partners[filterShipper]||{};
+      matchSh=Object.values(r.svcs||{}).some(function(sv){
+        return sv.on&&sv.invoice!=='Waived'&&sv.party&&_partyMatchesShipper(sv.party,filterShipper,spF);
+      });
+    }
+    return matchSh&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
   });
   if(!filtered.length){toast('Không có dữ liệu','error');return;}
   var roe=26390;
   var dnSeq=1;
   function makeDN(){return 'DN'+new Date().getFullYear().toString().slice(-2)+String(new Date().getMonth()+1).padStart(2,'0')+String(dnSeq++).padStart(6,'0');}
-  var shippers=[...new Set(filtered.map(r=>r.shipper||r.supplier||''))].filter(Boolean);
+  var shippers=filterShipper?[filterShipper]:[...new Set(filtered.map(r=>r.shipper||r.supplier||''))].filter(Boolean);
   if(!filterShipper) shippers=[shippers[0]];
   var today=fd(new Date().toISOString().slice(0,10));
   var dateRange=fd(from||'2026-01-01')+'  –  '+(to?fd(to):today);
@@ -26229,7 +26300,13 @@ async function exportExcelDebt(){
 
     shippers.forEach(sh=>{
       var sp=cache.partners[sh]||{};
-      var lots=filtered.filter(r=>(r.shipper||r.supplier||'')===sh);
+      var lots=filtered.filter(r=>{
+        if((r.shipper||r.supplier||'')===sh)return true;
+        // Lô "mượn" vào nhóm này do có dịch vụ set party khớp sh (không phải r.shipper chính)
+        return Object.values(r.svcs||{}).some(function(sv){
+          return sv.on&&sv.invoice!=='Waived'&&sv.party&&_partyMatchesShipper(sv.party,sh,sp);
+        });
+      });
       var dataRows=[];
       lots.forEach(r=>{
         var svcs=r.svcs||{};
