@@ -979,7 +979,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.96';
+window.APP_BUILD='v2.98';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3784,6 +3784,7 @@ function renderDetailPanel(r,tt){
         +'<div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">'
           +'<div><label class="lbl">Ghi chú costing</label><textarea id="costingNote" rows="2" style="font-size:12px;resize:none">'+(costing.note||'')+'</textarea></div>'
           +'<div style="display:flex;gap:8px"><button class="btn pri" onclick="saveCosting()"><i class="ti ti-check"></i> Lưu Costing</button>'
+          +'<button class="btn green" onclick="markCostingDone()" title="Lưu costing hiện tại VÀ chuyển trạng thái lô hàng sang Đã Costing"><i class="ti ti-circle-check-filled"></i> Done</button>'
           +(currentProfile?.role==='admin'?'<button class="btn '+(r.locked?'pri':'')+'" data-lock-action="1" onclick="toggleCurrentLotLock()" title="'+(r.locked?'Mở khóa':'Khóa lô hàng')+'"><i class="ti ti-'+(r.locked?'lock-open':'lock')+'"></i> '+(r.locked?'Mở khóa':'Khóa lô')+'</button>':'')+'</div>'
         +'</div>';
     }
@@ -8591,7 +8592,7 @@ function renderThuChi(){
     <div style="display:flex;gap:6px;overflow-x:auto">
     ${tabs.map(function(t){const active=tcTab===t.k;return '<button onclick="switchTcTab(\''+t.k+'\')" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border:none;border-bottom:2.5px solid '+(active?'var(--green)':'transparent')+';background:none;cursor:pointer;font-size:13px;font-weight:'+(active?'700':'500')+';color:'+(active?'var(--green)':'var(--text-secondary)')+';font-family:inherit;white-space:nowrap"><i class="ti '+t.icon+'" style="font-size:15px"></i>'+t.label+'</button>';}).join('')}
     </div>
-    <button class="btn sm" onclick="renderTcBody()" title="Tải lại dữ liệu mới nhất cho tab đang xem" style="flex-shrink:0;margin-bottom:6px"><i class="ti ti-refresh"></i> Refresh</button>
+    <button class="btn sm" onclick="refreshTcTab()" title="Tải lại dữ liệu mới nhất — nếu đang xem Cash Book, tự động quét bù các giao dịch Thu/Chi còn thiếu" style="flex-shrink:0;margin-bottom:6px"><i class="ti ti-refresh"></i> Refresh</button>
   </div>
   <div id="tcBody"></div>`;
   renderTcBody();
@@ -8898,11 +8899,23 @@ function renderTcBody(){
 // Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng CHƯA có giao dịch Sổ quỹ tương ứng
 // (ví dụ các bản ghi từ trước khi tính năng tự động ghi Sổ quỹ ra đời) — tạo bù các bút toán còn thiếu.
 // Idempotent: bỏ qua các bản ghi đã có cashTxId (đã được ghi nhận rồi).
-async function backfillCashBookFromHistory(){
-  if(currentProfile?.role!=='admin'){ toast('Chỉ Admin mới có quyền thực hiện thao tác này','error'); return; }
-  if(!confirm('Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng chưa có giao dịch trong Sổ quỹ, và tạo bù các bút toán Thu/Chi tương ứng.\n\nBản cập nhật này quét bù cho TỪNG ĐỐI TÁC (party) riêng lẻ trong mỗi lô — kể cả các khoản Thu cũ ghi nhận theo cách cũ (trước khi có tách Có HĐ/Không HĐ) mà trước đây có thể đã bị bỏ sót nếu lô hàng đó có ít nhất 1 đối tác khác đã dùng giao diện mới.\n\nNếu bản ghi không có tài khoản thanh toán cụ thể (chưa từng chọn lúc đánh dấu TT), hệ thống sẽ tự ghi vào "Tiền mặt" — bạn có thể chuyển sang đúng tài khoản sau.\n\nLưu ý: với các khoản CHI trả NCC ghi nhận trước khi có tính năng này, số tiền sẽ được ƯỚC TÍNH từ chi phí hiện tại của dịch vụ (do số tiền thanh toán chính xác lúc đó không được lưu lại) — vui lòng kiểm tra lại sau khi quét. Các khoản THU (Debit Note) dùng đúng số tiền đã ghi nhận.\n\nTiếp tục?'))return;
+// Nút Refresh dùng chung cho mọi tab con Finance. Riêng tab Cash Book: tự động quét bù các giao
+// dịch Thu/Chi còn thiếu (silent, không confirm/alert gây phiền) trước khi tải lại dữ liệu — đáp
+// ứng yêu cầu "bấm Refresh sẽ tự quét và cập nhật lại các thu chi còn thiếu trong Cash Book".
+async function refreshTcTab(){
+  if(tcTab==='soquy'&&currentProfile?.role==='admin'){
+    await backfillCashBookFromHistory(true);
+  } else {
+    renderTcBody();
+  }
+}
+window.refreshTcTab=refreshTcTab;
 
-  setLoading(true,'Đang quét lịch sử thanh toán...');
+async function backfillCashBookFromHistory(silent){
+  if(currentProfile?.role!=='admin'){ if(!silent)toast('Chỉ Admin mới có quyền thực hiện thao tác này','error'); return; }
+  if(!silent && !confirm('Quét toàn bộ lô hàng đã đánh dấu "Đã thanh toán" nhưng chưa có giao dịch trong Sổ quỹ, và tạo bù các bút toán Thu/Chi tương ứng.\n\nBản cập nhật này quét bù cho TỪNG ĐỐI TÁC (party) riêng lẻ trong mỗi lô — kể cả các khoản Thu cũ ghi nhận theo cách cũ (trước khi có tách Có HĐ/Không HĐ) mà trước đây có thể đã bị bỏ sót nếu lô hàng đó có ít nhất 1 đối tác khác đã dùng giao diện mới.\n\nNếu bản ghi không có tài khoản thanh toán cụ thể (chưa từng chọn lúc đánh dấu TT), hệ thống sẽ tự ghi vào "Tiền mặt" — bạn có thể chuyển sang đúng tài khoản sau.\n\nLưu ý: với các khoản CHI trả NCC ghi nhận trước khi có tính năng này, số tiền sẽ được ƯỚC TÍNH từ chi phí hiện tại của dịch vụ (do số tiền thanh toán chính xác lúc đó không được lưu lại) — vui lòng kiểm tra lại sau khi quét. Các khoản THU (Debit Note) dùng đúng số tiền đã ghi nhận.\n\nTiếp tục?'))return;
+
+  if(!silent)setLoading(true,'Đang quét lịch sử thanh toán...');
   let createdChi=0, createdThu=0, skippedNoAmount=0, skippedCurrency=0, lotErrors=0, scannedLots=0;
   const errLog=[];
 
@@ -9059,17 +9072,21 @@ async function backfillCashBookFromHistory(){
     setLoading(false);
   }
 
-  // Báo cáo kết quả chi tiết bằng modal (rõ ràng hơn toast, không bị trôi mất)
-  const summary=
-    'Đã quét '+scannedLots+' lô hàng.\n\n'
-    +'✅ Tạo mới: +'+createdThu+' giao dịch Thu, +'+createdChi+' giao dịch Chi\n'
-    +(skippedNoAmount?'⏭ Bỏ qua '+skippedNoAmount+' bản ghi (chưa có số tiền hợp lệ)\n':'')
-    +(skippedCurrency?'⏭ Bỏ qua '+skippedCurrency+' bản ghi (đơn vị tiền tệ khác VND, cần xử lý thủ công)\n':'')
-    +(lotErrors?'⚠ Lỗi tại '+lotErrors+' lô hàng:\n'+errLog.slice(0,10).join('\n')+(errLog.length>10?'\n... và '+(errLog.length-10)+' lỗi khác':''):'')
-    +((createdThu+createdChi)===0?'\n\nKhông tìm thấy bản ghi nào cần quét bù — có thể tất cả đã được ghi nhận từ trước, hoặc chưa có lô hàng nào được đánh dấu "Đã thanh toán".':'');
-  alert(summary);
+  // Báo cáo kết quả chi tiết bằng modal (rõ ràng hơn toast, không bị trôi mất) — CHỈ hiện khi
+  // chủ động bấm nút "Quét lịch sử". Khi chạy ngầm từ nút Refresh (silent=true), không làm phiền
+  // bằng alert() mỗi lần — chỉ báo nhẹ qua toast NẾU có tạo mới gì đó.
+  if(!silent){
+    const summary=
+      'Đã quét '+scannedLots+' lô hàng.\n\n'
+      +'✅ Tạo mới: +'+createdThu+' giao dịch Thu, +'+createdChi+' giao dịch Chi\n'
+      +(skippedNoAmount?'⏭ Bỏ qua '+skippedNoAmount+' bản ghi (chưa có số tiền hợp lệ)\n':'')
+      +(skippedCurrency?'⏭ Bỏ qua '+skippedCurrency+' bản ghi (đơn vị tiền tệ khác VND, cần xử lý thủ công)\n':'')
+      +(lotErrors?'⚠ Lỗi tại '+lotErrors+' lô hàng:\n'+errLog.slice(0,10).join('\n')+(errLog.length>10?'\n... và '+(errLog.length-10)+' lỗi khác':''):'')
+      +((createdThu+createdChi)===0?'\n\nKhông tìm thấy bản ghi nào cần quét bù — có thể tất cả đã được ghi nhận từ trước, hoặc chưa có lô hàng nào được đánh dấu "Đã thanh toán".':'');
+    alert(summary);
+  }
 
-  if(createdThu+createdChi>0) toast('Đã cập nhật Sổ quỹ: +'+createdThu+' Thu, +'+createdChi+' Chi','success');
+  if(createdThu+createdChi>0) toast((silent?'Refresh: đã tự cập nhật Sổ quỹ — ':'Đã cập nhật Sổ quỹ: ')+'+'+createdThu+' Thu, +'+createdChi+' Chi','success');
   renderTcBody();
 }
 
@@ -18763,14 +18780,33 @@ async function saveCosting(){
   try{
     await fsSet(colName(detailTt),detailId,{costing,updatedAt:Date.now()});
     _tempCosting=null;
+    toast('Đã lưu Costing');
+    logLotEvent(detailId,detailTt,'costing','Cập nhật Costing','Đã lưu dữ liệu costing');
+    const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
+    renderDetailPanel(fresh,detailTt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+
+// Nút "Done" riêng biệt — CHỈ hàm này mới chuyển trạng thái lô hàng sang "Đã Costing". "Lưu Costing"
+// (saveCosting) chỉ lưu dữ liệu hiện tại, KHÔNG tự đổi trạng thái nữa — theo đúng yêu cầu tách bạch
+// giữa "lưu tạm" và "hoàn tất costing".
+async function markCostingDone(){
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
+  // Lưu costing hiện tại trước (đảm bảo dữ liệu mới nhất được ghi), rồi mới chuyển trạng thái
+  await saveCosting();
+  setLoading(true,'Đang chuyển trạng thái Đã Costing...');
+  try{
     await fsSet(colName(detailTt),detailId,{costingStatus:'Đã costing',status:'Đã Costing',updatedAt:Date.now()});
-    toast('Đã lưu Costing → Trạng thái: Đã Costing');
-    logLotEvent(detailId,detailTt,'costing','Cập nhật Costing','Trạng thái: Đã Costing');
+    toast('Đã chuyển trạng thái: Đã Costing');
+    logLotEvent(detailId,detailTt,'costing','Hoàn tất Costing','Trạng thái: Đã Costing');
     const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
     renderDetailPanel(Object.assign({},fresh,{status:'Đã Costing',costingStatus:'Đã costing'}),detailTt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
+window.markCostingDone=markCostingDone;
 
 window.addCostingItem=addCostingItem;
 window.removeCostingItem=removeCostingItem;
@@ -20030,11 +20066,17 @@ function renderCostingReport(targetId){
       +'<button class="btn" onclick="exportCostingPdf()" style="color:#b91c1c;border-color:#b91c1c"><i class="ti ti-file-type-pdf"></i> Xuất PDF Lợi nhuận</button>'
     +'</div>'
     +'<div style="display:flex;gap:8px;align-items:center;margin-bottom:.75rem;flex-wrap:wrap">'
-      +'<div class="search-wrap" style="flex:1;min-width:200px"><i class="ti ti-search"></i><input type="text" id="crSearch" placeholder="Tìm Booking No, Job ID, MBL..." oninput="filterCostingRows()" style="font-size:12px"/></div>'
+      +'<div class="search-wrap" style="width:240px;flex-shrink:0"><i class="ti ti-search"></i><input type="text" id="crSearch" placeholder="Tìm Booking No, Job ID, MBL..." oninput="filterCostingRows()" style="font-size:12px"/></div>'
       +'<div style="display:flex;gap:4px">'
         +'<button class="btn sm" id="crFilterAll" data-f="all" onclick="setCostingFilter(this.dataset.f)" style="font-size:11px;background:var(--blue);color:#fff;border-color:var(--blue)">Tất cả</button>'
         +'<button class="btn sm" id="crFilterDone" data-f="done" onclick="setCostingFilter(this.dataset.f)" style="font-size:11px">Đã costing</button>'
         +'<button class="btn sm" id="crFilterPending" data-f="pending" onclick="setCostingFilter(this.dataset.f)" style="font-size:11px">Chưa costing</button>'
+      +'</div>'
+      +'<div style="width:1px;height:20px;background:var(--border-light)"></div>'
+      +'<div style="display:flex;gap:4px">'
+        +'<button class="btn sm" id="crPfAll" data-f="all" onclick="setCostingPriceFilter(this.dataset.f)" style="font-size:11px;background:var(--blue);color:#fff;border-color:var(--blue)">Tất cả</button>'
+        +'<button class="btn sm" id="crPfLocked" data-f="locked" onclick="setCostingPriceFilter(this.dataset.f)" style="font-size:11px"><i class="ti ti-lock" style="font-size:11px"></i> Lock giá</button>'
+        +'<button class="btn sm" id="crPfUnlocked" data-f="unlocked" onclick="setCostingPriceFilter(this.dataset.f)" style="font-size:11px"><i class="ti ti-lock-open" style="font-size:11px"></i> Chưa lock</button>'
       +'</div>'
     +'</div>'
     +'<div id="crResult"></div>';
@@ -20124,7 +20166,10 @@ function runCostingReport(){
     const hasCostData=costItems.length>0||SVCS.some(s=>svcs[s.key]?.on&&svcs[s.key]?.cost);
     const tt=r.loai==='Xuất'?'xuat':'nhap';
 
-    return '<tr>'
+    const isCostingDone=r.status==='Đã Costing'||r.costingStatus==='Đã costing'||!!r.locked;
+    const isPriceLocked=!!r.priceLocked;
+
+    return '<tr data-costing-done="'+isCostingDone+'" data-price-locked="'+isPriceLocked+'">'
       +'<td style="'+tdS+';font-weight:700;color:var(--blue);white-space:nowrap">'+(r.jobNo||'—')+'</td>'
       +'<td style="'+tdS+';font-weight:600"><button class="plink" data-id="'+r._id+'" data-tt="'+tt+'" onclick="openDetail(this.dataset.id,this.dataset.tt)">'+r.bookingNo+'</button></td>'
       +'<td style="'+tdS+';font-size:11px;white-space:nowrap">'+(r.mblNo||'—')+'</td>'
@@ -20135,10 +20180,10 @@ function runCostingReport(){
       +'<td style="'+tdS+';text-align:right;color:var(--red);font-weight:700">'+(totalCostPreVatVND?totalCostPreVatVND.toLocaleString():'—')+'</td>'
       +'<td style="'+tdS+';text-align:right;font-weight:800;color:'+clr+'">'+(totalRevVND||totalCostVND?(profitVND>=0?'+':'')+profitVND.toLocaleString()+' <em style="font-size:10px">('+pct+'%)</em>':'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td style="'+tdS+';text-align:center">'
-        +'<select data-id="'+r._id+'" data-tt="'+tt+'" onchange="saveCostingStatus(this)" style="font-size:11px;font-weight:600;border-radius:16px;padding:3px 8px;background:'+(r.locked||r.costingStatus==='Đã costing'?'var(--blueLight, #EEF4FB)':'rgba(220,53,69,.07)')+';color:'+(r.locked||r.costingStatus==='Đã costing'?'var(--blue)':'var(--red)')+';border:1px solid '+(r.locked||r.costingStatus==='Đã costing'?'var(--blue)':'rgba(220,53,69,.3)')+'">'
-          +'<option value="Chưa costing"'+((!r.costingStatus||r.costingStatus==='Chưa costing')?' selected':'')+'>Chưa costing</option>'
-          +'<option value="Đã costing"'+((r.costingStatus==='Đã costing'||r.locked)?' selected':'')+'>Đã costing</option>'
-        +'</select>'
+        +'<span style="font-size:11px;font-weight:600;border-radius:16px;padding:3px 10px;display:inline-block;background:'+(isCostingDone?'var(--blueLight, #EEF4FB)':'rgba(220,53,69,.07)')+';color:'+(isCostingDone?'var(--blue)':'var(--red)')+';border:1px solid '+(isCostingDone?'var(--blue)':'rgba(220,53,69,.3)')+'">'+(isCostingDone?'Đã Costing':'Chưa Costing')+'</span>'
+      +'</td>'
+      +'<td style="'+tdS+';text-align:center">'
+        +'<span style="font-size:11px;font-weight:600;border-radius:16px;padding:3px 10px;display:inline-block;background:'+(isPriceLocked?'rgba(220,53,69,.07)':'rgba(34,197,94,.08)')+';color:'+(isPriceLocked?'var(--red)':'var(--green-dark)')+';border:1px solid '+(isPriceLocked?'rgba(220,53,69,.3)':'rgba(34,197,94,.3)')+'"><i class="ti ti-'+(isPriceLocked?'lock':'lock-open')+'" style="font-size:10px;margin-right:3px"></i>'+(isPriceLocked?'Đã lock':'Chưa lock')+'</span>'
       +'</td>'
     +'</tr>';
   }).join('');
@@ -20178,7 +20223,8 @@ function runCostingReport(){
         +'<th style="'+thS+';text-align:right;color:#888;font-size:9px">Có VAT</th>'
         +'<th style="'+thS+';text-align:right;color:var(--red)">Chi phí (chưa VAT)</th>'
         +'<th style="'+thS+';text-align:right">Lợi nhuận (VND)</th>'
-        +'<th style="'+thS+'">Trạng thái</th>'
+        +'<th style="'+thS+';text-align:center">TT Costing</th>'
+        +'<th style="'+thS+';text-align:center">TT Fill giá</th>'
       +'</tr></thead>'
       +'<tbody>'+rows+'</tbody>'
     +'</table></div></div>';
@@ -20468,15 +20514,34 @@ function setCostingFilter(filter){
   filterCostingRows();
 }
 
+window._crPriceFilter=window._crPriceFilter||'all';
+function setCostingPriceFilter(filter){
+  window._crPriceFilter=filter;
+  const idMap={all:'crPfAll',locked:'crPfLocked',unlocked:'crPfUnlocked'};
+  Object.keys(idMap).forEach(function(f){
+    const btn=g(idMap[f]);
+    if(btn){
+      btn.style.background=f===filter?'var(--blue)':'';
+      btn.style.color=f===filter?'#fff':'';
+      btn.style.borderColor=f===filter?'var(--blue)':'';
+    }
+  });
+  filterCostingRows();
+}
+window.setCostingPriceFilter=setCostingPriceFilter;
+
 function filterCostingRows(){
   const q=(g('crSearch')?.value||'').toLowerCase().trim();
+  const pf=window._crPriceFilter||'all';
   const rows=document.querySelectorAll('#crResult tbody tr');
   rows.forEach(function(row){
     const txt=row.textContent.toLowerCase();
-    const isDone=row.querySelector('select')?.value==='Đã costing';
+    const isDone=row.dataset.costingDone==='true';
+    const isLocked=row.dataset.priceLocked==='true';
     const matchQ=!q||txt.includes(q);
     const matchF=_crFilter==='all'||(_crFilter==='done'&&isDone)||(_crFilter==='pending'&&!isDone);
-    row.style.display=matchQ&&matchF?'':'none';
+    const matchPf=pf==='all'||(pf==='locked'&&isLocked)||(pf==='unlocked'&&!isLocked);
+    row.style.display=matchQ&&matchF&&matchPf?'':'none';
   });
 }
 
