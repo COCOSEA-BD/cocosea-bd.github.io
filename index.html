@@ -457,24 +457,28 @@ function renderSvcCatList(){
   const box=g('svcCatList');
   if(!box)return;
   if(!_svcCatDraft)_svcCatDraft=SVCS.map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
+  const locked=!!window._svcCatalogLocked;
+  const dis=locked?'disabled':'';
   box.innerHTML=_svcCatDraft.map(function(s,i){
     return '<div style="display:grid;grid-template-columns:90px 1fr 110px 36px;gap:8px;margin-bottom:6px;align-items:center">'
-      +'<input type="text" maxlength="3" value="'+(s.code||'').replace(/"/g,'&quot;')+'" oninput="_svcCatSet('+i+',\'code\',this.value.toUpperCase());this.value=this.value.toUpperCase()" placeholder="ABC" style="font-size:12px;text-transform:uppercase;text-align:center;font-weight:600"/>'
-      +'<input type="text" value="'+(s.name||'').replace(/"/g,'&quot;')+'" oninput="_svcCatSet('+i+',\'name\',this.value)" placeholder="Tên dịch vụ" style="font-size:12px"/>'
-      +'<div style="display:flex;justify-content:center"><button type="button" class="tgl '+(s.default?'on':'off')+'" onclick="_svcCatToggleDefault('+i+')"></button></div>'
-      +'<button class="rac red" onclick="delSvcCatRow('+i+')" title="Xóa dịch vụ"><i class="ti ti-trash"></i></button>'
+      +'<input type="text" maxlength="3" value="'+(s.code||'').replace(/"/g,'&quot;')+'" '+dis+' oninput="_svcCatSet('+i+',\'code\',this.value.toUpperCase());this.value=this.value.toUpperCase()" placeholder="ABC" style="font-size:12px;text-transform:uppercase;text-align:center;font-weight:600"/>'
+      +'<input type="text" value="'+(s.name||'').replace(/"/g,'&quot;')+'" '+dis+' oninput="_svcCatSet('+i+',\'name\',this.value)" placeholder="Tên dịch vụ" style="font-size:12px"/>'
+      +'<div style="display:flex;justify-content:center"><button type="button" class="tgl '+(s.default?'on':'off')+'" '+dis+' onclick="_svcCatToggleDefault('+i+')"></button></div>'
+      +'<button class="rac red" '+dis+' onclick="delSvcCatRow('+i+')" title="Xóa dịch vụ"><i class="ti ti-trash"></i></button>'
       +'</div>';
   }).join('');
 }
 window.renderSvcCatList=renderSvcCatList;
 
 function _svcCatSet(i,field,val){
+  if(window._svcCatalogLocked){toast('Danh mục dịch vụ đang khóa — bấm Mở khóa trước khi sửa','error');return;}
   if(!_svcCatDraft[i])return;
   _svcCatDraft[i][field]=val;
 }
 window._svcCatSet=_svcCatSet;
 
 function _svcCatToggleDefault(i){
+  if(window._svcCatalogLocked){toast('Danh mục dịch vụ đang khóa — bấm Mở khóa trước khi sửa','error');return;}
   if(!_svcCatDraft[i])return;
   _svcCatDraft[i].default=!_svcCatDraft[i].default;
   renderSvcCatList();
@@ -482,6 +486,7 @@ function _svcCatToggleDefault(i){
 window._svcCatToggleDefault=_svcCatToggleDefault;
 
 function addSvcCatRow(){
+  if(window._svcCatalogLocked){toast('Danh mục dịch vụ đang khóa — bấm Mở khóa trước khi thêm','error');return;}
   if(!_svcCatDraft)_svcCatDraft=[];
   const key='custom_'+Date.now();
   _svcCatDraft.push({key:key,name:'',code:'',default:false,custom:true});
@@ -490,6 +495,7 @@ function addSvcCatRow(){
 window.addSvcCatRow=addSvcCatRow;
 
 function delSvcCatRow(i){
+  if(window._svcCatalogLocked){toast('Danh mục dịch vụ đang khóa — bấm Mở khóa trước khi xóa','error');return;}
   if(!_svcCatDraft[i])return;
   if(!confirm('Xóa dịch vụ "'+(_svcCatDraft[i].name||'')+'" khỏi danh mục?'))return;
   _svcCatDraft.splice(i,1);
@@ -499,6 +505,7 @@ window.delSvcCatRow=delSvcCatRow;
 
 async function saveSvcCatalog(){
   if(!_svcCatDraft)return;
+  if(window._svcCatalogLocked){toast('Danh mục dịch vụ đang khóa — bấm Mở khóa trước khi lưu','error');return;}
   // Validate: name required; auto-generate missing codes; ensure unique codes
   const seen={};
   for(let i=0;i<_svcCatDraft.length;i++){
@@ -696,6 +703,31 @@ function loadBankAccounts(){
     }
   }).catch(function(){});
 }
+
+// Trạng thái khóa Danh mục dịch vụ — mặc định KHÓA (an toàn) cho tới khi tải xong dữ liệu thật từ
+// Firestore. Khi khóa: không thể sửa Mã/Tên/Mặc định hay Thêm/Xóa dịch vụ trong danh mục — phải chủ
+// động Mở khóa trước. Mục đích: ngăn thay đổi/xóa nhầm mã dịch vụ (code), vì các mã này được nhiều
+// module khác trong app tham chiếu trực tiếp (VD: OCF, TRA, TRC...).
+window._svcCatalogLocked=(typeof window._svcCatalogLocked==='boolean')?window._svcCatalogLocked:true;
+function loadSvcCatalogLock(){
+  db.collection('_config').doc('svcCatalogLock').get().then(function(snap){
+    window._svcCatalogLocked=snap.exists?(snap.data().locked!==false):true; // mặc định khóa nếu chưa từng lưu
+    if(g('page-settings')&&g('page-settings').innerHTML.trim())renderSettings();
+  }).catch(function(){});
+}
+async function toggleSvcCatalogLock(){
+  const newVal=!window._svcCatalogLocked;
+  if(!newVal && !confirm('Mở khóa Danh mục dịch vụ để chỉnh sửa Mã/Tên dịch vụ?\n\nLưu ý: Mã dịch vụ (code) được nhiều module khác tham chiếu trực tiếp (Booking Request, Trucking...). Thay đổi mã của dịch vụ ĐANG DÙNG có thể làm mất liên kết với các lô hàng cũ.'))return;
+  setLoading(true,newVal?'Đang khóa...':'Đang mở khóa...');
+  try{
+    await fsSet('_config','svcCatalogLock',{locked:newVal,updatedAt:Date.now(),updatedBy:currentUser?.email||''});
+    window._svcCatalogLocked=newVal;
+    toast(newVal?'Đã khóa Danh mục dịch vụ':'Đã mở khóa — có thể chỉnh sửa');
+    renderSettings();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.toggleSvcCatalogLock=toggleSvcCatalogLock;
 
 /* ─────────────────────────────────────────────
    CONSTANTS
@@ -991,7 +1023,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.00';
+window.APP_BUILD='v3.01';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1549,6 +1581,7 @@ function startListeners(){
   // Mọi thứ KHÔNG thuộc shipment list — load sau, dần dần, không chặn UI
   function _bootRestOfApp(){
     loadBankAccounts();
+    loadSvcCatalogLock();
     loadCargoNames();
     loadPortsIcds();
     loadMarketShippers();
@@ -1975,7 +2008,7 @@ function goTab(t){
   if(t==='ocean'){ renderOcean(); _injectBackBtn('page-ocean','Sale Support','salesupport'); }
   if(t==='quote'){ renderQuote(); _injectBackBtn('page-quote','Sale Support','salesupport'); }
   if(t==='job-report'){ renderJobReportPage(); _injectBackBtn('page-job-report','Sale Support','salesupport'); }
-  if(t==='settings') renderSettings();
+  if(t==='settings'){ _svcCatDraft=null; renderSettings(); }
 }
 
 // Chèn nút "← Quay lại [trang cha]" vào đầu 1 trang con đã được gộp vào module khác
@@ -17107,7 +17140,13 @@ window.deleteNote=deleteNote;
 
 function renderSettings(){
   const pg=g('page-settings');
-  _svcCatDraft=null;
+  // KHÔNG reset _svcCatDraft ở đây nữa — trước đây dòng này chạy MỖI LẦN renderSettings() được gọi,
+  // kể cả khi chỉ là 1 hành động KHÔNG LIÊN QUAN (VD: thêm/xóa tài khoản ngân hàng ở mục khác trên
+  // cùng trang) kích hoạt render lại toàn trang Settings — khiến bản nháp danh mục dịch vụ đang gõ dở
+  // (kể cả code vừa nhập) bị xóa sạch, nạp lại từ SVCS đã lưu trước đó → đúng nguyên nhân "code tự
+  // xóa" người dùng gặp phải. Việc khởi tạo _svcCatDraft khi cần đã có sẵn trong renderSvcCatList()
+  // (chỉ tạo mới NẾU chưa có), giờ để logic đó tự quyết định đúng lúc. Chỉ reset khi người dùng THẬT
+  // SỰ điều hướng sang tab Settings (xem goTab()).
   if(!can('manageUsers')){pg.innerHTML='<div class="access-denied"><i class="ti ti-lock"></i><div>Chỉ Admin mới truy cập được cài đặt</div></div>';return;}
   const banks=window._bankAccounts||{company:[],personal:[]};
   const coBanks=Array.isArray(banks)?banks:(banks.company||[{beneficiary:'',account:'',bank:''}]);
@@ -17158,10 +17197,12 @@ function renderSettings(){
     )
 
     +stgBox('svc','ti-list-details','Danh mục dịch vụ',
-      '<button class="btn" onclick="addSvcCatRow()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>'
+      '<button class="btn '+(window._svcCatalogLocked?'pri':'red')+'" onclick="toggleSvcCatalogLock()"><i class="ti ti-'+(window._svcCatalogLocked?'lock-open':'lock')+'"></i> '+(window._svcCatalogLocked?'Mở khóa':'Khóa lại')+'</button>'
+      +'<button class="btn" onclick="addSvcCatRow()" '+(window._svcCatalogLocked?'disabled':'')+'><i class="ti ti-plus"></i> Thêm dịch vụ</button>'
       +'<button class="btn" onclick="scanOrphanSvcs()"><i class="ti ti-refresh"></i> Quét & đồng bộ lô cũ</button>'
-      +'<button class="btn pri" onclick="saveSvcCatalog()"><i class="ti ti-check"></i> Lưu danh mục dịch vụ</button>',
-      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Mỗi dịch vụ có mã 3 chữ cái. Bật <b>Mặc định</b> để tự xuất hiện khi tạo lô hàng mới.</div>'
+      +'<button class="btn pri" onclick="saveSvcCatalog()" '+(window._svcCatalogLocked?'disabled':'')+'><i class="ti ti-check"></i> Lưu danh mục dịch vụ</button>',
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.6rem">Mỗi dịch vụ có mã 3 chữ cái. Bật <b>Mặc định</b> để tự xuất hiện khi tạo lô hàng mới.'
+      +(window._svcCatalogLocked?' <span style="color:var(--red);font-weight:600"><i class="ti ti-lock" style="font-size:11px"></i> Danh mục đang KHÓA — bấm "Mở khóa" để chỉnh sửa.</span>':'')+'</div>'
       +'<div style="display:grid;grid-template-columns:90px 1fr 110px 36px;gap:8px;padding:0 2px 4px;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase"><div>Mã</div><div>Tên dịch vụ</div><div style="text-align:center">Mặc định</div><div></div></div>'
       +'<div id="svcCatList"></div>'
     )
