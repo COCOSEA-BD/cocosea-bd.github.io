@@ -446,7 +446,10 @@ window._comKbThucChi=_comKbThucChi;
 
 // Persist the current SVCS catalog to Firestore
 async function saveServices(){
-  const list=SVCS.map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
+  // QUAN TRỌNG: loại bỏ entry lotScoped (dịch vụ tạo tạm từ trong 1 lô hàng cụ thể — thêm dịch vụ
+  // trùng/mới) trước khi ghi vào Firestore. Đây là chốt chặn CUỐI CÙNG đảm bảo các entry tạm này
+  // không bao giờ bị lưu vĩnh viễn vào Danh mục dịch vụ chung, bất kể hàm này được gọi từ đâu.
+  const list=SVCS.filter(function(s){return !s.lotScoped&&!s._orphan;}).map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
   await db.collection('_config').doc('services').set({list:list,updatedAt:Date.now(),updatedBy:(currentUser?currentUser.email:'')},{merge:true});
 }
 window.saveServices=saveServices;
@@ -456,7 +459,10 @@ let _svcCatDraft=null;
 function renderSvcCatList(){
   const box=g('svcCatList');
   if(!box)return;
-  if(!_svcCatDraft)_svcCatDraft=SVCS.map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
+  // Loại bỏ entry lotScoped (tạo tạm từ trong 1 lô hàng cụ thể — VD thêm dịch vụ trùng/mới) khỏi
+  // Danh mục dịch vụ chung — chúng KHÔNG PHẢI dịch vụ chính thức, chỉ tồn tại tạm trong bộ nhớ để
+  // phục vụ hiển thị đúng lô đang mở, không nên xuất hiện/được lưu vào catalog dùng chung.
+  if(!_svcCatDraft)_svcCatDraft=SVCS.filter(function(s){return !s.lotScoped&&!s._orphan;}).map(function(s){return {key:s.key,name:s.name||'',code:(s.code||'').toUpperCase(),default:!!s.default,custom:!!s.custom};});
   const locked=!!window._svcCatalogLocked;
   const dis=locked?'disabled':'';
   box.innerHTML=_svcCatDraft.map(function(s,i){
@@ -518,7 +524,10 @@ async function saveSvcCatalog(){
   }
   setLoading(true,'Đang lưu danh mục dịch vụ...');
   try{
-    SVCS=_svcCatDraft.map(function(s){return {key:s.key,name:s.name.trim(),code:s.code,default:!!s.default,custom:!!s.custom};});
+    // Giữ lại các entry lotScoped hiện có (dịch vụ tạm thêm trong 1 lô cụ thể — không thuộc Danh mục
+    // chính thức) — _svcCatDraft chỉ chứa dịch vụ chính thức nên không được để mất chúng khi ghi đè SVCS.
+    const lotScopedKept=SVCS.filter(function(s){return s.lotScoped||s._orphan;});
+    SVCS=_svcCatDraft.map(function(s){return {key:s.key,name:s.name.trim(),code:s.code,default:!!s.default,custom:!!s.custom};}).concat(lotScopedKept);
     await saveServices();
     setLoading(false);
     toast('Đã lưu danh mục dịch vụ');
@@ -582,7 +591,7 @@ function doSyncOrphanSvcs(){
   const list=window._orphanSvcList||[];
   const chosen=Array.from(document.querySelectorAll('.orphanChk:checked')).map(function(el){return list[parseInt(el.dataset.i)];}).filter(Boolean);
   if(!chosen.length){toast('Chưa chọn dịch vụ nào','error');return;}
-  if(!_svcCatDraft)_svcCatDraft=SVCS.map(function(s){return {key:s.key,name:s.name,code:s.code,default:!!s.default,custom:!!s.custom};});
+  if(!_svcCatDraft)_svcCatDraft=SVCS.filter(function(s){return !s.lotScoped&&!s._orphan;}).map(function(s){return {key:s.key,name:s.name,code:s.code,default:!!s.default,custom:!!s.custom};});
   chosen.forEach(function(o){
     if(_svcCatDraft.find(function(s){return s.key===o.key;}))return;
     const isBuiltin=!!_BUILTIN_SVC_NAMES[o.key];
@@ -1023,7 +1032,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.06';
+window.APP_BUILD='v3.07';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4182,7 +4191,12 @@ function doAddSvcByKey(key){
   let s;
   if(key==='__new__'){
     const newKey='custom_'+Date.now();
-    s={key:newKey,name:'Dịch vụ mới',code:'',custom:true,default:false};
+    // lotScoped:true — entry này CHỈ để phục vụ hiển thị/thao tác trong lô đang mở, KHÔNG PHẢI dịch
+    // vụ chính thức của Danh mục dịch vụ chung. Nếu không đánh dấu, entry tạm này sẽ bị lẫn vào Danh
+    // mục dịch vụ (renderSvcCatList đọc thẳng từ SVCS) và có thể bị LƯU VĨNH VIỄN vào catalog chung
+    // nếu Admin bấm "Lưu danh mục dịch vụ" trong lúc entry tạm này vẫn còn nằm trong SVCS — đây chính
+    // là nguyên nhân xuất hiện các dòng lạ (code trống, hiện placeholder "ABC") trong Danh mục.
+    s={key:newKey,name:'Dịch vụ mới',code:genSvcCode('Dịch vụ mới',SVCS),custom:true,default:false,lotScoped:true};
     SVCS.push(s);
   } else {
     const base=SVCS.find(function(x){return x.key===key;});
@@ -4199,7 +4213,8 @@ function doAddSvcByKey(key){
       const baseCode=(base.code||base.key||'').toUpperCase();
       let newCode=(baseCode+i).slice(0,10);
       while(SVCS.some(function(x){return (x.code||x.key||'').toUpperCase()===newCode;})){i++;newCode=(baseCode+i).slice(0,10);}
-      s=Object.assign({},base,{key:addKey,code:newCode,custom:true});
+      // lotScoped:true — xem giải thích ở nhánh __new__ phía trên, áp dụng tương tự cho bản sao.
+      s=Object.assign({},base,{key:addKey,code:newCode,custom:true,lotScoped:true});
       SVCS.push(s);
     } else {
       s=base;
