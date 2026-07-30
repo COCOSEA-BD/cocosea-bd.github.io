@@ -778,6 +778,18 @@ async function _invMoveSvc(svcKey,dir){
   catch(e){ toast('Lỗi lưu thứ tự: '+e.message,'error'); }
 }
 window._invMoveSvc=_invMoveSvc;
+// Nhận diện dịch vụ "họ Trucking" — gồm key gốc 'trucking' (built-in) VÀ các dịch vụ tùy chỉnh có
+// code TRA/TRC (TRA = Cước vận chuyển container đã gồm nâng hạ, TRC = chưa gồm nâng hạ — 2 dịch vụ
+// này chỉ khác nhau ở phí bao gồm, nhưng đều cần các hành vi đặc biệt như dịch vụ Trucking gốc: nút
+// nhảy sang tab Trucking, tự gợi ý NCC mặc định cho form Trucking, tự thêm số xe/tuyến vào tên dòng
+// Invoice).
+function _isTruckingLikeSvc(key){
+  if(key==='trucking')return true;
+  const s=SVCS.find(function(x){return x.key===key;});
+  return !!(s&&(s.code==='TRA'||s.code==='TRC'));
+}
+window._isTruckingLikeSvc=_isTruckingLikeSvc;
+
 const CURRENCIES=['USD','VND','EUR','JPY','CNY','KRW'];
 const TASKS=[
   {key:'mbl',label:'Nhập MBL No'},{key:'cnee',label:'Nhập thông tin Cnee'},
@@ -979,7 +991,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v2.98';
+window.APP_BUILD='v3.00';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2816,7 +2828,8 @@ function renderLotTable(tt){
   // ── Build HTML string (nhanh); DOM write là bottleneck chính
   function buildRowHtml(r){
     const isUrgent=!!(r.etd&&r.etd>=todayStr&&r.etd<=urgDeadline);
-    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}">`
+    const noFill=r.status!=='Đã Fill giá';
+    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}${noFill?' tr-nofill':''}">`
       +cols.map(c=>{
         if(c.k==='bookingNo'){
           const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
@@ -3829,7 +3842,7 @@ function renderDetailPanel(r,tt){
           if(!sv.customName){
             if(s.key==='freight'&&r.vessel){
               autoName2=s.name+' (Số hiệu tàu: '+r.vessel+(r.voy?'/'+r.voy:'')+')';
-            } else if(s.key==='trucking'){
+            } else if(_isTruckingLikeSvc(s.key)){
               autoName2=s.name+(truckRoute2?' '+truckRoute2:'')+(truckNos2?', số xe '+truckNos2:'');
             }
           }
@@ -4897,7 +4910,13 @@ async function saveContSeal(){
 }
 
 async function saveDetailSvc(){
-  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  // QUAN TRỌNG: chốt id/tt vào biến LOCAL ngay từ đầu — hàm này có await (kiểm tra xung đột) trước
+  // khi ghi Firestore, nếu dùng biến global detailId/detailTt trực tiếp ở dòng ghi cuối, và người
+  // dùng kịp chuyển sang xem MỘT LÔ KHÁC trong lúc đang lưu (detailId/detailTt bị đổi), dữ liệu dịch
+  // vụ của lô ĐANG LƯU sẽ bị ghi NHẦM vào lô hàng KHÁC đang được mở sau đó — đây chính là nguyên nhân
+  // gây hiện tượng dịch vụ "lạ" xuất hiện ở lô hàng không liên quan.
+  const _svcTt=detailTt, _svcId=detailId;
+  const r=cache[_svcTt].find(x=>x._id===_svcId)||{};
   if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
   const existing=JSON.parse(JSON.stringify(r.svcs||{}));
   const svcs={};
@@ -4965,9 +4984,9 @@ async function saveDetailSvc(){
   });
   const svcDetailText=svcDiffLines.length?svcDiffLines.join('\n'):'Lưu lại (không có thay đổi)';
   // Kiểm tra xung đột: lô này có bị người khác cập nhật kể từ lúc mở tab không?
-  if(window._detailEditSnapshot && window._detailEditSnapshot.id===detailId){
+  if(window._detailEditSnapshot && window._detailEditSnapshot.id===_svcId){
     try{
-      const freshSnap=await db.collection(colName(detailTt)).doc(detailId).get();
+      const freshSnap=await db.collection(colName(_svcTt)).doc(_svcId).get();
       if(freshSnap.exists){
         const freshData=freshSnap.data();
         if((freshData.updatedAt||0)>window._detailEditSnapshot.updatedAt){
@@ -4981,20 +5000,24 @@ async function saveDetailSvc(){
   }
   setLoading(true,'Đang lưu...');
   try{
-    await fsSet(colName(detailTt),detailId,updatePayload);
+    await fsSet(colName(_svcTt),_svcId,updatePayload);
     // Xóa hẳn các key dịch vụ đã bị bỏ (merge không tự xóa nested map keys)
     if(removedKeys.length){
       const delMap={};
       removedKeys.forEach(function(k){delMap['svcs.'+k]=firebase.firestore.FieldValue.delete();});
-      await db.collection(colName(detailTt)).doc(detailId).update(delMap);
+      await db.collection(colName(_svcTt)).doc(_svcId).update(delMap);
     }
     toast('Đã lưu dịch vụ');
-    logLotEvent(detailId,detailTt,'svc','Cập nhật dịch vụ',svcDetailText);
+    logLotEvent(_svcId,_svcTt,'svc','Cập nhật dịch vụ',svcDetailText);
     // Cập nhật cache NGAY (listener Firestore là async) để re-render không bị khôi phục dịch vụ đã xóa
-    const ci=cache[detailTt].findIndex(x=>x._id===detailId);
-    if(ci>=0){ cache[detailTt][ci].svcs=svcs; }
-    const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
-    renderDetailPanel(fresh,detailTt);
+    const ci=cache[_svcTt].findIndex(x=>x._id===_svcId);
+    if(ci>=0){ cache[_svcTt][ci].svcs=svcs; }
+    // Chỉ render lại panel nếu người dùng VẪN đang xem đúng lô này — nếu đã chuyển sang lô khác
+    // trong lúc lưu, không ghi đè lên những gì họ đang xem hiện tại.
+    if(detailId===_svcId && detailTt===_svcTt){
+      const fresh=cache[_svcTt].find(x=>x._id===_svcId)||{};
+      renderDetailPanel(fresh,_svcTt);
+    }
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -5039,9 +5062,13 @@ async function toggleFillPriceLock(id,tt){
   const newVal=!r.priceLocked;
   setLoading(true,newVal?'Đang khóa Fill giá...':'Đang mở khóa Fill giá...');
   try{
-    await fsSet(colName(tt),id,{priceLocked:newVal,updatedAt:Date.now(),updatedBy:currentUser.email});
+    const payload={priceLocked:newVal,updatedAt:Date.now(),updatedBy:currentUser.email};
+    // Chỉ khi LOCK mới chuyển trạng thái lô hàng sang "Đã Fill giá" — mở khóa không tự đổi ngược.
+    if(newVal)payload.status='Đã Fill giá';
+    await fsSet(colName(tt),id,payload);
     r.priceLocked=newVal;
-    toast(newVal?'Đã khóa Fill giá':'Đã mở khóa Fill giá');
+    if(newVal)r.status='Đã Fill giá';
+    toast(newVal?'Đã khóa Fill giá → Trạng thái: Đã Fill giá':'Đã mở khóa Fill giá');
     renderDetailPanel(r,tt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
@@ -5064,10 +5091,10 @@ async function saveDetailFillPrice(){
   });
   setLoading(true,'Đang lưu giá...');
   try{
-    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email,status:'Đã Fill giá'});
-    toast('Đã lưu Fill giá → Trạng thái: Đã Fill giá');
+    await fsSet(colName(detailTt),detailId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã lưu Fill giá');
     const fresh=cache[detailTt].find(x=>x._id===detailId)||{};
-    renderDetailPanel(Object.assign({},fresh,{status:'Đã Fill giá'}),detailTt);
+    renderDetailPanel(fresh,detailTt);
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -6801,7 +6828,7 @@ function svcRowHTML(s, sv){
     <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer" title="${locked?'Bỏ tick để chỉnh sửa lại dòng này':'Đánh dấu hoàn tất'}"/></div>
     <div style="display:flex;justify-content:flex-end;gap:3px">
       ${(s.key==='stuffing')?`<button class="rac" onclick="switchDetailTab('scy')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-package"></i></button>`:''}
-      ${(s.key==='trucking')?`<button class="rac" onclick="switchDetailTab('trucking')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-truck"></i></button>`:''}
+      ${_isTruckingLikeSvc(s.key)?`<button class="rac" onclick="switchDetailTab('trucking')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-truck"></i></button>`:''}
       ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)"><i class="ti ti-file-check"></i></button>`:`<label class="rac" style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><i class="ti ti-upload"></i><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleSvcDnUpload(this,'${s.key}')"/></label>`}
       <button class="rac red" onclick="removeSvc('${s.key}')" ${lockedDis} title="${locked?'Đã thanh toán — bỏ tick Finish để xóa':'Xóa'}" style="font-size:13px"><i class="ti ti-trash"></i></button>
     </div>
@@ -7431,8 +7458,10 @@ function addTruckingRow(){
   const idx=existing.length;
   const defBk=bkList[0]||'';
   const defType=r.typeCont||'';
-  // Default NCC từ dịch vụ Trucking trong tab Dịch vụ
-  const defNcc=(r.svcs&&r.svcs.trucking&&r.svcs.trucking.svcSupplier)||'';
+  // Default NCC từ dịch vụ Trucking (hoặc TRA/TRC) trong tab Dịch vụ — dò theo _isTruckingLikeSvc
+  // để không bỏ sót dịch vụ tùy chỉnh cùng "họ trucking"
+  const truckSvcKey=Object.keys(r.svcs||{}).find(function(k){return _isTruckingLikeSvc(k)&&r.svcs[k]&&r.svcs[k].on;});
+  const defNcc=(truckSvcKey&&r.svcs[truckSvcKey].svcSupplier)||'';
   const newRow={bookingNo:defBk,vol:1,typeCont:defType,wh:'',fullReturn:polDefault,route:'từ Vĩnh Long đến Hồ Chí Minh',ncc:defNcc,date:'',contNo:'',seal:'',tare:'',truckNo:''};
   const tbody=g('truckingsBody'); if(!tbody)return;
   if(tbody.querySelector('td[colspan]'))tbody.innerHTML='';
@@ -10534,6 +10563,11 @@ window._psSetStatus=_psSetStatus;
 
 async function savePayStatusDetail(){
   const ctx=_psCtx; if(!ctx)return;
+  // Chốt id/tt của lô ĐANG MỞ ngay từ đầu — dùng cho các nhánh dựa vào "lô đang xem hiện tại"
+  // (ap_svc, ar_party — không có ctx.tt/ctx.lotId riêng như ap_cost). Nếu người dùng chuyển sang
+  // xem lô KHÁC trong lúc hàm này đang chạy (có nhiều await: get snapshot, sync Sổ quỹ...), dữ liệu
+  // vẫn ghi ĐÚNG vào lô đã chốt ban đầu, không bị "lạc" sang lô đang mở sau đó.
+  const _psTt0=detailTt, _psId0=detailId;
   const status=ctx.status||'unpaid';
   const date=g('psDate')?.value||'';
   const bank=g('psBank')?.value||'';
@@ -10545,6 +10579,7 @@ async function savePayStatusDetail(){
   setLoading(true,'Đang lưu...');
   try{
     if(ctx.type==='ap_svc'){
+      // (id/tt đã chốt ở đầu hàm: _psTt00/_psId00)
       // Tab Dịch vụ: cập nhật hidden inputs (đồng bộ form) + LƯU TRỰC TIẾP Firestore ngay
       // (trước đây chỉ lưu local, phải bấm "Lưu dịch vụ" mới ghi hệ thống → dễ mất đồng bộ
       //  với Costing Report / SOA nếu quên bấm hoặc Firestore onSnapshot ghi đè cache trước đó)
@@ -10560,8 +10595,8 @@ async function savePayStatusDetail(){
         bd.style.borderColor=status==='paid'?'rgba(40,167,69,.25)':'rgba(220,53,69,.2)';
       }
       // Lưu trực tiếp vào Firestore — merge:true để không mất các field svc khác
-      const colN=colName(detailTt);
-      const snap=await db.collection(colN).doc(detailId).get();
+      const colN=colName(_psTt0);
+      const snap=await db.collection(colN).doc(_psId0).get();
       let newCashTxId=null;
       if(snap.exists){
         const rFs=snap.data();
@@ -10574,7 +10609,7 @@ async function savePayStatusDetail(){
           existingTxId:svcs[ctx.key].apCashTxId||null, status, txType:'chi', account:bank, amount, date,
           category:'Trả nhà cung cấp — Dịch vụ', description:svcName+' — '+(rFs.bookingNo||rFs.jobNo||''),
           partnerRef:svcs[ctx.key].svcSupplier||svcs[ctx.key].party||null,
-          lotRef:{lotId:detailId,tt:detailTt,bookingNo:rFs.bookingNo||rFs.jobNo||''}
+          lotRef:{lotId:_psId0,tt:_psTt0,bookingNo:rFs.bookingNo||rFs.jobNo||''}
         });
         svcs[ctx.key].apPaidStatus=status;
         // Tự động tick Finish khi chuyển sang "Đã thanh toán" — khóa dòng dịch vụ này lại (không cho
@@ -10584,9 +10619,9 @@ async function savePayStatusDetail(){
         svcs[ctx.key].apPaidDate=date;
         svcs[ctx.key].apPaidBank=bank;
         svcs[ctx.key].apCashTxId=newCashTxId;
-        await db.collection(colN).doc(detailId).set({svcs,updatedAt:Date.now()},{merge:true});
+        await db.collection(colN).doc(_psId0).set({svcs,updatedAt:Date.now()},{merge:true});
       }
-      const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+      const r=cache[_psTt0]&&cache[_psTt0].find(function(x){return x._id===_psId0;});
       if(r&&r.svcs&&r.svcs[ctx.key]){
         r.svcs[ctx.key].apPaidStatus=status;
         if(status==='paid')r.svcs[ctx.key].finish=true;
@@ -10595,9 +10630,11 @@ async function savePayStatusDetail(){
         r.svcs[ctx.key].apCashTxId=newCashTxId;
       }
       toast('Đã lưu trạng thái thanh toán');
-      if(typeof renderDetailPanel==='function'){
-        const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
-        if(fresh)renderDetailPanel(fresh,detailTt);
+      // Chỉ render lại nếu người dùng VẪN đang xem đúng lô này — nếu đã chuyển sang lô khác trong
+      // lúc lưu, không ghi đè lên những gì họ đang xem hiện tại.
+      if(typeof renderDetailPanel==='function' && detailId===_psId0 && detailTt===_psTt0){
+        const fresh=cache[_psTt0]&&cache[_psTt0].find(function(x){return x._id===_psId0;});
+        if(fresh)renderDetailPanel(fresh,_psTt0);
       }
 
     } else if(ctx.type==='ap_cost'){
@@ -10723,7 +10760,7 @@ async function savePayStatusDetail(){
 
     } else if(ctx.type==='ar_party_inv'||ctx.type==='ar_party_noinv'){
       // TT riêng cho phần Có HĐ / Không HĐ
-      const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{};
+      const r=cache[_psTt0]&&cache[_psTt0].find(function(x){return x._id===_psId0;})||{};
       const dnPm=JSON.parse(JSON.stringify(r.dnPayments||{}));
       if(!dnPm[ctx.party])dnPm[ctx.party]={inv:{},noInv:{}};
       const section=ctx.type==='ar_party_inv'?'inv':'noInv';
@@ -10734,12 +10771,12 @@ async function savePayStatusDetail(){
         category:'Thu Debit Note — '+(section==='inv'?'Có HĐ':'Không HĐ'),
         description:(r.bookingNo||r.jobNo||'')+' — '+ctx.party,
         partnerRef:ctx.party||null,
-        lotRef:{lotId:detailId,tt:detailTt,bookingNo:r.bookingNo||r.jobNo||''}
+        lotRef:{lotId:_psId0,tt:_psTt0,bookingNo:r.bookingNo||r.jobNo||''}
       });
       dnPm[ctx.party][section]={status:status,date:date,bank:bank,amount:amount,cashTxId:newCashTxId};
-      await fsSet(colName(detailTt),detailId,{dnPayments:dnPm});
-      const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
-      if(ci>=0){cache[detailTt][ci].dnPayments=dnPm;}
+      await fsSet(colName(_psTt0),_psId0,{dnPayments:dnPm});
+      const ci=cache[_psTt0].findIndex(function(x){return x._id===_psId0;});
+      if(ci>=0){cache[_psTt0][ci].dnPayments=dnPm;}
       // Đồng bộ dnPayStatus (legacy) để báo cáo công nợ đọc được
       // QUAN TRỌNG: chỉ coi là 'paid' khi CẢ 2 phần (nếu tồn tại) đều CÓ status RÕ RÀNG = 'paid'.
       // Trước đây: !p.inv.status (chưa từng thao tác) bị coi là "OK" một cách vô tình → khiến
@@ -10756,17 +10793,17 @@ async function savePayStatusDetail(){
         const anyPaid=(invTouched&&p.inv.status==='paid')||(noInvTouched&&p.noInv.status==='paid');
         legacySync[party]=(invOk&&noInvOk&&anyPaid)?'paid':'unpaid';
       });
-      await fsSet(colName(detailTt),detailId,{dnPayStatus:legacySync});
-      if(ci>=0)cache[detailTt][ci].dnPayStatus=legacySync;
+      await fsSet(colName(_psTt0),_psId0,{dnPayStatus:legacySync});
+      if(ci>=0)cache[_psTt0][ci].dnPayStatus=legacySync;
       toast('Đã cập nhật trạng thái thanh toán');
-      if(typeof renderDetailPanel==='function'){
-        const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
-        if(fresh)renderDetailPanel(fresh,detailTt);
+      if(typeof renderDetailPanel==='function' && detailId===_psId0 && detailTt===_psTt0){
+        const fresh=cache[_psTt0]&&cache[_psTt0].find(function(x){return x._id===_psId0;});
+        if(fresh)renderDetailPanel(fresh,_psTt0);
       }
 
     } else if(ctx.type==='ar_party'){
       // Debit Note / Invoice by party (legacy)
-      const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;})||{};
+      const r=cache[_psTt0]&&cache[_psTt0].find(function(x){return x._id===_psId0;})||{};
       const payMap=JSON.parse(JSON.stringify(r.dnPayStatus||{}));
       const dateMap=JSON.parse(JSON.stringify(r.dnPayDate||{}));
       const bankMap=JSON.parse(JSON.stringify(r.dnPayBank||{}));
@@ -10776,22 +10813,22 @@ async function savePayStatusDetail(){
         existingTxId:cashTxMap[ctx.party]||null, status, txType:'thu', account:bank, amount, date,
         category:'Thu Debit Note', description:(r.bookingNo||r.jobNo||'')+' — '+ctx.party,
         partnerRef:ctx.party||null,
-        lotRef:{lotId:detailId,tt:detailTt,bookingNo:r.bookingNo||r.jobNo||''}
+        lotRef:{lotId:_psId0,tt:_psTt0,bookingNo:r.bookingNo||r.jobNo||''}
       });
       payMap[ctx.party]=status; dateMap[ctx.party]=date; bankMap[ctx.party]=bank; amtMap[ctx.party]=amount; cashTxMap[ctx.party]=newCashTxId;
-      await fsSet(colName(detailTt),detailId,{dnPayStatus:payMap,dnPayDate:dateMap,dnPayBank:bankMap,dnPayAmount:amtMap,dnPayCashTxId:cashTxMap});
-      const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
-      if(ci>=0){cache[detailTt][ci].dnPayStatus=payMap;cache[detailTt][ci].dnPayDate=dateMap;cache[detailTt][ci].dnPayBank=bankMap;cache[detailTt][ci].dnPayAmount=amtMap;cache[detailTt][ci].dnPayCashTxId=cashTxMap;}
+      await fsSet(colName(_psTt0),_psId0,{dnPayStatus:payMap,dnPayDate:dateMap,dnPayBank:bankMap,dnPayAmount:amtMap,dnPayCashTxId:cashTxMap});
+      const ci=cache[_psTt0].findIndex(function(x){return x._id===_psId0;});
+      if(ci>=0){cache[_psTt0][ci].dnPayStatus=payMap;cache[_psTt0][ci].dnPayDate=dateMap;cache[_psTt0][ci].dnPayBank=bankMap;cache[_psTt0][ci].dnPayAmount=amtMap;cache[_psTt0][ci].dnPayCashTxId=cashTxMap;}
       toast('Đã cập nhật trạng thái thanh toán');
-      if(typeof renderDetailPanel==='function'){
-        const fresh=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
-        if(fresh)renderDetailPanel(fresh,detailTt);
+      if(typeof renderDetailPanel==='function' && detailId===_psId0 && detailTt===_psTt0){
+        const fresh=cache[_psTt0]&&cache[_psTt0].find(function(x){return x._id===_psId0;});
+        if(fresh)renderDetailPanel(fresh,_psTt0);
       }
     }
     closeOv('payStatusOv');
     // Ghi nhận hoạt động: xác định đúng lô + nhãn theo loại context
-    const _logId=(ctx.type==='ap_cost')?ctx.lotId:detailId;
-    const _logTt=(ctx.type==='ap_cost')?ctx.tt:detailTt;
+    const _logId=(ctx.type==='ap_cost')?ctx.lotId:_psId0;
+    const _logTt=(ctx.type==='ap_cost')?ctx.tt:_psTt0;
     const _typeLabel={ap_svc:'Phải trả — Dịch vụ',ap_cost:'Phải trả — Costing',ap_popup:'Phải trả',ar_party_inv:'Phải thu — Có HĐ',ar_party_noinv:'Phải thu — Không HĐ',ar_party:'Phải thu'}[ctx.type]||'Thanh toán';
     const _partyTxt=ctx.party?(' ('+ctx.party+')'):'';
     logLotEvent(_logId,_logTt,'pay','Cập nhật TT: '+_typeLabel+_partyTxt,status==='paid'?('Đã thanh toán'+(amount?' — '+Math.round(amount).toLocaleString()+' đ':'')):'Chưa thanh toán');
@@ -13172,6 +13209,7 @@ tr:hover td{background:var(--hover-bg)}
 .tr-urgent td:first-child{border-left:3px solid #E24B4A}
 .tr-locked td:first-child{border-left:3px solid var(--red)}
 .tr-confirm td:first-child{border-left:3px solid #dc3545}
+.tr-nofill td:first-child{border-left:3px solid var(--red)}
 /* Striped rows — xen kẽ trắng ngà / xanh dương nhạt, KHÔNG bị trạng thái phủ màu đè lên */
 .lot-table tbody tr:nth-child(odd) td{background:var(--bg-primary)}
 .lot-table tbody tr:nth-child(even) td{background:#F0F7FF}
@@ -18493,6 +18531,7 @@ window.buildDnPartyRows=buildDnPartyRows;
 window.exportDebitForParty=exportDebitForParty;
 
 async function saveDnInfo(){
+  const _dnTt=detailTt, _dnId=detailId;
   const dnNo=g('dnNoInput')?.value||'';
   const dnStatus=g('dnStatusInput')?.value||'';
   if(!dnNo){toast('Nhập số DN','error');return;}
@@ -18501,9 +18540,9 @@ async function saveDnInfo(){
     const dnUpdateStatus=dnStatus==='Đã gửi DN'||dnStatus==='Đã xuất Hóa đơn'||dnStatus==='Đã thanh toán'?'Đã gửi DN':undefined;
     const dnUpdate={dnNo,dnStatus,updatedAt:Date.now()};
     if(dnUpdateStatus) dnUpdate.status=dnUpdateStatus;
-    await fsSet(colName(detailTt),detailId,dnUpdate);
+    await fsSet(colName(_dnTt),_dnId,dnUpdate);
     toast('Đã lưu: '+dnNo+(dnStatus?' — '+dnStatus:'')+(dnUpdateStatus?' → Trạng thái: '+dnUpdateStatus:''));
-    logLotEvent(detailId,detailTt,'invoice','Cập nhật Invoice',dnNo+(dnStatus?' — '+dnStatus:''));
+    logLotEvent(_dnId,_dnTt,'invoice','Cập nhật Invoice',dnNo+(dnStatus?' — '+dnStatus:''));
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
