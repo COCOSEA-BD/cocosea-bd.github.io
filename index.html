@@ -1023,7 +1023,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.04';
+window.APP_BUILD='v3.06';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4191,7 +4191,15 @@ function doAddSvcByKey(key){
     if(existingKeys.indexOf(key)>=0){
       let i=2; let addKey=key+'_'+i;
       while(existingKeys.indexOf(addKey)>=0){i++;addKey=key+'_'+i;}
-      s=Object.assign({},base,{key:addKey,custom:true});
+      // QUAN TRỌNG: gán CODE RIÊNG cho bản sao (thêm số thứ tự vào code gốc, VD "CNN"->"CNN2"),
+      // KHÔNG copy y hệt code của dịch vụ gốc. Nếu để trùng code, chỉ cần người dùng chạm/gõ lại vào
+      // ô Code của dòng này (dù không đổi giá trị) là switchSvcCodeByCode() sẽ tìm thấy dịch vụ GỐC
+      // có cùng code và HOÁN ĐỔI (switchSvcCode) — khiến 2 dòng bị lẫn/đổi dữ liệu cho nhau. Đặt code
+      // riêng biệt ngay từ đầu loại bỏ hoàn toàn khả năng trùng khớp gây hoán đổi nhầm.
+      const baseCode=(base.code||base.key||'').toUpperCase();
+      let newCode=(baseCode+i).slice(0,10);
+      while(SVCS.some(function(x){return (x.code||x.key||'').toUpperCase()===newCode;})){i++;newCode=(baseCode+i).slice(0,10);}
+      s=Object.assign({},base,{key:addKey,code:newCode,custom:true});
       SVCS.push(s);
     } else {
       s=base;
@@ -5001,14 +5009,14 @@ async function saveDetailSvc(){
   // FIX: các dịch vụ ĐÃ XÓA (có trong dữ liệu cũ nhưng không còn trong grid) phải bị xóa hẳn,
   // không để merge:true của Firestore tự khôi phục. Dùng FieldValue.delete() cho từng key đã bỏ.
   const removedKeys=Object.keys(existing).filter(function(k){return !(k in svcs);});
-  // Guard lớp 2: nếu Fill giá đang khóa, chặn lưu khi tập hợp dịch vụ "on" bị thay đổi (bật/tắt/
-  // thêm/xóa) — dù các nút bấm riêng lẻ (toggleSvc/removeSvc/addCustomSvcDetail) đã chặn từ trước,
-  // guard này đảm bảo an toàn tuyệt đối kể cả khi saveDetailSvc được gọi bằng cách khác.
+  // Guard lớp 2: nếu Fill giá đang khóa, CHỈ chặn khi có KEY MỚI HOÀN TOÀN xuất hiện (dịch vụ chưa
+  // từng tồn tại trong lô này trước đó) — vì đây là thao tác DUY NHẤT sinh ra dòng mới chưa có giá ở
+  // Fill giá. Bật/tắt/sửa/xóa các dịch vụ ĐÃ CÓ SẴN (dù đang on hay off từ trước) vẫn hoạt động bình
+  // thường — không bị chặn — đúng theo yêu cầu "tab Service vẫn hoạt động bình thường khi Fill giá khóa".
   if(r.priceLocked){
-    const onKeysBefore=Object.keys(existing).filter(function(k){return existing[k]&&existing[k].on;}).sort().join(',');
-    const onKeysAfter=Object.keys(svcs).filter(function(k){return svcs[k]&&svcs[k].on;}).sort().join(',');
-    if(onKeysBefore!==onKeysAfter||removedKeys.length){
-      toast('Fill giá đang khóa — không thể bật/tắt/thêm/xóa dịch vụ. Unlock ở tab Fill giá trước.','error');
+    const newKeys=Object.keys(svcs).filter(function(k){return !(k in existing);});
+    if(newKeys.length){
+      toast('Fill giá đang khóa — không thể tạo thêm dịch vụ mới. Unlock ở tab Fill giá trước.','error');
       return;
     }
   }
@@ -6767,15 +6775,14 @@ function svcRowHTML(s, sv){
   const svcStatus=sv.svcStatus||'';
   const cost=sv.cost||'';
   const r0=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
-  // Khóa dòng dịch vụ khi 1 trong 2 điều kiện đúng:
-  // 1) Đã thanh toán NCC (apPaidStatus='paid') VÀ đang tick Finish — bỏ tick Finish để mở khóa lại.
-  // 2) Fill giá đang khóa TOÀN LÔ (r0.priceLocked=true) — lúc này MỌI dòng dịch vụ đều khóa cứng
-  //    (kể cả bật/tắt/thêm/xóa), vì thay đổi này sẽ ảnh hưởng tới tập hợp dòng hiển thị ở tab Fill
-  //    giá dù tab đó đang khóa. Mở khóa ở TAB FILL GIÁ (không phải Finish) để sửa lại được.
+  // Khóa dòng dịch vụ khi: đã thanh toán NCC (apPaidStatus='paid') VÀ đang tick Finish — bỏ tick
+  // Finish để mở khóa lại. Fill giá khóa (r0.priceLocked) KHÔNG còn khóa việc sửa cost/toggle/xóa ở
+  // đây nữa — tab Service vẫn hoạt động bình thường khi Fill giá khóa, CHỈ chặn riêng việc TẠO MỚI
+  // dịch vụ (xem addCustomSvcDetail/doAddSvcByKey) để không phát sinh dòng mới, chưa có giá ở Fill giá.
   const paidLocked=sv.apPaidStatus==='paid'&&!!sv.finish;
-  const priceLockedFlag=!!r0.priceLocked;
-  const locked=paidLocked||priceLockedFlag;
-  const lockTip=priceLockedFlag?'Fill giá đang khóa — Unlock ở tab Fill giá để chỉnh sửa':'Đã thanh toán — bỏ tick Finish để chỉnh sửa';
+  const priceLockedFlag=false; // giữ biến để không phải sửa lại các chỗ dùng lockTip bên dưới
+  const locked=paidLocked;
+  const lockTip='Đã thanh toán — bỏ tick Finish để chỉnh sửa';
   const lockedDis=locked?'disabled':'';
   const defaultVol=parseInt(r0.vol)||1;
   const qty=sv.svcQty||defaultVol;
@@ -8094,14 +8101,13 @@ function addCustomSvc(){
   const tg=g('tg_'+key);if(tg){tg.classList.add('on');tg.classList.remove('off');}
 }
 
-// Kiểm tra dịch vụ có đang bị khóa không — gồm 2 loại độc lập:
-// 1) Khóa TỪNG DÒNG: đã thanh toán NCC (apPaidStatus='paid') + đang tick Finish
-// 2) Khóa TOÀN LÔ: Fill giá đang khóa (r.priceLocked=true) — khi đó KHÔNG được bật/tắt/thêm/xóa
-//    BẤT KỲ dịch vụ nào, vì việc này sẽ làm thay đổi tập hợp dòng hiển thị ở tab Fill giá dù đang khóa.
-// Trả về: null (không khóa) hoặc {reason:'row'|'price', msg:'...'} để nơi gọi hiện đúng thông báo.
+// Kiểm tra dịch vụ có đang bị khóa TỪNG DÒNG không: đã thanh toán NCC (apPaidStatus='paid') VÀ
+// đang tick Finish. Fill giá khóa (r.priceLocked) KHÔNG khóa bật/tắt/xóa ở đây nữa — tab Service vẫn
+// hoạt động bình thường; chỉ riêng việc TẠO MỚI dịch vụ mới bị chặn khi Fill giá khóa (xem
+// addCustomSvcDetail/doAddSvcByKey), vì đó là thao tác duy nhất sinh ra dòng MỚI chưa có giá ở Fill giá.
+// Trả về: null (không khóa) hoặc {reason:'row', msg:'...'} để nơi gọi hiện đúng thông báo.
 function _svcRowLocked(key){
   const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
-  if(r&&r.priceLocked)return {reason:'price',msg:'Fill giá đang khóa — Unlock ở tab Fill giá trước khi bật/tắt/xóa dịch vụ'};
   const sv=r&&r.svcs&&r.svcs[key];
   if(sv&&sv.apPaidStatus==='paid'&&sv.finish)return {reason:'row',msg:'Dịch vụ đã thanh toán — bỏ tick Finish trước khi chỉnh sửa'};
   return null;
@@ -13172,7 +13178,8 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .hex-center-ring.r2{width:160%;height:160%;transform:translate(-50%,-50%);border-color:rgba(63,167,163,.24)}
 /* Khối trung tâm: KHÔNG nền, KHÔNG khung lục giác — chỉ mỗi logo cây dừa */
 .hex-center-inner{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-.hex-center-inner img{width:56%;height:56%;object-fit:contain;filter:drop-shadow(0 0 14px rgba(63,167,163,.85))}
+.hex-center-inner img{width:56%;height:56%;object-fit:contain;filter:drop-shadow(0 0 10px rgba(246,185,64,.9)) drop-shadow(0 0 26px rgba(246,185,64,.55));animation:hexCenterGlowPulse 3.2s ease-in-out infinite}
+@keyframes hexCenterGlowPulse{0%,100%{filter:drop-shadow(0 0 10px rgba(246,185,64,.9)) drop-shadow(0 0 26px rgba(246,185,64,.55))}50%{filter:drop-shadow(0 0 16px rgba(246,185,64,1)) drop-shadow(0 0 38px rgba(246,185,64,.75))}}
 
 .dbtn{border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;padding:5px 12px;border-radius:8px;font-size:10px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;position:relative;z-index:2}
 .dbtn:hover{background:rgba(255,255,255,.16)}
