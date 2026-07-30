@@ -1023,7 +1023,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.03';
+window.APP_BUILD='v3.04';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7065,7 +7065,19 @@ async function _fetchAsDataUrl(url){
 // giữ nguyên phần mở rộng của file gốc. bk (optional): booking cụ thể (khi lô có nhiều booking),
 // mặc định lấy booking đầu tiên/giá trị đơn của lô nếu không truyền.
 async function _bookingFileAttachment(r, bk){
-  const doc=(r.savedDocs||[]).slice().reverse().find(function(d){return d.type==='booking'&&d.fileUrl;});
+  // Nhận diện file Booking: ƯU TIÊN type==='booking' (chuẩn mới, từ khi có tùy chọn "Booking (file
+  // gốc)" trong Upload chứng từ). DỰ PHÒNG: các lô ĐÃ UPLOAD file booking TRƯỚC KHI có tùy chọn này
+  // (gắn type khác, VD 'other') vẫn được nhận diện nếu tên/nhãn chứa từ "booking" — tránh bỏ sót file
+  // đã có sẵn chỉ vì tag type không khớp tuyệt đối.
+  const docs=(r.savedDocs||[]).slice().reverse();
+  let doc=docs.find(function(d){return d.type==='booking'&&d.fileUrl;});
+  if(!doc){
+    doc=docs.find(function(d){
+      if(!d.fileUrl)return false;
+      const txt=((d.typeLabel||'')+' '+(d.name||'')+' '+(d.fileName||'')).toLowerCase();
+      return txt.indexOf('booking')>=0;
+    });
+  }
   if(!doc)return null;
   try{
     const dataUrl=await _fetchAsDataUrl(doc.fileUrl);
@@ -7080,7 +7092,13 @@ async function _bookingFileAttachment(r, bk){
     const etd=r.etd?_fmtDMY(r.etd).replace(/-/g,''):'';
     const filename=[bkNo,pol,pod,volType,etd].filter(Boolean).join('-')+'.'+ext;
     return {filename:filename,dataUrl:dataUrl};
-  }catch(e){ console.error('Không tải được file Booking đính kèm:',e); return null; }
+  }catch(e){
+    console.error('Không tải được file Booking đính kèm:',e);
+    // Báo RÕ RÀNG thay vì im lặng bỏ qua — tìm thấy file trong Document nhưng tải về lỗi (mạng/URL
+    // hỏng...), để người dùng biết cần kiểm tra lại thay vì tưởng nhầm là "chưa upload file".
+    if(typeof toast==='function')toast('Tìm thấy file Booking trong Document nhưng tải về thất bại — email sẽ KHÔNG có đính kèm. Kiểm tra lại file trong tab Document.','error');
+    return null;
+  }
 }
 window._bookingFileAttachment=_bookingFileAttachment;
 
