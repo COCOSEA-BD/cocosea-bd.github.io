@@ -223,6 +223,7 @@ function loadPortsIcds(cb){
     const data=snap.exists?snap.data():{};
     window._customPorts=data.customPorts||[]; // [{country,name}]
     window._customIcds=data.customIcds||[];   // [name,...]
+    window._portRenames=data.portRenames||[]; // [{country,oldName,newName}] — ghi đè tên cảng đã sửa
     window._customPorts.forEach(function(p){
       if(!p||!p.name)return;
       if(!PORTS_BY_COUNTRY[p.country])PORTS_BY_COUNTRY[p.country]=[];
@@ -233,8 +234,17 @@ function loadPortsIcds(cb){
     window._customIcds.forEach(function(name){
       if(name&&ICD_LIST.indexOf(name)<0)ICD_LIST.push(name);
     });
+    // Áp dụng các lần đổi tên cảng ĐÃ LƯU — chạy SAU khi đã merge port tự thêm ở trên, để đổi tên
+    // đúng bất kể cảng đó là built-in (có sẵn trong PORTS_BY_COUNTRY từ đầu) hay tự thêm.
+    window._portRenames.forEach(function(r){
+      if(!r||!r.country||!r.oldName||!r.newName)return;
+      const list=PORTS_BY_COUNTRY[r.country];
+      if(list){const idx=list.indexOf(r.oldName);if(idx>=0)list[idx]=r.newName;}
+      const pIdx=PORTS.indexOf(r.oldName);
+      if(pIdx>=0)PORTS[pIdx]=r.newName;
+    });
     if(cb)cb();
-  }).catch(function(){window._customPorts=[];window._customIcds=[];if(cb)cb();});
+  }).catch(function(){window._customPorts=[];window._customIcds=[];window._portRenames=[];if(cb)cb();});
 }
 
 // Render nội dung mục "Danh mục Các cảng và ICD" trong Cài đặt: liệt kê đầy đủ cảng theo
@@ -246,13 +256,17 @@ function _renderPortsIcdSettingsContent(){
     if(!list.length)return'';
     return '<div style="margin-bottom:8px"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:3px">'+ctr+' <span style="font-weight:400;color:var(--text-tertiary)">('+list.length+')</span></div>'
       +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+list.map(function(p){
-        return '<span style="font-size:10.5px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'+p+'</span>';
+        return '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:2px 4px 2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'
+          +p
+          +'<button type="button" onclick="editPortName(\''+ctr.replace(/'/g,"\\'")+'\',\''+p.replace(/'/g,"\\'")+'\')" title="Sửa tên cảng" style="border:none;background:none;cursor:pointer;padding:2px;display:flex;color:var(--text-tertiary);font-size:11px"><i class="ti ti-pencil"></i></button>'
+        +'</span>';
       }).join('')+'</div></div>';
   }).join('');
   const icdHtml='<div style="display:flex;flex-wrap:wrap;gap:5px">'+ICD_LIST.map(function(i){
     return '<span style="font-size:10.5px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'+i+'</span>';
   }).join('')+'</div>';
-  return '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Danh sách cảng (POL/POD) và ICD dùng chung cho toàn bộ app — thêm mới tại đây sẽ có ngay ở mọi dropdown liên quan (Chi tiết lô hàng, Cont/Seal, Full Return...).</div>'
+  return '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Danh sách cảng (POL/POD) và ICD dùng chung cho toàn bộ app — thêm mới tại đây sẽ có ngay ở mọi dropdown liên quan (Chi tiết lô hàng, Cont/Seal, Full Return...). Bấm <i class="ti ti-pencil" style="font-size:10px"></i> cạnh tên cảng để sửa lại.</div>'
+    +'<div style="font-size:11px;color:#b45309;background:rgba(180,83,9,.08);border:1px solid rgba(180,83,9,.25);border-radius:6px;padding:6px 10px;margin-bottom:.75rem"><i class="ti ti-info-circle" style="font-size:11px"></i> Sửa tên chỉ áp dụng cho lựa chọn MỚI về sau — các lô hàng đã lưu trước đó vẫn giữ nguyên tên cảng cũ (không tự đổi theo hồi tố).</div>'
     +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:8px">'
       +'<input type="text" id="newPortName" placeholder="Tên cảng mới (VD: Vinh, VN)" style="font-size:12px;flex:1 1 200px"/>'
       +'<input type="text" id="newPortCountry" placeholder="Quốc gia (VD: Vietnam)" list="portCountryList" style="font-size:12px;flex:1 1 160px"/>'
@@ -269,8 +283,56 @@ function _renderPortsIcdSettingsContent(){
 }
 window._renderPortsIcdSettingsContent=_renderPortsIcdSettingsContent;
 
+function _refreshPortsListBox(){
+  const box=g('portsListBox'); if(!box)return;
+  const countries=Object.keys(PORTS_BY_COUNTRY).sort();
+  box.innerHTML=countries.map(function(ctr){
+    const list=PORTS_BY_COUNTRY[ctr]||[];
+    if(!list.length)return'';
+    return '<div style="margin-bottom:8px"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:3px">'+ctr+' <span style="font-weight:400;color:var(--text-tertiary)">('+list.length+')</span></div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+list.map(function(p){
+        return '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:2px 4px 2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'
+          +p
+          +'<button type="button" onclick="editPortName(\''+ctr.replace(/'/g,"\\'")+'\',\''+p.replace(/'/g,"\\'")+'\')" title="Sửa tên cảng" style="border:none;background:none;cursor:pointer;padding:2px;display:flex;color:var(--text-tertiary);font-size:11px"><i class="ti ti-pencil"></i></button>'
+        +'</span>';
+      }).join('')+'</div></div>';
+  }).join('');
+}
+
+// Sửa tên 1 cảng đã có sẵn (kể cả cảng built-in lẫn tự thêm) — dùng cơ chế "ghi đè tên" (portRenames)
+// thay vì đổi trực tiếp mảng PORTS_BY_COUNTRY gốc, để việc sửa được LƯU LẠI và áp dụng lại đúng mỗi
+// khi tải app (kể cả với port built-in vốn không có bản ghi riêng trong Firestore để cập nhật).
+async function editPortName(country,oldName){
+  const newName=(prompt('Sửa tên cảng:\n\nQuốc gia: '+country,oldName)||'').trim();
+  if(!newName||newName===oldName)return;
+  if(PORTS.indexOf(newName)>=0){toast('Tên cảng "'+newName+'" đã tồn tại — chọn tên khác','error');return;}
+  setLoading(true,'Đang lưu...');
+  try{
+    // Cập nhật NGAY trong bộ nhớ để mọi dropdown trong app thấy tên mới lập tức
+    const list=PORTS_BY_COUNTRY[country]||[];
+    const idx=list.indexOf(oldName);
+    if(idx>=0)list[idx]=newName;
+    const pIdx=PORTS.indexOf(oldName);
+    if(pIdx>=0)PORTS[pIdx]=newName;
+    // Nếu cảng này vốn là port tự thêm (có trong _customPorts), cập nhật luôn bản ghi gốc
+    const cp=(window._customPorts||[]).find(function(x){return x.country===country&&x.name===oldName;});
+    if(cp)cp.name=newName;
+    // Ghi đè tên — áp dụng cho port built-in (không có bản ghi _customPorts riêng) hoặc để chắc chắn
+    // luôn được áp dụng lại đúng thứ tự khi tải app ở phiên sau
+    window._portRenames=window._portRenames||[];
+    const existingRename=window._portRenames.find(function(x){return x.country===country&&x.newName===oldName;});
+    if(existingRename){existingRename.newName=newName;} // sửa tiếp 1 cảng đã từng được sửa trước đó
+    else{window._portRenames.push({country:country,oldName:oldName,newName:newName});}
+    await _savePortsIcdConfig();
+    toast('Đã đổi tên cảng: '+oldName+' → '+newName);
+    _refreshPortsListBox();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window.editPortName=editPortName;
+
 async function _savePortsIcdConfig(){
-  await db.collection('_config').doc('portsIcds').set({customPorts:window._customPorts||[],customIcds:window._customIcds||[]});
+  await db.collection('_config').doc('portsIcds').set({customPorts:window._customPorts||[],customIcds:window._customIcds||[],portRenames:window._portRenames||[]});
 }
 
 async function addNewPort(){
@@ -289,17 +351,7 @@ async function addNewPort(){
     await _savePortsIcdConfig();
     toast('Đã thêm cảng: '+name);
     g('newPortName').value=''; g('newPortCountry').value='';
-    const box=g('portsListBox'); if(box)box.innerHTML=(function(){
-      const countries=Object.keys(PORTS_BY_COUNTRY).sort();
-      return countries.map(function(ctr){
-        const list=PORTS_BY_COUNTRY[ctr]||[];
-        if(!list.length)return'';
-        return '<div style="margin-bottom:8px"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:3px">'+ctr+' <span style="font-weight:400;color:var(--text-tertiary)">('+list.length+')</span></div>'
-          +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+list.map(function(p){
-            return '<span style="font-size:10.5px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;color:var(--text-secondary)">'+p+'</span>';
-          }).join('')+'</div></div>';
-      }).join('');
-    })();
+    _refreshPortsListBox();
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
@@ -1032,7 +1084,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.07';
+window.APP_BUILD='v3.09';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3711,9 +3763,15 @@ function renderDetailPanel(r,tt){
         +'</tr>';
       }).join('');
 
+      // Khử trùng lặp SVCS theo key trước khi tính Costing — phòng ngừa trường hợp mảng SVCS (tích
+      // lũy dần qua nhiều lô đã xem trong cùng phiên làm việc, do nhiều nơi push thêm entry) lỡ có 2
+      // phần tử CÙNG key (VD: entry gốc + entry orphan/lotScoped bị trùng key do lỗi ở nơi khác) —
+      // nếu không khử trùng, dịch vụ đó sẽ bị CỘNG 2 LẦN vào "Tổng chi phí" dù bảng chỉ hiện 1 dòng
+      // (vì g('autoprice_'+key) luôn trả về đúng 1 input, nhưng vòng lặp forEach/filter chạy 2 lần).
+      const SVCS_DEDUP=Array.from(new Map(SVCS.map(function(s){return [s.key,s];})).values());
       // Auto-costs from svc.cost
       // Auto-costs from svc.cost (now editable)
-      const autoCostRows=SVCS.filter(function(s){const sv=svcs[s.key];return sv&&sv.on&&sv.cost;}).map(function(s){
+      const autoCostRows=SVCS_DEDUP.filter(function(s){const sv=svcs[s.key];return sv&&sv.on&&sv.cost;}).map(function(s){
         const sv=svcs[s.key];
         const svcAmt=(sv.cost||0)*(sv.svcQty||1);
         const autoCurOpts=CURRENCIES.map(function(c){return'<option'+(c===(sv.svcCur||sv.cur||'USD')?' selected':'')+'>'+c+'</option>';}).join('');
@@ -13193,8 +13251,27 @@ body{font-family:'Inter',-apple-system,sans-serif;font-size:13px;color:var(--tex
 .hex-center-ring.r2{width:160%;height:160%;transform:translate(-50%,-50%);border-color:rgba(63,167,163,.24)}
 /* Khối trung tâm: KHÔNG nền, KHÔNG khung lục giác — chỉ mỗi logo cây dừa */
 .hex-center-inner{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-.hex-center-inner img{width:56%;height:56%;object-fit:contain;filter:drop-shadow(0 0 10px rgba(246,185,64,.9)) drop-shadow(0 0 26px rgba(246,185,64,.55));animation:hexCenterGlowPulse 3.2s ease-in-out infinite}
-@keyframes hexCenterGlowPulse{0%,100%{filter:drop-shadow(0 0 10px rgba(246,185,64,.9)) drop-shadow(0 0 26px rgba(246,185,64,.55))}50%{filter:drop-shadow(0 0 16px rgba(246,185,64,1)) drop-shadow(0 0 38px rgba(246,185,64,.75))}}
+/* Quầng sáng phía SAU icon — dùng radial-gradient + pulse độ mờ/kích thước, KHÔNG chạm vào icon nên
+   icon luôn giữ nét căng, không bị mờ nhòe như cách cũ (drop-shadow blur trực tiếp lên hình). */
+.hex-center-inner::before{
+  content:'';position:absolute;width:64%;height:64%;border-radius:50%;
+  background:radial-gradient(circle,rgba(246,185,64,.5) 0%,rgba(246,185,64,.18) 45%,rgba(246,185,64,0) 72%);
+  animation:hexGlowHalo 3.4s ease-in-out infinite;pointer-events:none;z-index:0;
+}
+/* Vòng tròn viền mảnh xoay chậm quanh icon — tạo cảm giác "sống động" mà không cần blur */
+.hex-center-inner::after{
+  content:'';position:absolute;width:82%;height:82%;border-radius:50%;
+  border:1px dashed rgba(246,185,64,.55);
+  animation:hexRingSpin 14s linear infinite;pointer-events:none;z-index:0;
+}
+.hex-center-inner img{
+  width:56%;height:56%;object-fit:contain;position:relative;z-index:1;
+  filter:drop-shadow(0 2px 5px rgba(0,0,0,.3)) drop-shadow(0 0 5px rgba(246,185,64,.6));
+  animation:hexIconBreathe 3.4s ease-in-out infinite;
+}
+@keyframes hexGlowHalo{0%,100%{opacity:.55;transform:scale(.88)}50%{opacity:1;transform:scale(1.08)}}
+@keyframes hexRingSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes hexIconBreathe{0%,100%{filter:drop-shadow(0 2px 5px rgba(0,0,0,.3)) drop-shadow(0 0 5px rgba(246,185,64,.6));transform:scale(1)}50%{filter:drop-shadow(0 2px 6px rgba(0,0,0,.35)) drop-shadow(0 0 9px rgba(246,185,64,.95));transform:scale(1.045)}}
 
 .dbtn{border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;padding:5px 12px;border-radius:8px;font-size:10px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;position:relative;z-index:2}
 .dbtn:hover{background:rgba(255,255,255,.16)}
@@ -18807,8 +18884,11 @@ function updateCostingTotal(){
   let totalVNDPreVat=0; // Chi phí trước VAT (dùng cho lợi nhuận)
   const roe=26390;
 
+  // Khử trùng lặp SVCS theo key — xem giải thích chi tiết ở phần render bảng Costing (cùng nguyên
+  // nhân: SVCS tích lũy dần qua phiên làm việc có thể chứa entry trùng key, gây cộng đôi chi phí).
+  const SVCS_DEDUP=Array.from(new Map(SVCS.map(function(s){return [s.key,s];})).values());
   // Sum auto rows (from svcs) - only rendered inputs
-  SVCS.forEach(function(s){
+  SVCS_DEDUP.forEach(function(s){
     const sv=svcs[s.key];
     if(!sv||!sv.on||!sv.cost)return;
     const priceEl=g('autoprice_'+s.key);
@@ -20881,6 +20961,7 @@ function renderCOReport(){
       +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.bookingNo||'—')+'</div>'+(r.mblNo?'<div style="font-size:10.5px;color:var(--text-tertiary)"># '+r.mblNo+'</div>':'')+'</td>'
       +'<td style="'+tdS+'">'+shipperKey+'</td>'
       +'<td style="'+tdS+'">'+(r.pod||'—')+'</td>'
+      +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.vessel||'—')+'</div>'+(r.voy?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+r.voy+'</div>':'')+'</td>'
       +'<td style="'+tdS+';font-weight:700;color:#1a4b8c">'+(r.etd?fmtDMY(r.etd):'—')+'</td>'
       +'<td style="'+tdS+'">'+tkDisp+'</td>'
       +'<td style="'+tdS+'"><input type="text" value="'+coNo.replace(/"/g,'&quot;')+'" placeholder="Nhập số C/O" onchange="_coReportSaveRefNo(\''+r._id+'\',this.value)" style="font-size:11.5px;width:110px;padding:3px 6px"/></td>'
@@ -20912,13 +20993,14 @@ function renderCOReport(){
         +'<th style="'+thS+'">Booking/MBL</th>'
         +'<th style="'+thS+'">Shipper</th>'
         +'<th style="'+thS+'">POD</th>'
+        +'<th style="'+thS+'">Vessel/Voy</th>'
         +'<th style="'+thS+';cursor:pointer" onclick="window._coRptSort.dir=window._coRptSort.dir===\'desc\'?\'asc\':\'desc\';renderCOReport()">ETD <i class="ti '+sortIcon+'" style="font-size:12px"></i></th>'
         +'<th style="'+thS+'">Số tờ khai</th>'
         +'<th style="'+thS+'">Số C.O</th>'
         +'<th style="'+thS+'">Số INV</th>'
         +'<th style="'+thS+'">Tên Cnee</th>'
       +'</tr></thead>'
-      +'<tbody>'+(bodyRows||'<tr><td colspan="10" style="padding:2rem;text-align:center;color:var(--text-tertiary)">Không có lô hàng nào có dịch vụ C/O trong khoảng thời gian này.</td></tr>')+'</tbody>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="11" style="padding:2rem;text-align:center;color:var(--text-tertiary)">Không có lô hàng nào có dịch vụ C/O trong khoảng thời gian này.</td></tr>')+'</tbody>'
     +'</table></div>'
   +'</div>';
 }
