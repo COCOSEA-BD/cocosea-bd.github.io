@@ -1084,7 +1084,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.10';
+window.APP_BUILD='v3.11';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3545,6 +3545,7 @@ function renderDetailPanel(r,tt){
 
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
+      <button class="btn" onclick="loadDefaultServices()" title="Ưu tiên dịch vụ mặc định của Shipper (CRM); nếu Shipper chưa cấu hình sẽ dùng dịch vụ mặc định trong Danh mục dịch vụ"><i class="ti ti-download"></i> Load mặc định</button>
       <button class="rac" onclick="_svcTabRefresh()" title="Tải lại SL theo Vol mới nhất từ tab Chi tiết" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button>
     </div>
     <div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailSvc()"><i class="ti ti-check"></i> Lưu dịch vụ</button></div>`;
@@ -4202,6 +4203,38 @@ function _svcTabRefresh(){
   toast('Đã cập nhật SL = '+newVol+' cho '+qtyInputs.length+' dịch vụ — nhớ bấm "Lưu dịch vụ" để lưu lại');
 }
 window._svcTabRefresh=_svcTabRefresh;
+
+// Load dịch vụ mặc định vào lô đang mở — CHỦ ĐỘNG, không còn tự động khi tạo lô mới nữa.
+// Ưu tiên: (1) Dịch vụ mặc định riêng của Shipper (CRM › Dịch vụ mặc định) nếu có cấu hình.
+//          (2) Nếu Shipper CHƯA cấu hình gì (defaultSvcs rỗng/không có) → dùng các dịch vụ đã bật
+//              cờ "Mặc định" trong Danh mục dịch vụ chung (Settings › Danh mục dịch vụ).
+// Không thêm trùng dịch vụ đã có sẵn (đang hiển thị) trong lô.
+function loadDefaultServices(){
+  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  if(r.priceLocked){toast('Fill giá đang khóa — Unlock ở tab Fill giá trước khi thêm dịch vụ','error');return;}
+  const shipperKey=r.shipper||r.supplier||'';
+  const sp=cache.partners[shipperKey]||{};
+  const shipperDefaults=(sp.defaultSvcs||[]).filter(function(k){return SVCS.some(function(s){return s.key===k;});});
+  let sourceKeys, sourceLabel;
+  if(shipperDefaults.length){
+    sourceKeys=shipperDefaults;
+    sourceLabel='dịch vụ mặc định của Shipper "'+(sp.shortname||sp.fullname||shipperKey)+'" (CRM)';
+  } else {
+    sourceKeys=SVCS.filter(function(s){return s.default;}).map(function(s){return s.key;});
+    sourceLabel='dịch vụ mặc định trong Danh mục dịch vụ';
+  }
+  if(!sourceKeys.length){
+    toast(shipperKey?'Shipper chưa cấu hình dịch vụ mặc định (CRM), và Danh mục dịch vụ cũng chưa có dịch vụ nào đặt "Mặc định"':'Chưa chọn Shipper, và Danh mục dịch vụ chưa có dịch vụ nào đặt "Mặc định"','error');
+    return;
+  }
+  const existingKeys=Array.from(document.querySelectorAll('#detailSvcGrid [id^="tg_"]')).map(function(el){return el.id.slice(3);});
+  const toAdd=sourceKeys.filter(function(k){return existingKeys.indexOf(k)<0;});
+  if(!toAdd.length){toast('Tất cả dịch vụ mặc định đã có sẵn trong lô này','success');return;}
+  toAdd.forEach(function(key){ doAddSvcByKey(key); });
+  toast('Đã tải '+toAdd.length+' '+sourceLabel);
+}
+window.loadDefaultServices=loadDefaultServices;
 
 function addCustomSvcDetail(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
@@ -5635,25 +5668,48 @@ function _bulkRenderForm(){
   const isXuat=window._bulkTt==='xuat';
   const shipperLbl=isXuat?'Shipper':'Supplier';
   const cargoOpts=['Hàng khô','Hàng lạnh','LCL'];
-  const contTypesAll=['20DC','40HC','20RF','40RF','LCL','20OT','40OT'];
   const countryOpts=(typeof PORT_COUNTRIES!=='undefined'?PORT_COUNTRIES:[]);
+  const cargoNames=window._cargoNames||[];
+  const tenHangSharedField=cargoNames.length
+    ? '<select id="bulk_tenHang"><option value="">— Chọn tên hàng —</option>'+cargoNames.map(function(n){return '<option>'+(n.name||n)+'</option>';}).join('')+'</select>'
+    : '<input type="text" id="bulk_tenHang" placeholder="Áp dụng cho dòng không tự chọn riêng"/>';
   box.innerHTML=
-    '<div class="lot-section-card span2" style="margin-bottom:14px">'
-      +'<div class="lot-section-hdr" style="color:#0F766E"><i class="ti ti-file-info"></i>Thông tin dùng chung (áp dụng cho mọi lô hàng bên dưới)</div>'
+    // ── Card 1: Thông tin chung ──
+    '<div class="lot-section-card" style="margin-bottom:14px">'
+      +'<div class="lot-section-hdr" style="color:#2E90FA"><i class="ti ti-file-info"></i>1. Thông tin chung</div>'
       +'<div class="fg">'
         +'<div class="fi"><label class="lbl">Type Shipment</label><select id="bulk_loaiHang"><option>'+(isXuat?'XK - Xuất khẩu':'IM - Nhập khẩu')+'</option><option>LS - Local Service</option></select></div>'
         +'<div class="fi"><label class="lbl">Loại hàng</label><select id="bulk_cargoType">'+cargoOpts.map(function(o){return '<option>'+o+'</option>';}).join('')+'</select></div>'
         +'<div class="fi"><label class="lbl">Booking Party</label><select id="bulk_bookingParty">'+_bulkSelOpts(opts.pAll)+'</select></div>'
         +'<div class="fi"><label class="lbl">'+shipperLbl+'</label><select id="bulk_shipper">'+_bulkSelOpts(opts.pS.length?opts.pS:opts.pAll)+'</select></div>'
+        +'<div class="fi"><label class="lbl">Tên hàng chung</label>'+tenHangSharedField+'</div>'
+      +'</div>'
+    +'</div>'
+    // ── Card 2: Thông tin vận chuyển ──
+    +'<div class="lot-section-card" style="margin-bottom:14px">'
+      +'<div class="lot-section-hdr" style="color:#16C6B7"><i class="ti ti-truck"></i>2. Thông tin vận chuyển</div>'
+      +'<div class="fg">'
         +'<div class="fi"><label class="lbl">Carrier</label><select id="bulk_carrier" onchange="_bulkOnCarrierChange()">'+_bulkSelOpts(opts.pC)+'</select></div>'
         +'<div class="fi"><label class="lbl">FWD</label><select id="bulk_fwd">'+_bulkSelOpts(opts.pF)+'</select></div>'
         +'<div class="fi full" style="grid-column:1/-1"><label class="lbl">Chọn tàu từ Vessel Tool (tự điền Voy/ETD/ETA/POL/POD)</label><select id="bulk_vesselPick" onchange="_bulkOnVesselPick()"><option value="">(Chọn Carrier trước)</option></select></div>'
         +'<div class="fi"><label class="lbl">Vessel</label><input type="text" id="bulk_vessel" placeholder="Tên tàu"/></div>'
         +'<div class="fi"><label class="lbl">Voy</label><input type="text" id="bulk_voy"/></div>'
-        +'<div class="fi"><label class="lbl">ETD</label><input type="date" id="bulk_etd"/></div>'
+      +'</div>'
+    +'</div>'
+    // ── Card 3: Thời gian ──
+    +'<div class="lot-section-card" style="margin-bottom:14px">'
+      +'<div class="lot-section-hdr" style="color:#22C55E"><i class="ti ti-calendar-time"></i>3. Thời gian</div>'
+      +'<div class="fg">'
+        +'<div class="fi"><label class="lbl">ETD</label><input type="date" id="bulk_etd" oninput="_bulkUpdateCutoffs()"/></div>'
         +'<div class="fi"><label class="lbl">ETA</label><input type="date" id="bulk_eta"/></div>'
         +'<div class="fi"><label class="lbl">Cut Off CY</label><input type="text" id="bulk_cutoffCY" placeholder="yyyy-mm-dd 11:00"/></div>'
         +'<div class="fi"><label class="lbl">Cut Off SI</label><input type="text" id="bulk_cutoffSI" placeholder="yyyy-mm-dd 11:00"/></div>'
+      +'</div>'
+    +'</div>'
+    // ── Card 4: Cảng & Địa điểm ──
+    +'<div class="lot-section-card" style="margin-bottom:14px">'
+      +'<div class="lot-section-hdr" style="color:#7C3AED"><i class="ti ti-map-pin"></i>4. Cảng & Địa điểm</div>'
+      +'<div class="fg">'
         +'<div class="fi"><label class="lbl">POL — Quốc gia</label><select id="bulk_polCountry" onchange="_bulkUpdatePorts(\'pol\')"><option value="">— Chọn —</option>'+countryOpts.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select></div>'
         +'<div class="fi"><label class="lbl">POL — Cảng</label><select id="bulk_pol"><option value="">— Chọn quốc gia trước —</option></select></div>'
         +'<div class="fi"><label class="lbl">POD — Quốc gia (mặc định)</label><select id="bulk_podCountry" onchange="_bulkUpdatePorts(\'pod\')"><option value="">— Chọn —</option>'+countryOpts.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select></div>'
@@ -5661,16 +5717,22 @@ function _bulkRenderForm(){
         +'<div class="fi"><label class="lbl">ICD</label><select id="bulk_icd"><option value="">— Chọn ICD —</option>'+(typeof ICD_LIST!=='undefined'?ICD_LIST:[]).map(function(p){return '<option>'+p+'</option>';}).join('')+'</select></div>'
         +'<div class="fi"><label class="lbl">CY Location</label><input type="text" id="bulk_cyLocation"/></div>'
         +'<div class="fi"><label class="lbl">WH (Warehouse)</label><input type="text" id="bulk_wh"/></div>'
-        +'<div class="fi"><label class="lbl">Tên hàng chung</label><input type="text" id="bulk_tenHang" placeholder="Áp dụng cho dòng không tự nhập riêng"/></div>'
-        +'<div class="fi full" style="grid-column:1/-1"><label class="lbl">Ghi chú chung</label><textarea id="bulk_remark" rows="2"></textarea></div>'
       +'</div>'
     +'</div>'
-    +'<div class="lot-section-card span2">'
+    // ── Card 5: Ghi chú chung ──
+    +'<div class="lot-section-card" style="margin-bottom:14px">'
+      +'<div class="lot-section-hdr" style="color:#F59E0B"><i class="ti ti-notes"></i>5. Ghi chú chung</div>'
+      +'<div class="fg">'
+        +'<div class="fi full" style="grid-column:1/-1"><textarea id="bulk_remark" rows="2" placeholder="Áp dụng cho mọi lô hàng bên dưới"></textarea></div>'
+      +'</div>'
+    +'</div>'
+    // ── Danh sách lô hàng ──
+    +'<div class="lot-section-card">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
         +'<div class="lot-section-hdr" style="color:#103A6F;margin-bottom:0"><i class="ti ti-list-numbers"></i>Danh sách lô hàng — mỗi dòng = 1 lô hàng riêng</div>'
         +'<button class="btn sm" onclick="_bulkAddRow()"><i class="ti ti-plus"></i> Thêm dòng</button>'
       +'</div>'
-      +'<div class="bk-table-hdr" style="grid-template-columns:26px 1fr 90px 60px 90px 70px 1.2fr 1fr 1fr 34px">'
+      +'<div class="bk-table-hdr" style="grid-template-columns:26px 1fr 90px 60px 90px 70px 1.3fr 1fr 1fr 34px">'
         +'<div></div><div>Booking No</div><div>MBL No</div><div>VOL</div><div>Type Cont</div><div>Trucking</div><div>Tên hàng</div><div>CNEE</div><div>POD</div><div></div>'
       +'</div>'
       +'<div id="bulkRowsBody">'+window._bulkRows.map(function(r,i){return _bulkRowHtml(r,i);}).join('')+'</div>'
@@ -5678,6 +5740,17 @@ function _bulkRenderForm(){
   if(typeof _bulkPopulateVesselPicker==='function')_bulkPopulateVesselPicker();
 }
 window._bulkRenderForm=_bulkRenderForm;
+
+// Tự tính Cut Off CY/SI khi ETD đổi — dùng đúng hàm an toàn múi giờ calcDefaultCutoff() (KHÔNG
+// dùng toISOString() để tránh lỗi lệch ngày với múi giờ Việt Nam — xem _vesselCalcDefaultCutoff).
+function _bulkUpdateCutoffs(){
+  const etd=g('bulk_etd')?.value||'';
+  if(!etd)return;
+  const cyEl=g('bulk_cutoffCY'), siEl=g('bulk_cutoffSI');
+  if(cyEl&&!cyEl.value&&typeof calcDefaultCutoff==='function')cyEl.value=calcDefaultCutoff(etd,-2,'11:00');
+  if(siEl&&!siEl.value&&typeof calcDefaultCutoff==='function')siEl.value=calcDefaultCutoff(etd,-2,'11:00');
+}
+window._bulkUpdateCutoffs=_bulkUpdateCutoffs;
 
 // Tích hợp Vessel Tool vào form Thêm hàng loạt — tái dùng đúng nguồn dữ liệu cache.vessels như form
 // thêm lô đơn lẻ (_vesselsForCarrier), chỉ khác điểm điền là các field bulk_xxx thay vì f_xxx.
@@ -5709,7 +5782,7 @@ function _bulkOnVesselPick(){
   if(!v)return;
   if(g('bulk_vessel'))g('bulk_vessel').value=v.vessel||'';
   if(g('bulk_voy'))g('bulk_voy').value=v.voy||'';
-  if(g('bulk_etd')&&v.etd)g('bulk_etd').value=v.etd;
+  if(g('bulk_etd')&&v.etd){g('bulk_etd').value=v.etd; _bulkUpdateCutoffs();}
   // POL + quốc gia tương ứng
   if(v.pol&&typeof _findCountryForPort==='function'){
     const ctr=_findCountryForPort(v.pol);
@@ -5750,14 +5823,18 @@ function _bulkRowHtml(row,i){
   const podList=(podCountryDefault&&typeof PORTS_BY_COUNTRY!=='undefined'&&PORTS_BY_COUNTRY[podCountryDefault])?PORTS_BY_COUNTRY[podCountryDefault]:(typeof PORTS!=='undefined'?PORTS:[]);
   const podVal=row.pod||podDefault;
   const podOpts='<option value="">— Chọn cảng —</option>'+podList.map(function(p){return '<option'+(p===podVal?' selected':'')+'>'+p+'</option>';}).join('');
-  return '<div class="bk-row-table" data-bulk-i="'+i+'" style="grid-template-columns:26px 1fr 90px 60px 90px 70px 1.2fr 1fr 1fr 34px">'
+  const cargoNamesRow=window._cargoNames||[];
+  const tenHangField=cargoNamesRow.length
+    ? '<select class="bulk-tenHang"><option value="">(theo chung nếu để trống)</option>'+cargoNamesRow.map(function(n){const nm=n.name||n;return '<option'+(nm===row.tenHang?' selected':'')+'>'+nm+'</option>';}).join('')+'</select>'
+    : '<input type="text" class="bulk-tenHang" value="'+(row.tenHang||'').replace(/"/g,'&quot;')+'" placeholder="(theo chung nếu để trống)"/>';
+  return '<div class="bk-row-table" data-bulk-i="'+i+'" style="grid-template-columns:26px 1fr 90px 60px 90px 70px 1.3fr 1fr 1fr 34px">'
     +'<div class="bk-num">'+(i+1)+'</div>'
     +'<input type="text" class="bulk-bookingNo" value="'+(row.bookingNo||'').replace(/"/g,'&quot;')+'" placeholder="Booking No"/>'
     +'<input type="text" class="bulk-mblNo" value="'+(row.mblNo||'').replace(/"/g,'&quot;')+'" placeholder="MBL No"/>'
     +'<input type="number" class="bulk-vol" value="'+(row.vol||1)+'" min="1" style="text-align:right"/>'
     +'<select class="bulk-typeCont">'+contOpts+'</select>'
     +'<label class="bk-truck-toggle"><input type="checkbox" class="bulk-hasTruck" '+(row.hasTruck?'checked':'')+' style="width:15px;height:15px;cursor:pointer"/></label>'
-    +'<input type="text" class="bulk-tenHang" value="'+(row.tenHang||'').replace(/"/g,'&quot;')+'" placeholder="(theo chung nếu để trống)"/>'
+    +tenHangField
     +'<select class="bulk-cnee">'+cneeOpts+'</select>'
     +'<select class="bulk-pod">'+podOpts+'</select>'
     +'<button type="button" class="rac red" onclick="_bulkDelRow('+i+')" title="Xóa dòng"><i class="ti ti-trash"></i></button>'
@@ -6173,25 +6250,9 @@ async function saveLot(){
     alert('Vui lòng điền đầy đủ thông tin bắt buộc trước khi lưu:\n\n- '+_chk.missing.join('\n- '));
     return;
   }
-  // Lô MỚI: seed dịch vụ mặc định — CHỈ theo cấu hình riêng của từng Shipper
-  // (CRM › Dịch vụ mặc định), KHÔNG còn tự động thêm theo cờ "default" toàn hệ thống nữa
-  // (cờ default cũ khiến các dịch vụ như Sà lan/Phí công nhân đóng hàng luôn tự xuất hiện
-  // ở MỌI lô hàng mới bất kể shipper có cấu hình hay không — đã bỏ).
-  // svcQty mặc định = TỔNG VOL của lô (đã tính ở trên), đơn vị Cont.
-  if(!existing){
-    const _volDef=parseInt(rec.vol)||1;
-    const _mkSvc=function(sdef){return {on:true,desc:'',invoice:'No',party:'',cur:'VND',price:0,qty:_volDef,amount:0,cost:0,svcQty:_volDef,svcUnit:'Cont',svcCur:'VND'};};
-    // Dịch vụ mặc định riêng của shipper (CRM › Dịch vụ mặc định)
-    const _shipperKey=rec.shipper||rec.supplier||'';
-    const _sp=cache.partners[_shipperKey]||{};
-    (_sp.defaultSvcs||[]).forEach(function(sk){
-      if(!rec.svcs[sk]){
-        const sdef=SVCS.find(function(s){return s.key===sk;})||{};
-        rec.svcs[sk]=_mkSvc(sdef);
-        if(sdef.custom)rec.svcs[sk]._name=sdef.name;
-      }
-    });
-  }
+  // Lô MỚI: KHÔNG còn tự động seed dịch vụ mặc định nữa — để trống hoàn toàn, người dùng chủ động
+  // bấm nút "Load mặc định" ở tab Dịch vụ khi cần (xem loadDefaultServices()). Việc tự động thêm
+  // trước đây (dù chỉ theo cấu hình riêng Shipper) vẫn có thể gây bất ngờ khi Shipper đổi/chưa rõ.
   // MBL No lives inside the booking block (f_mblNo), read it explicitly
   const mblEl=g('f_mblNo');
   if(mblEl) rec.mblNo=mblEl.value||'';
@@ -23325,9 +23386,16 @@ window._vesselCalcEta=_vesselCalcEta;
 function _vesselCalcDefaultCutoff(etdStr){
   if(!etdStr)return '';
   try{
+    // QUAN TRỌNG: KHÔNG dùng toISOString() ở đây — hàm đó luôn quy đổi về UTC, khiến ngày bị LÙI
+    // LẠI 1 NGÀY với múi giờ Việt Nam (UTC+7). VD: ETD 05/08 -> tính đúng ra 03/08 theo giờ local,
+    // nhưng toISOString() lại trả về "02/08" (UTC). Dùng getFullYear/getMonth/getDate (đều là giờ
+    // LOCAL) để dựng chuỗi ngày, tránh hoàn toàn việc quy đổi múi giờ.
     const d=new Date(etdStr+'T00:00:00');
     d.setDate(d.getDate()-2);
-    return d.toISOString().slice(0,10)+' 11:00';
+    const yyyy=d.getFullYear();
+    const mm=String(d.getMonth()+1).padStart(2,'0');
+    const dd=String(d.getDate()).padStart(2,'0');
+    return yyyy+'-'+mm+'-'+dd+' 11:00';
   }catch(e){return '';}
 }
 window._vesselCalcDefaultCutoff=_vesselCalcDefaultCutoff;
