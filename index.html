@@ -1084,7 +1084,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.11';
+window.APP_BUILD='v3.12';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1791,6 +1791,33 @@ async function fsSet(colPath, docId, data){
 async function fsDel(colPath, docId){
   await db.collection(colPath).doc(docId).delete();
 }
+
+// Định dạng ngày CHUẨN dd/mm/yyyy — dùng RIÊNG cho các form email (thống nhất theo yêu cầu, VD
+// 02/08/2026). Tách biệt khỏi fmtDMY()/_fmtDMY() (kiểu dd-Mon-yyyy, dùng cho báo cáo/bảng biểu/PDF
+// khác — KHÔNG đổi 2 hàm đó để tránh ảnh hưởng các nơi đang dùng ổn định).
+function _emailFmtDate(s){
+  if(!s)return '';
+  const str=(s+'').trim();
+  const m=str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m)return m[3]+'/'+m[2]+'/'+m[1];
+  const d=new Date(str);
+  if(isNaN(d))return str;
+  const dd=String(d.getDate()).padStart(2,'0');
+  const mm=String(d.getMonth()+1).padStart(2,'0');
+  return dd+'/'+mm+'/'+d.getFullYear();
+}
+window._emailFmtDate=_emailFmtDate;
+
+// Biến thể xử lý chuỗi có cả ngày+giờ (VD Cut off "2026-08-03 11:00" -> "03/08/2026 11:00") — giữ
+// nguyên phần giờ, chỉ đổi phần ngày sang dd/mm/yyyy.
+function _emailFmtDateTime(s){
+  if(!s)return '';
+  const str=(s+'').trim();
+  const m=str.match(/^(\d{4}-\d{2}-\d{2})(.*)$/);
+  if(m)return _emailFmtDate(m[1])+m[2];
+  return str;
+}
+window._emailFmtDateTime=_emailFmtDateTime;
 
 function fmtDMY(s){
   // Format any date string/Date to dd-Mon-yyyy (16-Jun-2026). Returns '' for empty, raw for invalid.
@@ -2530,9 +2557,15 @@ function _wsSidebarHTML(tt){
   return `
   <div class="ws-side">
 
-    <div style="display:flex;gap:6px;margin-bottom:10px">
-      <button class="btn sm" onclick="openBulkLot('${tt}')" ${can('addLot')?'':'disabled'} style="flex:1;color:#0F766E;border-color:#0F766E"><i class="ti ti-stack-2"></i> Thêm hàng loạt</button>
-      <button class="btn sm pri" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'} style="flex:1"><i class="ti ti-plus"></i> Thêm lô hàng</button>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <button class="ws-cta-btn ws-cta-teal" onclick="openBulkLot('${tt}')" ${can('addLot')?'':'disabled'}>
+        <div class="ws-cta-icon"><i class="ti ti-stack-2"></i></div>
+        <div class="ws-cta-label">Thêm hàng loạt</div>
+      </button>
+      <button class="ws-cta-btn ws-cta-navy" onclick="openLot(null,'${tt}')" ${can('addLot')?'':'disabled'}>
+        <div class="ws-cta-icon"><i class="ti ti-plus"></i></div>
+        <div class="ws-cta-label">Thêm lô hàng</div>
+      </button>
     </div>
 
     <div class="ws-side-card">
@@ -7192,12 +7225,12 @@ async function openBookingEmail(id,tt){
     ['Port of Discharge', podFull],
     ['Volume', volDisplay],
     ['Stuffing Place', r.wh||r.cyLocation||'Warehouse'],
-    ['ETD', r.etd?fmtDMY(r.etd):'—'],
+    ['ETD', r.etd?_emailFmtDate(r.etd):'—'],
     ['Vessel/ Voyage', (r.vessel||'—')+(r.voy?' V. '+r.voy:'')],
-    ['Cut-off Time', r.cutoffCY||calcDefaultCutoff(r.etd,-2,'21:00')||'—'],
+    ['Cut-off Time', _emailFmtDateTime(r.cutoffCY||calcDefaultCutoff(r.etd,-2,'21:00'))||'—'],
     ['Full Return', r.pol||r.cyLocation||r.fullReturn||'—'],
-    ['Submit SI before', r.cutoffSI||calcDefaultCutoff(r.etd,-2,'08:30')||'—'],
-    ['ETA', r.eta?fmtDMY(r.eta)+' (dự kiến)':'—'],
+    ['Submit SI before', _emailFmtDateTime(r.cutoffSI||calcDefaultCutoff(r.etd,-2,'08:30'))||'—'],
+    ['ETA', r.eta?_emailFmtDate(r.eta)+' (dự kiến)':'—'],
     ['Freight/ Charge', r.freightNote||'To be advised later'],
     ['Booking remark', r.remark||'—']
   );
@@ -7385,7 +7418,7 @@ async function sendBookingRequestEmail(id,tt){
       '<tr><td style="'+cellL+'">Loại cont</td><td style="'+cellR+'">'+volType+'</td></tr>'+
       '<tr><td style="'+cellL+'">POL</td><td style="'+cellR+'">'+(r.pol||'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">POD</td><td style="'+cellR+'">'+(r.pod||'')+'</td></tr>'+
-      '<tr><td style="'+cellL+'">ETD</td><td style="'+cellR+'">'+(r.etd?_fmtDMY(r.etd):'')+'</td></tr>'+
+      '<tr><td style="'+cellL+'">ETD</td><td style="'+cellR+'">'+(r.etd?_emailFmtDate(r.etd):'')+'</td></tr>'+
       '<tr><td style="'+cellL+'">Stuffing</td><td style="'+cellR+'">'+stuffLoc+'</td></tr>'+
       '<tr><td style="'+cellL+'">Ghi chú</td><td style="'+cellR+'"></td></tr>'+
     '</table>'+
@@ -8054,11 +8087,11 @@ async function sendStuffingEmail(){
     vehicle:_domStuff.vehicle||'Công nhân, Xe nâng, Cẩu bờ'
   }:_stuffInfo(r);
   const stuffLoc=si.location||r.icd||r.cyLocation||'';
-  const subject='Đăng ký đóng bãi: '+(stuffLoc||'').toUpperCase()+' - Booking: '+bkgNos+'- Vol: '+(r.vol||'')+' '+(r.typeCont||'')+' /COCOSEA';
+  const subject='Đăng ký đóng bãi: '+(stuffLoc||'').toUpperCase()+' - Booking: '+bkgNos+'- Vol: '+(r.vol||'')+'x'+(r.typeCont||'')+' /COCOSEA';
   const cellL='padding:7px 10px;border:1px solid #999;font-weight:700;background:#f2f2f2;font-size:12.5px;width:160px;vertical-align:top';
   const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
   const stuffDatesHtml=(si.dates||[]).filter(function(d){return d&&(d.date||d.vol||d.typeCont);}).map(function(d){
-    const dt=(d.date||'').replace(/-/g,'/');
+    const dt=_emailFmtDate(d.date||'');
     const vt=((d.vol||'')+(d.typeCont?(' x '+d.typeCont):'')).trim();
     return dt+(vt?(': '+vt):'');
   }).join('<br>');
@@ -8247,10 +8280,10 @@ async function sendTruckingEmail(){
   const cellR='padding:7px 10px;border:1px solid #999;font-size:12.5px;vertical-align:top';
   // Thời gian đóng hàng: chỉ ngày + vol x type (không lặp định vị kho ở đây nữa)
   const truckDatesHtml=(ti.dates||[]).filter(function(d){return d&&(d.date||d.vol||d.typeCont);}).map(function(d){
-    const dt=(d.date||'').replace(/-/g,'/');
+    const dt=_emailFmtDate(d.date||'');
     const vt=((d.vol||'')+(d.typeCont?(' x '+d.typeCont):'')).trim();
     return dt+(vt?(': '+vt):'');
-  }).join('<br>')||((r.etd?r.etd.replace(/-/g,'/'):'')+' '+(r.vol||'')+'x'+(r.typeCont||''));
+  }).join('<br>')||((r.etd?_emailFmtDate(r.etd):'')+' '+(r.vol||'')+'x'+(r.typeCont||''));
   const noteHtml=(ti.note||'').replace(/\n/g,'<br>');
   const invoiceInfo=
     '<b>CÔNG TY TNHH COCO SEA</b><br>'+
@@ -13546,6 +13579,22 @@ body.xuat-tabmode:not(.xuat-lotmode) .table-wrap{max-height:calc(100vh - 230px);
 body.xuat-tabmode:not(.xuat-lotmode) .content{padding-bottom:0}
 body.xuat-tabmode:not(.xuat-lotmode) .lot-table thead tr{position:sticky;top:0;z-index:3}
 body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);overflow-y:auto}
+/* Nút CTA lớn dạng thẻ 3D nổi cho "Thêm lô hàng"/"Thêm hàng loạt" — thay cho nút nhỏ mỏng cũ,
+   giúp cân đối khoảng trống phía dưới trong sidebar, đồng thời trông nổi bật/chuyên nghiệp hơn. */
+.ws-cta-btn{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:16px 10px;border-radius:14px;border:none;cursor:pointer;color:#fff;text-align:center;transition:transform .15s ease,box-shadow .15s ease;overflow:hidden}
+.ws-cta-btn:disabled{opacity:.5;cursor:not-allowed;filter:grayscale(.3)}
+.ws-cta-btn:not(:disabled):hover{transform:translateY(-3px)}
+.ws-cta-btn:not(:disabled):active{transform:translateY(1px)}
+.ws-cta-btn::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.22) 0%,rgba(255,255,255,0) 45%);pointer-events:none}
+.ws-cta-icon{width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:inset 0 1px 2px rgba(255,255,255,.4)}
+.ws-cta-label{font-size:12.5px;font-weight:700;letter-spacing:.2px;position:relative;z-index:1}
+.ws-cta-navy{background:linear-gradient(155deg,#1a4b8c 0%,#103A6F 60%,#0b2c56 100%);box-shadow:0 4px 0 #082144,0 8px 16px rgba(16,58,111,.35)}
+.ws-cta-navy:not(:disabled):hover{box-shadow:0 6px 0 #082144,0 12px 22px rgba(16,58,111,.4)}
+.ws-cta-navy:not(:disabled):active{box-shadow:0 2px 0 #082144,0 4px 10px rgba(16,58,111,.3)}
+.ws-cta-teal{background:linear-gradient(155deg,#14958a 0%,#0F766E 60%,#0a4d47 100%);box-shadow:0 4px 0 #073531,0 8px 16px rgba(15,118,110,.35)}
+.ws-cta-teal:not(:disabled):hover{box-shadow:0 6px 0 #073531,0 12px 22px rgba(15,118,110,.4)}
+.ws-cta-teal:not(:disabled):active{box-shadow:0 2px 0 #073531,0 4px 10px rgba(15,118,110,.3)}
+
 .ws-side-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow-sm)}
 /* Ô Tổng quan lô hàng (thẻ đầu) — cao thêm ~1cm để thoáng hơn */
 .ws-side>.ws-side-card:first-child{min-height:216px;display:flex;flex-direction:column;justify-content:center}
@@ -21214,6 +21263,7 @@ function renderScyReport(){
       +'<i class="ti ti-package" style="font-size:20px;color:#1a4b8c"></i>'
       +'<h2 style="font-size:16px;font-weight:700;margin:0">SCY Report — Đóng hàng tại bãi</h2>'
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lệnh</span>'
+      +'<button class="btn sm" onclick="openPackingListPicker()" title="Xem/copy danh sách Cont/Seal đóng hàng theo ngày"><i class="ti ti-clipboard-list"></i> Packing List</button>'
       +'<button class="btn sm" onclick="renderScyReport()" title="Tải lại dữ liệu mới nhất" style="margin-left:auto"><i class="ti ti-refresh"></i> Refresh</button>'
     +'</div>'
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
@@ -21785,6 +21835,58 @@ function showTruckingEport(trkIdx){
   showEportModal('Khai Eport Trucking — '+(bkNo||''), lines.join('\n'));
 }
 window.showTruckingEport=showTruckingEport;
+
+// Packing List theo ngày — chọn 1 ngày, liệt kê TẤT CẢ booking đã đóng hàng tại bãi (SCY) ngày đó,
+// kèm đầy đủ Cont/Seal (lấy từ tab Cont/Seal của đúng lô hàng tương ứng). Gọn hơn Khai Eport: chỉ 1
+// bước chọn ngày rồi ra kết quả luôn, không cần mở từng lô.
+function openPackingListPicker(){
+  const today=(typeof _calToday==='function')?_calToday():new Date().toISOString().slice(0,10);
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:340px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+    <div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-clipboard-list" style="font-size:18px;color:#e8f0fe"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">Packing List theo ngày</div>
+      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:18px;background:var(--bg-secondary)">
+      <label class="lbl" style="display:block;margin-bottom:6px">Chọn ngày đóng hàng tại bãi</label>
+      <input type="date" id="pklDate" value="${today}" style="width:100%;font-size:13px;margin-bottom:14px"/>
+      <button class="btn pri" style="width:100%;background:#1a4b8c;border-color:#1a4b8c" onclick="generatePackingList(g('pklDate').value)"><i class="ti ti-search"></i> Xem Packing List</button>
+    </div>
+  </div>`;
+  openOv('eportOv');
+}
+window.openPackingListPicker=openPackingListPicker;
+
+function generatePackingList(dateStr){
+  if(!dateStr){toast('Chọn ngày trước','error');return;}
+  const scyRows=(typeof _calScyForDate==='function')?_calScyForDate(dateStr):[];
+  if(!scyRows.length){
+    showEportModal('Packing List — '+fd(dateStr), '(Không có lô hàng nào đóng tại bãi ngày '+fd(dateStr)+')');
+    return;
+  }
+  const blocks=scyRows.map(function(scy){
+    const r=(cache[scy._tt]||[]).find(function(x){return x._id===scy._lotId;})||{};
+    const sp=cache.partners[scy._shipper]||{};
+    const shipperDisp=sp.fullname||sp.shortname||scy._shipper||'—';
+    const vol=scy.vol||r.vol||'—';
+    const typeCont=scy.typeCont||r.typeCont||'—';
+    // Cont/Seal lấy từ tab Cont/Seal của lô — nếu lô có NHIỀU booking, chỉ lấy container khớp đúng
+    // booking này (qua field bookingNo nếu container có lưu, hoặc lấy hết nếu lô chỉ 1 booking).
+    const allConts=r.containers||[];
+    const multiBooking=(r.bookings&&r.bookings.length>1);
+    const conts=multiBooking?allConts.filter(function(c){return !c.bookingNo||c.bookingNo===scy.bookingNo;}):allConts;
+    const contLines=conts.length
+      ? conts.map(function(c,i){return (i+1)+'. '+(c.no||'—')+' / '+(c.seal||'—');}).join('\n')
+      : '(Chưa có dữ liệu Cont/Seal cho booking này — vào tab Cont/Seal để nhập)';
+    return 'Booking: '+(scy.bookingNo||scy._bookingNo)+' — '+shipperDisp+' — '+vol+' x '+typeCont+'\n'
+      +'Bãi đóng hàng: '+(scy.icd||'—')+'\n'
+      +'Cont/Seal:\n'+contLines;
+  });
+  const text='List cont seal đóng hàng — '+fd(dateStr)+'\n------------------\n'+blocks.join('\n\n------------------\n');
+  showEportModal('Packing List — '+fd(dateStr)+' ('+scyRows.length+' booking)', text);
+}
+window.generatePackingList=generatePackingList;
 
 function showEportModal(title, text){
   g('eportOv').innerHTML=`
