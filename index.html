@@ -1044,7 +1044,6 @@ function xuatSwitchTab(id){
     // Render lot detail inline into xuat-lot-view (no slide animation!)
     detailId=lt.id; detailTt=lt.tt; detailTab=lt.dpTab||'info';
     const r=(cache[lt.tt]||[]).find(x=>x._id===lt.id)||{};
-    window._detailEditSnapshot={id:lt.id,tt:lt.tt,updatedAt:r.updatedAt||0};
     // Xóa Document Maker khỏi _openTabs - xuat tab bar quản lý lot tabs
     _openTabs=_openTabs.filter(x=>x.type!=='docmaker');
     _xuatEnsureLotLayout(lotV);
@@ -1087,7 +1086,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.29';
+window.APP_BUILD='v3.30';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3185,8 +3184,6 @@ function openDetail(id, tt, startTab){
   } else if(startTab){ t.tab=startTab; }
   _activeTabKey=key;
   detailId=id; detailTt=tt; detailTab=startTab||t.tab;
-  // Snapshot updatedAt lúc mở — dùng để phát hiện xung đột khi lưu tab Dịch vụ/Cont-Seal...
-  window._detailEditSnapshot={id:id,tt:tt,updatedAt:r.updatedAt||0};
   renderDpanelTabs();
   renderDetailPanel(r,tt);
   g('detailPanel').classList.add('open');
@@ -5226,21 +5223,6 @@ async function saveDetailSvc(){
     svcDiffLines.push('- Xóa dịch vụ: '+(pv._name||(svcMeta?svcMeta.name:k)));
   });
   const svcDetailText=svcDiffLines.length?svcDiffLines.join('\n'):'Lưu lại (không có thay đổi)';
-  // Kiểm tra xung đột: lô này có bị người khác cập nhật kể từ lúc mở tab không?
-  if(window._detailEditSnapshot && window._detailEditSnapshot.id===_svcId){
-    try{
-      const freshSnap=await db.collection(colName(_svcTt)).doc(_svcId).get();
-      if(freshSnap.exists){
-        const freshData=freshSnap.data();
-        if((freshData.updatedAt||0)>window._detailEditSnapshot.updatedAt){
-          const who=freshData.updatedBy||'người khác';
-          const when=new Date(freshData.updatedAt).toLocaleString('vi-VN');
-          const proceed=confirm('⚠️ XUNG ĐỘT DỮ LIỆU\n\nLô hàng này đã được "'+who+'" cập nhật lúc '+when+' — SAU KHI bạn mở tab này.\n\nNếu tiếp tục lưu, thay đổi của "'+who+'" ở CÙNG các trường bạn vừa sửa có thể bị ghi đè.\n\nBấm OK để vẫn LƯU, hoặc Cancel để HỦY và mở lại lô hàng.');
-          if(!proceed){ toast('Đã hủy lưu — vui lòng mở lại lô hàng','error'); return; }
-        }
-      }
-    }catch(e){}
-  }
   setLoading(true,'Đang lưu...');
   try{
     await fsSet(colName(_svcTt),_svcId,updatePayload);
@@ -5669,9 +5651,6 @@ function openLot(id, tt){
   lotIdx=id; currentTab=tt;
   const cols=tt==='xuat'?XCOLS:NCOLS;
   const r=id?cache[tt].find(x=>x._id===id)||{}:{};
-  // Ghi lại thời điểm cập nhật cuối cùng lúc MỞ form — dùng để phát hiện xung đột: nếu lúc
-  // LƯU mà updatedAt trên Firestore đã khác (người khác vừa sửa), sẽ cảnh báo trước khi ghi đè.
-  window._lotEditSnapshot=id?{id:id,tt:tt,updatedAt:r.updatedAt||0}:null;
   g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'Shipment List':'nhập khẩu');
   g('lotSub').textContent=id?(r.bookingNo||''):'';
   const ctx={
@@ -6400,32 +6379,6 @@ async function saveLot(){
     }
   }
   const detailText=isNew?'':(diffLines.length?diffLines.join('\n'):'Lưu lại (không có trường nào thay đổi)');
-  // ─ Kiểm tra XUNG ĐỘT: lô này có bị người khác cập nhật kể từ lúc mở form không? ─
-  // Đọc TRỰC TIẾP từ Firestore (không dùng cache local) để chắc chắn thấy đúng thay đổi mới nhất,
-  // kể cả khi listener realtime của máy này chưa kịp đồng bộ.
-  if(!isNew && window._lotEditSnapshot && window._lotEditSnapshot.id===docId){
-    try{
-      const freshSnap=await db.collection(colName(currentTab)).doc(docId).get();
-      if(freshSnap.exists){
-        const freshData=freshSnap.data();
-        const freshUpdatedAt=freshData.updatedAt||0;
-        if(freshUpdatedAt>window._lotEditSnapshot.updatedAt){
-          const who=freshData.updatedBy||'người khác';
-          const when=new Date(freshUpdatedAt).toLocaleString('vi-VN');
-          const proceed=confirm(
-            '⚠️ XUNG ĐỘT DỮ LIỆU\n\n'+
-            'Lô hàng này đã được "'+who+'" cập nhật lúc '+when+' — SAU KHI bạn mở form này.\n\n'+
-            'Nếu tiếp tục lưu, thay đổi của "'+who+'" có thể bị GHI ĐÈ mất.\n\n'+
-            'Bấm OK để vẫn LƯU ĐÈ (không khuyến khích), hoặc Cancel để HỦY và tải lại lô hàng mới nhất.'
-          );
-          if(!proceed){
-            toast('Đã hủy lưu — vui lòng mở lại lô hàng để lấy dữ liệu mới nhất','error');
-            return;
-          }
-        }
-      }
-    }catch(e){ /* Nếu kiểm tra xung đột lỗi (VD mất mạng tạm thời) — vẫn cho lưu bình thường, không chặn */ }
-  }
   setLoading(true,'Đang lưu...');
   try {
     await fsSet(colName(currentTab), docId, rec);
