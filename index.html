@@ -1087,7 +1087,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.28';
+window.APP_BUILD='v3.29';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4219,6 +4219,16 @@ function _costingTabRefresh(){
 }
 window._costingTabRefresh=_costingTabRefresh;
 
+// Xác định ĐÚNG container đang hiển thị panel chi tiết lô hàng — khác nhau giữa chế độ tab
+// (xuat-lotmode, dùng #xuat-lot-work DÙNG CHUNG cho mọi tab) và chế độ panel trượt thường
+// (#detailPanel). Dùng làm PHẠM VI GIỚI HẠN khi đọc dữ liệu DOM trong các hàm lưu — thay vì
+// document.getElementById() không giới hạn phạm vi (rủi ro đọc nhầm phần tử của lô khác nếu trùng
+// id — nguyên nhân hàng đầu gây hiện tượng "dịch vụ/giá của job khác tự xuất hiện").
+function _getDetailContainer(){
+  return (document.body.classList.contains('xuat-lotmode')&&g('xuat-lot-work'))||g('detailPanel');
+}
+window._getDetailContainer=_getDetailContainer;
+
 function _priceTabRefresh(){
   const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
   if(!r){toast('Không tìm thấy lô hàng','error');return;}
@@ -4451,24 +4461,32 @@ function _dnPartyInputChange(input,i){
 window._dnPartyInputChange=_dnPartyInputChange;
 
 async function saveInvoiceSettings(){
-  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  // QUAN TRỌNG: chốt id/tt vào biến LOCAL trước await — hàm này TRƯỚC ĐÂY dùng trực tiếp biến global
+  // detailId/detailTt cả ở phần ghi Firestore LẪN cập nhật cache sau await, nếu người dùng kịp
+  // chuyển sang lô khác trong lúc đang lưu, dữ liệu Invoice của lô ĐANG LƯU sẽ bị ghi NHẦM vào lô
+  // đang xem sau đó — cùng loại lỗi đã phát hiện và sửa ở saveDetailSvc()/savePayStatusDetail().
+  const _ivTt=detailTt, _ivId=detailId;
+  const r=cache[_ivTt].find(x=>x._id===_ivId)||{};
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  // Giới hạn phạm vi đọc DOM CHỈ trong container chi tiết lô hàng đang hiển thị.
+  const _dc=_getDetailContainer();
+  const gC=function(id){ return _dc?_dc.querySelector('[id="'+id+'"]'):null; };
   SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
     // Only update services whose inputs actually exist in the DOM.
     // (Waived services are filtered out of the table, so g(...) would be null and
     //  would wrongly reset them to defaults — skip them to preserve saved state.)
-    const vatEl=g('invvat_'+s.key);
-    const invEl=g('invinv_'+s.key);
+    const vatEl=gC('invvat_'+s.key);
+    const invEl=gC('invinv_'+s.key);
     if(!vatEl&&!invEl)return;
     if(vatEl)svcs[s.key].vat=vatEl.value||'0%';
     if(invEl)svcs[s.key].invoice=invEl.value||'Yes';
-    const customName=g('invname_'+s.key)?.value||'';
+    const customName=gC('invname_'+s.key)?.value||'';
     if(customName&&customName!==s.name) svcs[s.key].customName=customName;
   });
   // Tự sinh Số DN cho các Party chưa có số (ô Số DN đang trống trong bảng "Debit Note theo Party")
   const dnByParty=Object.assign({},r.dnByParty||{});
   let dnGenerated=0;
-  document.querySelectorAll('[id^="dnParty_"]').forEach(function(el){
+  (_dc?_dc.querySelectorAll('[id^="dnParty_"]'):document.querySelectorAll('[id^="dnParty_"]')).forEach(function(el){
     const party=el.dataset.party; if(!party)return;
     if((el.value||'').trim())return; // đã có số, bỏ qua
     const newDn=_genDnNoUnique();
@@ -4477,16 +4495,16 @@ async function saveInvoiceSettings(){
     dnGenerated++;
     // Bật nút Xuất DN tương ứng (id dạng btnXuatDn_<i> cùng index với dnParty_<i>)
     const idx=el.id.replace('dnParty_','');
-    const btn=g('btnXuatDn_'+idx);
+    const btn=gC('btnXuatDn_'+idx);
     if(btn){btn.disabled=false; btn.title='';}
   });
   setLoading(true,'Đang lưu...');
   try{
     const payload={svcs,updatedAt:Date.now(),updatedBy:currentUser.email};
     if(dnGenerated)payload.dnByParty=dnByParty;
-    await fsSet(colName(detailTt),detailId,payload);
+    await fsSet(colName(_ivTt),_ivId,payload);
     // Update cache only, do NOT re-render (keeps current view, avoids reloading all prices)
-    const arr=cache[detailTt]||[];const ci=arr.findIndex(x=>x._id===detailId);
+    const arr=cache[_ivTt]||[];const ci=arr.findIndex(x=>x._id===_ivId);
     if(ci>=0){arr[ci].svcs=svcs; if(dnGenerated)arr[ci].dnByParty=dnByParty;}
     toast(dnGenerated?('Đã lưu — tự sinh '+dnGenerated+' số DN mới'):'Đã lưu');
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -4511,9 +4529,11 @@ function openDebitNotePopup(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   // Save current VAT/invoice settings first (in-memory, won't block if not saved)
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  const _dc=_getDetailContainer();
+  const gC=function(id){ return _dc?_dc.querySelector('[id="'+id+'"]'):null; };
   SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
-    if(g('invvat_'+s.key)) svcs[s.key].vat=g('invvat_'+s.key).value;
-    if(g('invinv_'+s.key)) svcs[s.key].invoice=g('invinv_'+s.key).value;
+    if(gC('invvat_'+s.key)) svcs[s.key].vat=gC('invvat_'+s.key).value;
+    if(gC('invinv_'+s.key)) svcs[s.key].invoice=gC('invinv_'+s.key).value;
   });
   const tempR=Object.assign({},r,{svcs});
   openInvoice(detailId, detailTt, tempR);
@@ -5123,31 +5143,40 @@ async function saveDetailSvc(){
   if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
   const existing=JSON.parse(JSON.stringify(r.svcs||{}));
   const svcs={};
+  // QUAN TRỌNG — CHỐT CHẶN AN TOÀN THÊM: đọc dữ liệu CHỈ trong phạm vi grid dịch vụ đang hiển thị
+  // (#detailSvcGrid), TUYỆT ĐỐI không dùng g()/document.getElementById() không giới hạn phạm vi.
+  // document.getElementById() luôn trả về phần tử ĐẦU TIÊN khớp id trong TOÀN BỘ trang — nếu vì BẤT
+  // KỲ lý do gì (DOM sót lại, phần tử trùng id ở vùng khác) có 1 phần tử "tg_xxx"/"scost_xxx"... nằm
+  // NGOÀI grid này nhưng trùng id, hàm sẽ đọc NHẦM dữ liệu dịch vụ của lô khác vào lô đang lưu — đây
+  // là nghi vấn hàng đầu gây hiện tượng "dịch vụ lạ của job khác tự xuất hiện". Giới hạn phạm vi tìm
+  // kiếm CHỈ trong container của CHÍNH lô đang mở loại bỏ hoàn toàn khả năng này.
+  const _svcGridEl=document.getElementById('detailSvcGrid');
+  const gS=function(id){ return _svcGridEl?_svcGridEl.querySelector('[id="'+id+'"]'):null; };
   SVCS.forEach(s=>{
-    const tg=g('tg_'+s.key);if(!tg)return;
+    const tg=gS('tg_'+s.key);if(!tg)return;
     const on=tg.classList.contains('on');
     const prev=existing[s.key]||{};
-    const descEl=g('sd_'+s.key);
+    const descEl=gS('sd_'+s.key);
     const desc=descEl?descEl.value:(prev.desc||'');
     const showPrice=can('fillPrice')||can('viewCost');
     const isOcf=(s.key==='ocf')||((s.code||'').toUpperCase()==='OCF');
     // Only update price fields if user has permission to see them — RIÊNG OCF: doc/cus cũng được điền đầy đủ (cost, SL, ĐV, Currency, NCC, VAT)
-    const cost=(showPrice||isOcf)?(parseFloat(g('scost_'+s.key)?.value)||0):(prev.cost||0);
-    const svcQty=(showPrice||isOcf)?(parseFloat(g('sqty_'+s.key)?.value)||1):(prev.svcQty||1);
-    const svcUnit=(showPrice||isOcf)?(g('svcunit_'+s.key)?.value||'Cont'):(prev.svcUnit||'Cont');
-    const svcCur=(showPrice||isOcf)?(g('svcur_'+s.key)?.value||'USD'):(prev.svcCur||'USD');
-    const svcSupplier=(showPrice||isOcf)?(g('ssup_'+s.key)?.value||''):(prev.svcSupplier||'');
-    const apPaidStatus=showPrice?(g('sstatus_'+s.key)?.value||'unpaid'):(prev.apPaidStatus||'unpaid');
-    const apPaidDate=showPrice?(g('spaiddate_'+s.key)?.value||''):(prev.apPaidDate||'');
-    const apPaidBank=showPrice?(g('spaidbank_'+s.key)?.value||''):(prev.apPaidBank||'');
-    const apRemark=showPrice?(g('sremark_'+s.key)?.value||''):(prev.apRemark||'');
-    const finish=g('sfin_'+s.key)?.checked||false;
+    const cost=(showPrice||isOcf)?(parseFloat(gS('scost_'+s.key)?.value)||0):(prev.cost||0);
+    const svcQty=(showPrice||isOcf)?(parseFloat(gS('sqty_'+s.key)?.value)||1):(prev.svcQty||1);
+    const svcUnit=(showPrice||isOcf)?(gS('svcunit_'+s.key)?.value||'Cont'):(prev.svcUnit||'Cont');
+    const svcCur=(showPrice||isOcf)?(gS('svcur_'+s.key)?.value||'USD'):(prev.svcCur||'USD');
+    const svcSupplier=(showPrice||isOcf)?(gS('ssup_'+s.key)?.value||''):(prev.svcSupplier||'');
+    const apPaidStatus=showPrice?(gS('sstatus_'+s.key)?.value||'unpaid'):(prev.apPaidStatus||'unpaid');
+    const apPaidDate=showPrice?(gS('spaiddate_'+s.key)?.value||''):(prev.apPaidDate||'');
+    const apPaidBank=showPrice?(gS('spaidbank_'+s.key)?.value||''):(prev.apPaidBank||'');
+    const apRemark=showPrice?(gS('sremark_'+s.key)?.value||''):(prev.apRemark||'');
+    const finish=gS('sfin_'+s.key)?.checked||false;
     // VAT Amt: chỉ đọc từ DOM nếu ô này THỰC SỰ tồn tại (showPrice hoặc OCF) — tránh reset về 0
     // cho các dịch vụ khác khi doc/cus lưu form (dòng đơn giản của họ không có ô VAT).
-    const vatEl=g('svvatamt_'+s.key);
+    const vatEl=gS('svvatamt_'+s.key);
     const svcVatAmt=vatEl?(parseFloat(vatEl.value)||0):(prev.svcVatAmt||0);
     // OCF — trạng thái request payment (doc/cus tick) & confirmed/revise (chỉ đổi qua popup xét duyệt, giữ nguyên khi lưu form)
-    const reqPaymentEl=g('sreqpay_'+s.key);
+    const reqPaymentEl=gS('sreqpay_'+s.key);
     const reqPayment=reqPaymentEl?reqPaymentEl.checked:(prev.reqPayment||false);
     const ocfConfirmed=prev.ocfConfirmed||false;
     // Nếu doc/cus tick lại Request Payment (resubmit) sau khi bị yêu cầu Need Revise → tự xóa cờ revise
@@ -5163,7 +5192,7 @@ async function saveDetailSvc(){
     if(prev.dnData)svcs[s.key].dnData=prev.dnData;
     if(prev.dnAt)svcs[s.key].dnAt=prev.dnAt;
     if(prev.svcStatus)svcs[s.key].svcStatus=prev.svcStatus;
-    if(s.custom)svcs[s.key]._name=g('sname_'+s.key)?.value||s.name;
+    if(s.custom)svcs[s.key]._name=gS('sname_'+s.key)?.value||s.name;
   });
   // FIX: các dịch vụ ĐÃ XÓA (có trong dữ liệu cũ nhưng không còn trong grid) phải bị xóa hẳn,
   // không để merge:true của Firestore tự khôi phục. Dùng FieldValue.delete() cho từng key đã bỏ.
@@ -5241,13 +5270,15 @@ function updDetailFpTotal(){
   const svcs=r.svcs||{};
   const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
   const byCur={};
+  const _fpTableEl=document.getElementById('fpTable');
+  const gFp=function(id){ return _fpTableEl?_fpTableEl.querySelector('[id="'+id+'"]'):null; };
   allOn.forEach(function(s){
-    const price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
-    const qty=parseFloat(g('fpq_'+s.key)&&g('fpq_'+s.key).value)||1;
-    const cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'VND';
+    const price=parseFloat(gFp('fpp_'+s.key)&&gFp('fpp_'+s.key).value)||0;
+    const qty=parseFloat(gFp('fpq_'+s.key)&&gFp('fpq_'+s.key).value)||1;
+    const cur=(gFp('fpcur_'+s.key)&&gFp('fpcur_'+s.key).value)||'VND';
     const amount=price*qty;
     // Update Amount cell
-    const amtEl=g('fpamt_'+s.key);
+    const amtEl=gFp('fpamt_'+s.key);
     if(amtEl) amtEl.textContent=amount?amount.toLocaleString():'—';
     if(!byCur[cur])byCur[cur]=0;
     byCur[cur]+=amount;
@@ -5296,15 +5327,20 @@ async function saveDetailFillPrice(){
   const r=cache[_fpTt].find(x=>x._id===_fpId)||{};
   if(r.priceLocked){toast('Fill giá đang bị khóa — Unlock trước khi lưu','error');return;}
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  // Giới hạn phạm vi đọc DOM CHỈ trong #fpTable (bảng Fill giá đang hiển thị) — cùng nguyên nhân/
+  // cùng cách sửa như saveDetailSvc(): g() không giới hạn phạm vi có thể đọc nhầm phần tử của lô
+  // khác nếu trùng id, gây lưu sai dữ liệu giá vào lô đang mở.
+  const _fpTableEl=document.getElementById('fpTable');
+  const gFp=function(id){ return _fpTableEl?_fpTableEl.querySelector('[id="'+id+'"]'):null; };
   SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on).forEach(function(s){
-    svcs[s.key].price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
-    svcs[s.key].cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'VND';
-    const qty=parseFloat(g('fpq_'+s.key)&&g('fpq_'+s.key).value)||1;
+    svcs[s.key].price=parseFloat(gFp('fpp_'+s.key)&&gFp('fpp_'+s.key).value)||0;
+    svcs[s.key].cur=(gFp('fpcur_'+s.key)&&gFp('fpcur_'+s.key).value)||'VND';
+    const qty=parseFloat(gFp('fpq_'+s.key)&&gFp('fpq_'+s.key).value)||1;
     svcs[s.key].qty=qty;
     svcs[s.key].amount=svcs[s.key].price*qty;
-    svcs[s.key].unit=(g('fpu_'+s.key)&&g('fpu_'+s.key).value)||'Cont';
-    svcs[s.key].invoice=(g('fpinv_'+s.key)&&g('fpinv_'+s.key).value)||'Yes';
-    svcs[s.key].party=(g('fpparty_'+s.key)&&g('fpparty_'+s.key).value)||'';
+    svcs[s.key].unit=(gFp('fpu_'+s.key)&&gFp('fpu_'+s.key).value)||'Cont';
+    svcs[s.key].invoice=(gFp('fpinv_'+s.key)&&gFp('fpinv_'+s.key).value)||'Yes';
+    svcs[s.key].party=(gFp('fpparty_'+s.key)&&gFp('fpparty_'+s.key).value)||'';
   });
   setLoading(true,'Đang lưu giá...');
   try{
@@ -6473,14 +6509,16 @@ function updFpTotal(){
   const svcs=r.svcs||{};
   const allOn=SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;});
   const byCur={};
+  const _fpOvEl=document.getElementById('fpOv');
+  const gM=function(id){ return _fpOvEl?_fpOvEl.querySelector('[id="'+id+'"]'):null; };
   allOn.forEach(function(s){
-    const cost=parseFloat(g('fpc_'+s.key)&&g('fpc_'+s.key).value)||0;
-    const price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
-    const cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'VND';
+    const cost=parseFloat(gM('fpc_'+s.key)&&gM('fpc_'+s.key).value)||0;
+    const price=parseFloat(gM('fpp_'+s.key)&&gM('fpp_'+s.key).value)||0;
+    const cur=(gM('fpcur_'+s.key)&&gM('fpcur_'+s.key).value)||'VND';
     if(!byCur[cur])byCur[cur]={cost:0,price:0};
     byCur[cur].cost+=cost; byCur[cur].price+=price;
   });
-  const tot=g('fpTot'); if(!tot)return;
+  const tot=gM('fpTot'); if(!tot)return;
   let html='';
   Object.keys(byCur).forEach(function(c){
     const v=byCur[c];
@@ -6493,13 +6531,16 @@ function updFpTotal(){
 async function saveFillPrice(){
   const r=cache[currentTab].find(function(x){return x._id===svcIdx;})||{};
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
+  // Giới hạn phạm vi đọc DOM CHỈ trong modal #fpOv — cùng lý do/cách sửa như saveSvc().
+  const _fpOvEl=document.getElementById('fpOv');
+  const gM=function(id){ return _fpOvEl?_fpOvEl.querySelector('[id="'+id+'"]'):null; };
   SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;}).forEach(function(s){
-    svcs[s.key].cost=parseFloat(g('fpc_'+s.key)&&g('fpc_'+s.key).value)||0;
-    svcs[s.key].price=parseFloat(g('fpp_'+s.key)&&g('fpp_'+s.key).value)||0;
-    svcs[s.key].cur=(g('fpcur_'+s.key)&&g('fpcur_'+s.key).value)||'VND';
+    svcs[s.key].cost=parseFloat(gM('fpc_'+s.key)&&gM('fpc_'+s.key).value)||0;
+    svcs[s.key].price=parseFloat(gM('fpp_'+s.key)&&gM('fpp_'+s.key).value)||0;
+    svcs[s.key].cur=(gM('fpcur_'+s.key)&&gM('fpcur_'+s.key).value)||'VND';
     // Also save qty/unit so Costing revenue picks them up correctly
-    var qEl=g('fpq_'+s.key); if(qEl) svcs[s.key].qty=parseFloat(qEl.value)||1;
-    var uEl=g('fpu_'+s.key); if(uEl) svcs[s.key].unit=uEl.value||svcs[s.key].svcUnit||'Cont';
+    var qEl=gM('fpq_'+s.key); if(qEl) svcs[s.key].qty=parseFloat(qEl.value)||1;
+    var uEl=gM('fpu_'+s.key); if(uEl) svcs[s.key].unit=uEl.value||svcs[s.key].svcUnit||'Cont';
   });
   setLoading(true,'Đang lưu giá...');
   try {
@@ -8434,14 +8475,20 @@ async function saveSvc(){
   const r=cache[currentTab].find(x=>x._id===svcIdx)||{};
   const existing=JSON.parse(JSON.stringify(r.svcs||{}));
   const svcs={};
+  // Giới hạn phạm vi đọc DOM CHỈ trong modal #svcOv — RỦI RO RẤT CAO nếu không giới hạn: modal này
+  // đè lên TRÊN panel chi tiết lô hàng khác (nếu đang mở phía sau), và cả 2 có thể dùng CÙNG pattern
+  // id "tg_xxx" — document.getElementById() sẽ lấy NHẦM phần tử của panel phía sau thay vì trong
+  // modal, gây lưu sai dịch vụ của lô A vào lô B đang mở modal.
+  const _svcOvEl=document.getElementById('svcOv');
+  const gM=function(id){ return _svcOvEl?_svcOvEl.querySelector('[id="'+id+'"]'):null; };
   SVCS.forEach(s=>{
-    const tg=g('tg_'+s.key);if(!tg)return;
+    const tg=gM('tg_'+s.key);if(!tg)return;
     const on=tg.classList.contains('on');
-    const desc=g('sd_'+s.key)?.value||'';
+    const desc=gM('sd_'+s.key)?.value||'';
     const prev=existing[s.key]||{};
     svcs[s.key]={on,desc,cost:prev.cost||0,price:prev.price||0,cur:prev.cur||'USD'};
     // Lưu kèm tên + mã cho MỌI dịch vụ (kể cả built-in) để không mất liên kết nếu danh mục thay đổi
-    svcs[s.key]._name=(s.custom?(g('sname_'+s.key)?.value||s.name):s.name);
+    svcs[s.key]._name=(s.custom?(gM('sname_'+s.key)?.value||s.name):s.name);
     if(s.code)svcs[s.key]._code=s.code;
   });
   setLoading(true,'Đang lưu dịch vụ...');
@@ -19223,6 +19270,10 @@ function updateCostingTotal(){
   let totalVatAmtVND=0;
   let totalVNDPreVat=0; // Chi phí trước VAT (dùng cho lợi nhuận)
   const roe=26390;
+  // Giới hạn phạm vi đọc/ghi DOM CHỈ trong container chi tiết lô hàng đang hiển thị — tránh đọc/ghi
+  // nhầm phần tử của lô khác nếu trùng id (cùng nguyên nhân đã phát hiện ở saveDetailSvc()).
+  const _dc=_getDetailContainer();
+  const gC=function(id){ return _dc?_dc.querySelector('[id="'+id+'"]'):null; };
 
   // Khử trùng lặp SVCS theo key — xem giải thích chi tiết ở phần render bảng Costing (cùng nguyên
   // nhân: SVCS tích lũy dần qua phiên làm việc có thể chứa entry trùng key, gây cộng đôi chi phí).
@@ -19231,15 +19282,15 @@ function updateCostingTotal(){
   SVCS_DEDUP.forEach(function(s){
     const sv=svcs[s.key];
     if(!sv||!sv.on||!sv.cost)return;
-    const priceEl=g('autoprice_'+s.key);
+    const priceEl=gC('autoprice_'+s.key);
     if(!priceEl)return;
-    const qtyEl=g('autoqty_'+s.key);
-    const curEl=g('autocur_'+s.key);
+    const qtyEl=gC('autoqty_'+s.key);
+    const curEl=gC('autocur_'+s.key);
     const price=parseFloat(priceEl.value)||0;
     const qty=parseFloat(qtyEl?qtyEl.value:'1')||1;
     const cur=curEl?curEl.value:'VND';
     const amt=price*qty;
-    const amtEl=g('autoamt_'+s.key);
+    const amtEl=gC('autoamt_'+s.key);
     if(amtEl)amtEl.textContent=amt?amt.toLocaleString():'—';
     const vatRate=parseFloat((sv.svcVat||'0%').replace('%',''))||0;
     const svcVatAmtManual=sv.svcVatAmt||0;
@@ -19254,18 +19305,18 @@ function updateCostingTotal(){
   // Sum manual rows - iterate by rendered inputs only
   let i=0;
   while(i<50){
-    const priceEl=g('cprice_'+i);
+    const priceEl=gC('cprice_'+i);
     if(!priceEl)break;
     const price=parseFloat(priceEl.value)||0;
-    const qty=parseFloat(g('cqty_'+i)?.value)||1;
-    const cur=g('ccur_'+i)?.value||'VND';
+    const qty=parseFloat(gC('cqty_'+i)?.value)||1;
+    const cur=gC('ccur_'+i)?.value||'VND';
     const amt=price*qty;
-    const dispEl=g('camt_display_'+i);
+    const dispEl=gC('camt_display_'+i);
     if(dispEl)dispEl.textContent=amt?amt.toLocaleString():'—';
-    const vatAmtInput=g('cvatamt_'+i);
+    const vatAmtInput=gC('cvatamt_'+i);
     const vatAmtManual=vatAmtInput?parseFloat(vatAmtInput.value)||0:0;
     const totalManual=amt+vatAmtManual;
-    const totDisp=g('ctotal_'+i); if(totDisp)totDisp.textContent=totalManual.toLocaleString();
+    const totDisp=gC('ctotal_'+i); if(totDisp)totDisp.textContent=totalManual.toLocaleString();
     const amtWithVat=totalManual;
     totalVatAmtVND+=(cur==='VND'?vatAmtManual:Math.round(vatAmtManual*roe));
     totalVNDPreVat+=cur==='VND'?amt:Math.round(amt*roe); // trước VAT
@@ -19273,20 +19324,20 @@ function updateCostingTotal(){
     i++;
   }
 
-  const tot=g('costingTotals');
+  const tot=gC('costingTotals');
   if(tot)tot.innerHTML='Tổng chi phí: <strong style="color:var(--red);font-size:13px">'+totalVND.toLocaleString()+' VND</strong>'
     +(totalVatAmtVND?'&nbsp;·&nbsp;VAT: <strong style="color:#e07000">'+totalVatAmtVND.toLocaleString()+' VND</strong>':'');
-  const cell=g('costingTotalCell');
+  const cell=gC('costingTotalCell');
   if(cell)cell.textContent=(totalVND-totalVatAmtVND).toLocaleString();
-  const vatCell=g('costingVatAmtCell');
+  const vatCell=gC('costingVatAmtCell');
   if(vatCell)vatCell.textContent=totalVatAmtVND?totalVatAmtVND.toLocaleString():'—';
-  const totalVatCell=g('costingTotalVatCell');
+  const totalVatCell=gC('costingTotalVatCell');
   if(totalVatCell)totalVatCell.textContent=totalVND?totalVND.toLocaleString():'—';
   // Update profit summary
-  const costCell=g('sumCostCell');
-  const profitCell=g('sumProfitCell');
-  const marginCell=g('sumMarginCell');
-  const revCell=g('sumRevCell');
+  const costCell=gC('sumCostCell');
+  const profitCell=gC('sumProfitCell');
+  const marginCell=gC('sumMarginCell');
+  const revCell=gC('sumRevCell');
   if(costCell||profitCell){
     const revVND=revCell?(parseFloat(revCell.dataset.val)||parseFloat((revCell.textContent||'0').replace(/,/g,''))||0):0;
     const profit=revVND-totalVNDPreVat; // Doanh thu (trước VAT) - Chi phí (trước VAT)
@@ -19305,12 +19356,16 @@ async function saveCosting(){
   if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
   let svcChanged=false;
+  // Giới hạn phạm vi đọc DOM CHỈ trong container đang hiển thị lô hàng này — cùng nguyên nhân/cách
+  // sửa như saveDetailSvc()/saveDetailFillPrice(): tránh đọc nhầm phần tử của lô khác nếu trùng id.
+  const _dc=_getDetailContainer();
+  const gC=function(id){ return _dc?_dc.querySelector('[id="'+id+'"]'):null; };
   SVCS.forEach(function(s){
     const sv=svcs[s.key];
     if(!sv||!sv.on||!sv.cost)return;
-    const priceEl=g('autoprice_'+s.key);
-    const qtyEl=g('autoqty_'+s.key);
-    const remarkEl=g('autoremark_'+s.key);
+    const priceEl=gC('autoprice_'+s.key);
+    const qtyEl=gC('autoqty_'+s.key);
+    const remarkEl=gC('autoremark_'+s.key);
     if(priceEl){ sv.cost=parseFloat(priceEl.value)||sv.cost; svcChanged=true; }
     if(qtyEl){ sv.svcQty=parseFloat(qtyEl.value)||sv.svcQty; svcChanged=true; }
     if(remarkEl){ sv.apRemark=remarkEl.value||''; svcChanged=true; }
@@ -19322,26 +19377,26 @@ async function saveCosting(){
   const items=_tempCosting||((r.costing||{}).items||[]);
   // Read current input values
   const savedItems=items.map(function(it,i){
-    const price=parseFloat(g('cprice_'+i)?.value)||it.price||it.amt||0;
-    const qty=parseFloat(g('cqty_'+i)?.value)||it.qty||1;
+    const price=parseFloat(gC('cprice_'+i)?.value)||it.price||it.amt||0;
+    const qty=parseFloat(gC('cqty_'+i)?.value)||it.qty||1;
     return {
       id:it.id||('ci_'+Date.now()+'_'+i),
-      name:g('cname_'+i)?.value||it.name||'',
+      name:gC('cname_'+i)?.value||it.name||'',
       price,
       qty,
       amt:price*qty,
-      vatAmt:parseFloat(g('cvatamt_'+i)?.value)||it.vatAmt||0,
-      unit:g('cunit_'+i)?.value||it.unit||'Cont',
-      cur:g('ccur_'+i)?.value||it.cur||'USD',
-      remark:g('cremark_'+i)?.value||it.remark||'',
-      partnerRef:g('cncc_'+i)?.value||it.partnerRef||null,
-      apPaidStatus:g('cstatus_'+i)?.value||it.apPaidStatus||'unpaid',
-      apPaidDate:g('cpaiddate_'+i)?.value||it.apPaidDate||'',
-      apPaidBank:g('cpaidbank_'+i)?.value||it.apPaidBank||'',
+      vatAmt:parseFloat(gC('cvatamt_'+i)?.value)||it.vatAmt||0,
+      unit:gC('cunit_'+i)?.value||it.unit||'Cont',
+      cur:gC('ccur_'+i)?.value||it.cur||'USD',
+      remark:gC('cremark_'+i)?.value||it.remark||'',
+      partnerRef:gC('cncc_'+i)?.value||it.partnerRef||null,
+      apPaidStatus:gC('cstatus_'+i)?.value||it.apPaidStatus||'unpaid',
+      apPaidDate:gC('cpaiddate_'+i)?.value||it.apPaidDate||'',
+      apPaidBank:gC('cpaidbank_'+i)?.value||it.apPaidBank||'',
       fromCashTx:it.fromCashTx||false
     };
   }).filter(function(it){return it.name||it.price;});
-  const note=g('costingNote')?.value||'';
+  const note=gC('costingNote')?.value||'';
   const costing={items:savedItems,note,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
   setLoading(true,'Đang lưu costing...');
   try{
