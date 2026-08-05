@@ -1086,7 +1086,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.45';
+window.APP_BUILD='v3.46';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -24036,7 +24036,6 @@ function renderDocMaker(){
   _dmHost=null;
   if(!pg)return;
   pg.innerHTML=`
-<div id="dmHeaderBar"></div>
 <div id="dmDocTabsBar"></div>
 <div class="dm-toolbar" style="margin-top:0;margin-bottom:10px">
   <button class="btn pri" onclick="dmPreview()"><i class="ti ti-eye"></i> Xem trước</button>
@@ -24161,7 +24160,6 @@ function renderDocMaker(){
 <div id="dmSideCol">
   <div class="dm-side-card"><div style="text-align:center;padding:2rem 1rem;color:var(--text-tertiary)"><i class="ti ti-file-certificate" style="font-size:32px;opacity:.25"></i><div style="margin-top:.5rem;font-size:12px">Chọn lô hàng để xem tóm tắt chứng từ</div></div></div>
 </div>
-<div id="dmPreviewBox" style="display:none;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light);padding:1.5rem;min-height:200px;margin-top:10px"></div>
 <!-- Giữ các nút export cũ (ẩn) để dmPreview()/các hàm cũ bật/tắt disabled không lỗi — không xóa để không ảnh hưởng logic hiện có -->
 <div style="display:none">
   <button id="dmBtnInv" onclick="dmExport('INV')" disabled></button>
@@ -24182,7 +24180,6 @@ function renderDocMaker(){
   _dmRenderInvItems();
   renderDmSavedList();
   _dmRenderDocTabs();
-  _dmRenderHeaderBar();
   _dmRenderSidebar();
 }
 
@@ -24194,22 +24191,6 @@ function _dmToggleSearchBox(){
   if(show)setTimeout(function(){g('dmSearch')&&g('dmSearch').focus();},50);
 }
 window._dmToggleSearchBox=_dmToggleSearchBox;
-
-// Header tóm tắt lô hàng — JOB ID/Buyer/POL-POD/Vessel-Voy/Carrier, theo đúng bố cục ảnh mẫu.
-function _dmRenderHeaderBar(){
-  const box=g('dmHeaderBar'); if(!box)return;
-  const r=_dmLot;
-  if(!r||!r._id){ box.innerHTML=''; return; }
-  const podFirst=(r.pod||'').split(',')[0]||r.pod||'';
-  box.innerHTML='<div class="dm-hdr">'
-    +'<div class="dm-hdr-item"><div class="k">Job ID</div><div class="v big">'+(r.jobNo||'—')+'</div></div>'
-    +'<div class="dm-hdr-item"><div class="k">Buyer</div><div class="v">'+(r.shipper||r.supplier||'—')+'</div></div>'
-    +'<div class="dm-hdr-item"><div class="k">POL / POD</div><div class="v">'+(r.pol||'—')+' → '+(podFirst||'—')+'</div></div>'
-    +'<div class="dm-hdr-item"><div class="k">Vessel / Voy</div><div class="v">'+(r.vessel||'—')+(r.voy?' V.'+r.voy:'')+(r.etd?' · ETD '+r.etd:'')+'</div></div>'
-    +'<div class="dm-hdr-item"><div class="k">Carrier</div><div class="v">'+((r.carriers&&r.carriers[0])||r.carrier||'—')+'</div></div>'
-  +'</div>';
-}
-window._dmRenderHeaderBar=_dmRenderHeaderBar;
 
 // Tab loại chứng từ — CHỈ để chuyển đổi/kích hoạt loại đang thao tác, KHÔNG tính trạng thái tự động
 // (theo đúng yêu cầu). Bấm 1 tab = chọn loại chứng từ đó làm "đang active" cho nút Tạo PDF dưới cùng.
@@ -24424,11 +24405,22 @@ async function _dmDoExportExcel(){
   }
   function headerRow(ws,r,cols){
     cols.forEach(function(h,i){
-      const c=ws.getCell(r,i+1); c.value=h; c.font={bold:true,size:9,color:{argb:'FFFFFFFF'}};
+      const c=ws.getCell(r,i+1); c.value=h; c.font={bold:true,size:9,color:{argb:'FFFFFFFF'},name:'Times New Roman'};
       c.fill={type:'pattern',pattern:'solid',fgColor:{argb:C.navy}}; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; c.border=B();
     });
     ws.getRow(r).height=26;
     return r+1;
+  }
+  // Áp font Times New Roman cho TOÀN BỘ ô đã có nội dung trong sheet — khớp đúng font PDF đang dùng
+  // ("Times New Roman", Times, serif trong _dmCSS()). Chạy 1 lần SAU KHI đã dựng xong từng sheet,
+  // thay vì phải sửa tay từng chỗ gán font={...} rải rác (rất dễ sót).
+  function applyTimesFont(ws){
+    ws.eachRow({includeEmpty:false},function(row){
+      row.eachCell({includeEmpty:false},function(cell){
+        const f=cell.font||{};
+        cell.font=Object.assign({},f,{name:'Times New Roman'});
+      });
+    });
   }
 
   try{
@@ -24464,42 +24456,42 @@ async function _dmDoExportExcel(){
       [1,3,4,5].forEach(function(ci){ws.getCell(r,ci).border=B();});
       r++;
       signBlock(ws,r,d);
+      applyTimesFont(ws);
     }
 
     // ═══ PACKING LIST — khớp _dmPKL2() ═══
     if(picked.indexOf('PKL')>=0){
       const ws=wb.addWorksheet('Packing List',{views:[{showGridLines:false}]});
-      ws.columns=[{width:16},{width:14},{width:9},{width:11},{width:11},{width:7},{width:12}];
-      let r=topHeader(ws,1,d,7);
-      r=titleRow(ws,r,'PACKING LIST',7);
-      r=setLbl(ws,r,1,'No.',d.pklNo||d.invoiceNo,{mergeValueTo:7}); r=setLbl(ws,r,1,'Date',d.pklDate||d.date,{mergeValueTo:7}); r++;
-      r=setLbl(ws,r,1,'SELLER',d.sName,{mergeValueTo:7,boldValue:true});
-      r=setLbl(ws,r,1,'ADDRESS',d.sAddr,{mergeValueTo:7});
+      ws.columns=[{width:16},{width:14},{width:9},{width:11},{width:11},{width:11},{width:6},{width:12}];
+      let r=topHeader(ws,1,d,8);
+      r=titleRow(ws,r,'PACKING LIST',8);
+      r=setLbl(ws,r,1,'No.',d.pklNo||d.invoiceNo,{mergeValueTo:8}); r=setLbl(ws,r,1,'Date',d.pklDate||d.date,{mergeValueTo:8}); r++;
+      r=setLbl(ws,r,1,'SELLER',d.sName,{mergeValueTo:8,boldValue:true});
+      r=setLbl(ws,r,1,'ADDRESS',d.sAddr,{mergeValueTo:8});
       r++;
-      r=setLbl(ws,r,1,'BUYER',d.cnee,{mergeValueTo:7,boldValue:true});
-      r=setLbl(ws,r,1,'ADDRESS',d.cneeAddr+(d.cneeUsci?' — USCI: '+d.cneeUsci:''),{mergeValueTo:7});
-      r=setLbl(ws,r,1,'BKG NO',d.bkgNo,{mergeValueTo:7});
-      r=setLbl(ws,r,1,'BILL NO',d.mbl,{mergeValueTo:7});
-      r=setLbl(ws,r,1,'VESSEL/VOYAGE',d.vessel,{mergeValueTo:7});
-      r=setLbl(ws,r,1,'SHIPMENT FROM',d.pol,{mergeValueTo:7});
-      r=setLbl(ws,r,1,'SHIPMENT TO',d.pod,{mergeValueTo:7});
+      r=setLbl(ws,r,1,'BUYER',d.cnee,{mergeValueTo:8,boldValue:true});
+      r=setLbl(ws,r,1,'ADDRESS',d.cneeAddr+(d.cneeUsci?' — USCI: '+d.cneeUsci:''),{mergeValueTo:8});
+      r=setLbl(ws,r,1,'BKG NO',d.bkgNo,{mergeValueTo:8});
+      r=setLbl(ws,r,1,'BILL NO',d.mbl,{mergeValueTo:8});
+      r=setLbl(ws,r,1,'VESSEL/VOYAGE',d.vessel,{mergeValueTo:8});
+      r=setLbl(ws,r,1,'SHIPMENT FROM',d.pol,{mergeValueTo:8});
+      r=setLbl(ws,r,1,'SHIPMENT TO',d.pod,{mergeValueTo:8});
       r++;
-      r=headerRow(ws,r,['DESCRIPTION','CONT','SEAL','NUMBER OF PACKAGE ('+(d.pkgUnit||d.unit)+')','NET WEIGHT (KGS)','GROSS WEIGHT (KGS)','NO','STUFF DATE'.slice(0,0)]);
-      // Chỉnh lại header đúng 7 cột theo colgroup đã set ở trên (không có cột NO riêng — gộp vào cuối), khớp PDL gốc 7 cột chính
-      ws.getRow(r-1).getCell(7).value='STUFF DATE'; ws.mergeCells(r-1,6,r-1,6);
+      r=headerRow(ws,r,['DESCRIPTION','CONT','SEAL','NUMBER OF PACKAGE ('+(d.pkgUnit||d.unit)+')','NET WEIGHT (KGS)','GROSS WEIGHT (KGS)','NO','STUFF DATE']);
       (d.conts||[]).forEach(function(c,i){
         const row=ws.getRow(r);
         if(i===0){row.getCell(1).value=d.goods; row.getCell(1).font={bold:true};}
         row.getCell(2).value=c.no||''; row.getCell(3).value=c.seal||''; row.getCell(4).value=c.pkg||'';
-        row.getCell(5).value=c.nw?f2(c.nw):''; row.getCell(6).value=c.gw?f2(c.gw):''; row.getCell(7).value=c.date||'';
-        [1,2,3,4,5,6,7].forEach(function(ci){row.getCell(ci).border=B(); row.getCell(ci).alignment={horizontal:ci===1?'left':'center'};});
+        row.getCell(5).value=c.nw?f2(c.nw):''; row.getCell(6).value=c.gw?f2(c.gw):''; row.getCell(7).value=i+1; row.getCell(8).value=c.date||'';
+        [1,2,3,4,5,6,7,8].forEach(function(ci){row.getCell(ci).border=B(); row.getCell(ci).alignment={horizontal:ci===1?'left':'center'};});
         r++;
       });
       ws.mergeCells(r,1,r,3); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'};
       ws.getCell(r,4).value=d.totalPkg; ws.getCell(r,5).value=f2(d.totalNW); ws.getCell(r,6).value=f2(d.totalGW);
-      [1,4,5,6,7].forEach(function(ci){ws.getCell(r,ci).font={bold:true}; ws.getCell(r,ci).border=B();});
+      [1,4,5,6,7,8].forEach(function(ci){ws.getCell(r,ci).font={bold:true}; ws.getCell(r,ci).border=B();});
       r+=2;
       signBlock(ws,r,d);
+      applyTimesFont(ws);
     }
 
     // ═══ CONTRACT — khớp _dmContract() ═══
@@ -24544,6 +24536,7 @@ async function _dmDoExportExcel(){
       r++;
       ws.mergeCells(r,1,r+3,3); ws.getCell(r,1).value=d.cnee||''; ws.getCell(r,1).alignment={horizontal:'center',vertical:'top'}; ws.getCell(r,1).border=B();
       ws.mergeCells(r,4,r+3,6); ws.getCell(r,4).value=d.sShort||d.sName; ws.getCell(r,4).font={bold:true}; ws.getCell(r,4).alignment={horizontal:'center',vertical:'top'}; ws.getCell(r,4).border=B();
+      applyTimesFont(ws);
     }
 
     // ═══ INV T.KHAI — khớp _dmInvTK() ═══
@@ -24581,6 +24574,7 @@ async function _dmDoExportExcel(){
       ws.getCell(r,5).value=f2(net); ws.getCell(r,5).font={bold:true};
       r+=2;
       signBlock(ws,r,d);
+      applyTimesFont(ws);
     }
 
     // ═══ SI — khớp _dmSI() ═══
@@ -24618,6 +24612,7 @@ async function _dmDoExportExcel(){
       r=setLbl(ws,r,1,'Payment Term','FREIGHT PREPAID',{mergeValueTo:10});
       r+=2;
       ws.mergeCells(r,1,r,10); ws.getCell(r,1).value='FOR AND ON BEHALF OF '+(d.sShort||d.sName); ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'right'};
+      applyTimesFont(ws);
     }
 
     const buf=await wb.xlsx.writeBuffer();
@@ -24813,7 +24808,6 @@ function dmPickLot(id,tt,targetBkArg){
   // cũ lưu từ lần tạo document trước — nếu để nó ghi đè sẽ tái hiện dữ liệu cont bị trùng.
   // Các field khác của docData (ngày, hàng hóa, giá, cnee...) vẫn được load bình thường.
   if(r.docData){setTimeout(function(){dmLoadSaved(r.docData,true);if(window._dmRenderSidebar)_dmRenderSidebar();},100);}
-  if(window._dmRenderHeaderBar)_dmRenderHeaderBar();
   if(window._dmRenderSidebar)_dmRenderSidebar();
   if(g('dmSearchBoxWrap'))g('dmSearchBoxWrap').style.display='none'; // tự thu gọn ô tìm kiếm sau khi đã chọn lô
 }
@@ -24993,31 +24987,97 @@ function dmGetData(){
     pol:'HO CHI MINH, VIET NAM'};
 }
 
+// Các loại chứng từ có thể xem trước dạng HTML (giống hệt nội dung sẽ in ra PDF) — không gồm
+// SI_HEDE vì đó là xuất thẳng file Excel, không có bản HTML để preview.
+const DM_PREVIEW_TYPES=[
+  {k:'INV',label:'Invoice',icon:'ti-file-invoice',gen:function(d){return _dmInvoice(d);}},
+  {k:'PKL',label:'Packing List',icon:'ti-package',gen:function(d){return _dmPKL2(d);}},
+  {k:'CONTRACT',label:'Contract',icon:'ti-file-contract',gen:function(d){return _dmContract(d);}},
+  {k:'INV_TK',label:'INV T.Khai',icon:'ti-receipt-2',gen:function(d){return _dmInvTK(d);}},
+  {k:'SI',label:'SI',icon:'ti-send',gen:function(d){return _dmSI(d);}},
+  {k:'INV_CONT',label:'Inv theo Cont',icon:'ti-container',gen:function(d){return _dmInvoiceByCont(d);}},
+  {k:'CONTRACT_CONT',label:'Contract theo Cont',icon:'ti-file-contract',gen:function(d){return _dmContractByCont(d);}}
+];
+
+// "Xem trước" — mở POPUP với live preview (iframe hiện ĐÚNG nội dung sẽ in ra PDF), có tab chọn
+// loại chứng từ, nút Tạo PDF/Merge PDF/Xuất Excel ngay trong popup, và danh sách chứng từ đã lưu ở
+// dưới cùng — thay cho cách hiện cũ (hiện tóm tắt cố định trong trang, không xem được nội dung thật).
 function dmPreview(){
   const d=dmGetData();
   if(!d){toast('Chưa chọn lô hàng','error');return;}
   if(!d.sName){toast('Shipper chưa có tên tiếng Anh — vào Đối tác để nhập','error');return;}
   ['dmBtnInv','dmBtnInvCont','dmBtnPkl','dmBtnCont','dmBtnContCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
-  if(window._dmRenderSidebar)_dmRenderSidebar();
-  if(g('dmPreviewBox'))g('dmPreviewBox').style.display='block';
-  const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
-  g('dmPreviewBox').innerHTML=
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">'
-    +'<div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)"><div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary)">SELLER</div><div style="font-size:12px;font-weight:700;margin-top:3px">'+d.sName+'</div><div style="font-size:11px;color:var(--text-secondary)">'+d.sAddr+'</div><div style="font-size:11px;color:var(--text-secondary);margin-top:2px">A/C: '+(d.sBankAcc||'—')+' — '+(d.sBankName||'—')+'</div></div>'
-    +'<div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)"><div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary)">BUYER / CNEE</div><div style="font-size:12px;font-weight:700;margin-top:3px">'+(d.cnee||'—')+'</div><div style="font-size:11px;color:var(--text-secondary)">'+d.cneeAddr+'</div>'+(d.cneeUsci?'<div style="font-size:11px;color:var(--text-secondary)">USCI: '+d.cneeUsci+'</div>':'')+'</div>'
-    +'<div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)"><div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary)">HÀNG HÓA</div>'+(function(){
-      const items=d.invItems||[];
-      if(items.length>1){
-        return '<div style="font-size:12px;font-weight:700;margin-top:3px">'+items.length+' dòng hàng (Invoice)</div>'
-          +'<div style="font-size:11px">'+items.map(function(it){return (it.name||d.goods);}).join(', ')+'</div>'
-          +'<div style="font-size:15px;font-weight:800;color:var(--green);margin-top:4px">USD '+f2(d.invGrandTotal)+' <span style="font-size:10px;font-weight:600;color:var(--text-tertiary)">(tự tính tổng)</span></div>';
-      }
-      return '<div style="font-size:12px;font-weight:700;margin-top:3px">'+d.goods+'</div><div style="font-size:11px">'+d.qty.toLocaleString()+' '+d.unit+' × $'+d.unitPrice+'</div><div style="font-size:15px;font-weight:800;color:var(--green);margin-top:4px">USD '+f2(d.amount)+'</div>';
-    })()+'</div>'
-    +'<div style="padding:10px;background:var(--bg-primary);border-radius:8px;border:1px solid var(--border-light)"><div style="font-size:9px;text-transform:uppercase;font-weight:700;color:var(--text-secondary)">TUYẾN</div><div style="font-size:12px;font-weight:700;margin-top:3px">'+d.vessel+'</div><div style="font-size:11px">'+d.pol+' → '+d.pod+'</div><div style="font-size:11px;margin-top:2px">MBL: '+d.mbl+' | BKG: '+d.bkgNo+'</div><div style="font-size:11px">NW: '+d.totalNW.toLocaleString()+' | GW: '+d.totalGW.toLocaleString()+' | '+d.conts.length+' conts</div></div>'
-    +'</div>'
-    +'<div style="display:flex;gap:6px;flex-wrap:wrap"><span class="bdg bdg-b">Contract: '+d.contractNo+'</span><span class="bdg bdg-tl">Invoice: '+d.invoiceNo+'</span><span class="bdg bdg-gr">Date: '+d.date+'</span></div>';
+  window._dmPreviewType=window._dmActiveDocType&&DM_PREVIEW_TYPES.some(function(t){return t.k===window._dmActiveDocType;})?window._dmActiveDocType:'INV';
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:980px;max-height:92vh;overflow-y:auto;border-radius:14px">
+    <div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-eye" style="font-size:18px;color:#e8f0fe"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">Xem trước chứng từ — ${_dmLot.jobNo||''}</div>
+      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:16px 18px;background:var(--bg-secondary)">
+      <div class="dm-tabs" id="dmPreviewTabs" style="margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button class="btn ofr-btn navy sm" onclick="_dmPreviewCreatePdf()"><i class="ti ti-file-check"></i> Tạo PDF (loại đang xem)</button>
+        <button class="btn sm" onclick="dmMergePdf()" style="color:var(--blue);border-color:var(--blue)"><i class="ti ti-files"></i> Merge PDF</button>
+        <button class="btn sm" onclick="_dmOpenExcelPicker()" style="color:#0D9488;border-color:#0D9488"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
+      </div>
+      <div style="background:#fff;border:1px solid var(--border-light);border-radius:10px;overflow:hidden">
+        <iframe id="dmPreviewFrame" style="width:100%;height:60vh;border:none;display:block"></iframe>
+      </div>
+      <div style="margin-top:18px">
+        <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px"><i class="ti ti-files" style="font-size:13px"></i> Chứng từ đã tạo của lô hàng này</div>
+        <input type="text" id="dmSavedSearchPreview" placeholder="Tìm theo Job ID / Booking / MBL..." oninput="_dmRenderSavedListPreview()" style="font-size:12px;width:100%;margin-bottom:8px;box-sizing:border-box"/>
+        <div id="dmSavedListPreview"></div>
+      </div>
+    </div>
+  </div>`;
+  openOv('eportOv');
+  _dmRenderPreviewTabs();
+  _dmRenderPreviewFrame();
+  _dmRenderSavedListPreview();
 }
+
+function _dmRenderPreviewTabs(){
+  const box=g('dmPreviewTabs'); if(!box)return;
+  box.innerHTML=DM_PREVIEW_TYPES.map(function(t){
+    const active=window._dmPreviewType===t.k;
+    return '<button type="button" class="dm-tab'+(active?' active':'')+'" onclick="window._dmPreviewType=\''+t.k+'\';_dmRenderPreviewTabs();_dmRenderPreviewFrame()"><i class="ti '+t.icon+'"></i>'+t.label+'</button>';
+  }).join('');
+}
+window._dmRenderPreviewTabs=_dmRenderPreviewTabs;
+
+function _dmRenderPreviewFrame(){
+  const frame=g('dmPreviewFrame'); if(!frame)return;
+  const d=dmGetData(); if(!d)return;
+  const type=DM_PREVIEW_TYPES.find(function(t){return t.k===window._dmPreviewType;})||DM_PREVIEW_TYPES[0];
+  let html='';
+  try{ html=type.gen(d); }catch(e){ html='<p style="font-family:sans-serif;padding:20px;color:#b91c1c">Không thể tạo bản xem trước: '+e.message+'</p>'; }
+  frame.srcdoc=html;
+}
+window._dmRenderPreviewFrame=_dmRenderPreviewFrame;
+
+// Tạo PDF đúng loại chứng từ ĐANG XEM trong popup preview — dùng lại nguyên vẹn dmExport()/
+// dmExportSIHede(), không đổi logic sinh PDF.
+function _dmPreviewCreatePdf(){
+  const type=window._dmPreviewType||'INV';
+  window._dmActiveDocType=type;
+  dmExport(type);
+}
+window._dmPreviewCreatePdf=_dmPreviewCreatePdf;
+
+// Danh sách chứng từ đã lưu — hiển thị NGAY TRONG popup Xem trước (thay cho popup Lịch sử riêng
+// trước đây) — tái sử dụng nguyên vẹn logic lọc/scope của renderDmSavedList().
+function _dmRenderSavedListPreview(){
+  const realSearch=g('dmSavedSearch'), realList=g('dmSavedList'), realTitle=g('dmSavedTitle');
+  const pvSearch=g('dmSavedSearchPreview'), pvList=g('dmSavedListPreview');
+  if(!pvList)return;
+  if(realSearch&&pvSearch)realSearch.value=pvSearch.value;
+  renderDmSavedList();
+  if(realList)pvList.innerHTML=realList.innerHTML;
+}
+window._dmRenderSavedListPreview=_dmRenderSavedListPreview;
+
 
 /* ── PDF / Print builders (match sample) ── */
 function _dmCSS(){
