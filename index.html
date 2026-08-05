@@ -1086,7 +1086,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.44';
+window.APP_BUILD='v3.45';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -10999,8 +10999,46 @@ function _openPayPopupFromEl(el){
 window._openPayPopupFromEl=_openPayPopupFromEl;
 
 // Mở popup
+// Tính số tiền GỢI Ý (đã bao gồm VAT = số tiền thực chi/thực thu) khi ctx KHÔNG tự truyền sẵn
+// suggestAmount — dùng làm phương án dự phòng CHUNG cho mọi nơi mở popup thanh toán, tránh phải sửa
+// rải rác từng nơi gọi _apPayBadge()/openPayStatusPopup(). Đọc trực tiếp từ cache (dữ liệu đã lưu),
+// áp dụng đúng công thức "Total" đã hiển thị sẵn trong tab Service/Costing: cost×SL + VAT.
+function _apSuggestAmount(ctx){
+  try{
+    if(ctx.type==='ap_svc'){
+      const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+      const sv=r&&r.svcs&&r.svcs[ctx.key];
+      if(!sv)return 0;
+      return (parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1)+(parseFloat(sv.svcVatAmt)||0);
+    }
+    if(ctx.type==='ap_cost'){
+      const r=cache[ctx.tt]&&cache[ctx.tt].find(function(x){return x._id===ctx.lotId;});
+      if(!r)return 0;
+      if(ctx.svcKey&&ctx.svcKey.startsWith('cost:')){
+        const itemId=ctx.svcKey.slice(5);
+        const items=(r.costing&&r.costing.items)||[];
+        const idx=items.findIndex(function(it,i){return it.id===itemId||('idx_'+i)===itemId;});
+        const it=items[idx]; if(!it)return 0;
+        return (parseFloat(it.price)||0)*(parseFloat(it.qty)||1)+(parseFloat(it.vatAmt)||0);
+      }
+      const sv=r.svcs&&r.svcs[ctx.svcKey];
+      if(!sv)return 0;
+      return (parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1)+(parseFloat(sv.svcVatAmt)||0);
+    }
+  }catch(e){ return 0; }
+  return 0;
+}
+window._apSuggestAmount=_apSuggestAmount;
+
 function openPayStatusPopup(ctx){
   _psCtx=Object.assign({},ctx);
+  // Dự phòng: nếu nơi gọi CHƯA tự tính suggestAmount, tự tính ở đây (đã bao gồm VAT) — đảm bảo
+  // KHÔNG BAO GIỜ để trống ô Số tiền dẫn tới ghi 0đ hoặc thiếu VAT vào Sổ quỹ khi đánh dấu "Đã TT".
+  if(_psCtx.suggestAmount==null||_psCtx.suggestAmount===0){
+    const auto=_apSuggestAmount(_psCtx);
+    if(auto>0)_psCtx.suggestAmount=auto;
+  }
+  ctx=_psCtx;
   const isAP=ctx.type!=='ar_party'&&ctx.type!=='ar_party_inv'&&ctx.type!=='ar_party_noinv';
   const bankLabel=isAP?'Tài khoản ngân hàng trừ tiền':'Tài khoản ngân hàng nhận tiền';
   const paid=ctx.status==='paid';
@@ -11047,7 +11085,16 @@ function _openSvcPayPopup(key){
   const status=g('sstatus_'+key)?.value||'unpaid';
   const date=g('spaiddate_'+key)?.value||'';
   const bank=g('spaidbank_'+key)?.value||'';
-  openPayStatusPopup({type:'ap_svc',key:key,status:status,date:date,bank:bank,label:svcDef.name||key});
+  // Số tiền thực chi = cost × SL + VAT (VAT chi phí lưu trực tiếp ở svcVatAmt) — ĐÚNG bằng công thức
+  // cột "Total" đã hiển thị sẵn trong tab Service (id="autototal_"+key), KHÔNG dùng cost×SL suông
+  // (thiếu VAT) làm số tiền ghi Sổ quỹ. Trước đây hàm này không hề truyền suggestAmount, khiến khi để
+  // trống ô Số tiền lúc đánh dấu "Đã TT", Sổ quỹ ghi nhận 0đ (hoặc người dùng phải tự gõ tay, dễ quên
+  // cộng VAT) thay vì đúng số tiền thực tế đã chi.
+  const cost=parseFloat(g('scost_'+key)?.value)||0;
+  const qty=parseFloat(g('sqty_'+key)?.value)||1;
+  const vatAmt=parseFloat(g('svvatamt_'+key)?.value)||0;
+  const suggestAmount=(cost*qty)+vatAmt;
+  openPayStatusPopup({type:'ap_svc',key:key,status:status,date:date,bank:bank,label:svcDef.name||key,suggestAmount:suggestAmount});
 }
 window._openSvcPayPopup=_openSvcPayPopup;
 
@@ -24302,98 +24349,275 @@ async function _dmDoExportExcel(){
   if(!d){toast('Chưa đủ dữ liệu lô hàng','error');return;}
   closeOv('eportOv');
   setLoading(true,'Đang tạo Excel...');
-  const C={primary:'FF0F766E',secondary:'FF103A6F',border:'FFD8DEDC',textDark:'FF1A2E2A',textGray:'FF667085'};
-  function thinB(){return {top:{style:'thin',color:{argb:C.border}},left:{style:'thin',color:{argb:C.border}},bottom:{style:'thin',color:{argb:C.border}},right:{style:'thin',color:{argb:C.border}}};}
-  function hdRow(ws,rowNum,title,co){
-    ws.mergeCells(rowNum,1,rowNum,6);
-    const c=ws.getCell(rowNum,1);
-    c.value=title; c.font={bold:true,size:13,color:{argb:C.secondary}}; c.alignment={horizontal:'left',vertical:'middle'};
-    ws.getRow(rowNum).height=22;
+  const C={navy:'FF103A6F',gray:'FFF3F4F6',border:'FFBFBFBF',red:'FFB91C1C'};
+  const thin={style:'thin',color:{argb:C.border}};
+  const B=function(){return {top:thin,left:thin,bottom:thin,right:thin};};
+  const f2=function(v){return (parseFloat(v)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
+
+  // ═══ Các khối DÙNG CHUNG — mô phỏng CHÍNH XÁC từng khối HTML tương ứng của bản PDF (_dmTop,
+  // _dmParties, _dmShipInfo, _dmBank, _dmSign...) nhưng viết ra Excel, để nội dung/thứ tự/nhãn trường
+  // KHỚP TUYỆT ĐỐI với file PDF — tránh xuất Excel là 1 bản tóm tắt khác biệt như trước đây. ═══
+  function setLbl(ws,r,c,label,value,opts){
+    opts=opts||{};
+    const lc=ws.getCell(r,c); lc.value=label; lc.font={bold:true,size:9.5};
+    const vc=ws.getCell(r,c+1); vc.value=value||''; vc.font={size:9.5,bold:!!opts.boldValue};
+    if(opts.mergeValueTo)ws.mergeCells(r,c+1,r,opts.mergeValueTo);
+    return r+1;
   }
-  function partiesBlock(ws,startRow,d){
-    let r=startRow;
-    ws.getCell(r,1).value='SELLER:'; ws.getCell(r,1).font={bold:true,size:9,color:{argb:C.textGray}};
-    ws.mergeCells(r,2,r,6); ws.getCell(r,2).value=d.sName; ws.getCell(r,2).font={bold:true,size:11};
+  function titleRow(ws,r,text,span){
+    ws.mergeCells(r,1,r,span||6);
+    const c=ws.getCell(r,1); c.value=text; c.font={bold:true,size:14}; c.alignment={horizontal:'center'};
+    ws.getRow(r).height=22;
+    return r+1;
+  }
+  function topHeader(ws,r,d,span){
+    ws.mergeCells(r,1,r,span||6);
+    const c=ws.getCell(r,1); c.value=d.sName; c.font={bold:true,size:12}; c.alignment={horizontal:'center'};
     r++;
-    ws.getCell(r,1).value='ADDRESS:'; ws.getCell(r,1).font={size:9,color:{argb:C.textGray}};
-    ws.mergeCells(r,2,r,6); ws.getCell(r,2).value=d.sAddr; ws.getCell(r,2).font={size:10};
-    r+=2;
-    ws.getCell(r,1).value='BUYER:'; ws.getCell(r,1).font={bold:true,size:9,color:{argb:C.textGray}};
-    ws.mergeCells(r,2,r,6); ws.getCell(r,2).value=d.cnee||''; ws.getCell(r,2).font={bold:true,size:11};
-    r++;
-    ws.getCell(r,1).value='ADDRESS:'; ws.getCell(r,1).font={size:9,color:{argb:C.textGray}};
-    ws.mergeCells(r,2,r,6); ws.getCell(r,2).value=d.cneeAddr||''; ws.getCell(r,2).font={size:10};
+    ws.mergeCells(r,1,r,span||6);
+    const a=ws.getCell(r,1); a.value='ADDRESS: '+(d.sAddr||'').toUpperCase(); a.font={bold:true,size:9.5}; a.alignment={horizontal:'center'};
+    a.border={bottom:{style:'thin',color:{argb:'FF000000'}}};
     return r+2;
   }
+  // Bảng SELLER/BUYER (giống _dmParties) — trả về row tiếp theo
+  function partiesBlock(ws,r,d,withPic){
+    r=setLbl(ws,r,1,'SELLER',d.sName,{mergeValueTo:6,boldValue:true});
+    r=setLbl(ws,r,1,'ADDRESS',d.sAddr+(d.sTel?' — Tel: '+d.sTel:'')+(d.sEmail?' — Email: '+d.sEmail:''),{mergeValueTo:6});
+    r++;
+    r=setLbl(ws,r,1,'BUYER',d.cnee,{mergeValueTo:6,boldValue:true});
+    let addr=d.cneeAddr+(d.cneeUsci?' — USCI: '+d.cneeUsci:'');
+    if(withPic)addr+=(d.cneePic?' — PIC: '+d.cneePic+(d.cneeTel?' — TEL: '+d.cneeTel:''):'')+(d.cneeEmail?' — Email: '+d.cneeEmail:'');
+    r=setLbl(ws,r,1,'ADDRESS',addr,{mergeValueTo:6});
+    return r;
+  }
+  // Bảng vận chuyển (giống _dmShipInfo)
+  function shipInfoBlock(ws,r,d){
+    r=setLbl(ws,r,1,'BILL NO',d.mbl,{mergeValueTo:6});
+    r=setLbl(ws,r,1,'VESSEL/VOYAGE',d.vessel,{mergeValueTo:6});
+    r=setLbl(ws,r,1,'SHIPMENT FROM',d.pol,{mergeValueTo:6});
+    r=setLbl(ws,r,1,'SHIPMENT TO',d.pod,{mergeValueTo:6});
+    return r;
+  }
+  // Bảng ngân hàng (giống _dmBank)
+  function bankBlock(ws,r,d){
+    r=setLbl(ws,r,1,'ACCOUNT NAME',d.sAcctName,{mergeValueTo:6});
+    r=setLbl(ws,r,1,'ACCOUNT NUMBER (USD)',d.sBankAcc,{mergeValueTo:3});
+    ws.getCell(r-1,4).value='SWIFT CODE'; ws.getCell(r-1,4).font={bold:true,size:9.5};
+    ws.getCell(r-1,5).value=d.sBankSwift; ws.mergeCells(r-1,5,r-1,6);
+    r=setLbl(ws,r,1,'BANK NAME',d.sBankName,{mergeValueTo:6});
+    if(d.sBankAddr)r=setLbl(ws,r,1,'BANK ADDRESS',d.sBankAddr,{mergeValueTo:6});
+    return r;
+  }
+  // Số Contract/Invoice/Date (giống _dmDocNos)
+  function docNosBlock(ws,r,d,showInv){
+    r=setLbl(ws,r,1,'CONTRACT No.',d.contractNo,{mergeValueTo:3});
+    if(showInv){ws.getCell(r-1,4).value='INVOICE No.';ws.getCell(r-1,4).font={bold:true,size:9.5};ws.getCell(r-1,5).value=d.invoiceNo;ws.mergeCells(r-1,5,r-1,6);}
+    r=setLbl(ws,r,1,'Date',d.date,{mergeValueTo:3});
+    return r;
+  }
+  // Chữ ký (giống _dmSign)
+  function signBlock(ws,r,d){
+    r+=1;
+    ws.mergeCells(r,4,r,6);
+    const c=ws.getCell(r,4); c.value=d.sShort||d.sName; c.font={bold:true,size:10.5}; c.alignment={horizontal:'right'};
+    return r+2;
+  }
+  function headerRow(ws,r,cols){
+    cols.forEach(function(h,i){
+      const c=ws.getCell(r,i+1); c.value=h; c.font={bold:true,size:9,color:{argb:'FFFFFFFF'}};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:C.navy}}; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; c.border=B();
+    });
+    ws.getRow(r).height=26;
+    return r+1;
+  }
+
   try{
     const wb=new ExcelJS.Workbook();
     wb.creator='CocoFlow ERP'; wb.created=new Date();
 
-    if(picked.indexOf('INV')>=0||picked.indexOf('INV_TK')>=0){
-      const isTk=picked.indexOf('INV_TK')>=0&&picked.indexOf('INV')<0;
-      const ws=wb.addWorksheet(isTk?'INV T.Khai':'Invoice',{views:[{showGridLines:false}]});
-      ws.columns=[{width:4},{width:26},{width:10},{width:9},{width:14},{width:14}];
-      hdRow(ws,1,(isTk?'INVOICE (T.KHAI) No. ':'INVOICE No. ')+(d.invoiceNo||''),null);
-      ws.getCell(2,1).value='Ngày: '+(d.date||''); ws.getCell(2,1).font={size:10,color:{argb:C.textGray}};
-      let r=partiesBlock(ws,4,d);
-      const headers=['#','Mô tả hàng (Invoice)','ĐVT','QTY','Unit Price (USD)','Amount (USD)'];
-      headers.forEach(function(h,i){const c=ws.getCell(r,i+1);c.value=h;c.font={bold:true,size:9.5,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:C.secondary}};c.alignment={horizontal:'center',vertical:'middle'};c.border=thinB();});
-      r++;
-      const items=d.invItems&&d.invItems.length?d.invItems:[{name:d.goods,unit:d.unit,qty:d.qty,price:d.unitPrice,amount:d.amount}];
+    // ═══ INVOICE — khớp _dmInvoice() ═══
+    if(picked.indexOf('INV')>=0){
+      const ws=wb.addWorksheet('Invoice',{views:[{showGridLines:false}]});
+      ws.columns=[{width:20},{width:16},{width:14},{width:14},{width:16},{width:14}];
+      let r=topHeader(ws,1,d);
+      r=titleRow(ws,r,'COMMERCIAL INVOICE'); r++;
+      r=docNosBlock(ws,r,d,true); r++;
+      r=partiesBlock(ws,r,d,false); r++;
+      r=shipInfoBlock(ws,r,d); r++;
+      r=bankBlock(ws,r,d); r++;
+      const items=(d.invItems&&d.invItems.length)?d.invItems:[{name:d.goods,unit:d.unit,qty:d.qty,price:d.unitPrice,amount:d.amount}];
+      r=headerRow(ws,r,['NAME OF GOODS','Specifications','Quantity ('+(items[0].unit||d.unit)+')','UNIT PRICE (USD)','AMOUNT (USD)','']);
+      const specLines=(d.specs||'').split('\n').map(function(s){return s.trim();}).filter(Boolean).join('\n');
       items.forEach(function(it,i){
-        const vals=[i+1,it.name,it.unit,it.qty,it.price,it.amount];
-        vals.forEach(function(v,ci){const c=ws.getCell(r,ci+1);c.value=v;c.font={size:9.5};c.alignment={horizontal:ci===1?'left':'center'};c.border=thinB();});
+        const row=ws.getRow(r);
+        row.getCell(1).value=it.name||d.goods; row.getCell(1).font={bold:true,size:9.5};
+        if(i===0){row.getCell(2).value=specLines; row.getCell(2).alignment={wrapText:true,vertical:'top'};}
+        row.getCell(3).value=it.qty; row.getCell(4).value=it.price; row.getCell(5).value=f2(it.amount);
+        [1,2,3,4,5,6].forEach(function(ci){row.getCell(ci).border=B(); if(ci>=3)row.getCell(ci).alignment={horizontal:'center'};});
         r++;
       });
-      ws.mergeCells(r,1,r,4); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'right'};
-      ws.getCell(r,5).value=''; ws.getCell(r,6).value=d.invGrandTotal||d.amount; ws.getCell(r,6).font={bold:true,color:{argb:C.primary}};
-      [1,2,3,4,5,6].forEach(function(ci){ws.getCell(r,ci).border=thinB();});
-      if(isTk){ r+=2; ws.getCell(r,1).value='Cước/Cont (USD): '+(d.freight||0); ws.getCell(r,1).font={size:10}; }
+      const totalQty=items.reduce(function(s,it){return s+(parseFloat(it.qty)||0);},0);
+      const grandTotal=items.reduce(function(s,it){return s+(parseFloat(it.amount)||0);},0);
+      ws.mergeCells(r,1,r,2); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'};
+      ws.getCell(r,3).value=totalQty; ws.getCell(r,3).font={bold:true};
+      ws.getCell(r,5).value=f2(grandTotal); ws.getCell(r,5).font={bold:true};
+      [1,3,4,5].forEach(function(ci){ws.getCell(r,ci).border=B();});
+      r++;
+      signBlock(ws,r,d);
     }
 
+    // ═══ PACKING LIST — khớp _dmPKL2() ═══
     if(picked.indexOf('PKL')>=0){
       const ws=wb.addWorksheet('Packing List',{views:[{showGridLines:false}]});
-      ws.columns=[{width:4},{width:16},{width:14},{width:8},{width:8},{width:11},{width:11},{width:9},{width:12}];
-      hdRow(ws,1,'PACKING LIST No. '+(d.pklNo||''),null);
-      ws.getCell(2,1).value='Ngày: '+(d.date||''); ws.getCell(2,1).font={size:10,color:{argb:C.textGray}};
-      let r=partiesBlock(ws,4,d);
-      const headers=['#','Cont','Seal','Type','Pkg','N.W (KG)','G.W (KG)','Tare','Date'];
-      headers.forEach(function(h,i){const c=ws.getCell(r,i+1);c.value=h;c.font={bold:true,size:9.5,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:C.secondary}};c.alignment={horizontal:'center'};c.border=thinB();});
+      ws.columns=[{width:16},{width:14},{width:9},{width:11},{width:11},{width:7},{width:12}];
+      let r=topHeader(ws,1,d,7);
+      r=titleRow(ws,r,'PACKING LIST',7);
+      r=setLbl(ws,r,1,'No.',d.pklNo||d.invoiceNo,{mergeValueTo:7}); r=setLbl(ws,r,1,'Date',d.pklDate||d.date,{mergeValueTo:7}); r++;
+      r=setLbl(ws,r,1,'SELLER',d.sName,{mergeValueTo:7,boldValue:true});
+      r=setLbl(ws,r,1,'ADDRESS',d.sAddr,{mergeValueTo:7});
       r++;
+      r=setLbl(ws,r,1,'BUYER',d.cnee,{mergeValueTo:7,boldValue:true});
+      r=setLbl(ws,r,1,'ADDRESS',d.cneeAddr+(d.cneeUsci?' — USCI: '+d.cneeUsci:''),{mergeValueTo:7});
+      r=setLbl(ws,r,1,'BKG NO',d.bkgNo,{mergeValueTo:7});
+      r=setLbl(ws,r,1,'BILL NO',d.mbl,{mergeValueTo:7});
+      r=setLbl(ws,r,1,'VESSEL/VOYAGE',d.vessel,{mergeValueTo:7});
+      r=setLbl(ws,r,1,'SHIPMENT FROM',d.pol,{mergeValueTo:7});
+      r=setLbl(ws,r,1,'SHIPMENT TO',d.pod,{mergeValueTo:7});
+      r++;
+      r=headerRow(ws,r,['DESCRIPTION','CONT','SEAL','NUMBER OF PACKAGE ('+(d.pkgUnit||d.unit)+')','NET WEIGHT (KGS)','GROSS WEIGHT (KGS)','NO','STUFF DATE'.slice(0,0)]);
+      // Chỉnh lại header đúng 7 cột theo colgroup đã set ở trên (không có cột NO riêng — gộp vào cuối), khớp PDL gốc 7 cột chính
+      ws.getRow(r-1).getCell(7).value='STUFF DATE'; ws.mergeCells(r-1,6,r-1,6);
       (d.conts||[]).forEach(function(c,i){
-        const vals=[i+1,c.no||'',c.seal||'',c.type||_dmLot.typeCont||'',c.pkg||'',c.nw||'',c.gw||'',c.tare||'',c.date||''];
-        vals.forEach(function(v,ci){const cc=ws.getCell(r,ci+1);cc.value=v;cc.font={size:9.5};cc.alignment={horizontal:'center'};cc.border=thinB();});
+        const row=ws.getRow(r);
+        if(i===0){row.getCell(1).value=d.goods; row.getCell(1).font={bold:true};}
+        row.getCell(2).value=c.no||''; row.getCell(3).value=c.seal||''; row.getCell(4).value=c.pkg||'';
+        row.getCell(5).value=c.nw?f2(c.nw):''; row.getCell(6).value=c.gw?f2(c.gw):''; row.getCell(7).value=c.date||'';
+        [1,2,3,4,5,6,7].forEach(function(ci){row.getCell(ci).border=B(); row.getCell(ci).alignment={horizontal:ci===1?'left':'center'};});
         r++;
       });
-      ws.mergeCells(r,1,r,4); ws.getCell(r,1).value='TỔNG'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'right'};
-      ws.getCell(r,6).value=d.totalNW; ws.getCell(r,7).value=d.totalGW; ws.getCell(r,6).font={bold:true}; ws.getCell(r,7).font={bold:true};
+      ws.mergeCells(r,1,r,3); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'};
+      ws.getCell(r,4).value=d.totalPkg; ws.getCell(r,5).value=f2(d.totalNW); ws.getCell(r,6).value=f2(d.totalGW);
+      [1,4,5,6,7].forEach(function(ci){ws.getCell(r,ci).font={bold:true}; ws.getCell(r,ci).border=B();});
+      r+=2;
+      signBlock(ws,r,d);
     }
 
+    // ═══ CONTRACT — khớp _dmContract() ═══
     if(picked.indexOf('CONTRACT')>=0){
       const ws=wb.addWorksheet('Contract',{views:[{showGridLines:false}]});
-      ws.columns=[{width:20},{width:40}];
-      hdRow(ws,1,'CONTRACT No. '+(d.contractNo||''),null);
-      ws.getCell(2,1).value='Ngày: '+(d.date||''); ws.getCell(2,1).font={size:10,color:{argb:C.textGray}};
-      let r=partiesBlock(ws,4,d);
-      const rows=[['Tên hàng',d.goods],['HS Code',d.hscode],['Số lượng',(d.qty||0)+' '+(d.unit||'')],['Đơn giá',d.priceLabel+' USD '+(d.unitPrice||0)],['Tổng trị giá','USD '+(d.invGrandTotal||d.amount||0)],['POL',d.pol],['POD',d.pod],['Tàu/Chuyến',d.vessel]];
-      rows.forEach(function(row){
-        ws.getCell(r,1).value=row[0]; ws.getCell(r,1).font={bold:true,size:10};
-        ws.getCell(r,2).value=row[1]; ws.getCell(r,2).font={size:10};
-        r++;
-      });
+      ws.columns=[{width:20},{width:16},{width:14},{width:14},{width:16},{width:14}];
+      let r=topHeader(ws,1,d);
+      r=titleRow(ws,r,'CONTRACT'); r++;
+      r=docNosBlock(ws,r,d,false); r++;
+      r=partiesBlock(ws,r,d,true); r++;
+      r=setLbl(ws,r,1,'SHIPMENT FROM',d.pol,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'SHIPMENT TO',d.pod,{mergeValueTo:6}); r++;
+      r=bankBlock(ws,r,d); r++;
+      ws.mergeCells(r,1,r,6); ws.getCell(r,1).value='This Purchase Contract is made between the Seller and the Buyer whereby the Seller agree to sell and the Buyer agree to buy the under-mentioned goods according to the terms and conditions stipulated below:';
+      ws.getCell(r,1).alignment={wrapText:true}; ws.getRow(r).height=28; r+=2;
+      r=headerRow(ws,r,['NAME OF GOODS','Specifications','Quantity ('+d.unit+')','UNIT PRICE (USD)','AMOUNT (USD)','']);
+      const specLines2=(d.specs||'').split('\n').map(function(s){return s.trim();}).filter(Boolean).join('\n');
+      const row1=ws.getRow(r);
+      row1.getCell(1).value=d.goods; row1.getCell(1).font={bold:true};
+      row1.getCell(2).value=specLines2; row1.getCell(2).alignment={wrapText:true,vertical:'top'};
+      row1.getCell(3).value=d.qty; row1.getCell(4).value=d.unitPrice; row1.getCell(5).value=f2(d.amount);
+      [1,2,3,4,5,6].forEach(function(ci){row1.getCell(ci).border=B();});
+      r++;
+      ws.mergeCells(r,1,r,2); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'};
+      ws.getCell(r,3).value=d.qty; ws.getCell(r,5).value=f2(d.amount);
+      [1,3,4,5].forEach(function(ci){ws.getCell(r,ci).font={bold:true};ws.getCell(r,ci).border=B();});
+      r+=2;
+      const terms=[
+        '1. Commodity and Description:',
+        'Origin: Vietnam. Only Shipment. Transshipment: Allowed. Partial Shipment: Allowed.',
+        'Port of Discharge: '+d.pod,
+        '2. Payment Terms:',
+        '1) TT 100% in advance   2) Scan documents will be sent after Seller received the remaining by TT.   3) Actual weight at the port of loading to be final for payment.',
+        '3. Documentation requirements:',
+        '1) Original Bill of Lading in 3 original (or copy, in case original B/L Surrendered). 2) Commercial Invoice and Packing List in 3 original. 3) Certificate of Origin (Form E). 4) Phytosanitary Certificate (1 Original and 1 Copy).',
+        '4. Shipment: within '+_dmEndOfMonth((d.r&&d.r.etd)||d.date)
+      ];
+      terms.forEach(function(t){ ws.mergeCells(r,1,r,6); const c=ws.getCell(r,1); c.value=t; c.font={bold:(t.match(/^\d\./)!=null)}; c.alignment={wrapText:true}; ws.getRow(r).height=t.length>90?28:16; r++; });
+      r++;
+      ws.mergeCells(r,1,r,3); ws.getCell(r,1).value='FOR THE BUYER'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'}; ws.getCell(r,1).border=B();
+      ws.mergeCells(r,4,r,6); ws.getCell(r,4).value='FOR THE SELLER'; ws.getCell(r,4).font={bold:true}; ws.getCell(r,4).alignment={horizontal:'center'}; ws.getCell(r,4).border=B();
+      r++;
+      ws.mergeCells(r,1,r+3,3); ws.getCell(r,1).value=d.cnee||''; ws.getCell(r,1).alignment={horizontal:'center',vertical:'top'}; ws.getCell(r,1).border=B();
+      ws.mergeCells(r,4,r+3,6); ws.getCell(r,4).value=d.sShort||d.sName; ws.getCell(r,4).font={bold:true}; ws.getCell(r,4).alignment={horizontal:'center',vertical:'top'}; ws.getCell(r,4).border=B();
     }
 
+    // ═══ INV T.KHAI — khớp _dmInvTK() ═══
+    if(picked.indexOf('INV_TK')>=0){
+      const ws=wb.addWorksheet('INV T.Khai',{views:[{showGridLines:false}]});
+      ws.columns=[{width:20},{width:16},{width:14},{width:14},{width:16},{width:14}];
+      let r=topHeader(ws,1,d);
+      r=titleRow(ws,r,'COMMERCIAL INVOICE'); r++;
+      r=docNosBlock(ws,r,d,true); r++;
+      r=setLbl(ws,r,1,'BUYER',d.cnee,{mergeValueTo:6,boldValue:true});
+      r=setLbl(ws,r,1,'ADDRESS',d.cneeAddr,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'BILL NO',d.mbl,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'VESSEL/VOYAGE',d.vessel,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'SHIPMENT FROM',d.pol,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'SHIPMENT TO',d.pod,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'ACCOUNT NAME',d.sName,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'BANK NAME',d.sBankName,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'ACCOUNT NUMBER',d.sBankAcc,{mergeValueTo:6});
+      r=setLbl(ws,r,1,'SWIFT CODE',d.sBankSwift,{mergeValueTo:6}); r++;
+      r=headerRow(ws,r,['NAME OF GOODS','Specifications','Quantity ('+d.unit+')','UNIT PRICE (USD/'+d.unit+')','AMOUNT (USD)','CƯỚC']);
+      const specLines3=(d.specs||'').split('\n').map(function(s){return s.trim();}).filter(Boolean).join('\n');
+      const rowTk=ws.getRow(r);
+      rowTk.getCell(1).value=d.goods; rowTk.getCell(1).font={bold:true};
+      rowTk.getCell(2).value=specLines3; rowTk.getCell(2).alignment={wrapText:true};
+      rowTk.getCell(3).value=d.qty; rowTk.getCell(4).value=d.unitPrice; rowTk.getCell(5).value=f2(d.amount); rowTk.getCell(6).value=d.freight;
+      [1,2,3,4,5,6].forEach(function(ci){rowTk.getCell(ci).border=B();});
+      r++;
+      const net=Math.round(((d.amount||0)-(d.freightTotal||0))*100)/100;
+      ws.mergeCells(r,1,r,2); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'};
+      ws.getCell(r,3).value=d.qty; ws.getCell(r,5).value=f2(d.amount); ws.getCell(r,6).value=(d.conts||[]).length;
+      [1,3,5,6].forEach(function(ci){ws.getCell(r,ci).font={bold:true};ws.getCell(r,ci).border=B();}); r++;
+      ws.mergeCells(r,1,r,4); ws.getCell(r,1).value='FREIGHT'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'right'};
+      ws.getCell(r,5).value=f2(d.freightTotal); ws.getCell(r,5).font={bold:true}; r++;
+      ws.mergeCells(r,1,r,4); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'right'};
+      ws.getCell(r,5).value=f2(net); ws.getCell(r,5).font={bold:true};
+      r+=2;
+      signBlock(ws,r,d);
+    }
+
+    // ═══ SI — khớp _dmSI() ═══
     if(picked.indexOf('SI')>=0){
       const ws=wb.addWorksheet('SI',{views:[{showGridLines:false}]});
-      ws.columns=[{width:20},{width:40}];
-      hdRow(ws,1,'SHIPPING INSTRUCTION',null);
-      let r=3;
-      const rows=[['Booking No.',d.allBkgNos||d.bkgNo],['MBL No.',d.mbl],['Vessel/Voy',d.vessel],['POL',d.pol],['POD',d.pod],['Shipper',d.sName],['Consignee',d.cnee],['Số cont',(d.conts||[]).length],['Tổng NW (KG)',d.totalNW],['Tổng GW (KG)',d.totalGW]];
-      rows.forEach(function(row){
-        ws.getCell(r,1).value=row[0]; ws.getCell(r,1).font={bold:true,size:10};
-        ws.getCell(r,2).value=row[1]; ws.getCell(r,2).font={size:10};
+      ws.columns=[{width:16},{width:14},{width:9},{width:11},{width:11},{width:9},{width:11},{width:9},{width:11},{width:9}];
+      let r=titleRow(ws,1,'SHIPPING INSTRUCTION',10); r++;
+      r=setLbl(ws,r,1,'Shipper/Exporter',d.sName+' — '+d.sAddr,{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Booking No',d.allBkgNos,{mergeValueTo:10});
+      r=setLbl(ws,r,1,'MBL',d.mbl,{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Consignee',d.cnee+' — '+d.cneeAddr+(d.cneeUsci?' — USCI: '+d.cneeUsci:''),{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Type of Bill of Lading',d.billType||'Surrendered',{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Notify Party','SAME AS CONSIGNEE',{mergeValueTo:10});
+      r=setLbl(ws,r,1,'HS Code',d.hscode,{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Vessel/Voy',(d.r&&d.r.vessel||'')+' / '+(d.r&&d.r.voy||''),{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Place of Receipt / POL',d.pol,{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Port of Discharge / Place of Delivery',d.pod,{mergeValueTo:10});
+      r++;
+      r=headerRow(ws,r,['#','Container No','Seal No','Size/Type','No. of Pkg','Unit','Gross Weight (KGS)','Tare (KGS)','VGM (KGS)','Measurement (CBM)']);
+      (d.conts||[]).forEach(function(c,i){
+        const row=ws.getRow(r);
+        const tare=c.tare||0, gw=c.gw||0; const vgm=gw?Math.round((gw+tare)*10)/10:'';
+        const vals=[i+1,c.no||'',c.seal||'',c.type||'40HC',c.pkg||'',d.pkgUnit||d.unit,gw||'',tare||'',vgm,40];
+        vals.forEach(function(v,ci){const cc=row.getCell(ci+1);cc.value=v;cc.border=B();cc.alignment={horizontal:'center'};});
         r++;
       });
+      const totalTare=(d.conts||[]).reduce(function(s,c){return s+(c.tare||0);},0);
+      const totalVGM=(d.conts||[]).reduce(function(s,c){return s+((c.gw||0)+(c.tare||0));},0);
+      ws.mergeCells(r,1,r,4); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'};
+      ws.getCell(r,5).value=d.totalPkg; ws.getCell(r,7).value=d.totalGW; ws.getCell(r,8).value=totalTare; ws.getCell(r,9).value=totalVGM;
+      [1,5,7,8,9].forEach(function(ci){ws.getCell(r,ci).font={bold:true};ws.getCell(r,ci).border=B();});
+      r+=2;
+      r=setLbl(ws,r,1,'Shipping Mark','N/M',{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Description of Goods',d.goods+(d.totalNW?' — Total N.W: '+f2(d.totalNW)+' KGS':''),{mergeValueTo:10});
+      r=setLbl(ws,r,1,'Payment Term','FREIGHT PREPAID',{mergeValueTo:10});
+      r+=2;
+      ws.mergeCells(r,1,r,10); ws.getCell(r,1).value='FOR AND ON BEHALF OF '+(d.sShort||d.sName); ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'right'};
     }
 
     const buf=await wb.xlsx.writeBuffer();
@@ -24401,7 +24625,7 @@ async function _dmDoExportExcel(){
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a'); a.href=url; a.download='DocMaker_'+(_dmLot.jobNo||'draft')+'_'+picked.join('-')+'.xlsx'; a.click();
     URL.revokeObjectURL(url);
-    toast('Đã xuất Excel ('+picked.length+' sheet)');
+    toast('Đã xuất Excel ('+picked.length+' sheet, khớp đúng nội dung PDF)');
   }catch(e){ toast('Lỗi xuất Excel: '+e.message,'error'); }
   setLoading(false);
 }
