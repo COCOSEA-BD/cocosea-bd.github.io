@@ -1086,7 +1086,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.37';
+window.APP_BUILD='v3.39';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1687,7 +1687,17 @@ function startListeners(){
     const u3 = db.collection('partners').onSnapshot(snap => {
       cache.partners = {};
       snap.docs.forEach(d=>{ cache.partners[d.id]={shortname:d.id,...d.data()}; });
-      if(currentTab==='doi-tac') renderPartners();
+      // Đang ở Customer 360 Workspace (full-page) của 1 đối tác — CHỈ làm mới ĐÚNG trang đó (giữ
+      // nguyên tab đang xem), KHÔNG điều hướng về danh sách. Đây là nguyên nhân trước đây khiến bấm
+      // "Lưu" trong CRM bị thoát ra trang danh sách — listener realtime này vô tình gọi renderPartners()
+      // ngay sau khi Firestore ghi xong, bất kể đang xem trang nào.
+      if(currentTab==='doi-tac'){
+        if(window._crmDetailFullPage&&crmDetailKey&&cache.partners[crmDetailKey]&&!_isEditingCrmDetail()){
+          renderCrmDetail();
+        } else if(!window._crmDetailFullPage){
+          renderPartners();
+        }
+      }
       if(currentTab==='contract'&&typeof _ctrRefreshPartnerSelect==='function') _ctrRefreshPartnerSelect();
       // Nếu đang mở panel chi tiết CRM của 1 đối tác, làm mới panel theo dữ liệu mới nhất
       // (bỏ qua nếu đang gõ dở trong 1 ô input của panel, tránh mất dữ liệu chưa lưu)
@@ -3191,28 +3201,19 @@ function openDetail(id, tt, startTab){
 }
 
 function openDocMakerTab(id, tt, targetBk){
-  const key='docmaker';
-  let t=_openTabs.find(x=>x.key===key);
-  if(!t){t={key,type:'docmaker',label:'Document Maker',id:id||null,tt:tt||null,bk:targetBk||null};_openTabs.push(t);}
-  else if(id&&tt){t.id=id;t.tt=tt;t.bk=targetBk||null;} // remember last lot + booking
-  // Đánh dấu scope: mở từ 1 lô cụ thể → chỉ hiện chứng từ của lô đó trong danh sách "đã lưu"
-  const _sid=id||t.id, _stt=tt||t.tt;
-  window._dmScopeLot=(_sid&&_stt)?{id:_sid,tt:_stt}:null;
-  _activeTabKey=key;
-  g('detailPanel').innerHTML='<div class="dpanel-tabbar" id="dpanelTabbar"></div><div style="display:flex;justify-content:flex-end;padding:6px 12px 0"><button class="rac" onclick="closeDetail()" title="Đóng" style="font-size:18px"><i class="ti ti-x"></i></button></div><div id="dmPanelHost" style="padding:0 1rem 1rem"></div>';
-  renderDpanelTabs();
-  _dmHost=g('dmPanelHost');
-  renderDocMaker();
-  g('detailPanel').classList.add('open');
-  g('detailBackdrop').classList.add('open');
-  // Auto-pick the lot once the form DOM exists
-  const pickId=id||t.id, pickTt=tt||t.tt, pickBk=(targetBk!==undefined?targetBk:t.bk);
-  if(pickId&&pickTt){
-    const tryPick=function(tries){
-      if(window.dmPickLot&&g('dmSearch')){window._dmTargetBooking=pickBk||'';dmPickLot(pickId,pickTt,pickBk);}
-      else if(tries>0){setTimeout(function(){tryPick(tries-1);},80);}
-    };
-    tryPick(15);
+  const pickId=id||detailId, pickTt=tt||detailTt;
+  if(!pickId||!pickTt){toast('Chưa chọn lô hàng','error');return;}
+  window._dmTargetBooking=targetBk||null;
+  if(detailId===pickId && detailTt===pickTt){
+    // Đang xem đúng lô hàng này rồi — chỉ cần chuyển tab, giữ nguyên context xuat-lotmode/panel hiện tại.
+    switchDetailTab('docmaker');
+  } else {
+    // Gọi từ 1 lô KHÁC lô đang mở (hiếm) — mở đúng lô đó trước, thẳng vào tab Document Maker.
+    detailId=pickId; detailTt=pickTt; detailTab='docmaker';
+    const r=cache[pickTt].find(function(x){return x._id===pickId;})||{};
+    renderDetailPanel(r,pickTt);
+    g('detailPanel')?.classList.add('open');
+    g('detailBackdrop')?.classList.add('open');
   }
 }
 
@@ -3325,9 +3326,10 @@ function renderDetailPanel(r,tt){
     {k:'scy',label:'SCY',icon:'ti-package',color:'#DB2777'},
     ...(canSeePricing?[
       {k:'price',label:'Fill giá',icon:'ti-currency-dollar',color:'#16A34A'},
-      {k:'costing',label:'Costing',icon:'ti-calculator',color:'#0D9488'},
       {k:'invoice',label:'Invoice',icon:'ti-file-invoice',color:'#4F46E5'},
+      {k:'costing',label:'Costing',icon:'ti-calculator',color:'#0D9488'},
     ]:[]),
+    {k:'docmaker',label:'Document Maker',icon:'ti-file-certificate',color:'#7C3AED'},
     {k:'document',label:'Document',icon:'ti-folder',color:'#9333EA'},
     {k:'log',label:'History',icon:'ti-history',color:'#D97706'},
   ];
@@ -4095,6 +4097,9 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
       </div>
     </div>`;
   }
+  else if(detailTab==='docmaker'){
+    bodyHtml='<div id="dmTabHost"></div>';
+  }
   else if(detailTab==='document'){
     const savedDocs=r.savedDocs||[];
     let docRows='';
@@ -4182,6 +4187,21 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
   }
   if(detailTab==='costing') setTimeout(updateCostingTotal, 100);
   if(detailTab==='cont') setTimeout(function(){document.querySelectorAll('[class*="cno_"]').forEach(function(inp){if(inp.value)validateContNo(inp);});if(typeof checkDupContSeal==='function')checkDupContSeal();}, 80);
+  if(detailTab==='docmaker'){
+    // Đánh dấu scope: đang xem Document Maker CỦA lô hàng này — chỉ hiện chứng từ của lô đó trong
+    // danh sách "đã lưu" (giữ nguyên logic cũ của openDocMakerTab, chỉ đổi nơi render).
+    window._dmScopeLot={id:detailId,tt:detailTt};
+    const pickBk=window._dmTargetBooking||null;
+    _dmHost=null; // sẽ được set lại đúng ngay dưới, tránh dính host cũ từ lần mở khác
+    const tryPick=function(tries){
+      const host=g('dmTabHost');
+      if(!host){ if(tries>0)setTimeout(function(){tryPick(tries-1);},60); return; }
+      _dmHost=host;
+      renderDocMaker();
+      if(window.dmPickLot){ dmPickLot(detailId,detailTt,pickBk); }
+    };
+    setTimeout(function(){tryPick(15);},20);
+  }
 
   // LOCK BANNER: show a read-only notice when lot is locked (no disabling of elements)
   if(r.locked){
@@ -7104,6 +7124,11 @@ window._ocfReviewUpdate=_ocfReviewUpdate;
 
 function svcRowHTML(s, sv){
   sv=sv||{on:false,desc:''};
+  // Bỏ nút gạt BẬT/TẮT theo yêu cầu — mọi dịch vụ ĐÃ THÊM vào lô hàng coi như LUÔN bật (on:true).
+  // Dịch vụ nào không cần thì xóa thủ công (nút thùng rác) thay vì gạt tắt. Ép on=true ở ĐÚNG 1 chỗ
+  // này để toàn bộ logic hiển thị/tính toán bên dưới (vốn đọc sv.on ở rất nhiều nơi trong hàm này)
+  // hoạt động nhất quán, không cần sửa từng chỗ riêng lẻ — an toàn hơn nhiều so với sửa rải rác.
+  sv=Object.assign({},sv,{on:true});
   const isCustom=s.custom||false;
   const svcStatus=sv.svcStatus||'';
   const cost=sv.cost||'';
@@ -7149,7 +7174,7 @@ function svcRowHTML(s, sv){
     const totalWithVat=amtNum>0?(amtNum+svcVatAmt):0;
     const ocfCols='22px 58px 200px 90px 60px 70px 85px 90px 90px 70px 120px 82px 140px 40px 72px 78px 108px';
     return`<div style="display:grid;grid-template-columns:${ocfCols};gap:6px;align-items:center;background:${locked?'rgba(220,53,69,.04)':'var(--bg-secondary)'};border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1.5px solid ${locked?'rgba(220,53,69,.3)':'rgba(37,99,235,.3)'}" id="srow_${s.key}">
-      <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')" ${lockedDis} title="${locked?lockTip:''}"></button>
+      <span id="tg_${s.key}" class="on" style="display:none"></span>
       ${codeCell}
       <div style="display:flex;align-items:center;gap:3px;min-width:0"><span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${sv._name||s.name}</span>${locked?`<i class="ti ti-lock" style="font-size:12px;color:var(--red)" title="${lockTip}"></i>`:''}</div>
       <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" oninput="calcSvcAmt('${s.key}')" title="Đơn giá (cước NCC)"/>
@@ -7180,7 +7205,7 @@ function svcRowHTML(s, sv){
   }
   if(!showPrice){
     return`<div style="display:grid;grid-template-columns:22px 58px 1fr 1fr 26px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
-      <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')"></button>
+      <span id="tg_${s.key}" class="on" style="display:none"></span>
       ${codeCell}
       <div style="display:flex;align-items:center;gap:3px;min-width:0">
         <span style="font-size:12.5px;font-weight:${sv.on?600:400}">${s.name}</span>
@@ -7196,7 +7221,7 @@ function svcRowHTML(s, sv){
   const totalWithVat=amtNum>0?(amtNum+svcVatAmt):0;
   const gridCols='22px 58px 200px 90px 60px 70px 85px 90px 90px 70px 120px 82px 140px 40px 52px';
   return`<div style="display:grid;grid-template-columns:${gridCols};gap:6px;align-items:center;background:${locked?'rgba(220,53,69,.04)':'var(--bg-secondary)'};border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid ${locked?'rgba(220,53,69,.25)':'var(--border-light)'}" id="srow_${s.key}">
-    <button class="tgl ${sv.on?'on':'off'}" id="tg_${s.key}" onclick="toggleSvc('${s.key}')" ${lockedDis} title="${locked?lockTip:''}"></button>
+    <span id="tg_${s.key}" class="on" style="display:none"></span>
     ${codeCell}
     <div style="display:flex;align-items:center;gap:3px;min-width:0">
       ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" ${lockedDis} style="font-size:12px;font-weight:600;flex:1;min-width:0;padding:3px 6px;border:1px solid var(--border-light);border-radius:5px"/>`:`<span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${s.name}</span>`}
@@ -12290,12 +12315,14 @@ window._crmAddVndBank=_crmAddVndBank;
 
 /* ─── CRM: Trang chi tiết đối tác (3 tab: Thông tin chung / Người liên hệ / Cnee) ─── */
 function _isEditingCrmDetail(){
-  const panel=g('crmDetailOv'); if(!panel)return false;
   const ae=document.activeElement; if(!ae)return false;
-  if(panel.contains(ae)){
-    const tag=(ae.tagName||'').toLowerCase();
-    if(tag==='input'||tag==='select'||tag==='textarea')return true;
-  }
+  const tag=(ae.tagName||'').toLowerCase();
+  if(tag!=='input'&&tag!=='select'&&tag!=='textarea')return false;
+  const popupPanel=g('crmDetailOv');
+  if(popupPanel&&popupPanel.contains(ae))return true;
+  // Chế độ full-page (Customer 360 Workspace) — kiểm tra luôn, trước đây bị bỏ sót chỉ check popup.
+  const fullPagePanel=g('page-doi-tac');
+  if(fullPagePanel&&fullPagePanel.contains(ae))return true;
   return false;
 }
 function renderCrmDetail(){
@@ -14780,6 +14807,12 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .crm3-barchart .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%;justify-content:flex-end}
 .crm3-barchart .bar{width:14px;border-radius:3px 3px 0 0;background:#0E9F8A}
 .crm3-barchart .lbl{font-size:9px;color:#94A3B8;font-weight:600}
+
+/* ═══ DOCUMENT MAKER — layout mới dạng tab, card theo nhóm ═══ */
+.dm-card{border:1px solid var(--border-light);border-radius:12px;padding:14px 16px;margin-bottom:12px;background:var(--bg-primary)}
+.dm-card-hd{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary);display:flex;align-items:center;gap:7px;margin-bottom:12px;padding-bottom:9px;border-bottom:1px solid var(--border-light)}
+.dm-card-hd i{font-size:14px}
+.dm-switchbar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light);margin-bottom:14px}
 .crm3-fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
 .crm3-fg .fi.full{grid-column:1/-1}
 .crm3-fg input,.crm3-fg select{max-width:340px}
@@ -21171,36 +21204,106 @@ function _qkGroupByPod(rows){
 window._qkGroupByPod=_qkGroupByPod;
 
 // ── Xuất Excel — thiết kế theo phong cách app (header gradient navy, POD merge cell, viền gọn) ──
-function exportQuickQuoteExcel(){
-  const XLSX=window.XLSX;
-  if(!XLSX){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+async function exportQuickQuoteExcel(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
   const q=quickQuoteGather();
   if(!q.quickRows.length){toast('Chưa có dữ liệu để xuất','error');return;}
   const groups=_qkGroupByPod(q.quickRows);
-  const aoa=[['POD','LINE / CARRIER','O/F','LỊCH TÀU','VALID TO']];
-  groups.forEach(function(g2){
-    g2.rows.forEach(function(r,i){
-      aoa.push([i===0?g2.pod:'', r.carrier||'', (r.of?parseFloat(r.of).toLocaleString()+' '+(r.curr||'USD'):''), r.schedule||'', r.validTo?fmtDMY(r.validTo):'']);
+  setLoading(true,'Đang tạo Excel...');
+  // Bảng màu COCO SEA — đồng bộ với Job Report / Bảng kê công nợ, không tự sáng tác màu mới.
+  const C={primary:'FF0F766E',secondary:'FF103A6F',accent:'FF22C55E',warning:'FFF59E0B',
+    border:'FFD8DEDC',textDark:'FF1A2E2A',textGray:'FF667085'};
+  var _xlsLogoB64=null;
+  try{
+    var _lr=await fetch(new URL('icons/icon-navy-192.png',location.href).href);
+    if(_lr&&_lr.ok){
+      var _lb=await _lr.arrayBuffer();var _u8=new Uint8Array(_lb);var _bin='';
+      for(var _li=0;_li<_u8.length;_li++)_bin+=String.fromCharCode(_u8[_li]);
+      _xlsLogoB64=btoa(_bin);
+    }
+  }catch(e){}
+  try{
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoFlow ERP'; wb.created=new Date();
+    var _logoImgId=null;
+    if(_xlsLogoB64){ try{_logoImgId=wb.addImage({base64:_xlsLogoB64,extension:'png'});}catch(e){_logoImgId=null;} }
+    const ws=wb.addWorksheet('Quick Quotation',{
+      pageSetup:{orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:0.3,right:0.3,top:0.4,bottom:0.4,header:0.2,footer:0.2}},
+      views:[{showGridLines:false}]
     });
-  });
-  const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:16},{wch:14},{wch:14},{wch:38},{wch:12}];
-  // Merge ô POD theo từng nhóm (giống mẫu bạn gửi)
-  let r0=1; const merges=[];
-  groups.forEach(function(g2){
-    if(g2.rows.length>1)merges.push({s:{r:r0,c:0},e:{r:r0+g2.rows.length-1,c:0}});
-    r0+=g2.rows.length;
-  });
-  ws['!merges']=merges;
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,'Quick Quotation');
-  XLSX.writeFile(wb,'QuickQuotation_'+(q.no||'draft')+'.xlsx');
-  toast('Đã xuất Excel');
+    ws.columns=[{width:5},{width:20},{width:18},{width:14},{width:42},{width:14}];
+    function thinB(color){return {top:{style:'thin',color:{argb:color||C.border}},left:{style:'thin',color:{argb:color||C.border}},bottom:{style:'thin',color:{argb:color||C.border}},right:{style:'thin',color:{argb:color||C.border}}};}
+
+    // ===== HEADER: logo + tên cty (trái) | tiêu đề + số quote (phải) — đúng phong cách chuẩn app =====
+    if(_logoImgId!==null){ try{ws.addImage(_logoImgId,{tl:{col:0.15,row:0.15},ext:{width:38,height:38}});}catch(e){} }
+    ws.getRow(1).height=24; ws.getRow(2).height=17;
+    const co=(typeof _coInfo==='function')?_coInfo():{name:'COCOSEA',addr:''};
+    ws.mergeCells(1,2,1,4);
+    {const c=ws.getCell(1,2);c.value=co.name;c.font={bold:true,size:15,color:{argb:C.secondary}};c.alignment={horizontal:'left',vertical:'middle'};}
+    ws.mergeCells(2,2,2,4);
+    {const c=ws.getCell(2,2);c.value='Keep Going – Keep Growing';c.font={bold:true,italic:true,size:9,color:{argb:C.primary}};c.alignment={horizontal:'left',vertical:'top'};}
+    ws.mergeCells(1,5,1,6);
+    {const c=ws.getCell(1,5);c.value='QUICK QUOTATION';c.font={bold:true,size:15,color:{argb:C.secondary}};c.alignment={horizontal:'right',vertical:'middle'};}
+    ws.mergeCells(2,5,2,6);
+    {const c=ws.getCell(2,5);c.value=(q.no||'—')+'  •  '+(q.date?fmtDMY(q.date):'');c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};c.alignment={horizontal:'center',vertical:'middle'};
+     c.fill={type:'pattern',pattern:'solid',fgColor:{argb:C.primary}};}
+    ws.getRow(3).height=8;
+
+    // ===== Table header (dòng 4), navy đồng bộ Job Report =====
+    const HEAD=4;
+    ws.getRow(HEAD).height=24;
+    const headers=['#','POD','LINE / CARRIER','O/F','LỊCH TÀU','VALID TO'];
+    headers.forEach(function(h,i){
+      const c=ws.getCell(HEAD,i+1);
+      c.value=h; c.font={bold:true,size:9.5,color:{argb:'FFFFFFFF'}};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:C.secondary}};
+      c.alignment={horizontal:'center',vertical:'middle',wrapText:true};
+      c.border=thinB(C.secondary);
+    });
+    ws.views=[{state:'frozen',ySplit:HEAD,showGridLines:false}];
+
+    // Data rows — zebra trắng/xám nhạt, merge cột POD theo từng nhóm carrier (đúng mẫu bạn gửi)
+    var rIdx=HEAD+1; var stt=1;
+    groups.forEach(function(g2){
+      const startRow=rIdx;
+      g2.rows.forEach(function(r,i){
+        const bg=stt%2===0?'FFFFFFFF':'FFF7F8FA';
+        const row=ws.getRow(rIdx); row.height=19;
+        const ofStr=r.of?(parseFloat(r.of).toLocaleString()+' '+(r.curr||'USD')):'';
+        const vals=[stt, i===0?g2.pod:'', r.carrier||'', ofStr, r.schedule||'', r.validTo?fmtDMY(r.validTo):''];
+        vals.forEach(function(v,ci){
+          const c=row.getCell(ci+1);
+          c.value=v; c.font={size:9.5,color:{argb:C.textDark}};
+          c.alignment={vertical:'middle',wrapText:true,horizontal:(ci===0||ci===3||ci===5)?'center':'left'};
+          c.border=thinB(); c.fill={type:'pattern',pattern:'solid',fgColor:{argb:bg}};
+        });
+        row.getCell(2).font={bold:true,size:9.5,color:{argb:C.secondary}};
+        row.getCell(3).font={bold:true,size:9.5,color:{argb:C.textDark}};
+        rIdx++; stt++;
+      });
+      if(g2.rows.length>1){ try{ws.mergeCells(startRow,2,rIdx-1,2);}catch(e){} }
+      const mc=ws.getCell(startRow,2); mc.alignment={horizontal:'center',vertical:'middle',wrapText:true};
+    });
+
+    ws.getRow(rIdx+1).height=6;
+    const fRow=rIdx+2;
+    ws.mergeCells(fRow,1,fRow,6);
+    {const c=ws.getCell(fRow,1);c.value='Báo giá tham khảo, có thể thay đổi theo thời điểm — vui lòng liên hệ để được xác nhận mới nhất.';c.font={italic:true,size:8.5,color:{argb:C.textGray}};c.alignment={horizontal:'left'};}
+
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/octet-stream'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='QuickQuotation_'+(q.no||'draft')+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel');
+  }catch(e){ toast('Lỗi xuất Excel: '+e.message,'error'); }
+  setLoading(false);
 }
 window.exportQuickQuoteExcel=exportQuickQuoteExcel;
 
 // ── Copy dạng TEXT gọn để gửi Zalo/Messenger/Chat — không phải HTML, chỉ text thuần định dạng đẹp ──
-async function copyQuickQuoteText(){
+function copyQuickQuoteText(){
   const q=quickQuoteGather();
   if(!q.quickRows.length){toast('Chưa có dữ liệu để copy','error');return;}
   const groups=_qkGroupByPod(q.quickRows);
@@ -21217,18 +21320,42 @@ async function copyQuickQuoteText(){
     lines.push('');
   });
   const text=lines.join('\n').trim();
+  // Hiện popup XEM TRƯỚC + CHO PHÉP CHỈNH SỬA trước khi copy — không tự động copy thẳng nữa.
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:520px;border-radius:14px;overflow:hidden">
+    <div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-brand-zalo" style="font-size:18px;color:#e8f0fe"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">Xem trước — Copy gửi Zalo/Chat</div>
+      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:16px 18px;background:var(--bg-secondary)">
+      <label class="lbl">Nội dung (có thể chỉnh sửa trước khi copy)</label>
+      <textarea id="qkCopyPreview" rows="14" style="width:100%;box-sizing:border-box;font-size:12.5px;font-family:inherit;resize:vertical;line-height:1.5">${text}</textarea>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+        <button class="btn" onclick="closeOv('eportOv')">Đóng</button>
+        <button class="btn ofr-btn navy" onclick="_qkDoCopyFromPopup()"><i class="ti ti-copy"></i> Copy</button>
+      </div>
+    </div>
+  </div>`;
+  openOv('eportOv');
+}
+window.copyQuickQuoteText=copyQuickQuoteText;
+
+// Thực hiện copy THẬT SỰ — đọc nội dung (có thể đã được người dùng chỉnh sửa) từ ô textarea trong
+// popup xem trước, người dùng tự bấm nút này khi đã ưng ý nội dung.
+async function _qkDoCopyFromPopup(){
+  const ta=g('qkCopyPreview'); if(!ta)return;
+  const text=ta.value;
   try{
     await navigator.clipboard.writeText(text);
     toast('Đã copy — dán trực tiếp vào Zalo/Chat');
   }catch(e){
-    // Fallback cho trình duyệt không hỗ trợ Clipboard API
-    const ta=document.createElement('textarea');
-    ta.value=text; document.body.appendChild(ta); ta.select();
+    ta.select();
     try{ document.execCommand('copy'); toast('Đã copy — dán trực tiếp vào Zalo/Chat'); }
-    catch(e2){ toast('Không thể copy tự động — vui lòng copy thủ công','error'); }
-    document.body.removeChild(ta);
+    catch(e2){ toast('Không thể copy tự động — vui lòng bôi đen và copy thủ công','error'); }
   }
 }
+window._qkDoCopyFromPopup=_qkDoCopyFromPopup;
 window.copyQuickQuoteText=copyQuickQuoteText;
 
 async function deleteQuotation(id){
@@ -23824,22 +23951,16 @@ function renderDocMaker(){
   _dmHost=null;
   if(!pg)return;
   pg.innerHTML=`
-<div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem">
-  <i class="ti ti-file-certificate" style="font-size:18px;color:var(--blue)"></i>
-  <span style="font-weight:700;font-size:15px">Document Maker</span>
-  <span style="font-size:11px;color:var(--text-secondary)">— Invoice / Packing List / Contract / INV T.Khai / SI</span>
+<div class="dm-switchbar">
+  <i class="ti ti-search" style="color:var(--text-tertiary);font-size:15px"></i>
+  <input type="text" id="dmSearch" placeholder="Đổi sang lô hàng khác (Job ID hoặc MBL)..." oninput="dmSearchLot()" style="font-size:12px;flex:1;border:none;background:transparent;box-shadow:none"/>
 </div>
-<div style="display:grid;grid-template-columns:minmax(500px,60%) 1fr;gap:1.25rem;align-items:start">
+<div id="dmSearchResults" style="margin-bottom:.75rem"></div>
+<div style="display:grid;grid-template-columns:minmax(480px,58%) 1fr;gap:1.25rem;align-items:start">
 <div>
-<div class="table-card" style="padding:1.1rem">
-  <label class="lbl">Tìm lô hàng (Job ID hoặc MBL)</label>
-  <div class="search-wrap" style="margin-bottom:6px"><i class="ti ti-search"></i>
-    <input type="text" id="dmSearch" placeholder="Gõ Job ID hoặc MBL No..." oninput="dmSearchLot()" style="font-size:12.5px"/>
-  </div>
-  <div id="dmSearchResults" style="margin-bottom:1rem"></div>
-
-  <div id="dmForm" style="display:none">
-    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📄 Số chứng từ</div>
+<div id="dmForm" style="display:none">
+    <div class="dm-card">
+    <div class="dm-card-hd"><i class="ti ti-file-text" style="color:#2563EB"></i>Số chứng từ</div>
     <div style="display:grid;grid-template-columns:90px 1fr 130px;gap:8px;margin-bottom:6px;align-items:center">
       <div style="font-size:11px;font-weight:600;color:var(--text-secondary)">Contract</div>
       <input type="text" id="dm_cno" placeholder="Contract No." style="font-size:12px"/>
@@ -23850,13 +23971,13 @@ function renderDocMaker(){
       <input type="text" id="dm_ino" placeholder="Invoice No." style="font-size:12px"/>
       <input type="date" id="dm_idate" title="Invoice Date" style="font-size:12px"/>
     </div>
-    <div style="display:grid;grid-template-columns:90px 1fr 130px;gap:8px;margin-bottom:10px;align-items:center">
+    <div style="display:grid;grid-template-columns:90px 1fr 130px;gap:8px;margin-bottom:2px;align-items:center">
       <div style="font-size:11px;font-weight:600;color:var(--text-secondary)">Packing List</div>
       <input type="text" id="dm_pkl" placeholder="Packing List No." style="font-size:12px"/>
       <input type="date" id="dm_pdate" title="PKL Date" style="font-size:12px"/>
     </div>
     <input type="hidden" id="dm_date"/>
-    <div style="margin-bottom:10px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
       <div style="flex:0 0 170px"><label class="lbl">POD (EN)</label><input type="text" id="dm_pod" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
       <div>
         <label class="lbl">Type Bill</label>
@@ -23868,16 +23989,20 @@ function renderDocMaker(){
         <input type="hidden" id="dm_billType" value="Surrendered"/>
       </div>
     </div>
+    </div>
 
-    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🏢 Buyer / Cnee</div>
-    <div style="margin-bottom:10px">
+    <div class="dm-card">
+    <div class="dm-card-hd"><i class="ti ti-building" style="color:#0E9F8A"></i>Buyer / Cnee</div>
+    <div>
       <label class="lbl">Chọn Cnee</label>
       <select id="dm_cnee" onchange="dmOnCneeChange()" style="font-size:12px"><option value="">— Chọn Cnee —</option></select>
       <div id="dm_cneeInfo" style="margin-top:5px;font-size:11px;color:var(--text-secondary)"></div>
     </div>
+    </div>
 
-    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📦 Hàng hóa (nhập thủ công)</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+    <div class="dm-card">
+    <div class="dm-card-hd"><i class="ti ti-package" style="color:#F59E0B"></i>Hàng hóa (nhập thủ công)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div style="grid-column:1/-1"><label class="lbl">Chọn tên hàng (từ Cài đặt)</label><select id="dm_goodsSel" onchange="dmPickGoods()" style="font-size:12px"><option value="">— Chọn / nhập tay —</option></select></div>
       <div style="grid-column:1/-1"><label class="lbl">Tên hàng (EN)</label><input type="text" id="dm_goods" placeholder="COCONUT PEAT" style="font-size:12px"/></div>
       <div style="grid-column:1/-1"><label class="lbl">HS Code</label><input type="text" id="dm_hscode" placeholder="VD: 530500 (coconut fiber) / 140490 (mụn dừa)" style="font-size:12px"/></div>
@@ -23896,9 +24021,10 @@ function renderDocMaker(){
       <div><label class="lbl">Price label</label><input type="text" id="dm_priceLabel" value="CNF" placeholder="CNF / FOB" style="font-size:12px"/></div>
       <div><label class="lbl">Cước/cont (USD) — INV TK</label><input type="number" id="dm_freight" placeholder="50" style="font-size:12px"/></div>
     </div>
+    </div>
 
-
-    <div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🚢 Container / Weight (cho PKL & SI)</div>
+    <div class="dm-card">
+    <div class="dm-card-hd"><i class="ti ti-container" style="color:#0891B2"></i>Container / Weight (cho PKL & SI)</div>
     <div style="overflow-x:auto;margin-bottom:4px">
       <table style="width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed">
         <colgroup><col style="width:26px"/><col style="width:104px"/><col style="width:96px"/><col style="width:50px"/><col style="width:66px"/><col style="width:66px"/><col style="width:62px"/><col style="width:112px"/></colgroup>
