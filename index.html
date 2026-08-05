@@ -1086,7 +1086,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.40';
+window.APP_BUILD='v3.41';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4489,8 +4489,10 @@ window.doAddSvcByKey=doAddSvcByKey;
 function switchSvcCode(oldKey,newKey){
   if(oldKey===newKey)return;
   const base=SVCS.find(function(x){return x.key===newKey;})||{key:newKey,name:newKey,custom:true};
-  const row=g('srow_'+oldKey);if(!row)return;
-  const sv={on:g('tg_'+oldKey)&&g('tg_'+oldKey).classList.contains('on'),desc:(g('sd_'+oldKey)||{}).value||'',cost:(g('scost_'+oldKey)||{}).value||'',svcQty:(g('sqty_'+oldKey)||{}).value||'1',svcCur:(g('svcur_'+oldKey)||{}).value||'VND',svcSupplier:(g('ssup_'+oldKey)||{}).value||''};
+  const grid=g('detailSvcGrid');
+  const row=grid?grid.querySelector('[id="srow_'+oldKey+'"]'):null; if(!row)return;
+  const gRow=function(id){return grid.querySelector('[id="'+id+'"]');};
+  const sv={on:gRow('tg_'+oldKey)&&gRow('tg_'+oldKey).classList.contains('on'),desc:(gRow('sd_'+oldKey)||{}).value||'',cost:(gRow('scost_'+oldKey)||{}).value||'',svcQty:(gRow('sqty_'+oldKey)||{}).value||'1',svcCur:(gRow('svcur_'+oldKey)||{}).value||'VND',svcSupplier:(gRow('ssup_'+oldKey)||{}).value||''};
   const newRow=document.createElement('div');
   newRow.innerHTML=svcRowHTML(Object.assign({},base,{custom:true}),sv);
   row.replaceWith(newRow.firstChild);
@@ -4503,7 +4505,22 @@ function switchSvcCodeByCode(oldKey, val){
   if(!v)return;
   const found=SVCS.find(function(sx){return(sx.code||sx.key).toUpperCase()===v;})||SVCS.find(function(sx){return sx.key.toUpperCase()===v;});
   if(!found)return;
-  if(found.key!==oldKey)switchSvcCode(oldKey,found.key);
+  if(found.key!==oldKey){
+    // CHỐT AN TOÀN QUAN TRỌNG: nếu key đích (found.key) ĐÃ CÓ SẴN 1 dòng khác đang hiển thị trong
+    // CHÍNH lô hàng này (VD: lô đã có "OCF" gốc, đang gõ mã trùng vào dòng "OCF2" nhân bản) — TUYỆT
+    // ĐỐI không cho hoán đổi. Hoán đổi trong trường hợp này sẽ tạo ra 2 phần tử CÙNG id trong DOM
+    // (2 dòng cùng key), khiến saveDetailSvc() chỉ đọc được 1 trong 2 dòng (dòng còn lại bị mất dữ
+    // liệu âm thầm) — cực kỳ nguy hiểm nếu dòng bị mất là dịch vụ ĐÃ THANH TOÁN. Đây chính là nguyên
+    // nhân gây lỗi khi thêm 1 dịch vụ lần thứ 2 rồi chạm vào ô Code của dòng đó.
+    const grid=g('detailSvcGrid');
+    const already=grid?grid.querySelector('[id="tg_'+found.key+'"]'):null;
+    if(already){
+      toast('Mã "'+v+'" đã được dùng bởi 1 dịch vụ khác đang có trong lô này — không thể đổi trùng. Dịch vụ nào không cần thì xóa thủ công.','error');
+      const inp=g('scode_'+oldKey);if(inp){const orig=SVCS.find(function(sx){return sx.key===oldKey;});inp.value=((orig&&(orig.code||orig.key))||'').toUpperCase().slice(0,8);}
+      return;
+    }
+    switchSvcCode(oldKey,found.key);
+  }
   else{
     // Reset display to current code
     const inp=g('scode_'+oldKey);if(inp)inp.value=((found.code||found.key)||'').toUpperCase().slice(0,8);
