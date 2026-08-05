@@ -1086,7 +1086,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.34';
+window.APP_BUILD='v3.35';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3576,7 +3576,7 @@ function renderDetailPanel(r,tt){
 
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
-      <button class="btn" onclick="loadDefaultServices()" title="Ưu tiên dịch vụ mặc định của Shipper (CRM); nếu Shipper chưa cấu hình sẽ dùng dịch vụ mặc định trong Danh mục dịch vụ"><i class="ti ti-download"></i> Load mặc định</button>
+      <button class="btn" onclick="openLoadQuotePicker()" title="Chọn 1 Quote đã tạo cho Shipper này (CRM → Pricing) — tải dịch vụ + giá tương ứng vào lô hàng"><i class="ti ti-download"></i> Load quote</button>
       <button class="rac" onclick="_svcTabRefresh()" title="Tải lại SL theo Vol mới nhất từ tab Chi tiết" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button>
     </div>
     <div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailSvc()"><i class="ti ti-check"></i> Lưu dịch vụ</button></div>`;
@@ -4292,6 +4292,95 @@ function loadDefaultServices(){
   toast('Đã tải '+toAdd.length+' '+sourceLabel);
 }
 window.loadDefaultServices=loadDefaultServices;
+
+// ═══════════════ LOAD QUOTE — tải dịch vụ + giá từ 1 Quote (CRM) vào lô hàng đang mở ═══════════════
+// Thay thế nút "Load mặc định" cũ. Danh sách hiện TẤT CẢ quote của ĐÚNG Shipper lô hàng (không lọc
+// theo tên hàng/POD — người dùng tự chọn quote phù hợp). Khi Load: CHỈ THÊM dịch vụ/giá còn THIẾU,
+// không ghi đè dữ liệu đã có (giống hệt cơ chế "Load mặc định" cũ) — dịch vụ nào quote CÓ giá sẽ tự
+// điền vào Fill giá; dịch vụ nào quote CHƯA có giá thì Fill giá vẫn để trống như bình thường.
+function openLoadQuotePicker(){
+  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  if(r.priceLocked){toast('Fill giá đang khóa — Unlock ở tab Fill giá trước khi load quote','error');return;}
+  const shipperKey=r.shipper||r.supplier||'';
+  if(!shipperKey){toast('Lô hàng chưa chọn Shipper/NCC','error');return;}
+  const sp=cache.partners[shipperKey]||{};
+  const quotes=sp.quotes||[];
+  if(!quotes.length){toast('Shipper "'+shipperKey+'" chưa có Quote nào — vào CRM → Pricing để tạo','error');return;}
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:460px;border-radius:14px;overflow:hidden">
+    <div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-file-invoice" style="font-size:18px;color:#e8f0fe"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">Load Quote — ${shipperKey}</div>
+      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:14px 16px;background:var(--bg-secondary);max-height:60vh;overflow-y:auto">
+      ${quotes.map(function(q){
+        const svcCount=Object.keys(q.svcs||{}).filter(function(k){return q.svcs[k]&&q.svcs[k].on;}).length;
+        const cargoStr=(q.cargoNames||[]).join(', ')||'—';
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--border-light);border-radius:10px;margin-bottom:8px;background:#fff">'
+          +'<div style="min-width:0"><div style="font-size:12.5px;font-weight:700;color:#0F2747">'+(q.name||'—')+'</div>'
+          +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px">'+cargoStr+' · POD: '+(q.pod||'—')+' · '+svcCount+' dịch vụ</div></div>'
+          +'<button class="btn sm pri" onclick="_applyQuoteToLot(\''+q.id+'\')">Load</button>'
+        +'</div>';
+      }).join('')}
+    </div>
+  </div>`;
+  openOv('eportOv');
+}
+window.openLoadQuotePicker=openLoadQuotePicker;
+
+// ⚠️ NGUYÊN TẮC THIẾT KẾ QUAN TRỌNG — không được thay đổi khi bảo trì sau này:
+// Quote chỉ có tác dụng DUY NHẤT 1 LẦN tại thời điểm bấm "Load" — hàm này COPY (sao chép) dữ liệu
+// giá của Quote vào field `svcs` CỦA RIÊNG lô hàng, rồi lưu thẳng vào document của LÔ HÀNG. Sau khi
+// Load xong, lô hàng và Quote HOÀN TOÀN ĐỘC LẬP — không lưu quoteId hay bất kỳ tham chiếu/liên kết
+// nào ngược lại Quote. Nếu sau này Quote bị sửa/xóa, các lô hàng ĐÃ Load trước đó (đặc biệt là dữ
+// liệu Fill giá) TUYỆT ĐỐI KHÔNG được thay đổi theo. TUYỆT ĐỐI không refactor theo hướng "tra cứu
+// giá trực tiếp từ Quote mỗi lần hiển thị" — điều đó sẽ phá vỡ yêu cầu này.
+async function _applyQuoteToLot(quoteId){
+  const _qTt=detailTt, _qId=detailId; // chốt biến local trước await — tránh lỗi ghi nhầm lô nếu người dùng kịp chuyển lô khác
+  const r=cache[_qTt]&&cache[_qTt].find(function(x){return x._id===_qId;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  const shipperKey=r.shipper||r.supplier||'';
+  const sp=cache.partners[shipperKey]||{};
+  const quote=(sp.quotes||[]).find(function(q){return q.id===quoteId;});
+  if(!quote){toast('Không tìm thấy Quote','error');return;}
+  const existing=Object.assign({},r.svcs||{});
+  let addedCount=0, pricedCount=0;
+  Object.keys(quote.svcs||{}).forEach(function(key){
+    if(existing[key])return; // ĐÃ CÓ — không ghi đè, chỉ thêm dịch vụ/giá còn THIẾU
+    const qs=quote.svcs[key]; if(!qs||!qs.on)return;
+    // base là object HOÀN TOÀN MỚI, các giá trị (price/unit/cur...) được COPY bằng giá trị (parseFloat,
+    // gán chuỗi mới) — KHÔNG phải tham chiếu tới object của Quote. Sau dòng này, sửa Quote không còn
+    // ảnh hưởng gì tới "base"/tới lô hàng nữa.
+    const base={on:true,desc:'',cost:0,svcQty:parseInt(r.vol)||1,svcUnit:'Cont',svcCur:'VND',svcSupplier:'',svcStatus:''};
+    // Chỉ điền dữ liệu Fill giá (price/unit/cur/invoice) nếu Quote THỰC SỰ có giá — nếu quote chưa
+    // điền giá, Fill giá vẫn để trống như bình thường (không set field price/unit/cur/invoice).
+    if(qs.price!==''&&qs.price!=null){
+      base.price=parseFloat(qs.price)||0;
+      base.unit=qs.unit||'Cont';
+      base.cur=qs.cur||'USD';
+      base.invoice=qs.invoice||'Yes';
+      base.qty=1;
+      pricedCount++;
+    }
+    existing[key]=base;
+    addedCount++;
+  });
+  if(!addedCount){toast('Tất cả dịch vụ trong Quote đã có sẵn trong lô này','success');closeOv('eportOv');return;}
+  setLoading(true,'Đang tải Quote...');
+  try{
+    await fsSet(colName(_qTt),_qId,{svcs:existing,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã tải '+addedCount+' dịch vụ từ Quote "'+quote.name+'"'+(pricedCount?' — '+pricedCount+' dịch vụ có sẵn giá':''));
+    closeOv('eportOv');
+    if(detailId===_qId && detailTt===_qTt){
+      const fresh=cache[_qTt].find(function(x){return x._id===_qId;});
+      renderDetailPanel(fresh,_qTt);
+    }
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._applyQuoteToLot=_applyQuoteToLot;
 
 function addCustomSvcDetail(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
@@ -12230,9 +12319,8 @@ function renderCrmDetail(){
       {k:'files',label:'Files',icon:'ti-folder'},
       {k:'email',label:'Email',icon:'ti-mail'},
     ];
-  if(isShipper)tabs.push({k:'report',label:'Report',icon:'ti-chart-bar'});
   if(isSaLan) crmDetailTab='general';
-  if(!isSaLan && crmDetailTab==='report' && !isShipper) crmDetailTab='overview';
+  if(!isSaLan && crmDetailTab==='report') crmDetailTab='overview';
 
   // ── FULL PAGE MODE: Customer 360 Workspace ──
   if(window._crmDetailFullPage){
@@ -12455,7 +12543,6 @@ function renderCrmDetailBody(){
   else if(crmDetailTab==='notes') body.innerHTML=renderCrmNotesTab(p);
   else if(crmDetailTab==='files') body.innerHTML=renderCrmFilesTab(p);
   else if(crmDetailTab==='email') body.innerHTML=renderCrmEmailTab(p);
-  else if(crmDetailTab==='report'){ body.innerHTML=renderCrmReportTab(p); _crmReportAfterRender(); }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -12598,18 +12685,41 @@ window._crmReportAfterRender=_crmReportAfterRender;
 // ── TAB: Dịch vụ mặc định cho shipper ──
 function renderCrmDefSvcTab(p){
   const defSvcs=p.defaultSvcs||[];
+  const quotes=p.quotes||[];
   const rows=SVCS.map(function(s){
     const checked=defSvcs.indexOf(s.key)>=0;
-    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;background:'+(checked?'var(--green-bg)':'var(--bg-primary)')+';transition:.15s" onmouseover="this.style.borderColor=\'var(--green)\'" onmouseout="this.style.borderColor=\'var(--border-light)\'">'
-      +'<input type="checkbox" class="crm-defsvc-chk" value="'+s.key+'" '+(checked?'checked':'')+' onchange="this.closest(\'label\').style.background=this.checked?\'var(--green-bg)\':\'var(--bg-primary)\'" style="cursor:pointer;width:16px;height:16px"/>'
-      +'<div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text-primary)">'+s.name+'</div>'
-      +'<div style="font-size:10.5px;color:var(--text-tertiary)">Mã: '+(s.code||'—')+'</div></div>'
+    return '<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;background:'+(checked?'var(--green-bg)':'var(--bg-primary)')+';transition:.15s">'
+      +'<input type="checkbox" class="crm-defsvc-chk" value="'+s.key+'" '+(checked?'checked':'')+' onchange="this.closest(\'label\').style.background=this.checked?\'var(--green-bg)\':\'var(--bg-primary)\'" style="cursor:pointer;width:15px;height:15px"/>'
+      +'<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+s.name+'</div></div>'
     +'</label>';
   }).join('');
-  return '<div style="padding:4px 2px">'
-    +'<div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:1rem;padding:10px 12px;background:rgba(59,130,246,.08);border-radius:8px;border-left:3px solid var(--blue)"><i class="ti ti-info-circle"></i> Chọn các dịch vụ mặc định cho <strong>'+(p.shortname||crmDetailKey)+'</strong>. Khi tạo lô hàng mới với shipper này, các dịch vụ đã chọn sẽ tự động được bật sẵn trong tab Dịch vụ.</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:1.25rem">'+rows+'</div>'
-    +'<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn pri" onclick="saveCrmDefSvc()"><i class="ti ti-device-floppy"></i> Lưu dịch vụ mặc định</button></div>'
+  return '<div>'
+    +'<details style="margin-bottom:18px;border:1px solid #E7EAEF;border-radius:12px;padding:2px 4px">'
+      +'<summary style="cursor:pointer;padding:10px 12px;font-size:12.5px;font-weight:700;color:#0F2747;list-style:none;display:flex;align-items:center;gap:6px"><i class="ti ti-list-check" style="color:#0E9F8A"></i>Dịch vụ mặc định (áp dụng khi tạo lô hàng mới, dùng làm mẫu khởi tạo Quote) <span style="font-weight:400;color:#94A3B8;margin-left:4px">— '+defSvcs.length+' dịch vụ</span></summary>'
+      +'<div style="padding:6px 12px 14px">'
+        +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:7px;margin-bottom:10px">'+rows+'</div>'
+        +'<button class="btn sm pri" onclick="saveCrmDefSvc()"><i class="ti ti-device-floppy"></i> Lưu dịch vụ mặc định</button>'
+      +'</div>'
+    +'</details>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<div class="crm3-section-hd" style="margin-bottom:0"><i class="ti ti-file-invoice"></i>Bảng báo giá (Quote) — '+quotes.length+'</div>'
+      +'<button class="crm3-btn teal" onclick="_crmOpenQuoteEditor(null)"><i class="ti ti-plus"></i> Tạo Quote mới</button>'
+    +'</div>'
+    +'<div class="crm3-table-card"><table>'
+      +'<thead><tr><th>Tên Quote</th><th>Tên hàng</th><th>POD</th><th style="text-align:center">Dịch vụ</th><th>Cập nhật</th><th></th></tr></thead>'
+      +'<tbody>'+(quotes.length?quotes.map(function(q){
+        const svcCount=Object.keys(q.svcs||{}).filter(function(k){return q.svcs[k]&&q.svcs[k].on;}).length;
+        const cargoStr=(q.cargoNames||[]).join(', ')||'—';
+        return '<tr class="rowlink" onclick="_crmOpenQuoteEditor(\''+q.id+'\')">'
+          +'<td style="font-weight:700;color:#0F2747">'+(q.name||'(chưa đặt tên)')+'</td>'
+          +'<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+cargoStr+'">'+cargoStr+'</td>'
+          +'<td>'+(q.pod||'—')+'</td>'
+          +'<td style="text-align:center"><span class="crm3-pill type">'+svcCount+'</span></td>'
+          +'<td style="font-size:11px;color:#94A3B8">'+(q.updatedAt?new Date(q.updatedAt).toLocaleDateString('vi-VN'):'—')+'</td>'
+          +'<td style="text-align:right" onclick="event.stopPropagation()"><button class="rac red" onclick="_crmDeleteQuote(\''+q.id+'\')" title="Xóa"><i class="ti ti-trash"></i></button></td>'
+        +'</tr>';
+      }).join(''):'<tr><td colspan="6" style="padding:2rem;text-align:center;color:#94A3B8"><i class="ti ti-file-off" style="font-size:24px;display:block;margin-bottom:6px;opacity:.4"></i>Chưa có Quote nào — bấm "Tạo Quote mới" để bắt đầu</td></tr>')+'</tbody>'
+    +'</table></div>'
   +'</div>';
 }
 window.renderCrmDefSvcTab=renderCrmDefSvcTab;
@@ -12627,6 +12737,163 @@ async function saveCrmDefSvc(){
   setLoading(false);
 }
 window.saveCrmDefSvc=saveCrmDefSvc;
+
+// ═══════════════ QUOTE EDITOR — báo giá theo Tên hàng/POD cho từng đối tác ═══════════════
+// Dữ liệu lưu trên chính partner: p.quotes = [{id,name,cargoNames:[...],pod,svcs:{key:{on,price,unit,cur,invoice}}}]
+function _crmOpenQuoteEditor(quoteId){
+  const p=cache.partners[crmDetailKey]||{};
+  const quote=quoteId?(p.quotes||[]).find(function(q){return q.id===quoteId;}):null;
+  window._crmQuoteEditId=quoteId;
+  // Quote MỚI: khởi tạo sẵn từ Default Services (chỉ hiện dịch vụ đã chọn mặc định, giá để trống)
+  window._crmQuoteSvcs=quote?JSON.parse(JSON.stringify(quote.svcs||{})):(function(){
+    const obj={};
+    (p.defaultSvcs||[]).forEach(function(k){ obj[k]={on:true,price:'',unit:'Cont',cur:'USD',invoice:'Yes'}; });
+    return obj;
+  })();
+  const cargoNames=(window._cargoNames||[]).map(function(c){return c.name;}).filter(Boolean);
+  const selectedCargo=quote?(quote.cargoNames||[]):[];
+  const podList=(typeof PORTS!=='undefined'?PORTS:[]);
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:640px;max-height:90vh;overflow-y:auto;border-radius:16px">
+    <div style="background:linear-gradient(135deg,#1a4b8c,#103A6F);padding:14px 20px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-file-invoice" style="font-size:18px;color:#e8f0fe"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">${quote?'Sửa Quote':'Tạo Quote mới'} — ${p.shortname||crmDetailKey}</div>
+      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:18px 20px;background:var(--bg-secondary)">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div><label class="lbl">Tên Quote</label><input type="text" id="crmQName" value="${(quote&&quote.name||'').replace(/"/g,'&quot;')}" placeholder="VD: Giá Coco Peat đi Qingdao" style="font-size:12.5px"/></div>
+        <div><label class="lbl">POD</label><select id="crmQPod" style="font-size:12.5px"><option value="">— Chọn POD —</option>${podList.map(function(pd){return '<option'+(pd===(quote&&quote.pod)?' selected':'')+'>'+pd+'</option>';}).join('')}</select></div>
+      </div>
+      <div style="margin-bottom:14px">
+        <label class="lbl">Tên hàng áp dụng (chọn nhiều)</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;max-height:110px;overflow-y:auto;padding:8px;background:#fff;border:1px solid var(--border-light);border-radius:8px">
+          ${cargoNames.length?cargoNames.map(function(cn){
+            const checked=selectedCargo.indexOf(cn)>=0;
+            return '<label style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:20px;background:'+(checked?'#0E9F8A':'var(--bg-secondary)')+';color:'+(checked?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:11.5px;font-weight:600"><input type="checkbox" class="crmQCargoChk" value="'+cn.replace(/"/g,'&quot;')+'" '+(checked?'checked':'')+' style="display:none" onchange="this.parentElement.style.background=this.checked?\'#0E9F8A\':\'var(--bg-secondary)\';this.parentElement.style.color=this.checked?\'#fff\':\'var(--text-secondary)\'"/>'+cn+'</label>';
+          }).join(''):'<span style="font-size:11.5px;color:var(--text-tertiary)">Chưa có tên hàng nào trong danh mục (Cài đặt → Tên hàng)</span>'}
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <label class="lbl" style="margin:0">Dịch vụ &amp; Giá</label>
+        <button class="btn sm" onclick="_crmQuoteAddSvcPicker()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
+      </div>
+      <div id="crmQuoteSvcTable"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+        <button class="btn" onclick="closeOv('eportOv')">Hủy</button>
+        <button class="btn ofr-btn navy" onclick="_crmSaveQuote()"><i class="ti ti-check"></i> Lưu Quote</button>
+      </div>
+    </div>
+  </div>`;
+  _crmRenderQuoteSvcTable();
+  openOv('eportOv');
+}
+window._crmOpenQuoteEditor=_crmOpenQuoteEditor;
+
+// Đọc dữ liệu ĐANG NHẬP trong bảng dịch vụ hiện tại (trước khi render lại) — tránh mất dữ liệu khi
+// thêm/xóa dòng dịch vụ.
+function _crmReadQuoteSvcsFromDom(){
+  const wrap=g('crmQuoteSvcTable'); if(!wrap)return window._crmQuoteSvcs||{};
+  const out={};
+  Object.keys(window._crmQuoteSvcs||{}).forEach(function(key){
+    const priceEl=g('crmQ_price_'+key);
+    if(!priceEl){ out[key]=window._crmQuoteSvcs[key]; return; } // dòng không render (hiếm) — giữ nguyên
+    out[key]={
+      on:true,
+      price:priceEl.value||'',
+      unit:g('crmQ_unit_'+key)?.value||'Cont',
+      cur:g('crmQ_cur_'+key)?.value||'USD',
+      invoice:g('crmQ_inv_'+key)?.value||'Yes'
+    };
+  });
+  return out;
+}
+window._crmReadQuoteSvcsFromDom=_crmReadQuoteSvcsFromDom;
+
+function _crmRenderQuoteSvcTable(){
+  const wrap=g('crmQuoteSvcTable'); if(!wrap)return;
+  const svcs=window._crmQuoteSvcs||{};
+  const keys=Object.keys(svcs);
+  if(!keys.length){ wrap.innerHTML='<div style="text-align:center;padding:1.2rem;color:var(--text-tertiary);font-size:12px;background:#fff;border:1px dashed var(--border-light);border-radius:8px">Chưa có dịch vụ nào — bấm "Thêm dịch vụ"</div>'; return; }
+  const curOpts=function(cur){return CURRENCIES.map(function(c){return '<option'+(c===cur?' selected':'')+'>'+c+'</option>';}).join('');};
+  const unitOpts=function(u){return ['Cont','Bill','Shipment','CBM','KG','Set','Invoice','Lần'].map(function(x){return '<option'+(x===u?' selected':'')+'>'+x+'</option>';}).join('');};
+  wrap.innerHTML='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden">'
+    +'<thead><tr style="background:var(--bg-secondary)"><th style="padding:6px 8px;font-size:9.5px;text-transform:uppercase;text-align:left">Dịch vụ</th><th style="padding:6px 8px;font-size:9.5px;text-transform:uppercase">Price</th><th style="padding:6px 8px;font-size:9.5px;text-transform:uppercase">Unit</th><th style="padding:6px 8px;font-size:9.5px;text-transform:uppercase">Curr</th><th style="padding:6px 8px;font-size:9.5px;text-transform:uppercase">Invoice</th><th></th></tr></thead>'
+    +'<tbody>'+keys.map(function(key){
+      const sv=svcs[key]||{}; const svcDef=SVCS.find(function(s){return s.key===key;});
+      return '<tr style="border-bottom:1px solid #F1F3F6">'
+        +'<td style="padding:6px 8px;font-size:12px;font-weight:600">'+(svcDef?svcDef.name:key)+'</td>'
+        +'<td style="padding:4px 6px"><input type="number" id="crmQ_price_'+key+'" value="'+(sv.price||'')+'" placeholder="0" style="font-size:11.5px;width:90px" min="0"/></td>'
+        +'<td style="padding:4px 6px"><select id="crmQ_unit_'+key+'" style="font-size:11.5px;width:88px">'+unitOpts(sv.unit||'Cont')+'</select></td>'
+        +'<td style="padding:4px 6px"><select id="crmQ_cur_'+key+'" style="font-size:11.5px;width:70px">'+curOpts(sv.cur||'USD')+'</select></td>'
+        +'<td style="padding:4px 6px"><select id="crmQ_inv_'+key+'" style="font-size:11.5px;width:78px"><option'+(sv.invoice!=='No'?' selected':'')+'>Yes</option><option'+(sv.invoice==='No'?' selected':'')+'>No</option></select></td>'
+        +'<td style="padding:4px 6px;text-align:right"><button class="rac red" onclick="_crmQuoteRemoveSvc(\''+key+'\')" title="Xóa"><i class="ti ti-x"></i></button></td>'
+      +'</tr>';
+    }).join('')+'</tbody></table></div>';
+}
+window._crmRenderQuoteSvcTable=_crmRenderQuoteSvcTable;
+
+function _crmQuoteRemoveSvc(key){
+  window._crmQuoteSvcs=_crmReadQuoteSvcsFromDom();
+  delete window._crmQuoteSvcs[key];
+  _crmRenderQuoteSvcTable();
+}
+window._crmQuoteRemoveSvc=_crmQuoteRemoveSvc;
+
+// Picker thêm 1 dịch vụ khác (ngoài mặc định) vào Quote đang soạn.
+function _crmQuoteAddSvcPicker(){
+  const existing=Object.keys(_crmReadQuoteSvcsFromDom());
+  window._crmQuoteSvcs=_crmReadQuoteSvcsFromDom();
+  const avail=SVCS.filter(function(s){return existing.indexOf(s.key)<0;});
+  if(!avail.length){toast('Đã thêm tất cả dịch vụ trong danh mục','error');return;}
+  const name=prompt('Nhập tên/mã dịch vụ cần thêm (VD: OCF, CUS, THC...):\n\nCác dịch vụ có thể thêm:\n'+avail.map(function(s){return (s.code||s.key)+' — '+s.name;}).join('\n'));
+  if(!name)return;
+  const q=name.trim().toLowerCase();
+  const match=avail.find(function(s){return (s.code||'').toLowerCase()===q||(s.key||'').toLowerCase()===q||(s.name||'').toLowerCase().includes(q);});
+  if(!match){toast('Không tìm thấy dịch vụ khớp "'+name+'"','error');return;}
+  window._crmQuoteSvcs[match.key]={on:true,price:'',unit:'Cont',cur:'USD',invoice:'Yes'};
+  _crmRenderQuoteSvcTable();
+}
+window._crmQuoteAddSvcPicker=_crmQuoteAddSvcPicker;
+
+async function _crmSaveQuote(){
+  const name=g('crmQName')?.value.trim();
+  if(!name){toast('Nhập tên Quote','error');return;}
+  const cargoNames=Array.from(document.querySelectorAll('.crmQCargoChk')).filter(function(c){return c.checked;}).map(function(c){return c.value;});
+  const pod=g('crmQPod')?.value||'';
+  const svcs=_crmReadQuoteSvcsFromDom();
+  // Bỏ các dòng dịch vụ không có Price (coi như chưa fill, không cần lưu rác)
+  Object.keys(svcs).forEach(function(k){ if(!svcs[k].price&&svcs[k].price!==0){} }); // giữ nguyên kể cả chưa có giá — cho phép thêm dịch vụ trước, điền giá sau
+  const p=cache.partners[crmDetailKey]||{};
+  const quotes=(p.quotes||[]).slice();
+  const id=window._crmQuoteEditId||('q_'+Date.now()+'_'+Math.random().toString(36).slice(2,6));
+  const rec={id:id,name:name,cargoNames:cargoNames,pod:pod,svcs:svcs,createdAt:(quotes.find(function(q){return q.id===id;})||{}).createdAt||Date.now(),updatedAt:Date.now()};
+  const idx=quotes.findIndex(function(q){return q.id===id;});
+  if(idx>=0)quotes[idx]=rec; else quotes.push(rec);
+  setLoading(true,'Đang lưu Quote...');
+  try{
+    await fsSet('partners',crmDetailKey,{quotes:quotes,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã lưu Quote "'+name+'"');
+    closeOv('eportOv');
+    if(crmDetailTab==='defsvc')renderCrmDetailBody();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._crmSaveQuote=_crmSaveQuote;
+
+async function _crmDeleteQuote(quoteId){
+  if(!confirm('Xóa Quote này? Không ảnh hưởng tới các lô hàng đã Load quote trước đó.'))return;
+  const p=cache.partners[crmDetailKey]||{};
+  const quotes=(p.quotes||[]).filter(function(q){return q.id!==quoteId;});
+  setLoading(true,'Đang xóa...');
+  try{
+    await fsSet('partners',crmDetailKey,{quotes:quotes,updatedAt:Date.now(),updatedBy:currentUser.email});
+    toast('Đã xóa Quote');
+    renderCrmDetailBody();
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._crmDeleteQuote=_crmDeleteQuote;
 
 // ── TAB: Thông tin chung (dùng prefix cg_ để không trùng ID với form "Thêm đối tác" pf_) ──
 // Lấy TOÀN BỘ lô hàng (xuất + nhập) mà đối tác này là Shipper/Supplier — dùng chung cho các tab
@@ -12683,10 +12950,10 @@ function _crmOverviewAfterRender(){
   const totalCont=lots.reduce(function(s,r){return s+(parseInt(r.vol)||0);},0);
   const activeCount=lots.filter(function(r){return !r.locked&&r.status!=='Delivered'&&r.status!=='Hoàn tất';}).length;
 
-  // Doanh thu 12 tháng gần nhất (theo ETD) — dùng CHÍNH các svcs invoice=Yes như _crmPartnerFinance
+  // Doanh thu 6 tháng gần nhất (theo ETD) — THU GỌN từ 12 xuống 6 tháng, chart thấp hơn cho gọn
   const roe=26390;
   const months=[]; const now=new Date();
-  for(let i=11;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);months.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));}
+  for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);months.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));}
   const revByMonth={}; months.forEach(function(m){revByMonth[m]=0;});
   lots.forEach(function(r){
     const mk=(r.etd||'').slice(0,7); if(!(mk in revByMonth))return;
@@ -12698,7 +12965,7 @@ function _crmOverviewAfterRender(){
   });
   const maxRev=Math.max.apply(null,months.map(function(m){return revByMonth[m];}).concat([1]));
   const barsHtml=months.map(function(m){
-    const h=Math.round(revByMonth[m]/maxRev*140);
+    const h=Math.round(revByMonth[m]/maxRev*76);
     const lbl='T'+parseInt(m.slice(5,7));
     return '<div class="col"><div class="bar" style="height:'+Math.max(h,2)+'px" title="'+fmtVND(revByMonth[m])+'"></div><div class="lbl">'+lbl+'</div></div>';
   }).join('');
@@ -12710,11 +12977,11 @@ function _crmOverviewAfterRender(){
   const totalCargoVol=topCargo.reduce(function(s,c){return s+c.vol;},0)||1;
   const cargoColors=['#0E9F8A','#2D7FF9','#FFB84D','#6C63FF','#EF4444'];
 
-  // Shipment gần đây (5 lô mới nhất theo ETD)
+  // Shipment gần đây (6 lô mới nhất theo ETD)
   const recentLots=lots.slice().sort(function(a,b){return (b.etd||'')<(a.etd||'')?-1:1;}).slice(0,6);
 
   box.innerHTML=`
-    <div class="crm3-kpi-row" style="grid-template-columns:repeat(6,1fr);margin-bottom:20px">
+    <div class="crm3-kpi-row" style="grid-template-columns:repeat(6,1fr);margin-bottom:18px">
       <div class="crm3-kpi"><div class="val">${lots.length}</div><div class="lbl">Tổng Shipment</div></div>
       <div class="crm3-kpi"><div class="val" style="color:#0E9F8A">${fmtVND(fin.revVND)}</div><div class="lbl">Doanh thu (VND)</div></div>
       <div class="crm3-kpi"><div class="val" style="color:${fin.profitVND>=0?'#16A34A':'#EF4444'}">${fmtVND(fin.profitVND)}</div><div class="lbl">Lợi nhuận (VND) · ${fin.margin}%</div></div>
@@ -12722,15 +12989,25 @@ function _crmOverviewAfterRender(){
       <div class="crm3-kpi"><div class="val">${activeCount}</div><div class="lbl">Đang xử lý</div></div>
       <div class="crm3-kpi"><div class="val">${(p.contacts||[]).length}</div><div class="lbl">Người liên hệ</div></div>
     </div>
-    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:18px">
-      <div>
-        <div class="crm3-section-hd"><i class="ti ti-chart-bar"></i>Doanh thu theo tháng (VND)</div>
-        <div class="crm3-barchart">${barsHtml}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+      <div style="border:1px solid #E7EAEF;border-radius:14px;padding:14px 16px">
+        <div class="crm3-section-hd" style="margin-bottom:8px"><i class="ti ti-chart-bar"></i>Doanh thu 6 tháng gần đây</div>
+        <div class="crm3-barchart" style="height:96px">${barsHtml}</div>
       </div>
-      <div>
-        <div class="crm3-section-hd"><i class="ti ti-package"></i>Top mặt hàng (theo sản lượng)</div>
+      <div style="border:1px solid #E7EAEF;border-radius:14px;padding:14px 16px">
+        <div class="crm3-section-hd" style="margin-bottom:10px"><i class="ti ti-package"></i>Top mặt hàng (theo Vol)</div>
         ${topCargo.map(function(c,i){return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:8px"><span style="width:9px;height:9px;border-radius:50%;background:'+cargoColors[i]+';flex-shrink:0"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+c.name+'</span><b>'+Math.round(c.vol/totalCargoVol*100)+'%</b></div>';}).join('')||'<div style="color:#94A3B8;font-size:12px">Chưa có dữ liệu</div>'}
       </div>
+    </div>
+    <div style="border:1px solid #E7EAEF;border-radius:14px;padding:14px 16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="crm3-section-hd" style="margin-bottom:0"><i class="ti ti-chart-donut-2"></i>Phân tích Vol theo</div>
+        <div style="display:inline-flex;background:#F4F6F9;border-radius:9px;padding:3px">
+          <button class="crm3-type-tab${(window._crmReportState.dim==='pod')?' active':''}" style="padding:5px 12px;font-size:11px" onclick="window._crmReportState.dim='pod';_crmOverviewAfterRender()">POD</button>
+          <button class="crm3-type-tab${(window._crmReportState.dim==='cnee')?' active':''}" style="padding:5px 12px;font-size:11px" onclick="window._crmReportState.dim='cnee';_crmOverviewAfterRender()">Cnee</button>
+        </div>
+      </div>
+      <div id="crmOverviewDimChart"></div>
     </div>
     <div class="crm3-section-hd"><i class="ti ti-list"></i>Shipment gần đây</div>
     <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
@@ -12739,8 +13016,40 @@ function _crmOverviewAfterRender(){
         return '<tr style="border-bottom:1px solid #F1F3F6;cursor:pointer" onclick="openDetail(\''+r._id+'\',\''+r._tt+'\')"><td style="padding:8px 10px;font-size:12px;font-weight:700;color:#2D7FF9">'+(r.jobNo||r.bookingNo||'—')+'</td><td style="padding:8px 10px;font-size:12px">'+(r.etd||'—')+'</td><td style="padding:8px 10px;font-size:12px">'+(r.pol||'—')+'</td><td style="padding:8px 10px;font-size:12px">'+(r.pod||'—')+'</td><td style="padding:8px 10px"><span class="crm3-pill active">'+(r.status||'—')+'</span></td></tr>';
       }).join(''):'<tr><td colspan="5" style="padding:1.5rem;text-align:center;color:#94A3B8;font-size:12px">Chưa có shipment nào</td></tr>'}</tbody>
     </table>`;
+  _crmOverviewRenderDimChart();
 }
 window._crmOverviewAfterRender=_crmOverviewAfterRender;
+
+// Phân tích Vol theo POD/Cnee — GỘP từ tab Report cũ (đã bỏ), tái dùng logic nhóm của
+// _crmReportData() nhưng trình bày gọn hơn (thanh ngang compact) phù hợp bố cục Tổng quan.
+function _crmOverviewRenderDimChart(){
+  const box=g('crmOverviewDimChart'); if(!box)return;
+  // Đảm bảo có khoảng thời gian mặc định (6 tháng gần nhất) — trước đây do renderCrmReportTab() đặt,
+  // giờ tab đó đã gộp vào Tổng quan nên tự đảm bảo ở đây để không bị lấy TOÀN BỘ lịch sử.
+  const st=window._crmReportState;
+  if(!st.from||!st.to){
+    const now=new Date();
+    st.to=now.toISOString().slice(0,10);
+    const d=new Date(now); d.setMonth(d.getMonth()-6); d.setDate(1);
+    st.from=d.toISOString().slice(0,10);
+  }
+  const data=_crmReportData();
+  if(!data.lots.length){ box.innerHTML='<div style="color:#94A3B8;font-size:12px;padding:8px 0">Chưa có dữ liệu</div>'; return; }
+  const dimLabel=data.dim==='pod'?'POD':'Cnee';
+  const dimEntries=Object.values(data.byDim).sort(function(a,b){return b.vol-a.vol;}).slice(0,6);
+  const maxVol=Math.max.apply(null,dimEntries.map(function(e){return e.vol;}).concat([1]));
+  box.innerHTML=dimEntries.map(function(e){
+    const pct=data.totalVol>0?Math.round(e.vol/data.totalVol*100):0;
+    const w=Math.round(e.vol/maxVol*100);
+    return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px">'
+      +'<div style="width:130px;flex-shrink:0;font-size:11.5px;font-weight:600;color:#5B6B78;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+e.key+'">'+e.key+'</div>'
+      +'<div style="flex:1;background:#F1F3F6;border-radius:5px;height:16px;position:relative"><div style="width:'+w+'%;background:#0E9F8A;height:100%;border-radius:5px"></div></div>'
+      +'<div style="width:86px;flex-shrink:0;text-align:right;font-size:11.5px"><b>'+e.vol+'</b> <span style="color:#94A3B8">('+pct+'%)</span></div>'
+    +'</div>';
+  }).join('')+'<div style="font-size:10.5px;color:#94A3B8;margin-top:4px">Top 6 '+dimLabel+' theo Vol — 6 tháng gần nhất</div>';
+}
+window._crmOverviewRenderDimChart=_crmOverviewRenderDimChart;
+
 function fmtVND(n){ n=Math.round(n||0); const abs=Math.abs(n); let s; if(abs>=1e9)s=(n/1e9).toFixed(2)+'B'; else if(abs>=1e6)s=(n/1e6).toFixed(0)+'M'; else s=n.toLocaleString(); return s; }
 window.fmtVND=fmtVND;
 
@@ -12763,8 +13072,8 @@ function _crmRenderShipList(){
   box.innerHTML=`
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
       <input type="text" placeholder="Tìm Job ID, Booking, POL, POD..." value="${(st.q||'').replace(/"/g,'&quot;')}" oninput="window._crmShipFilter.q=this.value;_crmRenderShipList()" style="flex:1;min-width:200px;font-size:12px"/>
-      <select onchange="window._crmShipFilter.status=this.value;_crmRenderShipList()" style="font-size:12px"><option value="">Tất cả Status</option>${statuses.map(function(s){return '<option'+(s===st.status?' selected':'')+'>'+s+'</option>';}).join('')}</select>
-      <select onchange="window._crmShipFilter.carrier=this.value;_crmRenderShipList()" style="font-size:12px"><option value="">Tất cả Carrier</option>${carriers.map(function(c){return '<option'+(c===st.carrier?' selected':'')+'>'+c+'</option>';}).join('')}</select>
+      <select onchange="window._crmShipFilter.status=this.value;_crmRenderShipList()" style="font-size:12px;width:150px"><option value="">Tất cả Status</option>${statuses.map(function(s){return '<option'+(s===st.status?' selected':'')+'>'+s+'</option>';}).join('')}</select>
+      <select onchange="window._crmShipFilter.carrier=this.value;_crmRenderShipList()" style="font-size:12px;width:150px"><option value="">Tất cả Carrier</option>${carriers.map(function(c){return '<option'+(c===st.carrier?' selected':'')+'>'+c+'</option>';}).join('')}</select>
     </div>
     <div class="crm3-table-card"><table>
       <thead><tr><th>Job ID</th><th>Booking</th><th>ETD</th><th>POL</th><th>POD</th><th>Carrier</th><th>Container</th><th>Status</th><th></th></tr></thead>
@@ -12920,7 +13229,7 @@ window.renderCrmEmailTab=renderCrmEmailTab;
 function renderCrmGeneralTab(p){
   const curTypes=p.types||(p.type?[p.type]:[]);
   const isShipper=curTypes.indexOf('shipper')>-1;
-  return `<div class="fg">
+  return `<div class="fg crm3-fg">
     <div class="fi"><label class="lbl">Short name (ID)</label><input type="text" id="cg_sn" value="${p.shortname||''}" readonly style="background:var(--bg-secondary);color:var(--text-secondary)"/></div>
     <div class="fi full"><label class="lbl">Loại đối tác (có thể chọn nhiều vai trò)</label>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px">${_partnerTypeChecksHtml('cg_type_cb',curTypes,'_cgTypeChanged()')}</div>
@@ -14405,6 +14714,10 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .crm3-barchart .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%;justify-content:flex-end}
 .crm3-barchart .bar{width:14px;border-radius:3px 3px 0 0;background:#0E9F8A}
 .crm3-barchart .lbl{font-size:9px;color:#94A3B8;font-weight:600}
+.crm3-fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
+.crm3-fg .fi.full{grid-column:1/-1}
+.crm3-fg input,.crm3-fg select{max-width:340px}
+.crm3-fg .fi.full input,.crm3-fg .fi.full select,.crm3-fg .fi.full textarea{max-width:none}
 
 .ws-side-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow-sm)}
 /* Ô Tổng quan lô hàng (thẻ đầu) — cao thêm ~1cm để thoáng hơn */
