@@ -1086,7 +1086,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.50';
+window.APP_BUILD='v3.51';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3180,6 +3180,9 @@ let _openTabs=[]; // {key, type:'lot'|'docmaker', id, tt, label, tab}
 let _activeTabKey=null;
 
 function openDetail(id, tt, startTab){
+  // Đang ở chế độ xem inline (Costing Report) mà lại gọi openDetail() bình thường từ nơi khác — reset
+  // về panel trượt tiêu chuẩn, tránh render nhầm vào khung inline cũ đã không còn hiển thị.
+  window._crInlineTarget=null;
   // ── Xuat tab mode: mở lô trong tab thay vì slide-in panel
   if(tt==='xuat' && document.body.classList.contains('xuat-tabmode')){
     xuatOpenLotTab(id, tt, startTab);
@@ -4186,14 +4189,14 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
     }
   }
 
-  (_xPanelEl||(document.body.classList.contains('xuat-lotmode')&&g('xuat-lot-work'))||g('detailPanel')).innerHTML=`
+  (_xPanelEl||(document.body.classList.contains('xuat-lotmode')&&g('xuat-lot-work'))||(window._crInlineTarget&&g(window._crInlineTarget))||g('detailPanel')).innerHTML=`
   <div class="dpanel-tabbar" id="dpanelTabbar"></div>
   <div class="detail-hdr">
     <div>
       <div style="font-size:15px;font-weight:600">${r.bookingNo||'—'} ${statusBadge} ${r.jobNo?`<span style="font-size:10px;padding:2px 8px;border-radius:20px;background:var(--bg-secondary);color:var(--blue);font-weight:700;border:1px solid var(--border-light)">${r.jobNo}</span>`:''}</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${r.shipper||r.supplier||''} ${r.pol&&r.pod?'| '+r.pol+' → '+r.pod:''}</div>
     </div>
-    <button class="rac" onclick="document.body.classList.contains('xuat-lotmode')?xuatCloseTab('${r._id}',event):closeTab(_activeTabKey)" style="font-size:18px;flex-shrink:0;padding:6px;border-radius:6px;border:1px solid var(--border-light)" title="Đóng"><i class="ti ti-x"></i></button>
+    <button class="rac" onclick="${window._crInlineTarget?'_crCloseInlineLot()':"document.body.classList.contains('xuat-lotmode')?xuatCloseTab('"+r._id+"',event):closeTab(_activeTabKey)"}" style="font-size:18px;flex-shrink:0;padding:6px;border-radius:6px;border:1px solid var(--border-light)" title="Đóng"><i class="ti ti-x"></i></button>
   </div>
   <div class="dtabs">${tabsHtml}</div>
   <div class="detail-body">${bodyHtml}</div>`;
@@ -22544,6 +22547,8 @@ function renderCostingReport(targetId){
       +'</div>'
     +'</div>';
   window._crSideTab='pending';
+  window._crInlineTarget=null;
+  window._crActiveLot=null;
   runCostingReport();
 }
 
@@ -22691,14 +22696,34 @@ function setCostingSideTab(f){
 }
 window.setCostingSideTab=setCostingSideTab;
 
-// Mở lô hàng ngay trên panel trượt tiêu chuẩn (dùng lại NGUYÊN VẸN openDetail + tab Costing gốc —
-// không đổi/không nhân bản bất kỳ logic Costing nào) — nhảy thẳng vào tab Costing để duyệt ngay.
+// Mở lô hàng NGAY TRONG khung crMainArea (không trượt ngang nữa) — dùng lại NGUYÊN VẸN
+// renderDetailPanel()/tab Costing gốc, chỉ đổi ĐÍCH RENDER qua cơ chế window._crInlineTarget đã có
+// sẵn pattern tương tự (_xPanelEl/xuat-lot-work) trong renderDetailPanel(). Không đổi/không nhân bản
+// bất kỳ logic Costing nào.
 function openCostingLot(id,tt){
   window._crActiveLot={id:id,tt:tt};
   renderCostingSidebar(); // cập nhật trạng thái "active" trên thẻ vừa bấm
-  openDetail(id,tt,'costing');
+  const r=cache[tt].find(function(x){return x._id===id;})||{};
+  const key='lot_'+id;
+  let t=_openTabs.find(function(x){return x.key===key;});
+  if(!t){t={key:key,type:'lot',id:id,tt:tt,label:(r.jobNo||r.bookingNo||'Lô hàng'),tab:'costing'};_openTabs.push(t);}
+  else{t.tab='costing';}
+  _activeTabKey=key;
+  detailId=id; detailTt=tt; detailTab='costing';
+  window._crInlineTarget='crMainArea'; // render vào khung inline thay vì panel trượt
+  renderDetailPanel(r,tt);
 }
 window.openCostingLot=openCostingLot;
+
+// Đóng khung xem inline — quay lại placeholder, bỏ chọn lô hàng đang active ở sidebar.
+function _crCloseInlineLot(){
+  window._crInlineTarget=null;
+  window._crActiveLot=null;
+  renderCostingSidebar();
+  const box=g('crMainArea');
+  if(box)box.innerHTML='<div style="text-align:center;padding:4rem 1rem;color:var(--text-tertiary)"><i class="ti ti-hand-click" style="font-size:38px;opacity:.3"></i><div style="margin-top:.75rem;font-size:12.5px">Chọn 1 lô hàng bên trái để xem &amp; duyệt Costing chi tiết</div></div>';
+}
+window._crCloseInlineLot=_crCloseInlineLot;
 
 function exportCostingExcel(){
   const XLSX=window.XLSX;
