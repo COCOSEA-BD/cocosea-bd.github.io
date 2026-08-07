@@ -1098,7 +1098,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.53';
+window.APP_BUILD='v3.54';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11762,6 +11762,186 @@ function _tcLotCostByStatus(from,to){
   return {paid:paid,unpaid:unpaid,total:paid+unpaid};
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  CÁC HÀM HỖ TRỢ MỚI cho giao diện Báo cáo tài chính (redesign) — CHỈ BỔ SUNG,
+//  không sửa/không xóa bất kỳ hàm tính toán nào đã có ở trên. Mọi số liệu hiển thị
+//  vẫn dùng ĐÚNG các hàm gốc (_tcPeriodRange, cache.cashTx, _tcLotRevenueVND,
+//  _tcLotCostVND...) — các hàm dưới đây chỉ gọi lại chúng với khoảng ngày khác
+//  (kỳ trước) hoặc nhóm lại theo ngày để vẽ biểu đồ, không thay đổi công thức gốc.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Kỳ TRƯỚC — cùng độ dài (số ngày) với kỳ đang chọn, dùng để so sánh % thay đổi.
+function _tcPrevPeriodRange(){
+  const {from,to}=_tcPeriodRange();
+  const fromD=new Date(from+'T00:00:00'), toD=new Date(to+'T00:00:00');
+  const days=Math.round((toD-fromD)/86400000)+1;
+  const prevTo=new Date(fromD); prevTo.setDate(prevTo.getDate()-1);
+  const prevFrom=new Date(prevTo); prevFrom.setDate(prevFrom.getDate()-days+1);
+  return {from:prevFrom.toISOString().slice(0,10), to:prevTo.toISOString().slice(0,10)};
+}
+
+// % thay đổi so với kỳ trước — chuẩn hóa hiển thị (tránh chia cho 0).
+function _tcPctChange(cur,prev){
+  if(!prev)return cur>0?100:0;
+  return Math.round((cur-prev)/Math.abs(prev)*1000)/10;
+}
+
+// Dòng tiền Thu/Chi (Sổ quỹ) cho 1 khoảng ngày BẤT KỲ — dùng lại ĐÚNG công thức đã có
+// ở đầu renderTcBaoCao(), tách thành hàm riêng để gọi được cho cả kỳ trước.
+function _tcCashFlowForPeriod(from,to){
+  const roe=26390;
+  const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to;});
+  let thu=0,chi=0;
+  txInPeriod.forEach(function(t){
+    const amtVND=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);
+    if(t.type==='thu')thu+=amtVND; else chi+=amtVND;
+  });
+  return {thu:thu,chi:chi};
+}
+
+// Số lô hàng có ETD trong kỳ + số lô CHƯA costing — dùng ĐÚNG điều kiện "đã costing" đã
+// dùng thống nhất ở Costing Report (r.status/r.costingStatus/r.locked).
+function _tcLotStatsForPeriod(from,to){
+  const allR=[...cache.xuat,...cache.nhap];
+  const filtered=allR.filter(function(r){return r.etd&&r.etd>=from&&r.etd<=to;});
+  const pending=filtered.filter(function(r){return !(r.status==='Đã Costing'||r.costingStatus==='Đã costing'||r.locked);}).length;
+  return {total:filtered.length,pending:pending};
+}
+
+// Chuỗi Thu/Chi theo NGÀY trong khoảng [from,to] — dùng để vẽ biểu đồ đường/cột xu hướng.
+// Gộp theo tuần nếu khoảng quá dài (>45 ngày) để biểu đồ không bị rối.
+function _tcDailySeries(from,to){
+  const roe=26390;
+  const fromD=new Date(from+'T00:00:00'), toD=new Date(to+'T00:00:00');
+  const totalDays=Math.round((toD-fromD)/86400000)+1;
+  const byBucket={};
+  const bucketOf=function(dateStr){
+    if(totalDays<=45)return dateStr;
+    // Gộp theo tuần: lấy ngày Thứ 2 đầu tuần chứa dateStr làm khóa nhóm
+    const d=new Date(dateStr+'T00:00:00');
+    const day=d.getDay()||7; d.setDate(d.getDate()-day+1);
+    return d.toISOString().slice(0,10);
+  };
+  const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to;});
+  txInPeriod.forEach(function(t){
+    const b=bucketOf(t.date);
+    if(!byBucket[b])byBucket[b]={date:b,thu:0,chi:0};
+    const amtVND=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);
+    if(t.type==='thu')byBucket[b].thu+=amtVND; else byBucket[b].chi+=amtVND;
+  });
+  return Object.values(byBucket).sort(function(a,b){return a.date<b.date?-1:1;}).map(function(x){return Object.assign({},x,{profit:x.thu-x.chi});});
+}
+
+// Vẽ mini sparkline SVG (dùng cho KPI card) — chỉ minh họa xu hướng, không có trục/label.
+function _tcSparkline(values,color){
+  if(!values||values.length<2)return '<svg viewBox="0 0 100 30" style="width:100%;height:30px"></svg>';
+  const max=Math.max.apply(null,values), min=Math.min.apply(null,values);
+  const range=(max-min)||1;
+  const pts=values.map(function(v,i){
+    const x=(i/(values.length-1))*100;
+    const y=28-((v-min)/range)*24;
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  const areaPts='0,30 '+pts+' 100,30';
+  return '<svg viewBox="0 0 100 30" preserveAspectRatio="none" style="width:100%;height:30px">'
+    +'<polygon points="'+areaPts+'" fill="'+color+'" opacity="0.12"/>'
+    +'<polyline points="'+pts+'" fill="none" stroke="'+color+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+  +'</svg>';
+}
+
+// Vẽ biểu đồ kết hợp Đường (Thu/Chi) + Cột (Lợi nhuận) theo chuỗi ngày — SVG thuần, không
+// cần thư viện ngoài (khớp phong cách đã dùng ở các nơi khác trong app).
+function _tcComboChart(series){
+  const W=900,H=260,padL=44,padR=10,padT=14,padB=28;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  if(!series.length)return '<div style="text-align:center;padding:3rem;color:var(--text-tertiary);font-size:12px">Không có dữ liệu trong kỳ</div>';
+  const allVals=series.reduce(function(a,x){return a.concat([x.thu,x.chi,x.profit]);},[]);
+  let maxV=Math.max.apply(null,allVals.concat([0])), minV=Math.min.apply(null,allVals.concat([0]));
+  if(maxV===minV){maxV=maxV+1;minV=minV-1;}
+  const pad=(maxV-minV)*0.1; maxV+=pad; minV-=pad;
+  const xFor=function(i){return padL+(series.length<=1?plotW/2:(i/(series.length-1))*plotW);};
+  const yFor=function(v){return padT+plotH-((v-minV)/(maxV-minV))*plotH;};
+  const barW=Math.min(28,plotW/series.length*0.5);
+  const fmtShort=function(v){const a=Math.abs(v);if(a>=1e9)return (v/1e9).toFixed(1)+'B';if(a>=1e6)return Math.round(v/1e6)+'M';if(a>=1e3)return Math.round(v/1e3)+'K';return String(Math.round(v));};
+  const gridLines=[0,0.25,0.5,0.75,1].map(function(f){
+    const v=minV+(maxV-minV)*f, y=yFor(v);
+    return '<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="#EDF1F5" stroke-width="1"/>'
+      +'<text x="'+(padL-6)+'" y="'+(y+3)+'" font-size="9" fill="#94A3B8" text-anchor="end">'+fmtShort(v)+'</text>';
+  }).join('');
+  const zeroY=yFor(0);
+  const bars=series.map(function(x,i){
+    const cx=xFor(i), h=Math.abs(yFor(x.profit)-zeroY), y=x.profit>=0?yFor(x.profit):zeroY;
+    return '<rect x="'+(cx-barW/2)+'" y="'+y+'" width="'+barW+'" height="'+Math.max(h,1)+'" fill="'+(x.profit>=0?'#0F4C81':'#EF4444')+'" opacity="0.75" rx="2"/>';
+  }).join('');
+  const lineOf=function(key,color){
+    const pts=series.map(function(x,i){return xFor(i).toFixed(1)+','+yFor(x[key]).toFixed(1);}).join(' ');
+    const dots=series.map(function(x,i){return '<circle cx="'+xFor(i).toFixed(1)+'" cy="'+yFor(x[key]).toFixed(1)+'" r="3" fill="'+color+'"/>';}).join('');
+    return '<polyline points="'+pts+'" fill="none" stroke="'+color+'" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'+dots;
+  };
+  const xLabels=series.map(function(x,i){
+    if(series.length>10 && i%Math.ceil(series.length/8)!==0 && i!==series.length-1)return '';
+    const d=new Date(x.date+'T00:00:00');
+    return '<text x="'+xFor(i).toFixed(1)+'" y="'+(H-8)+'" font-size="9" fill="#94A3B8" text-anchor="middle">'+String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'</text>';
+  }).join('');
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:260px" preserveAspectRatio="xMidYMid meet">'
+    +gridLines+bars+lineOf('thu','#16A34A')+lineOf('chi','#EF4444')+xLabels
+  +'</svg>';
+}
+
+// Vẽ donut "Cơ cấu chi phí" theo danh mục (dùng lại chiByCat đã tính ở trên) — CSS conic-gradient,
+// đồng bộ phong cách donut đã dùng ở CRM/Cont-Seal.
+const TC_DONUT_COLORS=['#0F4C81','#16A34A','#F59E0B','#7C3AED','#94A3B8','#DB2777','#0891B2'];
+function _tcCostDonut(chiByCat,totalChi){
+  const entries=Object.entries(chiByCat).sort(function(a,b){return b[1]-a[1];});
+  if(!entries.length||!totalChi)return '<div style="text-align:center;padding:3rem 1rem;color:var(--text-tertiary);font-size:12px">Chưa có chi phí trong kỳ</div>';
+  let acc=0;
+  const stops=entries.map(function(e,i){
+    const pct=e[1]/totalChi*100, from=acc, to=acc+pct; acc=to;
+    return TC_DONUT_COLORS[i%TC_DONUT_COLORS.length]+' '+from.toFixed(2)+'% '+to.toFixed(2)+'%';
+  }).join(',');
+  const legend=entries.map(function(e,i){
+    const pct=Math.round(e[1]/totalChi*1000)/10;
+    return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:9px">'
+      +'<span style="width:9px;height:9px;border-radius:50%;background:'+TC_DONUT_COLORS[i%TC_DONUT_COLORS.length]+';flex-shrink:0"></span>'
+      +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)" title="'+e[0]+'">'+e[0]+'</span>'
+      +'<span style="font-weight:700;color:var(--text-primary)">'+pct+'%</span>'
+      +'<span style="color:var(--text-tertiary);width:92px;text-align:right;font-size:11px">('+e[1].toLocaleString()+')</span>'
+    +'</div>';
+  }).join('');
+  return '<div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap">'
+    +'<div style="width:150px;height:150px;border-radius:50%;background:conic-gradient('+stops+');flex-shrink:0;position:relative">'
+      +'<div style="position:absolute;inset:28px;background:#fff;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:inset 0 0 0 1px #F1F3F6">'
+        +'<div style="font-size:15px;font-weight:800;color:var(--text-primary)">'+_tcFmtVNDShort(totalChi)+'</div>'
+        +'<div style="font-size:9px;color:var(--text-tertiary)">Tổng chi phí</div>'
+      +'</div>'
+    +'</div>'
+    +'<div style="flex:1;min-width:200px">'+legend+'</div>'
+  +'</div>';
+}
+function _tcFmtVNDShort(v){
+  const a=Math.abs(v||0);
+  if(a>=1e9)return (v/1e9).toFixed(2)+'M'; // theo đúng mẫu "644.31M" trong ảnh (đơn vị hiển thị rút gọn)
+  if(a>=1e6)return Math.round(v/1e6)+'K';
+  return String(Math.round(v||0));
+}
+
+// Dựng 1 thẻ KPI hoàn chỉnh: icon nền nhạt, tiêu đề, giá trị lớn, % so với kỳ trước, sparkline.
+// invertColor=true cho các chỉ số mà "giảm" mới là điều tốt (VD: Số lô CHƯA costing giảm = tốt).
+function _tcKpiCard(icon,label,value,pctChange,color,sparkSvg,invertColor){
+  const good=invertColor?pctChange<=0:pctChange>=0;
+  const pctColor=pctChange===0?'#94A3B8':(good?'#16A34A':'#EF4444');
+  const pctIcon=pctChange===0?'ti-minus':(pctChange>0?'ti-arrow-up-right':'ti-arrow-down-right');
+  return '<div class="tcbc-kpi">'
+    +'<div class="tcbc-kpi-top">'
+      +'<div class="tcbc-kpi-ic" style="background:'+color+'1a;color:'+color+'"><i class="ti '+icon+'"></i></div>'
+      +'<div class="tcbc-kpi-lbl">'+label+'</div>'
+    +'</div>'
+    +'<div class="tcbc-kpi-val" style="color:'+color+'">'+value+'</div>'
+    +'<div class="tcbc-kpi-chg" style="color:'+pctColor+'"><i class="ti '+pctIcon+'" style="font-size:12px"></i> '+Math.abs(pctChange)+'% so với kỳ trước</div>'
+    +'<div class="tcbc-kpi-spark">'+sparkSvg+'</div>'
+  +'</div>';
+}
+
 function renderTcBaoCao(){
   const p=window._tcRptPeriod;
   const {from,to}=_tcPeriodRange();
@@ -11808,6 +11988,20 @@ function renderTcBaoCao(){
   const lotCost=_tcLotCostByStatus(from,to);
 
   const money=function(n){return (n||0).toLocaleString();};
+
+  // ── Dữ liệu MỚI cho KPI card + biểu đồ (chỉ bổ sung, không đổi số liệu gốc ở trên) ──
+  const prevRange=_tcPrevPeriodRange();
+  const prevCF=_tcCashFlowForPeriod(prevRange.from,prevRange.to);
+  const lotStats=_tcLotStatsForPeriod(from,to);
+  const prevLotStats=_tcLotStatsForPeriod(prevRange.from,prevRange.to);
+  const profitVND=thuVND-chiVND, prevProfitVND=prevCF.thu-prevCF.chi;
+  const marginPct=thuVND>0?Math.round(profitVND/thuVND*1000)/10:0;
+  const prevMarginPct=prevCF.thu>0?Math.round(prevProfitVND/prevCF.thu*1000)/10:0;
+  const dailySeries=_tcDailySeries(from,to);
+  const sparkThu=dailySeries.map(function(x){return x.thu;});
+  const sparkChi=dailySeries.map(function(x){return x.chi;});
+  const sparkProfit=dailySeries.map(function(x){return x.profit;});
+
   window._tcRptBoxOpen=window._tcRptBoxOpen||{opening:true,rev:true,cost:true,byacc:true,cat:true};
   const _tcBox=function(key,titleHtml,innerHtml){
     const open=window._tcRptBoxOpen[key]!==false;
@@ -11832,12 +12026,12 @@ function renderTcBaoCao(){
   };
 
   return `
-  <div class="toolbar" style="align-items:center;flex-wrap:wrap">
+  <div class="tcbc-filterbar">
     <div style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">
       ${['month','quarter','year','custom'].map(function(m){
         const lbl={month:'Tháng',quarter:'Quý',year:'Năm',custom:'Tùy chọn'}[m];
         const active=p.mode===m;
-        return '<button onclick="window._tcRptPeriod.mode=\''+m+'\';renderTcBody()" style="padding:7px 14px;border:none;background:'+(active?'var(--green)':'transparent')+';color:'+(active?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12px;font-weight:'+(active?'700':'500')+';font-family:inherit">'+lbl+'</button>';
+        return '<button onclick="window._tcRptPeriod.mode=\''+m+'\';renderTcBody()" style="padding:7px 14px;border:none;background:'+(active?'var(--blue)':'transparent')+';color:'+(active?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:12px;font-weight:'+(active?'700':'500')+';font-family:inherit">'+lbl+'</button>';
       }).join('')}
     </div>
     ${p.mode==='month'?'<select onchange="window._tcRptPeriod.month=parseInt(this.value);renderTcBody()" style="width:110px;flex:0 0 110px;font-size:12px">'+monthOpts+'</select>':''}
@@ -11845,58 +12039,105 @@ function renderTcBaoCao(){
     ${p.mode!=='custom'?'<select onchange="window._tcRptPeriod.year=parseInt(this.value);renderTcBody()" style="width:100px;flex:0 0 100px;font-size:12px">'+yearOpts+'</select>':''}
     ${p.mode==='custom'?'<label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">Từ:</label><input type="date" id="tcRptCustomFrom" value="'+from+'" style="width:150px;flex:0 0 150px"/><label style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap">đến:</label><input type="date" id="tcRptCustomTo" value="'+to+'" style="width:150px;flex:0 0 150px"/><button class="btn pri" onclick="_tcApplyCustomRange()" style="flex:0 0 auto;white-space:nowrap"><i class="ti ti-filter"></i> Lọc</button>':''}
     <div style="flex:1"></div>
+    <button class="btn" onclick="renderTcBody()" title="Làm mới"><i class="ti ti-refresh"></i></button>
     <button class="btn" onclick="_tcExportBaoCao()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
   </div>
 
-  <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin:0 0 1rem;display:flex;align-items:center;gap:8px"><i class="ti ti-report-money" style="color:var(--green)"></i> Báo cáo tài chính — ${_tcPeriodLabel()} <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">(${from} → ${to})</span></div>
+  <div style="font-size:15px;font-weight:800;color:var(--text-primary);margin:1.1rem 0 .9rem;display:flex;align-items:center;gap:8px"><i class="ti ti-report-money" style="color:var(--blue)"></i> Báo cáo tài chính — ${_tcPeriodLabel()} <span style="font-size:11.5px;font-weight:500;color:var(--text-tertiary)">(${from} → ${to})</span></div>
 
-  <!-- Dòng tiền tổng quan (Sổ quỹ thực tế) -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:1.25rem">
-    <div style="padding:.9rem 1rem;background:var(--bg-secondary);border-radius:10px;border-left:4px solid #64748b"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Quỹ đầu kỳ</div><div style="font-size:16px;font-weight:800;color:#334155">${openingVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
-    <div style="padding:.9rem 1rem;background:var(--green-bg);border-radius:10px;border-left:4px solid var(--green)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Thu (Sổ quỹ)</div><div style="font-size:16px;font-weight:800;color:var(--green-dark)">+${thuVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
-    <div style="padding:.9rem 1rem;background:var(--red-bg);border-radius:10px;border-left:4px solid var(--red)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Tổng Chi (Sổ quỹ)</div><div style="font-size:16px;font-weight:800;color:var(--red-text)">-${chiVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
-    <div style="padding:.9rem 1rem;background:var(--blue-bg);border-radius:10px;border-left:4px solid var(--blue)"><div style="font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">Quỹ cuối kỳ</div><div style="font-size:16px;font-weight:800;color:${closingVND>=0?'var(--blue)':'var(--red-text)'}">${closingVND.toLocaleString()} <span style="font-size:11px">VND</span></div></div>
+  <!-- ═══ 6 KPI CARDS ═══ -->
+  <div class="tcbc-kpi-row">
+    ${_tcKpiCard('ti-trending-up','Tổng doanh thu (chưa VAT)',money(thuVND)+' VND',_tcPctChange(thuVND,prevCF.thu),'#16A34A',_tcSparkline(sparkThu,'#16A34A'))}
+    ${_tcKpiCard('ti-trending-down','Tổng chi phí (chưa VAT)',money(chiVND)+' VND',_tcPctChange(chiVND,prevCF.chi),'#EF4444',_tcSparkline(sparkChi,'#EF4444'))}
+    ${_tcKpiCard('ti-cash','Lợi nhuận (VND)',(profitVND>=0?'+':'')+money(profitVND),_tcPctChange(profitVND,prevProfitVND),'#0F4C81',_tcSparkline(sparkProfit,'#0F4C81'))}
+    ${_tcKpiCard('ti-percentage','Tỷ lệ lợi nhuận',marginPct+'%',_tcPctChange(marginPct,prevMarginPct),'#7C3AED',_tcSparkline(sparkProfit,'#7C3AED'))}
+    ${_tcKpiCard('ti-package','Số lô hàng',String(lotStats.total),_tcPctChange(lotStats.total,prevLotStats.total),'#0891B2',_tcSparkline(sparkThu.length?sparkThu.map(function(_,i){return i+1;}):[0,0],'#0891B2'))}
+    ${_tcKpiCard('ti-hourglass','Số lô chưa costing',String(lotStats.pending),_tcPctChange(lotStats.pending,prevLotStats.pending),'#D97706',_tcSparkline(sparkChi.length?sparkChi.map(function(_,i){return lotStats.pending;}):[0,0],'#D97706'),true)}
   </div>
 
-  <!-- Quỹ đầu kỳ theo từng tài khoản -->
-  ${_tcBox('opening','<i class="ti ti-wallet"></i> Quỹ đầu kỳ theo tài khoản',
-    (openingByAcc.length?openingByAcc.map(function(a){
-      return '<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px;border-bottom:1px dashed var(--border-light)"><span style="color:var(--text-secondary)"><i class="ti ti-building-bank" style="font-size:12px"></i> '+a.label+'</span><strong style="color:#334155">'+money(a.vnd)+' VND</strong></div>';
-    }).join(''):'<div style="font-size:11.5px;color:var(--text-tertiary);padding:6px 0">Chưa có tài khoản</div>')
-    +'<div style="display:flex;justify-content:space-between;padding:8px 0 2px;font-size:13px;font-weight:800;border-top:2px solid var(--border-light);margin-top:4px"><span>TỔNG QUỸ ĐẦU KỲ</span><span style="color:#1a4b8c">'+openingVND.toLocaleString()+' VND</span></div>'
-  )}
+  <!-- ═══ BIỂU ĐỒ: Doanh thu-Chi phí-Lợi nhuận (trái) + Cơ cấu chi phí (phải) ═══ -->
+  <div class="tcbc-chart-row">
+    <div class="tcbc-card">
+      <div class="tcbc-card-hd">
+        <span><i class="ti ti-chart-line"></i> Biểu đồ Doanh thu - Chi phí - Lợi nhuận</span>
+        <span style="display:flex;gap:14px;font-size:11px;font-weight:600">
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2.5px;background:#16A34A;display:inline-block;border-radius:2px"></span>Doanh thu</span>
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2.5px;background:#EF4444;display:inline-block;border-radius:2px"></span>Chi phí</span>
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:#0F4C81;display:inline-block;border-radius:2px"></span>Lợi nhuận</span>
+        </span>
+      </div>
+      ${_tcComboChart(dailySeries)}
+    </div>
+    <div class="tcbc-card">
+      <div class="tcbc-card-hd"><span><i class="ti ti-chart-donut"></i> Cơ cấu chi phí</span></div>
+      ${_tcCostDonut(chiByCat,chiVND)}
+    </div>
+  </div>
 
-  ${_tcBox('rev','<span style="color:var(--green-dark)"><i class="ti ti-arrow-down-circle"></i> Tổng Thu từ Shipper (theo Invoice / Debit Note)</span>',
-    tri(invRev.paid,invRev.unpaid,invRev.total,'rev')
-  )}
+  <!-- ═══ 3 CARD CHI TIẾT: Quỹ đầu/cuối kỳ | Thu/Chi theo tài khoản | Thu/Chi theo danh mục chi phí ═══ -->
+  <div class="tcbc-detail-row">
+    <div class="tcbc-card">
+      <div class="tcbc-card-hd"><span><i class="ti ti-wallet"></i> Quỹ đầu kỳ &amp; quỹ cuối kỳ</span></div>
+      <div class="tcbc-fund-row"><div class="tcbc-fund-ic" style="background:#64748B"><i class="ti ti-door-enter"></i></div><div><div class="tcbc-fund-lbl">Quỹ đầu kỳ</div><div class="tcbc-fund-val" style="color:#334155">${money(openingVND)} <small>VND</small></div></div></div>
+      <div class="tcbc-fund-row"><div class="tcbc-fund-ic" style="background:#16A34A"><i class="ti ti-arrow-down-circle"></i></div><div><div class="tcbc-fund-lbl">Tổng thu trong kỳ</div><div class="tcbc-fund-val" style="color:#16A34A">+${money(thuVND)} <small>VND</small></div></div></div>
+      <div class="tcbc-fund-row"><div class="tcbc-fund-ic" style="background:#EF4444"><i class="ti ti-arrow-up-circle"></i></div><div><div class="tcbc-fund-lbl">Tổng chi trong kỳ</div><div class="tcbc-fund-val" style="color:#EF4444">-${money(chiVND)} <small>VND</small></div></div></div>
+      <div class="tcbc-fund-row" style="border-top:1px dashed var(--border-light);padding-top:10px;margin-top:2px"><div class="tcbc-fund-ic" style="background:#0F4C81"><i class="ti ti-door-exit"></i></div><div><div class="tcbc-fund-lbl">Quỹ cuối kỳ</div><div class="tcbc-fund-val" style="color:${closingVND>=0?'#0F4C81':'#EF4444'}">${money(closingVND)} <small>VND</small></div></div></div>
+    </div>
+    <div class="tcbc-card">
+      <div class="tcbc-card-hd"><span><i class="ti ti-building-bank"></i> Thu / Chi theo tài khoản</span></div>
+      <div class="table-wrap"><table style="width:100%;font-size:12px">
+        <thead><tr><th style="text-align:left">Tài khoản</th><th style="text-align:right">Thu (VND)</th><th style="text-align:right">Chi (VND)</th><th style="text-align:right">Chênh lệch</th></tr></thead>
+        <tbody>${(Object.entries(statsByAcc).filter(function(e){return e[1].thu||e[1].chi;}).map(function(e){
+          const accId=e[0], a=e[1]; const diff=a.thu-a.chi;
+          return '<tr onclick="_tcShowAccountTx(\''+accId.replace(/'/g,"\\'")+'\',\''+from+'\',\''+to+'\')" style="cursor:pointer" class="tcbc-hoverrow"><td style="font-weight:600">'+a.label+'</td>'
+            +'<td style="text-align:right;color:#16A34A">'+money(a.thu)+'</td>'
+            +'<td style="text-align:right;color:#EF4444">'+money(a.chi)+'</td>'
+            +'<td style="text-align:right;font-weight:700;color:'+(diff>=0?'#16A34A':'#EF4444')+'">'+(diff>=0?'+':'')+money(diff)+'</td></tr>';
+        }).join(''))||'<tr><td colspan="4" style="text-align:center;padding:1rem;color:var(--text-tertiary)">Không có giao dịch</td></tr>'}</tbody>
+        <tfoot><tr style="background:var(--bg-secondary);font-weight:800"><td>TỔNG CỘNG</td><td style="text-align:right;color:#16A34A">${money(thuVND)}</td><td style="text-align:right;color:#EF4444">${money(chiVND)}</td><td style="text-align:right;color:${(thuVND-chiVND)>=0?'#16A34A':'#EF4444'}">${(thuVND-chiVND)>=0?'+':''}${money(thuVND-chiVND)}</td></tr></tfoot>
+      </table></div>
+    </div>
+    <div class="tcbc-card">
+      <div class="tcbc-card-hd"><span><i class="ti ti-category"></i> Chi phí theo danh mục</span></div>
+      <div class="tcbc-catbar-wrap">
+        <div class="tcbc-catbar-hd"><span>Danh mục chi phí</span><span>Chi phí (VND)</span><span>Tỷ trọng</span></div>
+        ${Object.entries(chiByCat).sort(function(a,b){return b[1]-a[1];}).map(function(e,i){
+          const pct=chiVND>0?Math.round(e[1]/chiVND*1000)/10:0;
+          const catEsc=e[0].replace(/'/g,"\\'").replace(/"/g,'&quot;');
+          return '<div class="tcbc-catbar-row" onclick="_tcShowCategoryTx(\'chi\',\''+catEsc+'\',\''+from+'\',\''+to+'\')">'
+            +'<span class="tcbc-catbar-name"><span class="tcbc-catbar-dot" style="background:'+TC_DONUT_COLORS[i%TC_DONUT_COLORS.length]+'"></span>'+e[0]+'</span>'
+            +'<span class="tcbc-catbar-amt">'+money(e[1])+'</span>'
+            +'<span class="tcbc-catbar-track"><span class="tcbc-catbar-fill" style="width:'+pct+'%;background:'+TC_DONUT_COLORS[i%TC_DONUT_COLORS.length]+'"></span></span>'
+          +'</div>';
+        }).join('')||'<div style="font-size:11.5px;color:var(--text-tertiary);padding:8px 0">Không có chi phí trong kỳ</div>'}
+        <div class="tcbc-catbar-row" style="border-top:1px solid var(--border-light);margin-top:6px;padding-top:8px;font-weight:800"><span class="tcbc-catbar-name">TỔNG CỘNG</span><span class="tcbc-catbar-amt">${money(chiVND)}</span><span></span></div>
+      </div>
+    </div>
+  </div>
 
-  ${_tcBox('cost','<span style="color:var(--red-text)"><i class="ti ti-arrow-up-circle"></i> Tổng Chi các lô hàng (phải trả NCC — đã gồm VAT)</span>',
-    tri(lotCost.paid,lotCost.unpaid,lotCost.total,'cost')
-  )}
+  <!-- ═══ Chi tiết bổ sung (giữ nguyên toàn bộ chức năng cũ: Thu từ Shipper/Chi các lô theo TT, Quỹ đầu kỳ theo từng TK, Thu theo danh mục) ═══ -->
+  <div onclick="window._tcRptBoxOpen.extra=!window._tcRptBoxOpen.extra;renderTcBody()" style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin:.5rem 0;display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--bg-secondary);border-radius:8px">
+    <i class="ti ti-chevron-${window._tcRptBoxOpen.extra?'down':'right'}"></i> Chi tiết bổ sung (Thu/Chi theo Invoice-Costing, Quỹ đầu kỳ theo từng tài khoản...)
+  </div>
+  ${window._tcRptBoxOpen.extra?(
+    _tcBox('opening','<i class="ti ti-wallet"></i> Quỹ đầu kỳ theo tài khoản',
+      (openingByAcc.length?openingByAcc.map(function(a){
+        return '<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px;border-bottom:1px dashed var(--border-light)"><span style="color:var(--text-secondary)"><i class="ti ti-building-bank" style="font-size:12px"></i> '+a.label+'</span><strong style="color:#334155">'+money(a.vnd)+' VND</strong></div>';
+      }).join(''):'<div style="font-size:11.5px;color:var(--text-tertiary);padding:6px 0">Chưa có tài khoản</div>')
+      +'<div style="display:flex;justify-content:space-between;padding:8px 0 2px;font-size:13px;font-weight:800;border-top:2px solid var(--border-light);margin-top:4px"><span>TỔNG QUỸ ĐẦU KỲ</span><span style="color:#1a4b8c">'+openingVND.toLocaleString()+' VND</span></div>'
+    )
+    +_tcBox('rev','<span style="color:var(--green-dark)"><i class="ti ti-arrow-down-circle"></i> Tổng Thu từ Shipper (theo Invoice / Debit Note)</span>',
+      tri(invRev.paid,invRev.unpaid,invRev.total,'rev')
+    )
+    +_tcBox('cost','<span style="color:var(--red-text)"><i class="ti ti-arrow-up-circle"></i> Tổng Chi các lô hàng (phải trả NCC — đã gồm VAT)</span>',
+      tri(lotCost.paid,lotCost.unpaid,lotCost.total,'cost')
+    )
+    +_tcBox('cat','<i class="ti ti-category"></i> Thu theo danh mục (Sổ quỹ)',
+      catRow(thuByCat,'var(--green-dark)','thu')
+    )
+  ):''}
 
-  ${_tcBox('byacc','<i class="ti ti-building-bank"></i> Thu / Chi theo tài khoản (Sổ quỹ trong kỳ)',
-    '<div class="table-wrap"><table style="width:100%">'
-      +'<thead><tr><th style="text-align:left">Tài khoản</th><th style="text-align:right">Thu</th><th style="text-align:right">Chi</th><th style="text-align:right">Chênh lệch</th></tr></thead>'
-      +'<tbody>'+(Object.entries(statsByAcc).filter(function(e){return e[1].thu||e[1].chi;}).map(function(e){
-        const accId=e[0], a=e[1];
-        const diff=a.thu-a.chi;
-        return '<tr onclick="_tcShowAccountTx(\''+accId.replace(/'/g,"\\'")+'\',\''+from+'\',\''+to+'\')" style="cursor:pointer" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'"><td style="font-weight:600">'+a.label+' <i class="ti ti-external-link" style="font-size:11px;color:var(--text-tertiary)"></i></td>'
-          +'<td style="text-align:right;color:var(--green)">'+money(a.thu)+'</td>'
-          +'<td style="text-align:right;color:var(--red)">'+money(a.chi)+'</td>'
-          +'<td style="text-align:right;font-weight:700;color:'+(diff>=0?'var(--green-dark)':'var(--red-text)')+'">'+(diff>=0?'+':'')+money(diff)+'</td></tr>';
-      }).join('')||'<tr><td colspan="4" style="text-align:center;padding:1rem;color:var(--text-secondary)">Không có giao dịch trong kỳ</td></tr>')+'</tbody>'
-      +'<tfoot><tr style="background:var(--bg-secondary);font-weight:800"><td>TỔNG</td><td style="text-align:right;color:var(--green)">'+money(thuVND)+'</td><td style="text-align:right;color:var(--red)">'+money(chiVND)+'</td><td style="text-align:right;color:'+((thuVND-chiVND)>=0?'var(--green-dark)':'var(--red-text)')+'">'+((thuVND-chiVND)>=0?'+':'')+money(thuVND-chiVND)+'</td></tr></tfoot>'
-    +'</table></div>'
-  )}
-
-  <div style="font-size:11.5px;color:var(--text-tertiary);margin:0 0 1.25rem;padding-left:2px"><i class="ti ti-info-circle"></i> Quỹ cuối kỳ của kỳ này sẽ là quỹ đầu kỳ của kỳ kế tiếp. Dòng tiền Sổ quỹ dựa trên giao dịch thực tế (đã gồm VAT). Thu từ Shipper và Chi các lô lấy theo số liệu Invoice/chi phí của các lô có ETD trong kỳ.</div>
-
-  ${_tcBox('cat','<i class="ti ti-category"></i> Thu / Chi theo danh mục (Sổ quỹ)',
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'
-    +'<div><div style="font-size:12px;font-weight:700;color:var(--green-dark);margin-bottom:.5rem;display:flex;justify-content:space-between"><span><i class="ti ti-arrow-down-circle"></i> Thu theo danh mục</span><span>'+thuVND.toLocaleString()+'</span></div>'+catRow(thuByCat,'var(--green-dark)','thu')+'</div>'
-    +'<div><div style="font-size:12px;font-weight:700;color:var(--red-text);margin-bottom:.5rem;display:flex;justify-content:space-between"><span><i class="ti ti-arrow-up-circle"></i> Chi theo danh mục</span><span>'+chiVND.toLocaleString()+'</span></div>'+catRow(chiByCat,'var(--red-text)','chi')+'</div>'
-    +'</div>'
-  )}
+  <div style="font-size:11.5px;color:var(--text-tertiary);margin:.25rem 0 1.25rem;padding-left:2px"><i class="ti ti-info-circle"></i> Quỹ cuối kỳ của kỳ này sẽ là quỹ đầu kỳ của kỳ kế tiếp. Dòng tiền Sổ quỹ dựa trên giao dịch thực tế (đã gồm VAT). Thu từ Shipper và Chi các lô lấy theo số liệu Invoice/chi phí của các lô có ETD trong kỳ.</div>
 
   ${_renderTcBaoCaoLots(from,to)}`;
 }
@@ -15008,6 +15249,42 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .cr-lot-etd{color:var(--text-tertiary);display:flex;align-items:center;gap:4px}
 .cr-lot-profit{font-weight:800}
 .cr-main{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:14px;min-height:74vh;box-shadow:var(--shadow-sm)}
+
+/* ═══ BÁO CÁO TÀI CHÍNH — redesign (chỉ giao diện, không đổi logic/dữ liệu) ═══ */
+.tcbc-filterbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow-sm)}
+.tcbc-kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
+@media (max-width:1300px){.tcbc-kpi-row{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:700px){.tcbc-kpi-row{grid-template-columns:repeat(2,1fr)}}
+.tcbc-kpi{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:16px;padding:14px 16px;box-shadow:var(--shadow-sm)}
+.tcbc-kpi-top{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.tcbc-kpi-ic{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.tcbc-kpi-lbl{font-size:9.5px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.3px;line-height:1.3}
+.tcbc-kpi-val{font-size:19px;font-weight:800;line-height:1.15;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tcbc-kpi-chg{font-size:10.5px;font-weight:700;display:flex;align-items:center;gap:3px;margin-bottom:8px}
+.tcbc-kpi-spark{margin-top:2px}
+.tcbc-chart-row{display:grid;grid-template-columns:1.7fr 1fr;gap:14px;margin-bottom:16px}
+@media (max-width:1100px){.tcbc-chart-row{grid-template-columns:1fr}}
+.tcbc-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow-sm)}
+.tcbc-card-hd{font-size:12.5px;font-weight:800;color:var(--text-primary);display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap}
+.tcbc-card-hd i{color:var(--blue);margin-right:6px}
+.tcbc-detail-row{display:grid;grid-template-columns:1fr 1.3fr 1.3fr;gap:14px;margin-bottom:14px}
+@media (max-width:1100px){.tcbc-detail-row{grid-template-columns:1fr}}
+.tcbc-fund-row{display:flex;align-items:center;gap:11px;padding:9px 0}
+.tcbc-fund-ic{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0}
+.tcbc-fund-lbl{font-size:11px;color:var(--text-secondary);font-weight:600}
+.tcbc-fund-val{font-size:15px;font-weight:800}
+.tcbc-fund-val small{font-size:10px;font-weight:600;opacity:.7}
+.tcbc-hoverrow{transition:.1s}
+.tcbc-hoverrow:hover{background:var(--bg-secondary)}
+.tcbc-catbar-wrap{display:flex;flex-direction:column}
+.tcbc-catbar-hd{display:grid;grid-template-columns:1.3fr .9fr 1fr;gap:8px;font-size:9px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.3px;padding-bottom:8px;border-bottom:1px solid var(--border-light);margin-bottom:8px}
+.tcbc-catbar-row{display:grid;grid-template-columns:1.3fr .9fr 1fr;gap:8px;align-items:center;padding:6px 0;cursor:pointer;border-radius:6px}
+.tcbc-catbar-row:hover{background:var(--bg-secondary)}
+.tcbc-catbar-name{font-size:12px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tcbc-catbar-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.tcbc-catbar-amt{font-size:12px;font-weight:700;text-align:right}
+.tcbc-catbar-track{background:var(--bg-secondary);border-radius:10px;height:7px;overflow:hidden}
+.tcbc-catbar-fill{display:block;height:100%;border-radius:10px}
 .crm3-fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
 .crm3-fg .fi.full{grid-column:1/-1}
 .crm3-fg input,.crm3-fg select{max-width:340px}
