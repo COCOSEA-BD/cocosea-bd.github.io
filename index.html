@@ -1098,7 +1098,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.55';
+window.APP_BUILD='v3.56';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3631,6 +3631,7 @@ function renderDetailPanel(r,tt){
 
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
+      <button class="btn" onclick="loadDefaultServices()" title="Tải dịch vụ mặc định của Shipper này (cấu hình ở CRM → Pricing); nếu Shipper chưa cấu hình sẽ dùng dịch vụ mặc định trong Danh mục dịch vụ"><i class="ti ti-download"></i> Load default</button>
       <button class="btn" onclick="openLoadQuotePicker()" title="Chọn 1 Quote đã tạo cho Shipper này (CRM → Pricing) — tải dịch vụ + giá tương ứng vào lô hàng"><i class="ti ti-download"></i> Load quote</button>
       <button class="rac" onclick="_svcTabRefresh()" title="Tải lại SL theo Vol mới nhất từ tab Chi tiết" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button>
     </div>
@@ -15741,6 +15742,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
         <div id="page-trucking-report" style="display:none"></div>
         <div id="page-scy-report" style="display:none"></div>
         <div id="page-co-report" style="display:none"></div>
+        <div id="page-phyto-report" style="display:none"></div>
       </div>
     </div>
   </div>
@@ -23359,7 +23361,8 @@ window._svcReportTab=window._svcReportTab||'trucking';
 const SVC_REPORT_TABS=[
   {key:'trucking',icon:'ti-truck',label:'Trucking',pageId:'page-trucking-report',renderFn:'renderTruckingReport'},
   {key:'scy',icon:'ti-package',label:'SCY',pageId:'page-scy-report',renderFn:'renderScyReport'},
-  {key:'co',icon:'ti-certificate',label:'C/O',pageId:'page-co-report',renderFn:'renderCOReport'}
+  {key:'co',icon:'ti-certificate',label:'C/O',pageId:'page-co-report',renderFn:'renderCOReport'},
+  {key:'phyto',icon:'ti-vaccine',label:'Phyto',pageId:'page-phyto-report',renderFn:'renderPhytoReport'}
 ];
 function renderServiceReport(){
   const sw=g('svcReportTabSwitch');
@@ -23597,6 +23600,143 @@ async function _coReportSaveRefNo(lotId,val){
   }catch(e){ toast('Lỗi: '+e.message,'error'); }
 }
 window._coReportSaveRefNo=_coReportSaveRefNo;
+
+// ─────────── PHYTO REPORT (tương tự C/O Report — lọc lô có CẢ 2 dịch vụ) ───────────
+// Tìm 1 dịch vụ trong svcs theo tên/code MONG MUỐN — kiểm tra CẢ _name/_code đã lưu trực tiếp trên
+// lô (ổn định nhất, không phụ thuộc catalog runtime hiện tại) LẪN catalog SVCS hiện hành (key cố
+// định hoặc name/code khớp) — để tương thích cả dịch vụ chuẩn catalog (key 'phyto') lẫn dịch vụ tự
+// thêm mỗi lô một key khác nhau (như "Hóa đơn kiểm dịch").
+function _findSvcByNameOrCode(svcs,nameContains,code,fixedKey){
+  if(!svcs)return null;
+  if(fixedKey&&svcs[fixedKey]&&svcs[fixedKey].on)return {key:fixedKey,sv:svcs[fixedKey]};
+  for(const k in svcs){
+    const sv=svcs[k]; if(!sv||!sv.on)continue;
+    if(sv._code===code)return {key:k,sv:sv};
+    if(sv._name&&sv._name.indexOf(nameContains)>=0)return {key:k,sv:sv};
+    const catDef=SVCS.find(function(s){return s.key===k;});
+    if(catDef&&(catDef.code===code||(catDef.name&&catDef.name.indexOf(nameContains)>=0)))return {key:k,sv:sv};
+  }
+  return null;
+}
+window._findSvcByNameOrCode=_findSvcByNameOrCode;
+
+function _phytoReportDefaultFrom(){ const d=new Date(); d.setDate(d.getDate()-5); return d.toISOString().slice(0,10); }
+function _phytoReportDefaultTo(){ const d=new Date(); d.setDate(d.getDate()+2); return d.toISOString().slice(0,10); }
+
+function renderPhytoReport(){
+  const pg=g('page-phyto-report'); if(!pg)return;
+  const allLots=[...(cache.xuat||[])]; // Kiểm dịch thực vật là dịch vụ xuất khẩu, giống C/O
+  let rows=allLots.filter(function(r){
+    const svcs=r.svcs||{};
+    const phy=_findSvcByNameOrCode(svcs,'Kiểm dịch thực vật','PHY','phyto');
+    const hoa=_findSvcByNameOrCode(svcs,'Hóa đơn kiểm dịch','HOA',null);
+    return !!(phy&&hoa); // PHẢI CÓ CẢ 2 dịch vụ mới liệt kê
+  });
+
+  window._phytoRptSort=window._phytoRptSort||{dir:'desc'};
+  const sortDir=window._phytoRptSort.dir;
+  rows.sort(function(a,b){
+    const va=a.etd||'', vb=b.etd||'';
+    return sortDir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
+  });
+
+  const fs=window._phytoRptFilter=window._phytoRptFilter||{q:'',from:_phytoReportDefaultFrom(),to:_phytoReportDefaultTo()};
+  const filtered=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    if(fs.q){
+      const q=fs.q.toLowerCase();
+      const hay=[r.jobNo,r.bookingNo,r.mblNo,r.shipper,r.supplier,r.pod,r.cnee,r.consignee].join(' ').toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    return true;
+  });
+
+  const thS='padding:7px 9px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-light);white-space:nowrap;background:var(--bg-secondary)';
+  const tdS='padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+
+  const bodyRows=filtered.map(function(r,i){
+    const bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
+    const shipperKey=r.shipper||r.supplier||'—';
+    const cneeKey=r.cnee||r.consignee||'';
+    const cp=cache.partners[cneeKey]||{};
+    const cneeDisp=cp.fullname||cneeKey||'—';
+    const tkList=(r.tkhaiList&&r.tkhaiList.length)?r.tkhaiList.map(function(t){return t.sotk;}).filter(Boolean):(r.soTkhai?[r.soTkhai]:[]);
+    const tkDisp=tkList.length?tkList.join(', '):'—';
+    const svcs=r.svcs||{};
+    const phy=_findSvcByNameOrCode(svcs,'Kiểm dịch thực vật','PHY','phyto');
+    const hoa=_findSvcByNameOrCode(svcs,'Hóa đơn kiểm dịch','HOA',null);
+    const phyNo=(phy&&phy.sv.refNo)||'';
+    const hoaNo=(hoa&&hoa.sv.refNo)||'';
+    const nccDisp=(phy&&phy.sv.svcSupplier)||(hoa&&hoa.sv.svcSupplier)||'';
+    const invNo=(r.docData&&r.docData.invoiceNo)||'';
+    return '<tr style="'+bg+'">'
+      +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
+      +'<td style="'+tdS+'"><button class="plink" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0" onclick="openDetail(\''+r._id+'\',\'xuat\')">'+(r.jobNo||'—')+'</button></td>'
+      +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.bookingNo||'—')+'</div>'+(r.mblNo?'<div style="font-size:10.5px;color:var(--text-tertiary)"># '+r.mblNo+'</div>':'')+'</td>'
+      +'<td style="'+tdS+'">'+shipperKey+'</td>'
+      +'<td style="'+tdS+'">'+(r.pod||'—')+'</td>'
+      +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.vessel||'—')+'</div>'+(r.voy?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+r.voy+'</div>':'')+'</td>'
+      +'<td style="'+tdS+';font-weight:700;color:#1a4b8c">'+(r.etd?fmtDMY(r.etd):'—')+'</td>'
+      +'<td style="'+tdS+'">'+tkDisp+'</td>'
+      +'<td style="'+tdS+'"><input type="text" value="'+phyNo.replace(/"/g,'&quot;')+'" placeholder="Nhập số Phyto" onchange="_phytoReportSaveRefNo(\''+r._id+'\',\''+phy.key+'\',this.value)" style="font-size:11.5px;width:110px;padding:3px 6px"/></td>'
+      +'<td style="'+tdS+'"><input type="text" value="'+hoaNo.replace(/"/g,'&quot;')+'" placeholder="Nhập số Hóa đơn" onchange="_phytoReportSaveRefNo(\''+r._id+'\',\''+hoa.key+'\',this.value)" style="font-size:11.5px;width:110px;padding:3px 6px"/></td>'
+      +'<td style="'+tdS+'">'+(nccDisp||'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
+      +'<td style="'+tdS+'">'+(invNo||'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
+      +'<td style="'+tdS+'">'+cneeDisp+'</td>'
+    +'</tr>';
+  }).join('');
+
+  const sortIcon=sortDir==='desc'?'ti-sort-descending':'ti-sort-ascending';
+  pg.innerHTML='<div style="padding:1rem 1.25rem">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">'
+      +'<i class="ti ti-vaccine" style="font-size:20px;color:#0E9F8A"></i>'
+      +'<h2 style="font-size:16px;font-weight:700;margin:0">Phyto Report — Kiểm dịch thực vật</h2>'
+      +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lô hàng</span>'
+      +'<button class="rac" onclick="renderPhytoReport()" title="Tải lại dữ liệu mới nhất" style="width:30px;height:30px;margin-left:auto"><i class="ti ti-refresh"></i></button>'
+    +'</div>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
+      +'<input type="text" placeholder="🔍 Tìm Job ID / Booking / MBL / Shipper / Cnee..." value="'+(fs.q||'')+'" oninput="window._phytoRptFilter.q=this.value;renderPhytoReport()" style="font-size:12px;flex:1;min-width:220px"/>'
+      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">ETD:'
+        +'<input type="date" value="'+(fs.from||'')+'" oninput="window._phytoRptFilter.from=this.value;renderPhytoReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+        +'<span>→</span>'
+        +'<input type="date" value="'+(fs.to||'')+'" oninput="window._phytoRptFilter.to=this.value;renderPhytoReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+      +'</div>'
+      +'<button class="btn sm" onclick="window._phytoRptFilter={q:\'\',from:_phytoReportDefaultFrom(),to:_phytoReportDefaultTo()};renderPhytoReport()"><i class="ti ti-refresh"></i> Reset</button>'
+    +'</div>'
+    +'<div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:10px"><table style="width:100%;border-collapse:collapse">'
+      +'<thead><tr>'
+        +'<th style="'+thS+';width:34px">#</th>'
+        +'<th style="'+thS+'">Job ID</th>'
+        +'<th style="'+thS+'">Booking/MBL</th>'
+        +'<th style="'+thS+'">Shipper</th>'
+        +'<th style="'+thS+'">POD</th>'
+        +'<th style="'+thS+'">Vessel/Voy</th>'
+        +'<th style="'+thS+';cursor:pointer" onclick="window._phytoRptSort.dir=window._phytoRptSort.dir===\'desc\'?\'asc\':\'desc\';renderPhytoReport()">ETD <i class="ti '+sortIcon+'" style="font-size:12px"></i></th>'
+        +'<th style="'+thS+'">Số tờ khai</th>'
+        +'<th style="'+thS+'">Số Phyto</th>'
+        +'<th style="'+thS+'">Số Hóa đơn KD</th>'
+        +'<th style="'+thS+'">NCC</th>'
+        +'<th style="'+thS+'">Số INV</th>'
+        +'<th style="'+thS+'">Tên Cnee</th>'
+      +'</tr></thead>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="13" style="padding:2rem;text-align:center;color:var(--text-tertiary)">Không có lô hàng nào có đủ 2 dịch vụ Kiểm dịch thực vật + Hóa đơn kiểm dịch trong khoảng thời gian này.</td></tr>')+'</tbody>'
+    +'</table></div>'
+  +'</div>';
+}
+window.renderPhytoReport=renderPhytoReport;
+
+async function _phytoReportSaveRefNo(lotId,svcKey,val){
+  if(!svcKey){toast('Không xác định được dịch vụ','error');return;}
+  try{
+    const upd={}; upd['svcs.'+svcKey+'.refNo']=val;
+    await fsSet('lots_xuat',lotId,upd);
+    const r=(cache.xuat||[]).find(function(x){return x._id===lotId;});
+    if(r){ r.svcs=r.svcs||{}; r.svcs[svcKey]=r.svcs[svcKey]||{}; r.svcs[svcKey].refNo=val; }
+    toast('Đã lưu');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+}
+window._phytoReportSaveRefNo=_phytoReportSaveRefNo;
 
 function renderScyReport(){
   const pg=g('page-scy-report'); if(!pg)return;
