@@ -1098,7 +1098,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.56';
+window.APP_BUILD='v3.57';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -12890,6 +12890,7 @@ function renderCrmDetailBody(){
   const p=cache.partners[crmDetailKey]||{};
   if(p.type==='salan'){
     body.innerHTML=`
+    <div class="crm3-info-grid2">
     <div class="crm3-info-card">
       <div class="crm3-info-card-hd"><i class="ti ti-sailing"></i>Thông tin cơ bản</div>
       <div class="fg crm3-fg">
@@ -12909,6 +12910,7 @@ function renderCrmDetailBody(){
         <div class="fi"><label class="lbl">Số thuyền viên</label><input type="number" id="cg_soTV" min="0" max="20" value="${p.soThuyenVien||(p.crew?p.crew.length:1)||1}" oninput="_saLanRenderCrew()"/></div>
         <div class="fi full"><label class="lbl">Hàng hóa (TEU/Tấn) — mặc định</label><input type="text" id="cg_hangHoa" value="${(p.hangHoaTeuTan||'').replace(/"/g,'&quot;')}" placeholder="VD: Xơ dừa (96 tấn) hàng nhập"/></div>
       </div>
+    </div>
     </div>
     <div class="crm3-info-card">
       <div class="crm3-info-card-hd"><i class="ti ti-users"></i>Danh sách thuyền viên <span style="font-weight:400;text-transform:none;color:var(--text-tertiary);margin-left:6px">(số dòng tự theo "Số thuyền viên" ở trên)</span></div>
@@ -24392,10 +24394,10 @@ function openSaLanDeclarePicker(){
 }
 window.openSaLanDeclarePicker=openSaLanDeclarePicker;
 
-function generateSaLanDeclareExcel(dateStr){
+async function generateSaLanDeclareExcel(dateStr){
   if(!dateStr){toast('Chọn ngày trước','error');return;}
-  const XLSX=window.XLSX;
-  if(!XLSX){toast('Đang tải thư viện XLSX, thử lại sau','error');return;}
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
   const scyRows=(typeof _calScyForDate==='function')?_calScyForDate(dateStr):[];
   // Chỉ lấy các lệnh ĐÃ chọn Sà lan (bỏ qua lệnh nào chưa chọn, vì không thể khai báo phương tiện)
   const withSaLan=scyRows.filter(function(s){return s.saLan&&cache.partners[s.saLan];});
@@ -24403,34 +24405,86 @@ function generateSaLanDeclareExcel(dateStr){
     toast('Không có lệnh đóng hàng nào (ngày '+fd(dateStr)+') có chọn Sà lan để khai báo','error');
     return;
   }
-  const header=['CHỦ PHƯƠNG TIỆN','TÊN PHƯƠNG TIỆN','SỐ ĐĂNG KÝ','PHÂN CẤP','SỐ THUYỀN VIÊN','TRỌNG TẢI','TỪ CẢNG, BẾN','HÀNG HÓA (TEU/TẤN)','SỐ ĐIỆN THOẠI','CHỨC VỤ','HỌ VÀ TÊN','MÃ ĐỊNH DANH','NGÀY SINH'];
-  const aoa=[header];
-  withSaLan.forEach(function(scy){
-    const sp=cache.partners[scy.saLan]||{};
-    const r=(cache[scy._tt]||[]).find(function(x){return x._id===scy._lotId;})||{};
-    const crew=(sp.crew&&sp.crew.length)?sp.crew:[{position:'',name:'',idCode:'',dob:''}];
-    const tuCang=(r.pol||'')+(scy.icd?(' tới '+scy.icd):'');
-    const hangHoa=sp.hangHoaTeuTan||((r.tenHang||'')+(scy.vol?(' ('+scy.vol+'x'+(scy.typeCont||'')+')'):''));
-    crew.forEach(function(cw,ci){
-      if(ci===0){
-        aoa.push([
-          sp.fullname||'', sp.tenPhuongTien||'', sp.soDangKy||'', sp.phanCap||'',
-          sp.soThuyenVien||crew.length||'', sp.trongTai||'', tuCang, hangHoa, sp.phone||'',
-          cw.position||'', cw.name||'', cw.idCode||'', cw.dob||''
-        ]);
-      } else {
-        aoa.push(['','','','','','','','','', cw.position||'', cw.name||'', cw.idCode||'', cw.dob||'']);
+  setLoading(true,'Đang tạo file khai báo...');
+  try{
+    const header=['CHỦ PHƯƠNG TIỆN','TÊN PHƯƠNG TIỆN','SỐ ĐĂNG KÝ','PHÂN CẤP','SỐ THUYỀN VIÊN','TRỌNG TẢI','TỪ CẢNG, BẾN','HÀNG HÓA (TEU/TẤN)','SỐ ĐIỆN THOẠI','CHỨC VỤ','HỌ VÀ TÊN','MÃ ĐỊNH DANH','NGÀY SINH'];
+    // Gom nhóm theo từng Sà lan/lệnh — GIỮ NGUYÊN 100% logic thu thập dữ liệu gốc, chỉ đổi phần
+    // XUẤT RA (từ SheetJS thô sang ExcelJS có style/border/merge).
+    const groups=[];
+    withSaLan.forEach(function(scy){
+      const sp=cache.partners[scy.saLan]||{};
+      const r=(cache[scy._tt]||[]).find(function(x){return x._id===scy._lotId;})||{};
+      const crew=(sp.crew&&sp.crew.length)?sp.crew:[{position:'',name:'',idCode:'',dob:''}];
+      const tuCang=(r.pol||'')+(scy.icd?(' tới '+scy.icd):'');
+      const hangHoa=sp.hangHoaTeuTan||((r.tenHang||'')+(scy.vol?(' ('+scy.vol+'x'+(scy.typeCont||'')+')'):''));
+      groups.push({
+        vehicle:[sp.fullname||'', sp.tenPhuongTien||'', sp.soDangKy||'', sp.phanCap||'', sp.soThuyenVien||crew.length||'', sp.trongTai||'', tuCang, hangHoa, sp.phone||''],
+        crew:crew
+      });
+    });
+
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoFlow ERP'; wb.created=new Date();
+    const ws=wb.addWorksheet('Sheet1',{views:[{showGridLines:false}]});
+    ws.columns=[{width:21},{width:17},{width:15},{width:11},{width:13},{width:11},{width:33},{width:27},{width:15},{width:15},{width:21},{width:17},{width:13}];
+    const thin={style:'thin',color:{argb:'FF000000'}};
+    const B=function(){return {top:thin,left:thin,bottom:thin,right:thin};};
+    const FONT='Times New Roman';
+
+    // Header
+    ws.getRow(1).height=22;
+    header.forEach(function(h,i){
+      const c=ws.getCell(1,i+1);
+      c.value=h; c.font={name:FONT,size:14,bold:false};
+      c.alignment={horizontal:'center',vertical:'middle',wrapText:true};
+      c.border=B();
+    });
+
+    // Data — mỗi Sà lan chiếm crew.length dòng, merge cột A-I (thông tin phương tiện) theo đúng số dòng đó
+    let r0=2;
+    groups.forEach(function(g2){
+      const startRow=r0;
+      g2.crew.forEach(function(cw,ci){
+        const row=ws.getRow(r0); row.height=20;
+        // Cột A-I: chỉ ghi giá trị ở DÒNG ĐẦU (dòng khác trong vùng merge phải để trống — quy tắc
+        // bắt buộc của merge cell, xem SKILL.md: chỉ ghi vào ô neo trên-trái)
+        if(ci===0){
+          g2.vehicle.forEach(function(v,ci2){
+            const c=row.getCell(ci2+1);
+            c.value=v; c.font={name:FONT,size:12};
+            c.alignment={horizontal:'center',vertical:'middle',wrapText:ci2===6}; // cột G "Từ cảng, bến" wrap text
+          });
+        }
+        // Cột J-M: Chức vụ/Họ tên/Mã định danh/Ngày sinh — MỖI THUYỀN VIÊN 1 DÒNG riêng, không merge
+        const cw2=[cw.position||'', cw.name||'', cw.idCode||'', cw.dob||''];
+        cw2.forEach(function(v,ci2){
+          const c=row.getCell(10+ci2);
+          c.value=v; c.font={name:FONT,size:12};
+          c.alignment={horizontal:'center',vertical:'middle'};
+        });
+        // Viền cho TOÀN BỘ 13 cột của dòng này (kể cả các dòng nằm trong vùng merge A-I, để khớp
+        // đúng mẫu — mỗi dòng đều có viền quanh, không chỉ dòng đầu/cuối)
+        for(let ci3=1;ci3<=13;ci3++) row.getCell(ci3).border=B();
+        r0++;
+      });
+      // Merge cột A-I theo đúng số dòng thuyền viên của Sà lan này
+      if(g2.crew.length>1){
+        for(let colIdx=1;colIdx<=9;colIdx++){
+          try{ ws.mergeCells(startRow,colIdx,r0-1,colIdx); }catch(e){}
+        }
       }
     });
-  });
-  const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:20},{wch:16},{wch:14},{wch:10},{wch:12},{wch:10},{wch:32},{wch:26},{wch:14},{wch:14},{wch:20},{wch:16},{wch:12}];
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-  const fname='KHAI_BAO_PHUONG_TIEN_VAO-RA_'+dateStr.split('-').reverse().slice(0,2).join('-')+'.xlsx';
-  XLSX.writeFile(wb, fname);
-  closeOv('eportOv');
-  toast('Đã xuất khai báo '+withSaLan.length+' sà lan → '+fname);
+
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/octet-stream'});
+    const url=URL.createObjectURL(blob);
+    const fname='KHAI_BAO_PHUONG_TIEN_VAO-RA_'+dateStr.split('-').reverse().slice(0,2).join('-')+'.xlsx';
+    const a=document.createElement('a'); a.href=url; a.download=fname; a.click();
+    URL.revokeObjectURL(url);
+    closeOv('eportOv');
+    toast('Đã xuất khai báo '+withSaLan.length+' sà lan → '+fname);
+  }catch(e){ toast('Lỗi xuất Excel: '+e.message,'error'); }
+  setLoading(false);
 }
 window.generateSaLanDeclareExcel=generateSaLanDeclareExcel;
 // kèm đầy đủ Cont/Seal (lấy từ tab Cont/Seal của đúng lô hàng tương ứng). Gọn hơn Khai Eport: chỉ 1
