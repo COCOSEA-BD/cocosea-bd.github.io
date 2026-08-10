@@ -1098,7 +1098,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.57';
+window.APP_BUILD='v3.58';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7350,6 +7350,20 @@ function _coInfo(){
 }
 
 // Chữ ký email của user đang đăng nhập — tự động chèn vào cuối email Trucking/Đóng bãi/Debit Note
+// Logo cây dừa (icons/icon-navy-192.png) dạng base64, dùng chèn vào chữ ký email hệ thống — fetch
+// 1 LẦN DUY NHẤT ngay khi trang tải (không đợi tới lúc mở email), cache lại để _bookingEmailSignature()
+// đọc ĐỒNG BỘ (email hiện tại được ghép bằng string concatenation, không tiện await). Nếu lần đầu mở
+// email quá sớm khi logo CHƯA fetch xong, chữ ký vẫn hiển thị bình thường, chỉ thiếu icon lần đó.
+window._emailLogoB64=null;
+(function _preloadEmailLogo(){
+  fetch(new URL('icons/icon-navy-192.png',location.href).href).then(function(res){return res.ok?res.blob():null;}).then(function(blob){
+    if(!blob)return;
+    const fr=new FileReader();
+    fr.onload=function(){ window._emailLogoB64=fr.result; }; // data:image/png;base64,...
+    fr.readAsDataURL(blob);
+  }).catch(function(){});
+})();
+
 function _emailSignatureHtml(){
   const sig=(currentProfile&&currentProfile.emailSignature)||'';
   if(!sig.trim())return '';
@@ -7466,16 +7480,26 @@ window.openBookingEmail=openBookingEmail;
 
 // Chữ ký email chuyên nghiệp cho Booking Confirmation
 function _bookingEmailSignature(){
+  const logo=window._emailLogoB64;
+  const logoCell=logo
+    ? '<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:56px"><img src="'+logo+'" width="52" height="52" style="display:block;border-radius:10px"/></td>'
+       +'<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:1px;background:#e2e8f0"></td>'
+    : '';
   return ''
-    +'<div style="margin-top:20px;padding-top:14px;border-top:2px solid #1a56db;font-family:Arial,sans-serif">'
-    +'<div style="font-size:15px;font-weight:800;color:#0f766e;letter-spacing:.3px">COCO SEA CO., LTD</div>'
-    +'<table style="border:none;border-collapse:collapse;margin-top:6px;font-size:12px;color:#333">'
-    +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">📞</td><td style="border:none;padding:1px 0">Hotline: <strong>0909 641 011</strong></td></tr>'
-    +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">✉️</td><td style="border:none;padding:1px 0">Cocosea.bd@gmail.com</td></tr>'
-    +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">🏢</td><td style="border:none;padding:1px 0">991B Tân Kỳ Tân Quý, P. Bình Hưng Hòa, TP. Hồ Chí Minh, Việt Nam</td></tr>'
-    +'</table>'
-    +'<div style="font-size:10.5px;color:#888;margin-top:8px;font-style:italic">This email and any attachments are confidential and intended solely for the addressee.</div>'
-    +'</div>';
+    +'<table role="presentation" style="margin-top:20px;border:none;border-collapse:collapse"><tr>'
+      +'<td colspan="'+(logo?3:1)+'" style="border:none;border-top:2px solid #1a56db;padding:0;line-height:0;font-size:0">&nbsp;</td>'
+    +'</tr><tr>'
+      +logoCell
+      +'<td style="border:none;padding:14px 0 0 '+(logo?'16px':'0')+';vertical-align:middle">'
+        +'<div style="font-size:15px;font-weight:800;color:#0f766e;letter-spacing:.3px">COCO SEA CO., LTD</div>'
+        +'<table style="border:none;border-collapse:collapse;margin-top:6px;font-size:12px;color:#333">'
+        +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">📞</td><td style="border:none;padding:1px 0">Hotline: <strong>0909 641 011</strong></td></tr>'
+        +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">✉️</td><td style="border:none;padding:1px 0">Cocosea.bd@gmail.com</td></tr>'
+        +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">🏢</td><td style="border:none;padding:1px 0">991B Tân Kỳ Tân Quý, P. Bình Hưng Hòa, TP. Hồ Chí Minh, Việt Nam</td></tr>'
+        +'</table>'
+      +'</td>'
+    +'</tr></table>'
+    +'<div style="font-size:10.5px;color:#888;margin-top:8px;font-style:italic">This email and any attachments are confidential and intended solely for the addressee.</div>';
 }
 window._bookingEmailSignature=_bookingEmailSignature;
 
@@ -22851,6 +22875,7 @@ function renderCostingReport(targetId){
       +'<div class="cr-side">'
         +'<div class="cr-side-tabs">'
           +'<button class="cr-side-tab" id="crSideTabPending" data-f="pending" onclick="setCostingSideTab(this.dataset.f)">Chưa costing</button>'
+          +'<button class="cr-side-tab" id="crSideTabUnlocked" data-f="unlocked" onclick="setCostingSideTab(this.dataset.f)">Chưa lock</button>'
           +'<button class="cr-side-tab" id="crSideTabAll" data-f="all" onclick="setCostingSideTab(this.dataset.f)">Tất cả</button>'
         +'</div>'
         +'<div id="crSideList" class="cr-side-list"></div>'
@@ -22976,25 +23001,36 @@ function renderCostingSidebar(){
   let data=window._crLotData||[];
   const q=(g('crSearch')?.value||'').trim().toLowerCase();
   if(q){data=data.filter(x=>(x.bookingNo||'').toLowerCase().includes(q)||(x.jobNo||'').toLowerCase().includes(q)||(x.mblNo||'').toLowerCase().includes(q));}
-  if((window._crSideTab||'pending')==='pending'){data=data.filter(x=>!x.isCostingDone);}
+  const sideTab=window._crSideTab||'pending';
+  if(sideTab==='pending'){data=data.filter(x=>!x.isCostingDone);}
+  else if(sideTab==='unlocked'){data=data.filter(x=>!x.isPriceLocked);}
   // ETD SỚM nhất lên đầu (ưu tiên duyệt gấp các lô sắp đến hạn)
   data=data.slice().sort((a,b)=>(a.etd||'9999').localeCompare(b.etd||'9999'));
 
-  const pendingTotal=(window._crLotData||[]).filter(x=>!x.isCostingDone).length;
-  const allTotal=(window._crLotData||[]).length;
-  const btnP=g('crSideTabPending'), btnA=g('crSideTabAll');
+  const allData=window._crLotData||[];
+  const pendingTotal=allData.filter(x=>!x.isCostingDone).length;
+  const unlockedTotal=allData.filter(x=>!x.isPriceLocked).length;
+  const allTotal=allData.length;
+  const btnP=g('crSideTabPending'), btnU=g('crSideTabUnlocked'), btnA=g('crSideTabAll');
   if(btnP)btnP.innerHTML='Chưa costing <span class="cr-side-tab-count">'+pendingTotal+'</span>';
+  if(btnU)btnU.innerHTML='Chưa lock <span class="cr-side-tab-count">'+unlockedTotal+'</span>';
   if(btnA)btnA.innerHTML='Tất cả <span class="cr-side-tab-count">'+allTotal+'</span>';
-  if(btnP)btnP.classList.toggle('active',(window._crSideTab||'pending')==='pending');
-  if(btnA)btnA.classList.toggle('active',window._crSideTab==='all');
+  if(btnP)btnP.classList.toggle('active',sideTab==='pending');
+  if(btnU)btnU.classList.toggle('active',sideTab==='unlocked');
+  if(btnA)btnA.classList.toggle('active',sideTab==='all');
 
-  if(!data.length){box.innerHTML='<div style="text-align:center;padding:2rem 1rem;color:var(--text-tertiary);font-size:12px"><i class="ti ti-circle-check" style="font-size:26px;display:block;margin-bottom:6px;opacity:.4"></i>'+((window._crSideTab||'pending')==='pending'?'Đã duyệt hết — không còn lô nào chưa costing':'Không tìm thấy lô hàng')+'</div>';return;}
+  if(!data.length){
+    const emptyMsg=sideTab==='pending'?'Đã duyệt hết — không còn lô nào chưa costing':(sideTab==='unlocked'?'Đã lock hết — không còn lô nào chưa lock giá':'Không tìm thấy lô hàng');
+    box.innerHTML='<div style="text-align:center;padding:2rem 1rem;color:var(--text-tertiary);font-size:12px"><i class="ti ti-circle-check" style="font-size:26px;display:block;margin-bottom:6px;opacity:.4"></i>'+emptyMsg+'</div>';return;
+  }
 
   box.innerHTML=data.map(function(x){
     const active=(window._crActiveLot&&window._crActiveLot.id===x.id&&window._crActiveLot.tt===x.tt);
     const pclr=x.profitVND>=0?'#16A34A':'#DC2626';
+    const lockBadge=x.isPriceLocked?'<span class="cr-lot-badge done" title="Đã lock giá"><i class="ti ti-lock"></i></span>':'<span class="cr-lot-badge pending" title="Chưa lock giá"><i class="ti ti-lock-open"></i></span>';
+    const costBadge=x.isCostingDone?'<span class="cr-lot-badge done" title="Đã costing"><i class="ti ti-check"></i></span>':'<span class="cr-lot-badge pending" title="Chưa costing"><i class="ti ti-clock"></i></span>';
     return '<div class="cr-lot-card'+(active?' active':'')+'" data-id="'+x.id+'" data-tt="'+x.tt+'" onclick="openCostingLot(\''+x.id+'\',\''+x.tt+'\')">'
-      +'<div class="cr-lot-top"><span class="cr-lot-bill">'+x.bookingNo+'</span>'+(x.isCostingDone?'<span class="cr-lot-badge done"><i class="ti ti-check"></i></span>':'<span class="cr-lot-badge pending"><i class="ti ti-clock"></i></span>')+'</div>'
+      +'<div class="cr-lot-top"><span class="cr-lot-bill">'+x.bookingNo+'</span><span style="display:flex;gap:4px">'+costBadge+lockBadge+'</span></div>'
       +'<div class="cr-lot-shipper">'+x.shipper+'</div>'
       +'<div class="cr-lot-bottom"><span class="cr-lot-etd"><i class="ti ti-calendar-event"></i> '+(x.etd||'—')+'</span><span class="cr-lot-profit" style="color:'+pclr+'">'+(x.revVND||x.costVND?(x.profitVND>=0?'+':'')+x.profitVND.toLocaleString():'—')+'</span></div>'
     +'</div>';
