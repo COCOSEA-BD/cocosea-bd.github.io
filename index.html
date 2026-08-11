@@ -801,6 +801,7 @@ let SVCS=[
   {key:'trucking',name:'Trucking',code:'TRU',default:false},{key:'ddl',name:'DDL',code:'DDL',default:false},
   {key:'docfee',name:'Phí chứng từ xuất khẩu',code:'DOC',default:false},
   {key:'bill',name:'Bill (Vận đơn)',code:'BIL',default:false},{key:'phyto',name:'Phyto (Kiểm dịch thực vật)',code:'PHY',default:false},
+  {key:'other',name:'Phí khác',code:'OTH',default:false},
 ];
 // Danh sách chứng từ mặc định khi bật "Theo dõi tiến độ chứng từ" lần đầu cho 1 lô hàng
 // (Danh sách chứng từ mặc định giờ tính động — xem hàm _docTrackDefaultKeys() dò theo code, khai báo cùng loadServices())
@@ -822,7 +823,7 @@ function genSvcCode(name, existing){
 window.genSvcCode=genSvcCode;
 
 // Tên gốc của các dịch vụ built-in (để khôi phục liên kết cho lô CŨ nếu danh mục bị đổi/xóa)
-const _BUILTIN_SVC_NAMES={ocf:'OCF - Cước vận tải biển',freight:'Cước vận tải QT',customs:'Thông quan',quarantine:'Kiểm dịch',co:'C/O',fumi:'Fumi',stuffing:'Đóng hàng tại bãi',trucking:'Trucking',ddl:'DDL',docfee:'Phí chứng từ xuất khẩu'};
+const _BUILTIN_SVC_NAMES={ocf:'OCF - Cước vận tải biển',freight:'Cước vận tải QT',customs:'Thông quan',quarantine:'Kiểm dịch',co:'C/O',fumi:'Fumi',stuffing:'Đóng hàng tại bãi',trucking:'Trucking',ddl:'DDL',docfee:'Phí chứng từ xuất khẩu',other:'Phí khác'};
 window._BUILTIN_SVC_NAMES=_BUILTIN_SVC_NAMES;
 
 // Đảm bảo mọi dịch vụ ĐANG CÓ DỮ LIỆU trong lô đều tồn tại trong SVCS để các tab (Fill giá/Costing/Invoice) hiển thị đúng.
@@ -1098,7 +1099,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.58';
+window.APP_BUILD='v3.59';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4509,6 +4510,25 @@ function doAddSvcByKey(key){
     // là nguyên nhân xuất hiện các dòng lạ (code trống, hiện placeholder "ABC") trong Danh mục.
     s={key:newKey,name:'Dịch vụ mới',code:genSvcCode('Dịch vụ mới',SVCS),custom:true,default:false,lotScoped:true};
     SVCS.push(s);
+  } else if(key==='other'){
+    // Dịch vụ đặc biệt "OTH - Phí khác": BẮT BUỘC ghi rõ tên cụ thể ngay khi thêm — áp dụng cho MỌI
+    // lần thêm (kể cả lần 2, 3... để dùng cho nhiều khoản phí khác nhau trong CÙNG 1 lô). LUÔN tạo
+    // entry MỚI với key riêng biệt (giống hệt cơ chế "Dịch vụ mới" __new__ ở trên) và PUSH vào SVCS —
+    // KHÔNG dùng thẳng/mutate entry mẫu "other" trong danh mục chung (sẽ làm hỏng mẫu dùng chung cho
+    // các lô khác). custom:true để (a) ô tên hiện input sửa được ngay trong dòng, (b) saveDetailSvc()
+    // lưu đúng _name — tên này TỰ ĐỘNG đồng bộ sang Fill giá/Invoice/Costing qua _ensureSvcInCatalog()
+    // đã dùng sẵn ở các tab đó, không cần sửa gì thêm nơi khác.
+    let customName=prompt('Dịch vụ "Phí khác" — vui lòng nhập TÊN CỤ THỂ cho khoản phí này (VD: Phí xử lý hồ sơ, Phí lưu kho...):','');
+    customName=(customName||'').trim();
+    if(!customName){toast('Đã hủy — cần nhập tên cụ thể cho "Phí khác"','error');return;}
+    const base=SVCS.find(function(x){return x.key==='other';})||{code:'OTH'};
+    const existingKeys=Array.from(document.querySelectorAll('#detailSvcGrid [id^="tg_"]')).map(function(el){return el.id.slice(3);});
+    let newKey='other', i=1;
+    while(existingKeys.indexOf(newKey)>=0){i++;newKey='other_'+i;}
+    let newCode=i===1?'OTH':('OTH'+i).slice(0,10);
+    while(SVCS.some(function(x){return (x.code||x.key||'').toUpperCase()===newCode;})){i++;newCode=('OTH'+i).slice(0,10);}
+    s={key:newKey,name:customName,code:newCode,custom:true,default:false,lotScoped:true};
+    SVCS.push(s);
   } else {
     const base=SVCS.find(function(x){return x.key===key;});
     if(!base){toast('Không tìm thấy dịch vụ','error');return;}
@@ -7482,7 +7502,7 @@ window.openBookingEmail=openBookingEmail;
 function _bookingEmailSignature(){
   const logo=window._emailLogoB64;
   const logoCell=logo
-    ? '<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:56px"><img src="'+logo+'" width="52" height="52" style="display:block;border-radius:10px"/></td>'
+    ? '<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:66px"><img src="'+logo+'" width="62" height="62" style="display:block;border-radius:12px"/></td>'
        +'<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:1px;background:#e2e8f0"></td>'
     : '';
   return ''
