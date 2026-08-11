@@ -1099,7 +1099,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.62';
+window.APP_BUILD='v3.63';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -10567,16 +10567,14 @@ function _dv3DetailTable(data,isAR,limit){
 
 // ── Card "CẦN XỬ LÝ" — CHỈ hiển thị cảnh báo tính được từ dữ liệu hiện có (không suy diễn ngày
 // quá hạn vì hệ thống chưa lưu due date), đúng yêu cầu spec mục 14. ──
-function _dv3Warnings(dataAR,dataAP){
+function _dv3Warnings(data,isAR){
   const items=[];
-  const bigDebtorsAR=dataAR.list.filter(function(s){return s.remain>0.01;}).length;
-  const bigDebtorsAP=dataAP.list.filter(function(s){return s.remain>0.01;}).length;
-  if(bigDebtorsAR)items.push({icon:'ti-users','text':bigDebtorsAR+' Shipper còn công nợ phải thu',color:'#DC2626'});
-  if(bigDebtorsAP)items.push({icon:'ti-truck-delivery','text':bigDebtorsAP+' nhà cung cấp cần thanh toán',color:'#D97706'});
-  const unpaidLotsAR=dataAR.rows.filter(function(r){return r.remain>0.01;}).length;
-  const unpaidLotsAP=dataAP.rows.filter(function(r){return r.remain>0.01;}).length;
-  if(unpaidLotsAR)items.push({icon:'ti-file-invoice','text':unpaidLotsAR+' lô hàng chưa thu đủ tiền',color:'#DC2626'});
-  if(unpaidLotsAP)items.push({icon:'ti-receipt','text':unpaidLotsAP+' khoản chi phí chưa thanh toán NCC',color:'#D97706'});
+  const bigDebtors=data.list.filter(function(s){return s.remain>0.01;}).length;
+  if(bigDebtors)items.push({icon:isAR?'ti-users':'ti-truck-delivery','text':bigDebtors+(isAR?' Shipper còn công nợ phải thu':' nhà cung cấp cần thanh toán'),color:isAR?'#DC2626':'#D97706'});
+  const unpaidLots=data.rows.filter(function(r){return r.remain>0.01;}).length;
+  if(unpaidLots)items.push({icon:isAR?'ti-file-invoice':'ti-receipt','text':unpaidLots+(isAR?' lô hàng chưa thu đủ tiền':' khoản chi phí chưa thanh toán NCC'),color:isAR?'#DC2626':'#D97706'});
+  const fullyPaidPartners=data.list.filter(function(s){return s.total>0&&s.remain<=0.01;}).length;
+  if(fullyPaidPartners)items.push({icon:'ti-circle-check','text':fullyPaidPartners+(isAR?' Shipper đã thu đủ':' NCC đã thanh toán đủ'),color:'#059669'});
   if(!items.length)return '<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd" style="color:#059669"><i class="ti ti-circle-check"></i> Tất cả công nợ đã xử lý</div></div>';
   return '<div class="debt-report-v3__card">'
     +'<div class="debt-report-v3__card-hd" style="color:#D97706"><i class="ti ti-alert-triangle"></i> CẦN XỬ LÝ</div>'
@@ -10760,25 +10758,19 @@ function renderDebtReportV3(){
       +'<div class="debt-report-v3__main-right">'
         +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">PHÂN BỔ CÔNG NỢ</div>'+_dv3BarChart(activeData.list,isAR)+'</div>'
         +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">TỶ TRỌNG CÒN PHẢI '+(isAR?'THU':'TRẢ')+'</div>'+_dv3Donut(activeData.list,activeData.grandRemain,'Còn phải '+(isAR?'thu':'trả'))+'</div>'
-        +_dv3Warnings(dataAR,dataAP)
+        +_dv3Warnings(activeData,isAR)
       +'</div>'
     +'</div>'
 
-    // ── Bảng đối tác còn lại (không active) — hiện gọn bên dưới để không mất thông tin ──
-    +'<div class="debt-report-v3__main" style="margin-top:14px">'
-      +'<div class="debt-report-v3__main-left" style="grid-column:1/-1">'+_dv3PartnerTable(isAR?dataAP:dataAR,!isAR)+'</div>'
+    // ── Chi tiết theo lô — CHỈ hiện đúng bảng khớp tab đang xem (full width, tận dụng không gian
+    // rộng hơn để hiển thị đầy đủ cột dễ đọc hơn) ──
+    +'<div class="debt-report-v3__detailrow debt-report-v3__detailrow--single">'
+      +_dv3DetailTable(activeData,isAR,window._debtV3.detailExpand?9999:10)
     +'</div>'
 
-    // ── Chi tiết theo lô (2 bảng cạnh nhau desktop, stack mobile) ──
-    +'<div class="debt-report-v3__detailrow">'
-      +_dv3DetailTable(dataAR,true,window._debtV3.detailExpand?9999:10)
-      +_dv3DetailTable(dataAP,false,window._debtV3.detailExpand?9999:10)
-    +'</div>'
-
-    // ── Theo dõi thủ công (giữ nguyên 100% chức năng) ──
-    +'<div class="debt-report-v3__detailrow">'
-      +_dv3ManualDebtCard('PHẢI THU KHÁCH HÀNG (THỦ CÔNG)',ar,'#2563EB','phaiThu')
-      +_dv3ManualDebtCard('PHẢI TRẢ NHÀ CUNG CẤP (THỦ CÔNG)',ap,'#DC2626','phaiTra')
+    // ── Theo dõi thủ công — CHỈ hiện đúng card khớp tab đang xem ──
+    +'<div class="debt-report-v3__detailrow debt-report-v3__detailrow--single">'
+      +(isAR?_dv3ManualDebtCard('PHẢI THU KHÁCH HÀNG (THỦ CÔNG)',ar,'#2563EB','phaiThu'):_dv3ManualDebtCard('PHẢI TRẢ NHÀ CUNG CẤP (THỦ CÔNG)',ap,'#DC2626','phaiTra'))
     +'</div>'
 
     +'<div id="dv3DrawerWrap"></div>'
@@ -15869,6 +15861,7 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 @media (max-width:1100px){.debt-report-v3__main{grid-template-columns:1fr}}
 .debt-report-v3__main-right{display:flex;flex-direction:column;gap:14px}
 .debt-report-v3__detailrow{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.debt-report-v3__detailrow--single{grid-template-columns:1fr}
 @media (max-width:1100px){.debt-report-v3__detailrow{grid-template-columns:1fr}}
 
 .debt-report-v3__card{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:13px 15px}
