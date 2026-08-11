@@ -1099,7 +1099,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.60';
+window.APP_BUILD='v3.61';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -20896,10 +20896,25 @@ function updateCostingTotal(){
 }
 
 async function saveCosting(){
-  // First, save any edited auto-cost values back to svcs
+  // ═══ SỬA LỖI RACE CONDITION NGHIÊM TRỌNG (dữ liệu lô này ghi đè qua lô kia) ═══
+  // NGUYÊN NHÂN: trước đây hàm này đọc DOM (savedItems) SAU khi đã `await fsSet(...)` cho svcs. Nếu
+  // người dùng chuyển sang xem lô KHÁC trong lúc đang chờ await đó (đặc biệt dễ xảy ra ở Costing
+  // Report — bấm sang lô khác ở sidebar không có cảnh báo gì), khung chứa (#crMainArea/detailPanel)
+  // đã bị RENDER ĐÈ bằng HTML của LÔ MỚI. Vì các ô costing dùng ID theo CHỈ SỐ (cprice_0, cqty_0...),
+  // đoạn code đọc DOM SAU await sẽ vô tình đọc NHẦM giá trị của LÔ MỚI, nhưng lại ghi vào bản costing
+  // của LÔ CŨ (_scId/_scTt đã chốt sẵn) → đúng hiện tượng "dữ liệu lô này bị ghi đè qua lô kia".
+  // CÁCH SỬA: đọc TOÀN BỘ dữ liệu cần thiết từ DOM (svcs LẪN savedItems) xong HOÀN TOÀN — không còn
+  // bất kỳ lệnh đọc DOM nào — RỒI MỚI bắt đầu các lệnh await ghi Firestore. Đảm bảo mọi thao tác đọc
+  // DOM diễn ra ĐỒNG BỘ (synchronous), không thể bị "chen ngang" bởi việc chuyển lô ở giữa chừng.
+  //
+  // LỚP BẢO VỆ BỔ SUNG: window._crSaveBusy chặn openCostingLot() chuyển sang lô khác trong lúc đang
+  // lưu — dùng pattern "chỉ người đặt cờ mới được gỡ cờ" để an toàn khi hàm này được gọi LỒNG bên
+  // trong markCostingDone() (không bị gỡ cờ giữa chừng trước khi markCostingDone() làm xong việc).
+  const _wasBusy=window._crSaveBusy;
+  window._crSaveBusy=true;
   const _scTt=detailTt, _scId=detailId;
   const r=cache[_scTt].find(x=>x._id===_scId)||{};
-  if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
+  if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');if(!_wasBusy)window._crSaveBusy=false;return;}
   const svcs=JSON.parse(JSON.stringify(r.svcs||{}));
   let svcChanged=false;
   // Giới hạn phạm vi đọc DOM CHỈ trong container đang hiển thị lô hàng này — cùng nguyên nhân/cách
@@ -20916,12 +20931,9 @@ async function saveCosting(){
     if(qtyEl){ sv.svcQty=parseFloat(qtyEl.value)||sv.svcQty; svcChanged=true; }
     if(remarkEl){ sv.apRemark=remarkEl.value||''; svcChanged=true; }
   });
-  if(svcChanged){
-    try{ await fsSet(colName(_scTt),_scId,{svcs}); }catch(e){}
-  }
-  // eslint placeholder
+  // ĐỌC savedItems NGAY TẠI ĐÂY (đồng bộ, cùng lúc với phần đọc svcs ở trên) — KHÔNG được đặt sau
+  // bất kỳ await nào, đây chính là điểm mấu chốt của bản sửa lỗi.
   const items=_tempCosting||((r.costing||{}).items||[]);
-  // Read current input values
   const savedItems=items.map(function(it,i){
     const price=parseFloat(gC('cprice_'+i)?.value)||it.price||it.amt||0;
     const qty=parseFloat(gC('cqty_'+i)?.value)||it.qty||1;
@@ -20943,6 +20955,12 @@ async function saveCosting(){
     };
   }).filter(function(it){return it.name||it.price;});
   const note=gC('costingNote')?.value||'';
+  // ═══ TỪ ĐÂY TRỞ ĐI: KHÔNG còn bất kỳ lệnh đọc DOM nào — chỉ còn các lệnh await ghi Firestore,
+  // dùng biến LOCAL (_scId/_scTt/svcs/savedItems/note) đã chốt sẵn, an toàn tuyệt đối dù người dùng
+  // có chuyển sang lô khác ngay sau khi hàm này bắt đầu await. ═══
+  if(svcChanged){
+    try{ await fsSet(colName(_scTt),_scId,{svcs}); }catch(e){}
+  }
   const costing={items:savedItems,note,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
   setLoading(true,'Đang lưu costing...');
   try{
@@ -20956,15 +20974,20 @@ async function saveCosting(){
     }
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
+  if(!_wasBusy)window._crSaveBusy=false;
 }
 
 // Nút "Done" riêng biệt — CHỈ hàm này mới chuyển trạng thái lô hàng sang "Đã Costing". "Lưu Costing"
 // (saveCosting) chỉ lưu dữ liệu hiện tại, KHÔNG tự đổi trạng thái nữa — theo đúng yêu cầu tách bạch
 // giữa "lưu tạm" và "hoàn tất costing".
 async function markCostingDone(){
+  // window._crSaveBusy bao trùm TOÀN BỘ quá trình (kể cả saveCosting() lồng bên trong) — chặn
+  // openCostingLot() chuyển sang lô khác cho tới khi hoàn tất cả lưu costing lẫn đổi trạng thái.
+  const _wasBusy=window._crSaveBusy;
+  window._crSaveBusy=true;
   const _mcTt=detailTt, _mcId=detailId;
   const r=cache[_mcTt].find(x=>x._id===_mcId)||{};
-  if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');return;}
+  if(r.locked){toast('Lô hàng đã khóa — không thể chỉnh sửa','error');if(!_wasBusy)window._crSaveBusy=false;return;}
   // Lưu costing hiện tại trước (đảm bảo dữ liệu mới nhất được ghi), rồi mới chuyển trạng thái
   await saveCosting();
   setLoading(true,'Đang chuyển trạng thái Đã Costing...');
@@ -20978,6 +21001,7 @@ async function markCostingDone(){
     }
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
+  if(!_wasBusy)window._crSaveBusy=false;
 }
 window.markCostingDone=markCostingDone;
 
@@ -23069,7 +23093,18 @@ window.setCostingSideTab=setCostingSideTab;
 // renderDetailPanel()/tab Costing gốc, chỉ đổi ĐÍCH RENDER qua cơ chế window._crInlineTarget đã có
 // sẵn pattern tương tự (_xPanelEl/xuat-lot-work) trong renderDetailPanel(). Không đổi/không nhân bản
 // bất kỳ logic Costing nào.
+//
+// AN TOÀN DỮ LIỆU: (1) window._crSaveBusy chặn chuyển lô trong lúc đang có thao tác Lưu Costing/Done
+// diễn ra (dù bản vá saveCosting() đã tự an toàn ở tầng dữ liệu, chặn thêm ở đây tránh người dùng
+// thấy khó hiểu khi bấm lô khác mà chưa kịp thấy "Đã lưu"). (2) Yêu cầu XÁC NHẬN đóng lô đang mở
+// trước khi mở lô khác — đúng yêu cầu "đóng job trước khi chuyển job khác", giúp người dùng luôn ý
+// thức rõ đang thao tác xong lô nào trước khi rời đi, tránh gõ nhầm/quên lưu.
 function openCostingLot(id,tt){
+  if(window._crSaveBusy){toast('Đang lưu dữ liệu lô hiện tại — vui lòng đợi hoàn tất rồi mới chuyển lô khác','error');return;}
+  const cur=window._crActiveLot;
+  if(cur&&(cur.id!==id||cur.tt!==tt)){
+    if(!confirm('Bạn đang xem 1 lô hàng khác.\n\nHãy đảm bảo đã bấm "Lưu Costing" nếu có thay đổi trước khi tiếp tục.\n\nĐóng lô hiện tại và mở lô này?')){return;}
+  }
   window._crActiveLot={id:id,tt:tt};
   renderCostingSidebar(); // cập nhật trạng thái "active" trên thẻ vừa bấm
   const r=cache[tt].find(function(x){return x._id===id;})||{};
