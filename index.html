@@ -1099,7 +1099,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.61';
+window.APP_BUILD='v3.62';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9503,8 +9503,8 @@ function renderTcBody(){
   try{
     if(tcTab==='soquy') body.innerHTML=renderTcSoQuy();
     else if(tcTab==='congno'){
-      body.innerHTML=renderTcCongNo();
-      if(tcArLegacyOpen) renderDebt('tcArLegacyWrap');
+      body.innerHTML=renderDebtReportV3();
+      if(window._debtV3&&window._debtV3.drawerOpen)_dv3RenderDrawer();
     }
     else if(tcTab==='danhmuc') body.innerHTML=renderTcDanhMuc();
     else if(tcTab==='baocao') body.innerHTML=renderTcBaoCao();
@@ -10293,6 +10293,510 @@ function _tcDebtPaid(debt){
 }
 function _tcDebtRemaining(debt){ return (debt.totalAmount||0)-_tcDebtPaid(debt); }
 window._tcDebtRemaining=_tcDebtRemaining;
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+//  DEBT REPORT V3 — "Debt Control Center" (redesign giao diện, KHÔNG đổi logic nghiệp vụ)
+//  Toàn bộ số liệu lấy lại từ CÁC HÀM GỐC đã có (runDebtReport/_tcSupplierBreakdown/
+//  _tcDebtPaid/_tcDebtRemaining) — module này CHỈ tổng hợp lại thành dạng dữ liệu phù hợp
+//  cho KPI/bảng/biểu đồ kiểu mới, không tính toán lại bất kỳ công thức tài chính nào.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+// Bộ lọc riêng cho trang V3 — tách biệt khỏi window._cnRptState/_tcApFilter cũ (không đụng state
+// của các nơi khác đang dùng 2 biến đó), nhưng khi CHẠY BÁO CÁO sẽ đồng bộ giá trị SANG 2 biến đó
+// để gọi lại đúng hàm gốc runDebtReport()/_tcSupplierBreakdown() — không viết lại logic lọc.
+window._debtV3=window._debtV3||{
+  mode:'ar', // 'ar' = Phải thu khách hàng | 'ap' = Phải trả nhà cung cấp
+  shipper:'', supplier:'', from:'', to:'',
+  drawerOpen:false, drawerType:'', drawerKey:''
+};
+
+// ── AR: tổng hợp lại theo Shipper (tái sử dụng SIDE-EFFECT của runDebtReport() — hàm gốc này
+// tính đúng r._arRowPaidVND cho từng lô đã lọc, xử lý đầy đủ party-matching/dnPayments/VAT mà
+// KHÔNG cần viết lại). Cần có sẵn 1 phần tử #cnReportResult (ẩn) để hàm gốc ghi HTML vào mà
+// không lỗi — nội dung HTML đó không dùng tới, chỉ cần SIDE-EFFECT tính toán trên cache. ──
+function _debtV3ComputeAR(){
+  const v3=window._debtV3;
+  const filterShipper=v3.shipper, from=v3.from, to=v3.to;
+  // Đồng bộ sang state gốc để các nơi khác (nếu còn dùng _cnRptState) không bị lệch — không bắt
+  // buộc cho phép tính ở đây (đã chuyển sang gọi thẳng _computeArRowStatus thuần bên dưới).
+  window._cnRptState=window._cnRptState||{}; window._cnRptState.shipper=filterShipper; window._cnRptState.from=from; window._cnRptState.to=to;
+
+  const allR=[...cache.xuat.map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...cache.nhap.map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
+  const filtered=allR.filter(function(r){
+    const sh=r.shipper||r.supplier||'';
+    let matchSh=!filterShipper||sh===filterShipper;
+    if(filterShipper&&!matchSh){
+      const spF=cache.partners[filterShipper]||{};
+      matchSh=Object.values(r.svcs||{}).some(function(sv){return sv.on&&sv.invoice!=='Waived'&&sv.party&&_partyMatchesShipper(sv.party,filterShipper,spF);});
+    }
+    return matchSh&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
+  });
+
+  function _amtVND(sv,r){ const amt=sv.amount||(sv.price||0)*(sv.qty||1); if((sv.cur||'USD')==='VND')return amt; return Math.round(amt*(r.roe||26390)); }
+
+  const byShipper={};
+  const rows=[]; // dùng cho bảng "Chi tiết phải thu" (theo từng lô)
+  filtered.forEach(function(r){
+    const sh=filterShipper||r.shipper||r.supplier||'(Không rõ)';
+    if(!byShipper[sh])byShipper[sh]={partner:sh,total:0,paid:0,lots:0};
+    const svcs=r.svcs||{};
+    const sp2=cache.partners[sh]||{};
+    let rowTotalVND=0, rowTotalNoVND=0;
+    Object.values(svcs).forEach(function(sv){
+      if(!sv.on||sv.invoice==='Waived')return;
+      if(filterShipper&&!_partyMatchesShipper(sv.party,sh,sp2))return;
+      const base=_amtVND(sv,r);
+      if(sv.invoice==='No'){ rowTotalNoVND+=base; return; }
+      const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;
+      rowTotalVND+=Math.round(base*(1+vr/100));
+    });
+    const rowAll=rowTotalVND+rowTotalNoVND;
+    if(rowAll<=0)return; // lô không có doanh thu áp dụng cho shipper này thì bỏ qua khỏi thống kê
+    // Gọi TRỰC TIẾP hàm thuần _computeArRowStatus() đã có sẵn — đúng công thức "số tiền đã thu THỰC
+    // TẾ" (đọc trực tiếp dnPayments[party].inv/noInv.amount), khớp 100% với badge hiển thị ở bảng
+    // Báo cáo công nợ theo Shipper gốc, không suy diễn/tính lại theo cách khác.
+    const st=_computeArRowStatus(r,filterShipper,sh,sp2);
+    const rowPaid=Math.min(rowAll, (st.paidYesVND||0)+(st.paidNoVND||0));
+    byShipper[sh].total+=rowAll; byShipper[sh].paid+=rowPaid; byShipper[sh].lots+=1;
+    rows.push({
+      id:r._id,tt:r._tt,bookingNo:r.bookingNo||r.jobNo||'',mbl:r.mblNo||'',etd:r.etd||'',
+      route:(r.pol||'—')+' → '+(r.pod||'—'),shipper:sh,total:rowAll,paid:rowPaid,remain:Math.max(0,rowAll-rowPaid)
+    });
+  });
+  const list=Object.values(byShipper).map(function(s){return Object.assign({},s,{remain:Math.max(0,s.total-s.paid)});})
+    .sort(function(a,b){return b.total-a.total;});
+  const grandTotal=list.reduce(function(a,s){return a+s.total;},0);
+  const grandPaid=list.reduce(function(a,s){return a+s.paid;},0);
+  return {list:list,rows:rows,grandTotal:grandTotal,grandPaid:grandPaid,grandRemain:Math.max(0,grandTotal-grandPaid),lotCount:rows.length};
+}
+
+// ── AP: tổng hợp theo NCC — dùng THẲNG _tcSupplierBreakdown() (hàm gốc, đã là dữ liệu thuần,
+// không cần side-effect gì thêm) — chỉ quy đổi thêm paid/remain (đã có sẵn paidStatus từng dòng). ──
+function _debtV3ComputeAP(){
+  const v3=window._debtV3;
+  const suppliers=_tcSupplierBreakdown({supplier:v3.supplier,from:v3.from,to:v3.to});
+  const rows=[];
+  const list=suppliers.map(function(s){
+    // Chỉ tính VND cho KPI tổng hợp (đúng theo cách _sumBox của Báo cáo tài chính đã làm — quy đổi
+    // đã thực hiện sẵn ở _tcSupplierBreakdown cho từng dòng theo cur gốc; ở đây gom theo VND là
+    // đồng tiền chiếm đa số trong dữ liệu thực tế, các đồng tiền khác vẫn hiển thị riêng trong bảng).
+    let total=0,paid=0;
+    s.lots.forEach(function(l){
+      const amtVND=l.cur==='VND'?l.amt:l.amt; // giữ nguyên đơn vị gốc — không tự quy đổi (đúng logic cũ)
+      total+=amtVND; if(l.paidStatus==='paid')paid+=amtVND;
+      rows.push({id:l.lotId,tt:l.tt,bookingNo:l.bookingNo,mbl:l.mbl,etd:l.date,
+        route:'—'+(l.pod?(' → '+l.pod):''),supplier:s.partner,name:l.name,total:l.amt,cur:l.cur,
+        paid:l.paidStatus==='paid'?l.amt:0,remain:l.paidStatus==='paid'?0:l.amt,paidStatus:l.paidStatus});
+    });
+    return {partner:s.partner,total:total,paid:paid,remain:Math.max(0,total-paid),lots:s.lots.length};
+  }).sort(function(a,b){return b.total-a.total;});
+  const grandTotal=list.reduce(function(a,s){return a+s.total;},0);
+  const grandPaid=list.reduce(function(a,s){return a+s.paid;},0);
+  return {list:list,rows:rows,grandTotal:grandTotal,grandPaid:grandPaid,grandRemain:Math.max(0,grandTotal-grandPaid),lotCount:rows.length};
+}
+
+// ── Định dạng số tiền ngắn gọn (VD: 960,915,093 -> giữ nguyên, chỉ thêm dấu phẩy) ──
+function _dv3Money(v){ return Math.round(v||0).toLocaleString(); }
+function _dv3Pct(paid,total){ return total>0?Math.round(paid/total*1000)/10:0; }
+
+// ── KPI card (6 thẻ đầu trang) — style theo đúng mockup: icon nền nhạt, giá trị lớn, phụ đề nhỏ ──
+function _dv3KpiCard(icon,label,value,sub,color){
+  return '<div class="debt-report-v3__kpi">'
+    +'<div class="debt-report-v3__kpi-ic" style="background:'+color+'1a;color:'+color+'"><i class="ti '+icon+'"></i></div>'
+    +'<div class="debt-report-v3__kpi-body">'
+      +'<div class="debt-report-v3__kpi-lbl">'+label+'</div>'
+      +'<div class="debt-report-v3__kpi-val" style="color:'+color+'">'+value+'</div>'
+      +'<div class="debt-report-v3__kpi-sub">'+sub+'</div>'
+    +'</div>'
+  +'</div>';
+}
+
+// ── Progress bar trong cột "% ĐÃ THU/TRẢ" — màu đổi theo tỷ lệ đúng quy tắc spec (0-30 đỏ,
+// 30-70 cam, 70-100 xanh, 100 xanh + badge) ──
+function _dv3ProgressColor(pct){
+  if(pct>=100)return '#059669';
+  if(pct>=70)return '#059669';
+  if(pct>=30)return '#D97706';
+  return '#DC2626';
+}
+function _dv3ProgressBar(pct){
+  const clamped=Math.max(0,Math.min(100,pct));
+  const color=_dv3ProgressColor(pct);
+  return '<div style="display:flex;align-items:center;gap:6px">'
+    +'<div style="flex:1;height:6px;background:#E2E8F0;border-radius:4px;overflow:hidden;min-width:50px"><div style="width:'+clamped+'%;height:100%;background:'+color+';border-radius:4px"></div></div>'
+    +'<span style="font-size:11px;font-weight:700;color:'+color+';white-space:nowrap;min-width:38px;text-align:right">'+pct+'%</span>'
+    +(pct>=100?'<span style="font-size:9px;font-weight:700;color:#059669;background:#05966915;padding:1px 6px;border-radius:8px;white-space:nowrap">Đủ</span>':'')
+  +'</div>';
+}
+
+// ── Horizontal bar chart "Phân bổ công nợ" — SVG thuần, 2 series (Tổng/Đã thu-trả) ──
+function _dv3BarChart(list,isAR){
+  const top=list.slice(0,6);
+  if(!top.length)return '<div style="text-align:center;padding:2rem 1rem;color:#94A3B8;font-size:12px">Không có dữ liệu</div>';
+  const maxV=Math.max.apply(null,top.map(function(s){return s.total;}).concat([1]));
+  const rowH=28, gap=10, padL=92, padR=54, W=460;
+  const H=top.length*(rowH+gap);
+  const colorTotal=isAR?'#2563EB':'#DC2626';
+  const colorPaid=isAR?'#059669':'#059669';
+  const bars=top.map(function(s,i){
+    const y=i*(rowH+gap);
+    const wTotal=(s.total/maxV)*(W-padL-padR);
+    const wPaid=(s.paid/maxV)*(W-padL-padR);
+    const nameShort=s.partner.length>13?s.partner.slice(0,12)+'…':s.partner;
+    return '<g>'
+      +'<text x="'+(padL-8)+'" y="'+(y+9)+'" font-size="10.5" font-weight="700" fill="#334155" text-anchor="end">'+nameShort+'</text>'
+      +'<rect x="'+padL+'" y="'+y+'" width="'+Math.max(wTotal,1)+'" height="10" rx="3" fill="'+colorTotal+'" opacity="0.85"/>'
+      +'<text x="'+(padL+wTotal+6)+'" y="'+(y+9)+'" font-size="9.5" fill="#64748B">'+_dv3Money(s.total)+'</text>'
+      +'<rect x="'+padL+'" y="'+(y+13)+'" width="'+Math.max(wPaid,1)+'" height="10" rx="3" fill="'+colorPaid+'" opacity="0.85"/>'
+    +'</g>';
+  }).join('');
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:'+Math.min(H,260)+'px" preserveAspectRatio="xMidYMid meet">'+bars+'</svg>'
+    +'<div style="display:flex;gap:14px;justify-content:center;margin-top:8px;font-size:10.5px;font-weight:600;color:#5B6B78">'
+      +'<span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:2px;background:'+colorTotal+';display:inline-block"></span>'+(isAR?'Phải thu':'Phải trả')+'</span>'
+      +'<span style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:2px;background:'+colorPaid+';display:inline-block"></span>'+(isAR?'Đã thu':'Đã trả')+'</span>'
+    +'</div>';
+}
+
+// ── Donut chart "Tỷ trọng còn phải thu/trả" — CSS conic-gradient, đồng bộ phong cách donut đã
+// dùng ở Báo cáo tài chính/Cont-Seal. Gộp các đối tác nhỏ vào "Khác" nếu quá 5 đối tác. ──
+const DV3_DONUT_COLORS=['#2563EB','#059669','#D97706','#7C3AED','#0891B2','#94A3B8'];
+function _dv3Donut(list,totalRemain,centerLabel){
+  const withRemain=list.filter(function(s){return s.remain>0.01;});
+  if(!withRemain.length||totalRemain<=0)return '<div style="text-align:center;padding:2.5rem 1rem;color:#94A3B8;font-size:12px">Không còn công nợ</div>';
+  let entries=withRemain.slice(0,5).map(function(s){return [s.partner,s.remain];});
+  if(withRemain.length>5){
+    const restSum=withRemain.slice(5).reduce(function(a,s){return a+s.remain;},0);
+    entries.push(['Khác',restSum]);
+  }
+  let acc=0;
+  const stops=entries.map(function(e,i){
+    const pct=e[1]/totalRemain*100, from=acc, to=acc+pct; acc=to;
+    return DV3_DONUT_COLORS[i%DV3_DONUT_COLORS.length]+' '+from.toFixed(2)+'% '+to.toFixed(2)+'%';
+  }).join(',');
+  const legend=entries.map(function(e,i){
+    const pct=Math.round(e[1]/totalRemain*1000)/10;
+    return '<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;margin-bottom:7px">'
+      +'<span style="width:8px;height:8px;border-radius:50%;background:'+DV3_DONUT_COLORS[i%DV3_DONUT_COLORS.length]+';flex-shrink:0"></span>'
+      +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155;font-weight:600" title="'+e[0]+'">'+e[0]+'</span>'
+      +'<span style="font-weight:700;color:#0F172A">'+pct+'%</span>'
+    +'</div>';
+  }).join('');
+  return '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
+    +'<div style="width:118px;height:118px;border-radius:50%;background:conic-gradient('+stops+');flex-shrink:0;position:relative">'
+      +'<div style="position:absolute;inset:22px;background:#fff;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:inset 0 0 0 1px #F1F3F6">'
+        +'<div style="font-size:13px;font-weight:800;color:#0F172A">'+_dv3FmtShort(totalRemain)+'</div>'
+        +'<div style="font-size:8px;color:#94A3B8;text-align:center;line-height:1.15">'+centerLabel+'</div>'
+      +'</div>'
+    +'</div>'
+    +'<div style="flex:1;min-width:130px">'+legend+'</div>'
+  +'</div>';
+}
+function _dv3FmtShort(v){
+  const a=Math.abs(v||0);
+  if(a>=1e9)return (v/1e9).toFixed(2)+'B';
+  if(a>=1e6)return (v/1e6).toFixed(1)+'M';
+  if(a>=1e3)return Math.round(v/1e3)+'K';
+  return String(Math.round(v||0));
+}
+
+// ── Bảng "CÔNG NỢ THEO SHIPPER/NCC" — cột: Đối tác/Tổng/Đã thu-trả/Còn lại/%/Số lô, có progress bar,
+// click vào dòng mở drawer chi tiết (không chuyển trang). ──
+function _dv3PartnerTable(data,isAR){
+  const paidLbl=isAR?'ĐÃ THU':'ĐÃ TRẢ';
+  const remainLbl=isAR?'CÒN PHẢI THU':'CÒN PHẢI TRẢ';
+  const totalLbl=isAR?'TỔNG PHẢI THU':'TỔNG PHẢI TRẢ';
+  const partnerLbl=isAR?'SHIPPER':'NCC';
+  const rows=data.list.map(function(s){
+    const pct=_dv3Pct(s.paid,s.total);
+    return '<tr class="debt-report-v3__row" onclick="_dv3OpenDrawer(\''+(isAR?'shipper':'supplier')+'\',\''+s.partner.replace(/'/g,"\\'")+'\')">'
+      +'<td style="font-weight:700;color:#0F172A">'+s.partner+'</td>'
+      +'<td style="text-align:right">'+_dv3Money(s.total)+'</td>'
+      +'<td style="text-align:right;color:#059669">'+_dv3Money(s.paid)+'</td>'
+      +'<td style="text-align:right;font-weight:700;color:'+(s.remain>0.01?'#DC2626':'#94A3B8')+'">'+_dv3Money(s.remain)+'</td>'
+      +'<td style="min-width:130px">'+_dv3ProgressBar(pct)+'</td>'
+      +'<td style="text-align:center;color:#64748B">'+s.lots+'</td>'
+    +'</tr>';
+  }).join('');
+  const totPct=_dv3Pct(data.grandPaid,data.grandTotal);
+  return '<div class="debt-report-v3__card">'
+    +'<div class="debt-report-v3__card-hd">CÔNG NỢ THEO '+partnerLbl+' <span class="debt-report-v3__count">'+data.list.length+'</span></div>'
+    +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table">'
+      +'<thead><tr><th>'+partnerLbl+'</th><th style="text-align:right">'+totalLbl+'</th><th style="text-align:right">'+paidLbl+'</th><th style="text-align:right">'+remainLbl+'</th><th>% '+paidLbl+'</th><th style="text-align:center">SỐ LÔ</th></tr></thead>'
+      +'<tbody>'+(rows||'<tr><td colspan="6" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>')+'</tbody>'
+      +'<tfoot><tr><td>TỔNG CỘNG</td><td style="text-align:right">'+_dv3Money(data.grandTotal)+'</td><td style="text-align:right;color:#059669">'+_dv3Money(data.grandPaid)+'</td><td style="text-align:right;color:#DC2626">'+_dv3Money(data.grandRemain)+'</td><td>'+_dv3ProgressBar(totPct)+'</td><td style="text-align:center">'+data.lotCount+'</td></tr></tfoot>'
+    +'</table></div>'
+  +'</div>';
+}
+
+// ── Bảng "CHI TIẾT PHẢI THU/TRẢ" (theo từng lô/booking) — hiện tối đa 10 dòng đầu (theo tổng giảm
+// dần), có nút "Xem tất cả" chuyển sang chế độ xem đầy đủ trong bảng đối tác phía trên khi cần. ──
+function _dv3DetailTable(data,isAR,limit){
+  const lim=limit||10;
+  const sorted=data.rows.slice().sort(function(a,b){return b.total-a.total;});
+  const shown=sorted.slice(0,lim);
+  const partnerLbl=isAR?'SHIPPER':'NCC';
+  const totalLbl=isAR?'DOANH THU':'CHI PHÍ';
+  const paidLbl=isAR?'ĐÃ THU':'ĐÃ TRẢ';
+  const remainLbl=isAR?'CÒN PHẢI THU':'CÒN PHẢI TRẢ';
+  const rows=shown.map(function(r,i){
+    const status=r.remain<=0.01?{l:'Đã TT',c:'#059669',bg:'#05966915'}:(r.paid>0.01?{l:'Một phần',c:'#D97706',bg:'#D9770615'}:{l:'Chưa TT',c:'#DC2626',bg:'#DC262615'});
+    return '<tr class="debt-report-v3__row" onclick="openDetail(\''+r.id+'\',\''+r.tt+'\')">'
+      +'<td style="color:#94A3B8;font-size:10.5px">'+(i+1)+'</td>'
+      +'<td style="font-weight:700;color:#2563EB">'+(r.bookingNo||'—')+'</td>'
+      +'<td>'+(isAR?r.shipper:r.supplier)+'</td>'
+      +'<td style="color:#64748B">'+(r.mbl||'—')+'</td>'
+      +'<td style="color:#64748B;white-space:nowrap">'+(r.etd||'—')+'</td>'
+      +'<td style="color:#64748B;font-size:11px">'+(r.route||'—')+'</td>'
+      +'<td style="text-align:right">'+_dv3Money(r.total)+(r.cur&&r.cur!=='VND'?' '+r.cur:'')+'</td>'
+      +'<td style="text-align:right;color:#059669">'+_dv3Money(r.paid)+'</td>'
+      +'<td style="text-align:right;font-weight:700;color:'+(r.remain>0.01?'#DC2626':'#94A3B8')+'">'+_dv3Money(r.remain)+'</td>'
+      +'<td><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;background:'+status.bg+';color:'+status.c+';white-space:nowrap">'+status.l+'</span></td>'
+    +'</tr>';
+  }).join('');
+  return '<div class="debt-report-v3__card">'
+    +'<div class="debt-report-v3__card-hd" style="display:flex;justify-content:space-between;align-items:center">'
+      +'<span>CHI TIẾT '+(isAR?'PHẢI THU KHÁCH HÀNG':'PHẢI TRẢ NHÀ CUNG CẤP')+' <span class="debt-report-v3__count">'+data.rows.length+' lô hàng</span></span>'
+      +(data.rows.length>lim?'<span style="font-size:11px;font-weight:600;color:#2563EB;cursor:pointer" onclick="window._debtV3.detailExpand=!window._debtV3.detailExpand;renderTcBody()">'+(window._debtV3.detailExpand?'Thu gọn':'Xem tất cả →')+'</span>':'')
+    +'</div>'
+    +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table debt-report-v3__table--dense">'
+      +'<thead><tr><th>#</th><th>BOOKING NO</th><th>'+partnerLbl+'</th><th>MBL</th><th>ETD</th><th>HÀNH TRÌNH</th><th style="text-align:right">'+totalLbl+'</th><th style="text-align:right">'+paidLbl+'</th><th style="text-align:right">'+remainLbl+'</th><th>TRẠNG THÁI</th></tr></thead>'
+      +'<tbody>'+(rows||'<tr><td colspan="10" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>')+'</tbody>'
+    +'</table></div>'
+  +'</div>';
+}
+
+// ── Card "CẦN XỬ LÝ" — CHỈ hiển thị cảnh báo tính được từ dữ liệu hiện có (không suy diễn ngày
+// quá hạn vì hệ thống chưa lưu due date), đúng yêu cầu spec mục 14. ──
+function _dv3Warnings(dataAR,dataAP){
+  const items=[];
+  const bigDebtorsAR=dataAR.list.filter(function(s){return s.remain>0.01;}).length;
+  const bigDebtorsAP=dataAP.list.filter(function(s){return s.remain>0.01;}).length;
+  if(bigDebtorsAR)items.push({icon:'ti-users','text':bigDebtorsAR+' Shipper còn công nợ phải thu',color:'#DC2626'});
+  if(bigDebtorsAP)items.push({icon:'ti-truck-delivery','text':bigDebtorsAP+' nhà cung cấp cần thanh toán',color:'#D97706'});
+  const unpaidLotsAR=dataAR.rows.filter(function(r){return r.remain>0.01;}).length;
+  const unpaidLotsAP=dataAP.rows.filter(function(r){return r.remain>0.01;}).length;
+  if(unpaidLotsAR)items.push({icon:'ti-file-invoice','text':unpaidLotsAR+' lô hàng chưa thu đủ tiền',color:'#DC2626'});
+  if(unpaidLotsAP)items.push({icon:'ti-receipt','text':unpaidLotsAP+' khoản chi phí chưa thanh toán NCC',color:'#D97706'});
+  if(!items.length)return '<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd" style="color:#059669"><i class="ti ti-circle-check"></i> Tất cả công nợ đã xử lý</div></div>';
+  return '<div class="debt-report-v3__card">'
+    +'<div class="debt-report-v3__card-hd" style="color:#D97706"><i class="ti ti-alert-triangle"></i> CẦN XỬ LÝ</div>'
+    +'<div style="display:flex;flex-direction:column;gap:8px">'
+      +items.map(function(it){return '<div style="display:flex;align-items:center;gap:9px;font-size:12.5px;padding:7px 9px;background:'+it.color+'0d;border-radius:8px;border:1px solid '+it.color+'22"><i class="ti '+it.icon+'" style="color:'+it.color+';font-size:15px;flex-shrink:0"></i><span style="color:#334155;font-weight:600">'+it.text+'</span></div>';}).join('')
+    +'</div>'
+  +'</div>';
+}
+
+// ── 2 card "Theo dõi thủ công" (giữ nguyên 100% chức năng cũ — openTcDebtForm/delTcDebt/cache.debts) ──
+function _dv3ManualDebtCard(title,list,color,addType){
+  const totalByC={}, paidByC={};
+  list.forEach(function(d){
+    const cur=d.currency||'VND';
+    totalByC[cur]=(totalByC[cur]||0)+(d.totalAmount||0);
+    paidByC[cur]=(paidByC[cur]||0)+_tcDebtPaid(d);
+  });
+  const fmtMulti=function(obj){return Object.entries(obj).filter(function(e){return e[1]>0.01;}).map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / ')||'0 VND';};
+  const rows=list.map(function(d){
+    const paid=_tcDebtPaid(d), remain=_tcDebtRemaining(d);
+    const lotStr=d.lotRef?(d.lotRef.bookingNo||d.lotRef.jobNo||''):'';
+    return '<tr>'
+      +'<td style="font-weight:600">'+(d.partner||'—')+'</td>'
+      +'<td>'+(lotStr?'<span class="bdg bdg-b">'+lotStr+'</span>':'—')+'</td>'
+      +'<td style="max-width:180px;white-space:normal;color:#64748B;font-size:11px">'+(d.note||'—')+'</td>'
+      +'<td style="text-align:right">'+_tcFmtMoney(d.totalAmount,d.currency)+'</td>'
+      +'<td style="text-align:right;color:#059669">'+_tcFmtMoney(paid,d.currency)+'</td>'
+      +'<td style="text-align:right;font-weight:700;color:'+(remain>0.01?color:'#94A3B8')+'">'+_tcFmtMoney(remain,d.currency)+(remain<=0.01?' ✓':'')+'</td>'
+      +'<td><button class="rac red" onclick="delTcDebt(\''+d._id+'\')" title="Xóa"><i class="ti ti-trash"></i></button></td>'
+    +'</tr>';
+  }).join('');
+  return '<div class="debt-report-v3__card">'
+    +'<div class="debt-report-v3__card-hd" style="display:flex;justify-content:space-between;align-items:center">'
+      +'<span style="color:'+color+'">'+title+' <span class="debt-report-v3__count">'+list.length+'</span></span>'
+      +'<button class="btn sm" onclick="openTcDebtForm(\''+addType+'\')"><i class="ti ti-plus"></i> Thêm khoản</button>'
+    +'</div>'
+    +'<div style="display:flex;gap:16px;margin-bottom:10px;font-size:11.5px">'
+      +'<span style="color:#64748B">Tổng: <strong style="color:#0F172A">'+fmtMulti(totalByC)+'</strong></span>'
+      +'<span style="color:#64748B">Đã '+(addType==='phaiThu'?'thu':'trả')+': <strong style="color:#059669">'+fmtMulti(paidByC)+'</strong></span>'
+    +'</div>'
+    +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table">'
+      +'<thead><tr><th>Đối tác</th><th>Lô hàng</th><th>Ghi chú</th><th style="text-align:right">Tổng nợ</th><th style="text-align:right">Đã '+(addType==='phaiThu'?'thu':'trả')+'</th><th style="text-align:right">Còn lại</th><th></th></tr></thead>'
+      +'<tbody>'+(rows||'<tr><td colspan="7" style="text-align:center;padding:1.25rem;color:#94A3B8">Chưa có khoản nào</td></tr>')+'</tbody>'
+    +'</table></div>'
+  +'</div>';
+}
+
+// ── DRAWER chi tiết Shipper/NCC — trượt từ phải, KHÔNG chuyển trang (đúng spec mục 10/19).
+// Escape / click ra ngoài đều đóng. Click booking mở đúng lô hàng bằng openDetail() hiện có. ──
+function _dv3OpenDrawer(type,key){
+  window._debtV3.drawerOpen=true;
+  window._debtV3.drawerType=type; // 'shipper' | 'supplier'
+  window._debtV3.drawerKey=key;
+  _dv3RenderDrawer();
+}
+window._dv3OpenDrawer=_dv3OpenDrawer;
+
+function _dv3CloseDrawer(){
+  window._debtV3.drawerOpen=false;
+  const el=g('dv3Drawer'); if(el)el.classList.remove('open');
+  const bd=g('dv3DrawerBackdrop'); if(bd)bd.classList.remove('open');
+}
+window._dv3CloseDrawer=_dv3CloseDrawer;
+
+function _dv3RenderDrawer(){
+  const v3=window._debtV3;
+  const wrap=g('dv3DrawerWrap'); if(!wrap)return;
+  if(!v3.drawerOpen){wrap.innerHTML='';return;}
+  const isAR=v3.drawerType==='shipper';
+  const data=isAR?_debtV3ComputeAR():_debtV3ComputeAP();
+  const s=data.list.find(function(x){return x.partner===v3.drawerKey;});
+  if(!s){_dv3CloseDrawer();return;}
+  const pct=_dv3Pct(s.paid,s.total);
+  const rows=data.rows.filter(function(r){return (isAR?r.shipper:r.supplier)===v3.drawerKey;})
+    .sort(function(a,b){return (b.etd||'').localeCompare(a.etd||'');});
+  const bodyRows=rows.map(function(r){
+    const status=r.remain<=0.01?{l:'Đã TT',c:'#059669',bg:'#05966915'}:(r.paid>0.01?{l:'Một phần',c:'#D97706',bg:'#D9770615'}:{l:'Chưa TT',c:'#DC2626',bg:'#DC262615'});
+    return '<tr class="debt-report-v3__row" onclick="openDetail(\''+r.id+'\',\''+r.tt+'\')">'
+      +'<td style="font-weight:700;color:#2563EB">'+(r.bookingNo||'—')+'</td>'
+      +'<td style="color:#64748B;white-space:nowrap">'+(r.etd||'—')+'</td>'
+      +'<td style="color:#64748B">'+(r.mbl||'—')+'</td>'
+      +'<td style="color:#64748B;font-size:11px">'+(r.route||'—')+'</td>'
+      +'<td style="text-align:right">'+_dv3Money(r.total)+'</td>'
+      +'<td style="text-align:right;color:#059669">'+_dv3Money(r.paid)+'</td>'
+      +'<td style="text-align:right;font-weight:700;color:'+(r.remain>0.01?'#DC2626':'#94A3B8')+'">'+_dv3Money(r.remain)+'</td>'
+      +'<td><span style="font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:'+status.bg+';color:'+status.c+';white-space:nowrap">'+status.l+'</span></td>'
+    +'</tr>';
+  }).join('');
+  wrap.innerHTML=
+    '<div class="debt-report-v3__drawer-backdrop" id="dv3DrawerBackdrop" onclick="_dv3CloseDrawer()"></div>'
+    +'<div class="debt-report-v3__drawer" id="dv3Drawer">'
+      +'<div class="debt-report-v3__drawer-hd">'
+        +'<div><div style="font-size:15px;font-weight:800;color:#0F172A">'+s.partner+'</div><div style="font-size:11px;color:#64748B">'+(isAR?'Chi tiết công nợ phải thu':'Chi tiết công nợ phải trả')+'</div></div>'
+        +'<button class="rac" onclick="_dv3CloseDrawer()" title="Đóng (Esc)"><i class="ti ti-x"></i></button>'
+      +'</div>'
+      +'<div class="debt-report-v3__drawer-kpis">'
+        +'<div><div class="debt-report-v3__drawer-kpi-lbl">'+(isAR?'Tổng phải thu':'Tổng phải trả')+'</div><div class="debt-report-v3__drawer-kpi-val" style="color:'+(isAR?'#2563EB':'#DC2626')+'">'+_dv3Money(s.total)+' VND</div></div>'
+        +'<div><div class="debt-report-v3__drawer-kpi-lbl">'+(isAR?'Đã thu':'Đã trả')+'</div><div class="debt-report-v3__drawer-kpi-val" style="color:#059669">'+_dv3Money(s.paid)+' VND</div></div>'
+        +'<div><div class="debt-report-v3__drawer-kpi-lbl">'+(isAR?'Còn phải thu':'Còn phải trả')+'</div><div class="debt-report-v3__drawer-kpi-val" style="color:#DC2626">'+_dv3Money(s.remain)+' VND</div></div>'
+        +'<div><div class="debt-report-v3__drawer-kpi-lbl">Tỷ lệ đã '+(isAR?'thu':'trả')+'</div>'+_dv3ProgressBar(pct)+'</div>'
+      +'</div>'
+      +'<div style="font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px;margin:14px 0 8px">Danh sách các lô ('+rows.length+')</div>'
+      +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table debt-report-v3__table--dense">'
+        +'<thead><tr><th>BOOKING NO</th><th>ETD</th><th>MBL</th><th>ROUTE</th><th style="text-align:right">TỔNG</th><th style="text-align:right">ĐÃ '+(isAR?'THU':'TRẢ')+'</th><th style="text-align:right">CÒN LẠI</th><th>TRẠNG THÁI</th></tr></thead>'
+        +'<tbody>'+(bodyRows||'<tr><td colspan="8" style="text-align:center;padding:1.25rem;color:#94A3B8">Không có lô nào</td></tr>')+'</tbody>'
+      +'</table></div>'
+    +'</div>';
+  requestAnimationFrame(function(){
+    const el=g('dv3Drawer'); if(el)el.classList.add('open');
+    const bd=g('dv3DrawerBackdrop'); if(bd)bd.classList.add('open');
+  });
+}
+window._dv3RenderDrawer=_dv3RenderDrawer;
+
+// Escape đóng drawer — đăng ký 1 LẦN DUY NHẤT (module-level flag), tránh gắn listener trùng lặp
+// mỗi lần renderTcBody() chạy lại (đúng yêu cầu spec mục 21: "Không tạo listener trùng").
+if(!window._dv3EscBound){
+  window._dv3EscBound=true;
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'&&window._debtV3&&window._debtV3.drawerOpen)_dv3CloseDrawer();
+  });
+}
+
+// ═══ HÀM RENDER CHÍNH — "Debt Control Center" V3 ═══
+function renderDebtReportV3(){
+  const v3=window._debtV3;
+  const dataAR=_debtV3ComputeAR();
+  const dataAP=_debtV3ComputeAP();
+  const isAR=v3.mode==='ar';
+  const activeData=isAR?dataAR:dataAP;
+
+  const allR=[...cache.xuat,...cache.nhap];
+  const shippers=[...new Set(allR.map(function(r){return r.shipper||r.supplier||'';}).filter(Boolean))].sort();
+  const suppliers=[...new Set(dataAP.list.map(function(s){return s.partner;}))].sort();
+
+  const ar=(cache.debts||[]).filter(function(d){return d.type==='phaiThu';});
+  const ap=(cache.debts||[]).filter(function(d){return d.type==='phaiTra';});
+
+  const html='<div class="debt-report-v3">'
+    // ── Header ──
+    +'<div class="debt-report-v3__header">'
+      +'<div><h2>Báo cáo công nợ</h2><div class="debt-report-v3__subtitle">Theo dõi công nợ chi tiết theo Shipper &amp; Nhà cung cấp</div></div>'
+      +'<div class="debt-report-v3__header-actions">'
+        +'<button class="btn sm" onclick="'+(isAR?'exportExcelDebt()':'_dv3ExportApAll()')+'"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
+        +'<button class="btn sm" onclick="exportSOA()" style="color:#DC2626;border-color:#DC262644"><i class="ti ti-file-text"></i> Xuất PDF</button>'
+        +'<button class="btn sm" onclick="renderTcBody()"><i class="ti ti-refresh"></i> Refresh</button>'
+      +'</div>'
+    +'</div>'
+
+    // ── KPI area (6 thẻ — luôn hiện CẢ AR lẫn AP bất kể đang xem tab nào, đúng spec mục 5) ──
+    +'<div class="debt-report-v3__kpi-row">'
+      +_dv3KpiCard('ti-arrow-down-circle','TỔNG PHẢI THU',_dv3Money(dataAR.grandTotal)+' VND',dataAR.lotCount+' lô hàng','#2563EB')
+      +_dv3KpiCard('ti-arrow-up-circle','TỔNG PHẢI TRẢ',_dv3Money(dataAP.grandTotal)+' VND',dataAP.lotCount+' lô hàng','#DC2626')
+      +_dv3KpiCard('ti-trending-up','ĐÃ THU',_dv3Money(dataAR.grandPaid)+' VND',_dv3Pct(dataAR.grandPaid,dataAR.grandTotal)+'%','#059669')
+      +_dv3KpiCard('ti-trending-down','ĐÃ TRẢ',_dv3Money(dataAP.grandPaid)+' VND',_dv3Pct(dataAP.grandPaid,dataAP.grandTotal)+'%','#D97706')
+      +_dv3KpiCard('ti-hourglass-high','CÒN PHẢI THU',_dv3Money(dataAR.grandRemain)+' VND',_dv3Pct(dataAR.grandRemain,dataAR.grandTotal)+'%','#7C3AED')
+      +_dv3KpiCard('ti-hourglass-low','CÒN PHẢI TRẢ',_dv3Money(dataAP.grandRemain)+' VND',_dv3Pct(dataAP.grandRemain,dataAP.grandTotal)+'%','#0891B2')
+    +'</div>'
+
+    // ── Filter bar ──
+    +'<div class="debt-report-v3__filterbar">'
+      +'<div class="debt-report-v3__modetabs">'
+        +'<button class="debt-report-v3__modetab'+(isAR?' active':'')+'" onclick="window._debtV3.mode=\'ar\';renderTcBody()">Phải thu khách hàng</button>'
+        +'<button class="debt-report-v3__modetab'+(!isAR?' active':'')+'" onclick="window._debtV3.mode=\'ap\';renderTcBody()">Phải trả nhà cung cấp</button>'
+      +'</div>'
+      +'<div class="debt-report-v3__filterrow">'
+        +(isAR?('<label>Shipper</label><select onchange="window._debtV3.shipper=this.value" style="width:170px">'+
+          '<option value="">Tất cả shipper</option>'+shippers.map(function(s){return '<option'+(s===v3.shipper?' selected':'')+'>'+s+'</option>';}).join('')+'</select>')
+          :('<label>NCC</label><select onchange="window._debtV3.supplier=this.value" style="width:170px">'+
+          '<option value="">Tất cả NCC</option>'+suppliers.map(function(s){return '<option'+(s===v3.supplier?' selected':'')+'>'+s+'</option>';}).join('')+'</select>'))
+        +'<label>ETD từ</label><input type="date" value="'+(v3.from||'')+'" onchange="window._debtV3.from=this.value" style="width:140px"/>'
+        +'<label>đến</label><input type="date" value="'+(v3.to||'')+'" onchange="window._debtV3.to=this.value" style="width:140px"/>'
+        +'<button class="btn pri sm" onclick="renderTcBody()"><i class="ti ti-search"></i> Chạy báo cáo</button>'
+        +'<button class="btn sm" onclick="window._debtV3=Object.assign(window._debtV3,{shipper:\'\',supplier:\'\',from:\'\',to:\'\'});renderTcBody()"><i class="ti ti-x"></i> Reset</button>'
+      +'</div>'
+    +'</div>'
+
+    // ── Main dashboard: 2 cột (bảng đối tác | chart+cảnh báo) ──
+    +'<div class="debt-report-v3__main">'
+      +'<div class="debt-report-v3__main-left">'+_dv3PartnerTable(activeData,isAR)+'</div>'
+      +'<div class="debt-report-v3__main-right">'
+        +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">PHÂN BỔ CÔNG NỢ</div>'+_dv3BarChart(activeData.list,isAR)+'</div>'
+        +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">TỶ TRỌNG CÒN PHẢI '+(isAR?'THU':'TRẢ')+'</div>'+_dv3Donut(activeData.list,activeData.grandRemain,'Còn phải '+(isAR?'thu':'trả'))+'</div>'
+        +_dv3Warnings(dataAR,dataAP)
+      +'</div>'
+    +'</div>'
+
+    // ── Bảng đối tác còn lại (không active) — hiện gọn bên dưới để không mất thông tin ──
+    +'<div class="debt-report-v3__main" style="margin-top:14px">'
+      +'<div class="debt-report-v3__main-left" style="grid-column:1/-1">'+_dv3PartnerTable(isAR?dataAP:dataAR,!isAR)+'</div>'
+    +'</div>'
+
+    // ── Chi tiết theo lô (2 bảng cạnh nhau desktop, stack mobile) ──
+    +'<div class="debt-report-v3__detailrow">'
+      +_dv3DetailTable(dataAR,true,window._debtV3.detailExpand?9999:10)
+      +_dv3DetailTable(dataAP,false,window._debtV3.detailExpand?9999:10)
+    +'</div>'
+
+    // ── Theo dõi thủ công (giữ nguyên 100% chức năng) ──
+    +'<div class="debt-report-v3__detailrow">'
+      +_dv3ManualDebtCard('PHẢI THU KHÁCH HÀNG (THỦ CÔNG)',ar,'#2563EB','phaiThu')
+      +_dv3ManualDebtCard('PHẢI TRẢ NHÀ CUNG CẤP (THỦ CÔNG)',ap,'#DC2626','phaiTra')
+    +'</div>'
+
+    +'<div id="dv3DrawerWrap"></div>'
+  +'</div>';
+
+  return html;
+}
+window.renderDebtReportV3=renderDebtReportV3;
+
+// Xuất Excel cho TOÀN BỘ NCC (khi đang ở mode AP) — gộp các hàm exportSupplierExcel() đã có sẵn
+// theo từng NCC hiện đang hiển thị, không viết lại logic xuất Excel.
+function _dv3ExportApAll(){
+  const data=_debtV3ComputeAP();
+  if(!data.list.length){toast('Không có dữ liệu để xuất','error');return;}
+  toast('Đang xuất Excel cho '+data.list.length+' nhà cung cấp...');
+  data.list.forEach(function(s){ exportSupplierExcel(s.partner); });
+}
+window._dv3ExportApAll=_dv3ExportApAll;
 
 function renderTcCongNo(){
   const ar=(cache.debts||[]).filter(function(d){return d.type==='phaiThu';});
@@ -15329,6 +15833,65 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .tcbc-catbar-amt{font-size:12px;font-weight:700;text-align:right}
 .tcbc-catbar-track{background:var(--bg-secondary);border-radius:10px;height:7px;overflow:hidden}
 .tcbc-catbar-fill{display:block;height:100%;border-radius:10px}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DEBT REPORT V3 — "Debt Control Center" — CSS namespace RIÊNG BIỆT, không
+   ghi đè bất kỳ style toàn cục nào đang dùng ở module khác.
+   Phong cách: Linear + Microsoft Fluent + CargoWise hiện đại — compact,
+   data-dense, viền mảnh, ít shadow, ít bo tròn.
+═══════════════════════════════════════════════════════════════════════ */
+.debt-report-v3{font-family:inherit;color:#0F172A;background:#F5F7FA;margin:-1rem;padding:1rem}
+.debt-report-v3__header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
+.debt-report-v3__header h2{font-size:19px;font-weight:800;margin:0;color:#0F172A}
+.debt-report-v3__subtitle{font-size:12px;color:#64748B;margin-top:2px}
+.debt-report-v3__header-actions{display:flex;gap:8px}
+.debt-report-v3__header-actions .btn{border-radius:6px;border-color:#E2E8F0}
+
+.debt-report-v3__kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px}
+@media (max-width:1200px){.debt-report-v3__kpi-row{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:640px){.debt-report-v3__kpi-row{grid-auto-flow:column;grid-auto-columns:75%;overflow-x:auto;grid-template-columns:none;padding-bottom:4px}}
+.debt-report-v3__kpi{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:11px 13px;display:flex;gap:9px;align-items:flex-start}
+.debt-report-v3__kpi-ic{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.debt-report-v3__kpi-lbl{font-size:9px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px}
+.debt-report-v3__kpi-val{font-size:15px;font-weight:800;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.debt-report-v3__kpi-sub{font-size:10.5px;color:#94A3B8;margin-top:1px}
+
+.debt-report-v3__filterbar{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:10px 14px;margin-bottom:14px}
+.debt-report-v3__modetabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid #E2E8F0;padding-bottom:10px}
+.debt-report-v3__modetab{padding:7px 14px;border-radius:6px;border:1px solid transparent;background:transparent;font-size:12.5px;font-weight:700;color:#64748B;cursor:pointer;font-family:inherit}
+.debt-report-v3__modetab.active{background:#0F766E1a;color:#0F766E;border-color:#0F766E33}
+.debt-report-v3__filterrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.debt-report-v3__filterrow label{font-size:11.5px;font-weight:600;color:#64748B;white-space:nowrap}
+.debt-report-v3__filterrow select,.debt-report-v3__filterrow input{font-size:12px;border:1px solid #E2E8F0;border-radius:6px;padding:6px 8px}
+.debt-report-v3 .btn.pri{background:#0F766E;border-color:#0F766E}
+
+.debt-report-v3__main{display:grid;grid-template-columns:62% 1fr;gap:14px;align-items:start;margin-bottom:14px}
+@media (max-width:1100px){.debt-report-v3__main{grid-template-columns:1fr}}
+.debt-report-v3__main-right{display:flex;flex-direction:column;gap:14px}
+.debt-report-v3__detailrow{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+@media (max-width:1100px){.debt-report-v3__detailrow{grid-template-columns:1fr}}
+
+.debt-report-v3__card{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:13px 15px}
+.debt-report-v3__card-hd{font-size:11.5px;font-weight:800;color:#0F172A;text-transform:uppercase;letter-spacing:.3px;margin-bottom:11px;display:flex;align-items:center;gap:6px}
+.debt-report-v3__count{font-size:10px;font-weight:700;color:#64748B;background:#F5F7FA;border:1px solid #E2E8F0;border-radius:10px;padding:1px 7px;margin-left:2px}
+
+.debt-report-v3__table-wrap{overflow-x:auto}
+.debt-report-v3__table{width:100%;border-collapse:collapse;font-size:12px}
+.debt-report-v3__table th{text-align:left;font-size:9.5px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px;padding:6px 8px;border-bottom:1.5px solid #E2E8F0;white-space:nowrap}
+.debt-report-v3__table td{padding:7px 8px;border-bottom:1px solid #F1F5F9;vertical-align:middle}
+.debt-report-v3__table tfoot td{font-weight:800;background:#F8FAFC;border-top:1.5px solid #E2E8F0;border-bottom:none}
+.debt-report-v3__table--dense th,.debt-report-v3__table--dense td{padding:5px 7px;font-size:11.5px}
+.debt-report-v3__row{cursor:pointer;transition:background .1s}
+.debt-report-v3__row:hover{background:#F8FAFC}
+
+.debt-report-v3__drawer-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:998;opacity:0;transition:opacity .18s}
+.debt-report-v3__drawer-backdrop.open{opacity:1}
+.debt-report-v3__drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,92vw);background:#fff;z-index:999;box-shadow:-8px 0 24px rgba(15,23,42,.12);padding:18px 20px;overflow-y:auto;transform:translateX(100%);transition:transform .2s ease}
+.debt-report-v3__drawer.open{transform:translateX(0)}
+.debt-report-v3__drawer-hd{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:12px;border-bottom:1px solid #E2E8F0;margin-bottom:14px}
+.debt-report-v3__drawer-kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.debt-report-v3__drawer-kpi-lbl{font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;margin-bottom:3px}
+.debt-report-v3__drawer-kpi-val{font-size:14px;font-weight:800}
 .crm3-fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
 .crm3-fg .fi.full{grid-column:1/-1}
 .crm3-fg input,.crm3-fg select{max-width:340px}
