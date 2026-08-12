@@ -418,7 +418,7 @@ function loadServices(){
     // cần cho tính năng "Theo dõi tiến độ chứng từ". fumi/co đã có sẵn từ trước nên không cần thêm.
     // QUAN TRỌNG: dò theo CODE trước (không phân biệt hoa/thường) — nếu user đã có sẵn dịch vụ
     // cùng code (dù key khác, vd tự tạo tay từ trước) thì KHÔNG được thêm mới, tránh trùng code.
-    var _docSvcDefaults=[{key:'bill',name:'Bill (Vận đơn)',code:'BIL'},{key:'phyto',name:'Phyto (Kiểm dịch thực vật)',code:'PHY'},{key:'other',name:'Phí khác',code:'OTH'}];
+    var _docSvcDefaults=[{key:'bill',name:'Bill (Vận đơn)',code:'BIL'},{key:'phyto',name:'Phyto (Kiểm dịch thực vật)',code:'PHY'},{key:'other',name:'Phí khác',code:'OTH'},{key:'disbursement',name:'Chi hộ',code:'CHO'}];
     _docSvcDefaults.forEach(function(req){
       var existsByCode=SVCS.find(function(s){return (s.code||'').toUpperCase()===req.code;});
       var existsByKey=SVCS.find(function(s){return s.key===req.key;});
@@ -802,6 +802,7 @@ let SVCS=[
   {key:'docfee',name:'Phí chứng từ xuất khẩu',code:'DOC',default:false},
   {key:'bill',name:'Bill (Vận đơn)',code:'BIL',default:false},{key:'phyto',name:'Phyto (Kiểm dịch thực vật)',code:'PHY',default:false},
   {key:'other',name:'Phí khác',code:'OTH',default:false},
+  {key:'disbursement',name:'Chi hộ',code:'CHO',default:false},
 ];
 // Danh sách chứng từ mặc định khi bật "Theo dõi tiến độ chứng từ" lần đầu cho 1 lô hàng
 // (Danh sách chứng từ mặc định giờ tính động — xem hàm _docTrackDefaultKeys() dò theo code, khai báo cùng loadServices())
@@ -823,7 +824,7 @@ function genSvcCode(name, existing){
 window.genSvcCode=genSvcCode;
 
 // Tên gốc của các dịch vụ built-in (để khôi phục liên kết cho lô CŨ nếu danh mục bị đổi/xóa)
-const _BUILTIN_SVC_NAMES={ocf:'OCF - Cước vận tải biển',freight:'Cước vận tải QT',customs:'Thông quan',quarantine:'Kiểm dịch',co:'C/O',fumi:'Fumi',stuffing:'Đóng hàng tại bãi',trucking:'Trucking',ddl:'DDL',docfee:'Phí chứng từ xuất khẩu',other:'Phí khác'};
+const _BUILTIN_SVC_NAMES={ocf:'OCF - Cước vận tải biển',freight:'Cước vận tải QT',customs:'Thông quan',quarantine:'Kiểm dịch',co:'C/O',fumi:'Fumi',stuffing:'Đóng hàng tại bãi',trucking:'Trucking',ddl:'DDL',docfee:'Phí chứng từ xuất khẩu',other:'Phí khác',disbursement:'Chi hộ'};
 window._BUILTIN_SVC_NAMES=_BUILTIN_SVC_NAMES;
 
 // Đảm bảo mọi dịch vụ ĐANG CÓ DỮ LIỆU trong lô đều tồn tại trong SVCS để các tab (Fill giá/Costing/Invoice) hiển thị đúng.
@@ -1099,7 +1100,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.64';
+window.APP_BUILD='v3.65';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3677,8 +3678,9 @@ function renderDetailPanel(r,tt){
           const unitOpts=['Cont','Bill','Shipment','CBM','KG','Set','Invoice','Lần'].map(function(u){return '<option'+(u===(sv.unit||'Cont')?' selected':'')+'>'+u+'</option>';}).join('');
           const invOpts=['Yes','No','Waived'].map(function(v){return '<option'+(v===(sv.invoice||'Yes')?' selected':'')+'>'+v+'</option>';}).join('');
           const desc=sv.desc?'<div style="font-size:10px;color:var(--text-secondary);margin-top:2px">'+sv.desc+'</div>':'';
+          const fpNameVal=(sv.customName||s.name).replace(/"/g,'&quot;');
           return '<tr style="background:'+rowBg+'">'
-            +'<td style="'+tdStyle+'"><div style="font-weight:500">'+s.name+'</div>'+desc+'</td>'
+            +'<td style="'+tdStyle+'"><input type="text" id="fpname_'+s.key+'" value="'+fpNameVal+'" title="Tên hiển thị — có thể sửa riêng cho Fill giá, không ảnh hưởng tên gốc ở tab Dịch vụ" style="font-size:12px;font-weight:500;border:none;background:transparent;padding:0;outline:none;width:100%"/>'+desc+'</td>'
             +'<td style="'+tdRStyle+'"><input type="number" id="fpp_'+s.key+'" value="'+(sv.price||'')+'" min="0" placeholder="0" oninput="updDetailFpTotal()" style="font-size:12px;text-align:right;width:90px"/></td>'
             +'<td style="'+tdStyle+'"><select id="fpcur_'+s.key+'" onchange="updDetailFpTotal()" style="font-size:12px;width:68px">'+curOpts+'</select></td>'
             +'<td style="'+tdRStyle+'"><input type="number" id="fpq_'+s.key+'" value="'+(sv.qty||lotVol||1)+'" min="0" placeholder="1" oninput="updDetailFpTotal()" style="font-size:12px;text-align:right;width:52px"/></td>'
@@ -4509,25 +4511,6 @@ function doAddSvcByKey(key){
     // nếu Admin bấm "Lưu danh mục dịch vụ" trong lúc entry tạm này vẫn còn nằm trong SVCS — đây chính
     // là nguyên nhân xuất hiện các dòng lạ (code trống, hiện placeholder "ABC") trong Danh mục.
     s={key:newKey,name:'Dịch vụ mới',code:genSvcCode('Dịch vụ mới',SVCS),custom:true,default:false,lotScoped:true};
-    SVCS.push(s);
-  } else if(key==='other'){
-    // Dịch vụ đặc biệt "OTH - Phí khác": BẮT BUỘC ghi rõ tên cụ thể ngay khi thêm — áp dụng cho MỌI
-    // lần thêm (kể cả lần 2, 3... để dùng cho nhiều khoản phí khác nhau trong CÙNG 1 lô). LUÔN tạo
-    // entry MỚI với key riêng biệt (giống hệt cơ chế "Dịch vụ mới" __new__ ở trên) và PUSH vào SVCS —
-    // KHÔNG dùng thẳng/mutate entry mẫu "other" trong danh mục chung (sẽ làm hỏng mẫu dùng chung cho
-    // các lô khác). custom:true để (a) ô tên hiện input sửa được ngay trong dòng, (b) saveDetailSvc()
-    // lưu đúng _name — tên này TỰ ĐỘNG đồng bộ sang Fill giá/Invoice/Costing qua _ensureSvcInCatalog()
-    // đã dùng sẵn ở các tab đó, không cần sửa gì thêm nơi khác.
-    let customName=prompt('Dịch vụ "Phí khác" — vui lòng nhập TÊN CỤ THỂ cho khoản phí này (VD: Phí xử lý hồ sơ, Phí lưu kho...):','');
-    customName=(customName||'').trim();
-    if(!customName){toast('Đã hủy — cần nhập tên cụ thể cho "Phí khác"','error');return;}
-    const base=SVCS.find(function(x){return x.key==='other';})||{code:'OTH'};
-    const existingKeys=Array.from(document.querySelectorAll('#detailSvcGrid [id^="tg_"]')).map(function(el){return el.id.slice(3);});
-    let newKey='other', i=1;
-    while(existingKeys.indexOf(newKey)>=0){i++;newKey='other_'+i;}
-    let newCode=i===1?'OTH':('OTH'+i).slice(0,10);
-    while(SVCS.some(function(x){return (x.code||x.key||'').toUpperCase()===newCode;})){i++;newCode=('OTH'+i).slice(0,10);}
-    s={key:newKey,name:customName,code:newCode,custom:true,default:false,lotScoped:true};
     SVCS.push(s);
   } else {
     const base=SVCS.find(function(x){return x.key===key;});
@@ -5379,11 +5362,24 @@ async function saveDetailSvc(){
     // Nếu doc/cus tick lại Request Payment (resubmit) sau khi bị yêu cầu Need Revise → tự xóa cờ revise
     const ocfRevise=(reqPayment&&!prev.reqPayment)?false:(prev.ocfRevise||false);
     const ocfReviseNote=ocfRevise?(prev.ocfReviseNote||''):'';
+    // Dịch vụ "Chi hộ"/"Phí khác" — đọc ô "Chi tiết" (sdetail_KEY) ngay trong dòng, ghép thành
+    // customName = "Chi hộ phí nâng container" — dùng ĐÚNG field customName đã có sẵn, tự động lan
+    // tỏa sang Fill giá/Invoice/Costing/Debit Note/Export mà không cần sửa thêm nơi nào khác. Nếu ô
+    // chi tiết để trống, customName về lại rỗng (hiển thị tên gốc "Chi hộ"/"Phí khác" như bình thường).
+    const svcCodeUpS=(s.code||s.key||'').toUpperCase();
+    let customNameVal=prev.customName||'';
+    if(svcCodeUpS==='OTH'||svcCodeUpS==='CHO'){
+      const detailElS=gS('sdetail_'+s.key);
+      if(detailElS){
+        const detailTxt=(detailElS.value||'').trim();
+        customNameVal=detailTxt?(s.name+' '+detailTxt):'';
+      }
+    }
     svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,svcVatAmt,apPaidStatus,apPaidDate,apPaidBank,apRemark,finish,reqPayment,ocfConfirmed,ocfRevise,ocfReviseNote,
       price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',
       vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0,
       party:prev.party||'',                    // giữ lại party từ tab Fill giá
-      customName:prev.customName||''};
+      customName:customNameVal};
     // Giữ lại Debit Note đã upload cho dịch vụ (không có input trong DOM)
     if(prev.dnFile)svcs[s.key].dnFile=prev.dnFile;
     if(prev.dnData)svcs[s.key].dnData=prev.dnData;
@@ -5523,6 +5519,13 @@ async function saveDetailFillPrice(){
     svcs[s.key].unit=(gFp('fpu_'+s.key)&&gFp('fpu_'+s.key).value)||'Cont';
     svcs[s.key].invoice=(gFp('fpinv_'+s.key)&&gFp('fpinv_'+s.key).value)||'Yes';
     svcs[s.key].party=(gFp('fpparty_'+s.key)&&gFp('fpparty_'+s.key).value)||'';
+    // Tên hiển thị riêng cho Fill giá — khớp đúng pattern đã dùng ở saveInvoiceSettings() (invname_),
+    // dùng CHUNG field customName đã có sẵn (không phải field riêng) để tự động lan tỏa đồng bộ sang
+    // Invoice/Costing/Debit Note/Export — không ảnh hưởng tên gốc s.name ở tab Dịch vụ.
+    const fpNameEl=gFp('fpname_'+s.key);
+    const fpNameTyped=fpNameEl?(fpNameEl.value||'').trim():'';
+    if(fpNameTyped&&fpNameTyped!==s.name) svcs[s.key].customName=fpNameTyped;
+    else if(fpNameTyped===s.name) svcs[s.key].customName='';
   });
   setLoading(true,'Đang lưu giá...');
   try{
@@ -7117,6 +7120,11 @@ function autoFillQtyByUnit(selectEl, key){
   updateCostingTotal();
 }
 
+// Ô "Chi tiết" (Chi hộ/Phí khác) chỉ cần đọc giá trị lúc Lưu dịch vụ (xem saveDetailSvc) — không cần
+// xử lý gì ngay lúc gõ, giữ hàm rỗng để tránh lỗi từ oninput, dành chỗ mở rộng preview sau này nếu cần.
+function _updSvcDetailName(key){}
+window._updSvcDetailName=_updSvcDetailName;
+
 function calcSvcAmt(key){
   const cost=parseFloat(g('scost_'+key)?.value)||0;
   const qty=parseFloat(g('sqty_'+key)?.value)||1;
@@ -7216,6 +7224,19 @@ function svcRowHTML(s, sv){
   // hoạt động nhất quán, không cần sửa từng chỗ riêng lẻ — an toàn hơn nhiều so với sửa rải rác.
   sv=Object.assign({},sv,{on:true});
   const isCustom=s.custom||false;
+  // Dịch vụ đặc biệt "Chi hộ"/"Phí khác" (nhận diện theo CODE — ổn định kể cả với bản trùng lặp có
+  // key khác như 'other_2', 'disbursement_2'...) — hiện thêm 1 ô "Chi tiết" NGAY TRONG DÒNG để ghi rõ
+  // khoản chi cụ thể (VD: "phí nâng container"). Khi gõ, ghép thành sv.customName = "Chi hộ phí nâng
+  // container" — dùng ĐÚNG field customName đã có sẵn, TỰ ĐỘNG lan tỏa sang Fill giá/Invoice/Costing/
+  // Debit Note/Export (không cần sửa thêm bất kỳ đâu khác — customName vốn đã được đọc rộng rãi khắp
+  // app). Không ảnh hưởng tới tên hiển thị ở CHÍNH tab Service (vẫn luôn dùng s.name cố định).
+  const svcCodeUp=(s.code||s.key||'').toUpperCase();
+  const isDetailSvc=(svcCodeUp==='OTH'||svcCodeUp==='CHO');
+  let detailVal='';
+  if(isDetailSvc&&sv.customName&&sv.customName.indexOf(s.name)===0){
+    detailVal=sv.customName.slice(s.name.length).trim();
+  }
+  const detailFieldHtml=isDetailSvc?`<input type="text" id="sdetail_${s.key}" value="${detailVal.replace(/"/g,'&quot;')}" placeholder="Chi tiết cụ thể (VD: phí nâng container)..." ${sv.on?'':'disabled'} oninput="_updSvcDetailName('${s.key}')" style="font-size:10.5px;margin-top:3px;padding:3px 6px;border:1px solid var(--border-light);border-radius:5px;width:100%;box-sizing:border-box;color:var(--text-secondary)"/>`:'';
   const svcStatus=sv.svcStatus||'';
   const cost=sv.cost||'';
   const r0=cache[detailTt]&&cache[detailTt].find(x=>x._id===detailId)||{};
@@ -7293,8 +7314,9 @@ function svcRowHTML(s, sv){
     return`<div style="display:grid;grid-template-columns:22px 58px 1fr 1fr 26px;gap:6px;align-items:center;background:var(--bg-secondary);border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid var(--border-light)" id="srow_${s.key}">
       <span id="tg_${s.key}" class="on" style="visibility:hidden"></span>
       ${codeCell}
-      <div style="display:flex;align-items:center;gap:3px;min-width:0">
+      <div style="display:flex;flex-direction:column;min-width:0">
         <span style="font-size:12.5px;font-weight:${sv.on?600:400}">${s.name}</span>
+        ${detailFieldHtml}
       </div>
       <input type="text" id="sd_${s.key}" value="${sv.desc||''}" placeholder="Mô tả / Ghi chú..." ${sv.on?'':'disabled'} style="font-size:11px;padding:4px 7px;border:1px solid var(--border-light);border-radius:6px"/>
       <div style="display:flex;justify-content:flex-end">
@@ -7309,9 +7331,12 @@ function svcRowHTML(s, sv){
   return`<div style="display:grid;grid-template-columns:${gridCols};gap:6px;align-items:center;background:${locked?'rgba(220,53,69,.04)':'var(--bg-secondary)'};border-radius:8px;padding:6px 8px;margin-bottom:4px;border:1px solid ${locked?'rgba(220,53,69,.25)':'var(--border-light)'}" id="srow_${s.key}">
     <span id="tg_${s.key}" class="on" style="visibility:hidden"></span>
     ${codeCell}
-    <div style="display:flex;align-items:center;gap:3px;min-width:0">
-      ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" ${lockedDis} style="font-size:12px;font-weight:600;flex:1;min-width:0;padding:3px 6px;border:1px solid var(--border-light);border-radius:5px"/>`:`<span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${s.name}</span>`}
-      ${locked?`<i class="ti ti-lock" style="font-size:12px;color:var(--red)" title="${lockTip}"></i>`:''}
+    <div style="display:flex;flex-direction:column;min-width:0">
+      <div style="display:flex;align-items:center;gap:3px;min-width:0">
+        ${isCustom?`<input type="text" id="sname_${s.key}" value="${s.name}" placeholder="Tên dịch vụ" ${lockedDis} style="font-size:12px;font-weight:600;flex:1;min-width:0;padding:3px 6px;border:1px solid var(--border-light);border-radius:5px"/>`:`<span style="font-size:12.5px;font-weight:${sv.on?600:400};white-space:normal;word-break:break-word;line-height:1.3">${s.name}</span>`}
+        ${locked?`<i class="ti ti-lock" style="font-size:12px;color:var(--red)" title="${lockTip}"></i>`:''}
+      </div>
+      ${detailFieldHtml}
     </div>
     <input type="number" id="scost_${s.key}" value="${cost}" placeholder="Đơn giá" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right;width:100%;box-sizing:border-box" oninput="calcSvcAmt('${s.key}')" title="Đơn giá"/>
     <input type="number" id="sqty_${s.key}" value="${qty}" placeholder="SL" min="0" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px;text-align:right" oninput="calcSvcAmt('${s.key}')" title="Số lượng"/>
