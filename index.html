@@ -1099,7 +1099,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.63';
+window.APP_BUILD='v3.64';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9501,7 +9501,7 @@ window._prExportExcel=_prExportExcel;
 function renderTcBody(){
   const body=g('tcBody'); if(!body)return;
   try{
-    if(tcTab==='soquy') body.innerHTML=renderTcSoQuy();
+    if(tcTab==='soquy') body.innerHTML=renderTcSoQuyV3();
     else if(tcTab==='congno'){
       body.innerHTML=renderDebtReportV3();
       if(window._debtV3&&window._debtV3.drawerOpen)_dv3RenderDrawer();
@@ -9722,6 +9722,119 @@ function _tcSearchInput(el){
   if(ne){ ne.focus(); try{ne.setSelectionRange(pos,pos);}catch(e){} }
 }
 window._tcSearchInput=_tcSearchInput;
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+//  CASH BOOK V3 — redesign giao diện Sổ quỹ (KHÔNG đổi logic/dữ liệu/Firebase).
+//  Tái sử dụng 100% các hàm/biến gốc: _tcAccountList/_tcBalances/_tcOpening/tcAccFilter/
+//  tcTypeFilter/tcFrom/tcTo/window._tcSearchQ/cache.cashTx/openTcVoucher/editCashTx/
+//  delTcTransaction/_tcTotalBalanceUpTo/_tcPrevDay. Không viết lại bất kỳ phép tính nào.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+function _cbv3TxRow(t,isThu){
+  const lotStr=t.lotRef?(t.lotRef.bookingNo||t.lotRef.jobNo||t.lotRef.mblNo||''):'';
+  const lotId=t.lotRef?t.lotRef.lotId:'', lotTt=t.lotRef?t.lotRef.tt:'';
+  const lotBadge=lotStr?('<span class="cashbook-v3__lot" onclick="openDetail(\''+lotId+'\',\''+lotTt+'\',\'invoice\');event.stopPropagation()" title="Mở lô hàng">'+lotStr+'</span>'):'';
+  const color=isThu?'#0F766E':'#DC2626';
+  return '<div class="cashbook-v3__tx" onclick="editCashTx(\''+t._id+'\')">'
+    +'<div class="cashbook-v3__tx-top">'
+      +'<span class="cashbook-v3__tx-date">'+(t.date||'—')+'</span>'
+      +'<span class="cashbook-v3__tx-amt" style="color:'+color+'">'+(isThu?'+':'−')+_tcFmtMoney(t.amount,t.currency)+'</span>'
+    +'</div>'
+    +'<div class="cashbook-v3__tx-desc">'+(t.description||t.category||'—')+'</div>'
+    +'<div class="cashbook-v3__tx-meta">'
+      +(t.category?'<span class="cashbook-v3__tag">'+t.category+'</span>':'')
+      +lotBadge
+      +'<span class="cashbook-v3__tx-acc"><i class="ti ti-building-bank"></i>'+_tcAccountLabel(t.account)+'</span>'
+    +'</div>'
+    +'<div class="cashbook-v3__tx-actions">'
+      +'<button class="rac" onclick="editCashTx(\''+t._id+'\');event.stopPropagation()" title="Sửa"><i class="ti ti-edit"></i></button>'
+      +'<button class="rac red" onclick="delTcTransaction(\''+t._id+'\');event.stopPropagation()" title="Xóa"><i class="ti ti-trash"></i></button>'
+    +'</div>'
+  +'</div>';
+}
+
+function _cbv3EmptyState(isThu){
+  return '<div class="cashbook-v3__empty"><i class="ti '+(isThu?'ti-coin':'ti-receipt-2')+'"></i><div>Chưa có khoản '+(isThu?'thu':'chi')+'<br/>trong khoảng thời gian này</div></div>';
+}
+
+function renderTcSoQuyV3(){
+  const accs=_tcAccountList();
+  const balCards=accs.map(function(a){
+    const bal=_tcBalances(a.id);
+    const parts=Object.entries(bal).filter(function(e){return e[1]!==0;});
+    const total=parts.reduce(function(s,e){return s+(e[0]==='VND'?e[1]:0);},0); // màu theo VND (đồng tiền chính)
+    const clr=parts.length===0?'#64748B':(total>0?'#0F766E':(total<0?'#DC2626':'#64748B'));
+    return '<div class="cashbook-v3__acc" onclick="openTcOpeningBalance(\''+a.id+'\')" title="Click để nhập số tiền đầu kỳ">'
+      +'<div class="cashbook-v3__acc-top"><i class="ti ti-'+(a.id==='cash'?'cash':'building-bank')+'"></i><span>'+a.label+'</span><i class="ti ti-edit cashbook-v3__acc-edit"></i></div>'
+      +'<div class="cashbook-v3__acc-val" style="color:'+clr+'">'+(parts.length?parts.map(function(e){return e[1].toLocaleString()+' '+e[0];}).join(' / '):'0 VND')+'</div>'
+    +'</div>';
+  }).join('');
+
+  const q=(window._tcSearchQ||'');
+  const cashTxs=(cache.cashTx||[]).filter(function(t){return t.account==='cash'||!t.account;});
+  const cashWarnBanner=cashTxs.length?('<div style="margin-bottom:12px;padding:.7rem 1rem;background:rgba(234,179,8,.12);border:1.5px solid #eab308;border-radius:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
+    +'<i class="ti ti-alert-triangle" style="font-size:20px;color:#b45309"></i>'
+    +'<div style="flex:1;min-width:200px"><div style="font-weight:700;font-size:12.5px;color:#92400e">Có '+cashTxs.length+' giao dịch chưa gán tài khoản ngân hàng</div>'
+    +'<div style="font-size:11px;color:#a16207;margin-top:1px">Hệ thống không dùng "Tiền mặt" nữa. Hãy gán các giao dịch này vào một tài khoản ngân hàng cụ thể.</div></div>'
+    +'<button class="btn pri" style="background:#b45309;border-color:#b45309" onclick="openAssignCashAccount()"><i class="ti ti-arrow-right"></i> Gán tài khoản ngay</button>'
+    +'</div>'):'';
+
+  // ── Lọc — TÁI SỬ DỤNG NGUYÊN VẸN các biến/điều kiện lọc gốc, không viết lại ──
+  let list=(cache.cashTx||[]).slice();
+  if(tcAccFilter) list=list.filter(function(t){return t.account===tcAccFilter;});
+  if(tcFrom) list=list.filter(function(t){return !t.date||t.date>=tcFrom;});
+  if(tcTo) list=list.filter(function(t){return !t.date||t.date<=tcTo;});
+  if(q) list=list.filter(function(t){const s=(t.description||'')+' '+(t.category||'')+' '+(t.lotRef?(t.lotRef.bookingNo||'')+(t.lotRef.mblNo||'')+(t.lotRef.jobNo||''):'');return s.toLowerCase().includes(q.toLowerCase());});
+  // tcTypeFilter áp dụng RIÊNG cho từng cột bên dưới (nếu đang lọc "Chỉ Thu" thì cột Chi rỗng và ngược lại — đúng hành vi filter gốc)
+  const thuList=(tcTypeFilter&&tcTypeFilter!=='thu')?[]:list.filter(function(t){return t.type==='thu';}).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});
+  const chiList=(tcTypeFilter&&tcTypeFilter!=='chi')?[]:list.filter(function(t){return t.type==='chi';}).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');});
+  const tongThu=thuList.reduce(function(s,t){return s+(t.currency==='VND'||!t.currency?(t.amount||0):0);},0);
+  const tongChi=chiList.reduce(function(s,t){return s+(t.currency==='VND'||!t.currency?(t.amount||0):0);},0);
+
+  // ── Số dư đầu kỳ/cuối kỳ theo đúng khoảng filter — TÁI SỬ DỤNG _tcTotalBalanceUpTo/_tcPrevDay
+  // đã có sẵn (dùng chung với Báo cáo tài chính), không viết lại công thức. ──
+  const openingVND=tcFrom?_tcTotalBalanceUpTo(_tcPrevDay(tcFrom),tcFrom):0;
+  const closingVND=tcTo?_tcTotalBalanceUpTo(tcTo,''):accs.reduce(function(s,a){const b=_tcBalances(a.id);return s+(b.VND||0);},0);
+
+  return `
+  <div class="cashbook-v3">
+    <div class="cashbook-v3__title"><i class="ti ti-wallet"></i><div><h2>Cash Book</h2><div class="cashbook-v3__subtitle">Quản lý dòng tiền / Thu Chi</div></div></div>
+
+    <div class="cashbook-v3__acc-row">${balCards}</div>
+    ${cashWarnBanner}
+
+    <div class="cashbook-v3__toolbar">
+      <div class="search-wrap" style="flex:1;min-width:200px"><i class="ti ti-search"></i><input type="text" id="tcSearch" placeholder="Tìm diễn giải, danh mục, booking..." value="${(window._tcSearchQ||'').replace(/"/g,'&quot;')}" oninput="_tcSearchInput(this)"/></div>
+      <select id="tcAccSel" onchange="tcAccFilter=this.value;renderTcBody()"><option value="">Tất cả tài khoản</option>${accs.map(function(a){return '<option value="'+a.id+'"'+(tcAccFilter===a.id?' selected':'')+'>'+a.label+'</option>';}).join('')}</select>
+      <select id="tcTypeSel" onchange="tcTypeFilter=this.value;renderTcBody()"><option value="">Thu &amp; Chi</option><option value="thu"${tcTypeFilter==='thu'?' selected':''}>Chỉ Thu</option><option value="chi"${tcTypeFilter==='chi'?' selected':''}>Chỉ Chi</option></select>
+      <input type="date" id="tcFromSel" value="${tcFrom}" onchange="tcFrom=this.value;renderTcBody()"/>
+      <input type="date" id="tcToSel" value="${tcTo}" onchange="tcTo=this.value;renderTcBody()"/>
+      <button class="btn pri" style="background:#0F766E;border-color:#0F766E" onclick="openTcVoucher('thu')"><i class="ti ti-plus"></i> Phiếu Thu</button>
+      <button class="btn red" onclick="openTcVoucher('chi')"><i class="ti ti-minus"></i> Phiếu Chi</button>
+      ${currentProfile?.role==='admin'?'<button class="btn" onclick="backfillCashBookFromHistory()" title="Quét toàn bộ lô hàng đã thanh toán nhưng chưa có giao dịch Sổ quỹ"><i class="ti ti-history"></i></button>':''}
+      ${currentProfile?.role==='admin'?'<button class="btn" onclick="cleanDuplicateCashTx()" title="Dọn các giao dịch tự động bị trùng"><i class="ti ti-eraser"></i></button>':''}
+    </div>
+
+    <div class="cashbook-v3__summary">
+      <div><div class="cashbook-v3__summary-lbl">Số dư đầu kỳ</div><div class="cashbook-v3__summary-val" style="color:#0F172A">${openingVND.toLocaleString()} VND</div></div>
+      <div><div class="cashbook-v3__summary-lbl">Tổng thu</div><div class="cashbook-v3__summary-val" style="color:#0F766E">+${tongThu.toLocaleString()} VND</div></div>
+      <div><div class="cashbook-v3__summary-lbl">Tổng chi</div><div class="cashbook-v3__summary-val" style="color:#DC2626">−${tongChi.toLocaleString()} VND</div></div>
+      <div><div class="cashbook-v3__summary-lbl">Số dư ${tcTo?'cuối kỳ':'hiện tại'}</div><div class="cashbook-v3__summary-val" style="color:${closingVND>=0?'#0F172A':'#DC2626'}">${closingVND.toLocaleString()} VND</div></div>
+    </div>
+
+    <div class="cashbook-v3__columns">
+      <div class="cashbook-v3__col">
+        <div class="cashbook-v3__col-hd cashbook-v3__col-hd--thu"><i class="ti ti-cash-banknote"></i><div><div class="cashbook-v3__col-title">THU</div><div class="cashbook-v3__col-total">+${tongThu.toLocaleString()} VND</div></div><span class="cashbook-v3__col-count">${thuList.length}</span></div>
+        <div class="cashbook-v3__col-list">${thuList.length?thuList.map(function(t){return _cbv3TxRow(t,true);}).join(''):_cbv3EmptyState(true)}</div>
+      </div>
+      <div class="cashbook-v3__col">
+        <div class="cashbook-v3__col-hd cashbook-v3__col-hd--chi"><i class="ti ti-receipt-2"></i><div><div class="cashbook-v3__col-title">CHI</div><div class="cashbook-v3__col-total">−${tongChi.toLocaleString()} VND</div></div><span class="cashbook-v3__col-count">${chiList.length}</span></div>
+        <div class="cashbook-v3__col-list">${chiList.length?chiList.map(function(t){return _cbv3TxRow(t,false);}).join(''):_cbv3EmptyState(false)}</div>
+      </div>
+    </div>
+  </div>`;
+}
+window.renderTcSoQuyV3=renderTcSoQuyV3;
 
 function renderTcSoQuy(){
   const accs=_tcAccountList();
@@ -15885,6 +15998,69 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .debt-report-v3__drawer-kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .debt-report-v3__drawer-kpi-lbl{font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;margin-bottom:3px}
 .debt-report-v3__drawer-kpi-val{font-size:14px;font-weight:800}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   CASH BOOK V3 — CSS namespace RIÊNG BIỆT, không ghi đè style toàn cục.
+   Navy cho tiêu đề, Teal cho THU, Red nhạt cho CHI, nền xám xanh rất nhạt.
+═══════════════════════════════════════════════════════════════════════ */
+.cashbook-v3{font-family:inherit;color:#0F172A;background:#F5F7FA;margin:-1rem;padding:1rem}
+.cashbook-v3__title{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.cashbook-v3__title>i{font-size:22px;color:#0F172A}
+.cashbook-v3__title h2{font-size:18px;font-weight:800;margin:0;color:#0F172A}
+.cashbook-v3__subtitle{font-size:11.5px;color:#64748B;margin-top:1px}
+
+.cashbook-v3__acc-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.cashbook-v3__acc{flex:1;min-width:175px;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px;cursor:pointer;transition:border-color .12s}
+.cashbook-v3__acc:hover{border-color:#0F766E}
+.cashbook-v3__acc-top{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px;margin-bottom:5px}
+.cashbook-v3__acc-top i:first-child{font-size:12px;color:#0F172A}
+.cashbook-v3__acc-edit{margin-left:auto;font-size:10px;color:#CBD5E1}
+.cashbook-v3__acc-val{font-size:14.5px;font-weight:800}
+
+.cashbook-v3__toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:9px 12px;margin-bottom:12px}
+.cashbook-v3__toolbar select,.cashbook-v3__toolbar input[type=date]{font-size:12px;border:1px solid #E2E8F0;border-radius:6px;padding:6px 8px;flex:0 0 auto}
+.cashbook-v3__toolbar select{width:150px}
+.cashbook-v3__toolbar input[type=date]{width:135px}
+.cashbook-v3 .btn.pri{background:#0F766E;border-color:#0F766E}
+
+.cashbook-v3__summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:10px 14px;margin-bottom:12px}
+.cashbook-v3__summary-lbl{font-size:9.5px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px}
+.cashbook-v3__summary-val{font-size:14px;font-weight:800;margin-top:2px}
+@media (max-width:700px){.cashbook-v3__summary{grid-template-columns:1fr 1fr}}
+
+.cashbook-v3__columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:900px){.cashbook-v3__columns{grid-template-columns:1fr}}
+.cashbook-v3__col{background:#fff;border:1px solid #E2E8F0;border-radius:8px;overflow:hidden;display:flex;flex-direction:column}
+.cashbook-v3__col-hd{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid #E2E8F0}
+.cashbook-v3__col-hd--thu{background:#0F766E0d}
+.cashbook-v3__col-hd--chi{background:#DC26260d}
+.cashbook-v3__col-hd>i:first-child{font-size:19px}
+.cashbook-v3__col-hd--thu>i:first-child{color:#0F766E}
+.cashbook-v3__col-hd--chi>i:first-child{color:#DC2626}
+.cashbook-v3__col-title{font-size:11px;font-weight:800;letter-spacing:.4px;color:#334155}
+.cashbook-v3__col-total{font-size:15px;font-weight:800;margin-top:1px}
+.cashbook-v3__col-hd--thu .cashbook-v3__col-total{color:#0F766E}
+.cashbook-v3__col-hd--chi .cashbook-v3__col-total{color:#DC2626}
+.cashbook-v3__col-count{margin-left:auto;font-size:10.5px;font-weight:700;color:#64748B;background:#F1F5F9;border-radius:10px;padding:2px 9px}
+.cashbook-v3__col-list{max-height:calc(100vh - 420px);min-height:280px;overflow-y:auto;padding:6px}
+
+.cashbook-v3__tx{position:relative;padding:9px 10px;border-radius:7px;cursor:pointer;transition:background .1s}
+.cashbook-v3__tx:hover{background:#F8FAFC}
+.cashbook-v3__tx+.cashbook-v3__tx{border-top:1px solid #F1F5F9}
+.cashbook-v3__tx-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.cashbook-v3__tx-date{font-size:10.5px;color:#94A3B8;font-weight:600}
+.cashbook-v3__tx-amt{font-size:13px;font-weight:800;white-space:nowrap}
+.cashbook-v3__tx-desc{font-size:12.5px;color:#1E293B;font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cashbook-v3__tx-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px}
+.cashbook-v3__tag{font-size:9.5px;font-weight:700;color:#64748B;background:#F1F5F9;border-radius:5px;padding:1px 7px}
+.cashbook-v3__lot{font-size:9.5px;font-weight:700;color:#2563EB;background:#2563EB14;border-radius:5px;padding:1px 7px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.cashbook-v3__tx-acc{font-size:9.5px;color:#94A3B8;display:flex;align-items:center;gap:3px;margin-left:auto}
+.cashbook-v3__tx-actions{position:absolute;top:8px;right:9px;display:none;gap:4px;background:#fff;border-radius:6px;box-shadow:0 1px 4px rgba(15,23,42,.12)}
+.cashbook-v3__tx:hover .cashbook-v3__tx-actions{display:flex}
+.cashbook-v3__tx-actions .rac{width:24px;height:24px;font-size:12px}
+
+.cashbook-v3__empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3rem 1rem;color:#94A3B8;text-align:center;font-size:12px;line-height:1.5}
+.cashbook-v3__empty i{font-size:34px;opacity:.35;margin-bottom:8px}
 .crm3-fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
 .crm3-fg .fi.full{grid-column:1/-1}
 .crm3-fg input,.crm3-fg select{max-width:340px}
