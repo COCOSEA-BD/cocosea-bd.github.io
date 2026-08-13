@@ -1111,7 +1111,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.73';
+window.APP_BUILD='v3.74';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -10696,6 +10696,9 @@ function _dv3DetailTable(data,isAR,limit){
   const lim=limit||10;
   const statusKey=isAR?'detailStatusAR':'detailStatusAP';
   const curStatus=window._debtV3[statusKey]||'all';
+  const sortKey=isAR?'detailSortAR':'detailSortAP';
+  // Mặc định ETD trễ (mới nhất) sắp trên — 'desc'. Người dùng có thể bấm nút đổi sang 'asc' (sớm lên trên).
+  const sortDir=window._debtV3[sortKey]||'desc';
   // Lọc theo trạng thái thanh toán TRƯỚC khi sort/cắt limit — đảm bảo "X lô hàng"/"Xem tất cả" phản
   // ánh đúng số lượng SAU KHI đã lọc, không phải tổng số gốc.
   const filteredRows=data.rows.filter(function(r){
@@ -10703,13 +10706,20 @@ function _dv3DetailTable(data,isAR,limit){
     if(curStatus==='unpaid')return r.remain>0.01;
     return true;
   });
-  const sorted=filteredRows.slice().sort(function(a,b){return b.total-a.total;});
+  // Sắp xếp theo ETD (đúng yêu cầu — trước đây sắp theo Tổng tiền khiến danh sách trông lộn xộn về
+  // ngày tháng). ETD rỗng luôn xếp CUỐI danh sách bất kể chiều sort, để không lẫn lên đầu.
+  const sorted=filteredRows.slice().sort(function(a,b){
+    const ea=a.etd||'', eb=b.etd||'';
+    if(!ea&&!eb)return 0; if(!ea)return 1; if(!eb)return -1;
+    return sortDir==='desc'?eb.localeCompare(ea):ea.localeCompare(eb);
+  });
   const shown=sorted.slice(0,lim);
   const partnerLbl=isAR?'SHIPPER':'NCC';
   const totalLbl=isAR?'DOANH THU':'CHI PHÍ';
   const paidLbl=isAR?'ĐÃ THU':'ĐÃ TRẢ';
   const remainLbl=isAR?'CÒN PHẢI THU':'CÒN PHẢI TRẢ';
   const chkClass=isAR?'cn-ar-chk':'cn-ap-chk';
+  const sortBtnHtml='<button class="btn sm" onclick="window._debtV3.'+sortKey+'=\''+(sortDir==='desc'?'asc':'desc')+'\';renderTcBody()" title="Đang sắp xếp ETD '+(sortDir==='desc'?'trễ → sớm':'sớm → trễ')+'"><i class="ti ti-sort-'+(sortDir==='desc'?'descending':'ascending')+'"></i> ETD '+(sortDir==='desc'?'Trễ→Sớm':'Sớm→Trễ')+'</button>';
   const statusTabHtml=function(){
     const tabs=[['all','Tất cả'],['unpaid','Chưa TT'],['paid','Đã TT']];
     return '<span style="display:inline-flex;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden">'
@@ -10749,6 +10759,7 @@ function _dv3DetailTable(data,isAR,limit){
       +'<span>CHI TIẾT '+(isAR?'PHẢI THU KHÁCH HÀNG':'PHẢI TRẢ NHÀ CUNG CẤP')+' <span class="debt-report-v3__count">'+filteredRows.length+' lô hàng</span></span>'
       +'<span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
         +statusTabHtml()
+        +sortBtnHtml
         +'<button class="btn sm" style="font-weight:700;color:#0F766E;border-color:#0F766E66" onclick="_dv3TriggerBulkPayment('+isAR+')"><i class="ti ti-credit-card-pay"></i> Cập nhật TT hàng loạt</button>'
         +(filteredRows.length>lim?'<span style="font-size:11px;font-weight:600;color:#2563EB;cursor:pointer" onclick="window._debtV3.detailExpand=!window._debtV3.detailExpand;renderTcBody()">'+(window._debtV3.detailExpand?'Thu gọn':'Xem tất cả →')+'</span>':'')
       +'</span>'
@@ -10852,12 +10863,18 @@ function _dv3RenderDrawer(){
   const pct=_dv3Pct(s.paid,s.total);
   const curStatus=v3.drawerStatusFilter||'all';
   const allRowsForPartner=data.rows.filter(function(r){return (isAR?r.shipper:r.supplier)===v3.drawerKey;});
+  const drawerSortDir=v3.drawerSort||'desc';
   const rows=allRowsForPartner.filter(function(r){
     if(curStatus==='paid')return r.remain<=0.01;
     if(curStatus==='unpaid')return r.remain>0.01;
     return true;
-  }).sort(function(a,b){return (b.etd||'').localeCompare(a.etd||'');});
+  }).sort(function(a,b){
+    const ea=a.etd||'', eb=b.etd||'';
+    if(!ea&&!eb)return 0; if(!ea)return 1; if(!eb)return -1;
+    return drawerSortDir==='desc'?eb.localeCompare(ea):ea.localeCompare(eb);
+  });
   const chkClass=isAR?'cn-ar-chk':'cn-ap-chk';
+  const sortBtnHtml='<button class="btn sm" onclick="window._debtV3.drawerSort=\''+(drawerSortDir==='desc'?'asc':'desc')+'\';_dv3RenderDrawer()" title="Đang sắp xếp ETD '+(drawerSortDir==='desc'?'trễ → sớm':'sớm → trễ')+'"><i class="ti ti-sort-'+(drawerSortDir==='desc'?'descending':'ascending')+'"></i> ETD</button>';
   const statusTabHtml='<span style="display:inline-flex;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden">'
     +[['all','Tất cả'],['unpaid','Chưa TT'],['paid','Đã TT']].map(function(t){
       const active=curStatus===t[0];
@@ -10901,6 +10918,7 @@ function _dv3RenderDrawer(){
         +'<span style="font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px">Danh sách các lô ('+rows.length+'/'+allRowsForPartner.length+')</span>'
         +'<span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
           +statusTabHtml
+          +sortBtnHtml
           +'<button class="btn sm" style="font-weight:700;color:#0F766E;border-color:#0F766E66" onclick="_dv3TriggerBulkPayment('+isAR+')"><i class="ti ti-credit-card-pay"></i> Cập nhật TT hàng loạt</button>'
         +'</span>'
       +'</div>'
