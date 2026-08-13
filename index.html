@@ -1111,7 +1111,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.72';
+window.APP_BUILD='v3.73';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -30870,20 +30870,42 @@ window.logLotEvent=logLotEvent;
 // dùng CHÍNH XÁC cùng cách nhóm party như tab Invoice (sv.party||'(Không party)') để tra
 // đúng key trong r.dnPayments, KHÔNG dò theo tên shipper qua _partyMatchesShipper trên các
 // KEY của dnPayments (cách cũ có thể lệch nếu key thực tế khác các biến thể tên shipper).
-function _computeArRowStatus(r, filterShipper, sh, sp){
+// Tính tập hợp "party keys" (khóa trong dnPayments) mà 1 lô hàng thực sự dùng cho 1 shipper cụ thể
+// — dựa trên sv.party của TỪNG DỊCH VỤ đang bật (Yes/No hóa đơn), mặc định '(Không party)' nếu dịch
+// vụ không set party riêng. DÙNG CHUNG cho CẢ đọc (_computeArRowStatus) LẪN ghi (_cnSaveBulkPay) —
+// đảm bảo 2 bên LUÔN tính ra đúng cùng 1 tập hợp key, không bao giờ lệch nhau. Đây là hàm sửa lỗi gốc
+// của bug "thanh toán hàng loạt bị ghi nhầm key (dùng tên Shipper) trong khi báo cáo đọc theo key
+// khác ('(Không party)')" — khiến thanh toán đã ghi nhưng báo cáo không thấy được.
+function _arPartyKeysForLot(r,filterShipper,sh,sp){
   const svcs=r.svcs||{};
+  const collect=function(applyFilter){
+    const keys=new Set();
+    Object.values(svcs).forEach(function(sv){
+      if(!sv||!sv.on||sv.invoice==='Waived')return;
+      const svParty=(sv.party||'').trim();
+      if(applyFilter&&filterShipper){
+        const belongs=!svParty||svParty===sh||svParty===(sp.fullname||'')||svParty===(sp.enName||'')||svParty===(sp.enShort||'')||svParty===(sp.shortname||'');
+        if(!belongs)return;
+      }
+      keys.add(svParty||'(Không party)');
+    });
+    return keys;
+  };
+  let keys=collect(true);
+  // An toàn cho trường hợp biên: nếu lọc theo filterShipper không khớp dịch vụ nào (dữ liệu lô có
+  // thể đã thay đổi giữa lúc chọn dòng và lúc lưu) — thử lại KHÔNG lọc, lấy đúng party thực tế của
+  // các dịch vụ đang bật, thay vì mặc định mù quáng về "(Không party)" (có thể ghi nhầm key).
+  if(!keys.size)keys=collect(false);
+  return keys.size?[...keys]:['(Không party)'];
+}
+window._arPartyKeysForLot=_arPartyKeysForLot;
+
+function _computeArRowStatus(r, filterShipper, sh, sp){
   const dnPm=r.dnPayments||{};
   const legacyPay=r.dnPayStatus||{};
-  const partyKeysUsed=new Set();
-  Object.values(svcs).forEach(function(sv){
-    if(!sv||!sv.on||sv.invoice==='Waived')return;
-    const svParty=(sv.party||'').trim();
-    if(filterShipper){
-      const belongs=!svParty||svParty===sh||svParty===(sp.fullname||'')||svParty===(sp.enName||'')||svParty===(sp.enShort||'')||svParty===(sp.shortname||'');
-      if(!belongs)return;
-    }
-    partyKeysUsed.add(svParty||'(Không party)');
-  });
+  // Dùng CHUNG hàm tính party keys với _cnSaveBulkPay() (xem _arPartyKeysForLot ở trên) — đảm bảo
+  // đọc và ghi luôn khớp đúng cùng 1 tập key, không bao giờ lệch nhau.
+  const partyKeysUsed=_arPartyKeysForLot(r,filterShipper,sh,sp);
   let invPaidAll=true, noInvPaidAll=true, hasInvRecord=false, hasNoInvRecord=false;
   // Số tiền ĐÃ THANH TOÁN THỰC TẾ — lấy trực tiếp từ dnPayments[party].inv/noInv.amount.
   // KHÔNG suy diễn từ status: trạng thái có thể đã đánh dấu "paid" trong khi số tiền nhập vào
@@ -31253,10 +31275,14 @@ async function _cnSaveBulkPay(){
         const dnPm=JSON.parse(JSON.stringify(rFs.dnPayments||{}));
         const sh=cfg.label||window._cnRptState?.shipper;
         const sp=cache.partners[sh]||{};
-        // Tìm party keys khớp shipper
-        const partyKeys=Object.keys(dnPm).filter(function(k){return _partyMatchesShipper(k,sh,sp);});
-        // Nếu chưa có party nào trong dnPayments, dùng shipper shortname làm key
-        const usedKeys=partyKeys.length?partyKeys:[sh];
+        // SỬA LỖI GỐC (nguyên nhân "thanh toán hàng loạt không đồng bộ trạng thái"): dùng CHUNG hàm
+        // _arPartyKeysForLot() — hàm mà _computeArRowStatus() (phần ĐỌC trạng thái) cũng đang dùng —
+        // để tính ĐÚNG tập key cần ghi, dựa trên sv.party thực tế của từng dịch vụ trong lô. Trước
+        // đây dùng "sh" (tên shipper, VD "KIMNGANBTRE") làm key fallback khi lô chưa có dnPayments,
+        // trong khi _computeArRowStatus() lại tìm đọc ở key "(Không party)" (mặc định khi dịch vụ
+        // không set party riêng — là trường hợp phổ biến nhất) → ghi 1 nơi, đọc 1 nơi khác, khiến
+        // thanh toán "biến mất" hoặc hiện sai "Một phần"/"Chưa TT" dù đã thanh toán đủ.
+        const usedKeys=_arPartyKeysForLot(rFs,sh,sh,sp);
         // Đọc lựa chọn "phần thanh toán" của dòng này (nếu có ô chọn — chỉ hiện khi lô có cả 2 phần)
         const sectionSel=g('blk_section_'+i)?.value||'both';
         const payInv=(sectionSel==='both'||sectionSel==='inv');
