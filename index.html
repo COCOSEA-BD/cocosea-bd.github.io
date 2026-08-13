@@ -1111,7 +1111,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.70';
+window.APP_BUILD='v3.71';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -10694,13 +10694,31 @@ function _dv3PartnerTable(data,isAR){
 // dần), có nút "Xem tất cả" chuyển sang chế độ xem đầy đủ trong bảng đối tác phía trên khi cần. ──
 function _dv3DetailTable(data,isAR,limit){
   const lim=limit||10;
-  const sorted=data.rows.slice().sort(function(a,b){return b.total-a.total;});
+  const statusKey=isAR?'detailStatusAR':'detailStatusAP';
+  const curStatus=window._debtV3[statusKey]||'all';
+  // Lọc theo trạng thái thanh toán TRƯỚC khi sort/cắt limit — đảm bảo "X lô hàng"/"Xem tất cả" phản
+  // ánh đúng số lượng SAU KHI đã lọc, không phải tổng số gốc.
+  const filteredRows=data.rows.filter(function(r){
+    if(curStatus==='paid')return r.remain<=0.01;
+    if(curStatus==='unpaid')return r.remain>0.01;
+    return true;
+  });
+  const sorted=filteredRows.slice().sort(function(a,b){return b.total-a.total;});
   const shown=sorted.slice(0,lim);
   const partnerLbl=isAR?'SHIPPER':'NCC';
   const totalLbl=isAR?'DOANH THU':'CHI PHÍ';
   const paidLbl=isAR?'ĐÃ THU':'ĐÃ TRẢ';
   const remainLbl=isAR?'CÒN PHẢI THU':'CÒN PHẢI TRẢ';
   const chkClass=isAR?'cn-ar-chk':'cn-ap-chk';
+  const statusTabHtml=function(){
+    const tabs=[['all','Tất cả'],['unpaid','Chưa TT'],['paid','Đã TT']];
+    return '<span style="display:inline-flex;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden">'
+      +tabs.map(function(t){
+        const active=curStatus===t[0];
+        return '<button onclick="window._debtV3.'+statusKey+'=\''+t[0]+'\';renderTcBody()" style="padding:4px 10px;border:none;background:'+(active?'#0F766E':'#fff')+';color:'+(active?'#fff':'#64748B')+';font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">'+t[1]+'</button>';
+      }).join('')
+    +'</span>';
+  };
   const rows=shown.map(function(r,i){
     const status=r.remain<=0.01?{l:'Đã TT',c:'#059669',bg:'#05966915'}:(r.paid>0.01?{l:'Một phần',c:'#D97706',bg:'#D9770615'}:{l:'Chưa TT',c:'#DC2626',bg:'#DC262615'});
     const partnerVal=isAR?r.shipper:r.supplier;
@@ -10728,10 +10746,11 @@ function _dv3DetailTable(data,isAR,limit){
   }).join('');
   return '<div class="debt-report-v3__card">'
     +'<div class="debt-report-v3__card-hd" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'
-      +'<span>CHI TIẾT '+(isAR?'PHẢI THU KHÁCH HÀNG':'PHẢI TRẢ NHÀ CUNG CẤP')+' <span class="debt-report-v3__count">'+data.rows.length+' lô hàng</span></span>'
-      +'<span style="display:flex;align-items:center;gap:10px">'
+      +'<span>CHI TIẾT '+(isAR?'PHẢI THU KHÁCH HÀNG':'PHẢI TRẢ NHÀ CUNG CẤP')+' <span class="debt-report-v3__count">'+filteredRows.length+' lô hàng</span></span>'
+      +'<span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+        +statusTabHtml()
         +'<button class="btn sm" style="font-weight:700;color:#0F766E;border-color:#0F766E66" onclick="_dv3TriggerBulkPayment('+isAR+')"><i class="ti ti-credit-card-pay"></i> Cập nhật TT hàng loạt</button>'
-        +(data.rows.length>lim?'<span style="font-size:11px;font-weight:600;color:#2563EB;cursor:pointer" onclick="window._debtV3.detailExpand=!window._debtV3.detailExpand;renderTcBody()">'+(window._debtV3.detailExpand?'Thu gọn':'Xem tất cả →')+'</span>':'')
+        +(filteredRows.length>lim?'<span style="font-size:11px;font-weight:600;color:#2563EB;cursor:pointer" onclick="window._debtV3.detailExpand=!window._debtV3.detailExpand;renderTcBody()">'+(window._debtV3.detailExpand?'Thu gọn':'Xem tất cả →')+'</span>':'')
       +'</span>'
     +'</div>'
     +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table debt-report-v3__table--dense">'
@@ -10831,11 +10850,30 @@ function _dv3RenderDrawer(){
   const s=data.list.find(function(x){return x.partner===v3.drawerKey;});
   if(!s){_dv3CloseDrawer();return;}
   const pct=_dv3Pct(s.paid,s.total);
-  const rows=data.rows.filter(function(r){return (isAR?r.shipper:r.supplier)===v3.drawerKey;})
-    .sort(function(a,b){return (b.etd||'').localeCompare(a.etd||'');});
+  const curStatus=v3.drawerStatusFilter||'all';
+  const allRowsForPartner=data.rows.filter(function(r){return (isAR?r.shipper:r.supplier)===v3.drawerKey;});
+  const rows=allRowsForPartner.filter(function(r){
+    if(curStatus==='paid')return r.remain<=0.01;
+    if(curStatus==='unpaid')return r.remain>0.01;
+    return true;
+  }).sort(function(a,b){return (b.etd||'').localeCompare(a.etd||'');});
+  const chkClass=isAR?'cn-ar-chk':'cn-ap-chk';
+  const statusTabHtml='<span style="display:inline-flex;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden">'
+    +[['all','Tất cả'],['unpaid','Chưa TT'],['paid','Đã TT']].map(function(t){
+      const active=curStatus===t[0];
+      return '<button onclick="window._debtV3.drawerStatusFilter=\''+t[0]+'\';_dv3RenderDrawer()" style="padding:4px 10px;border:none;background:'+(active?'#0F766E':'#fff')+';color:'+(active?'#fff':'#64748B')+';font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">'+t[1]+'</button>';
+    }).join('')
+  +'</span>';
   const bodyRows=rows.map(function(r){
     const status=r.remain<=0.01?{l:'Đã TT',c:'#059669',bg:'#05966915'}:(r.paid>0.01?{l:'Một phần',c:'#D97706',bg:'#D9770615'}:{l:'Chưa TT',c:'#DC2626',bg:'#DC262615'});
+    const rowDataObj=isAR
+      ?{id:r.id,tt:r.tt,booking:r.bookingNo,mbl:r.mbl,vol:r.vol,typeCont:r.typeCont,pod:r.pod,amtYes:r.amtYes,amtNo:r.amtNo,amtAll:r.amtAll}
+      :{id:r.id,tt:r.tt,booking:r.bookingNo,mbl:r.mbl,vol:r.vol,typeCont:r.typeCont,pod:r.pod,svcKey:r.svcKey,amt:r.total,cur:r.cur};
+    const rowDataAttr=JSON.stringify(rowDataObj).replace(/"/g,'&quot;');
+    const partnerAttr=(v3.drawerKey||'').replace(/"/g,'&quot;');
+    const chkAttrs=isAR?('data-sh="'+partnerAttr+'"'):('data-partner="'+partnerAttr+'"');
     return '<tr class="debt-report-v3__row" onclick="openDetail(\''+r.id+'\',\''+r.tt+'\')">'
+      +'<td onclick="event.stopPropagation()" style="text-align:center"><input type="checkbox" class="'+chkClass+'" '+chkAttrs+' data-row="'+rowDataAttr+'" onchange="_cnBulkChkChange(this)" style="cursor:pointer"/></td>'
       +'<td style="font-weight:700;color:#2563EB">'+(r.bookingNo||'—')+'</td>'
       +'<td style="color:#64748B;white-space:nowrap">'+(r.etd||'—')+'</td>'
       +'<td style="color:#64748B">'+(r.mbl||'—')+'</td>'
@@ -10859,10 +10897,16 @@ function _dv3RenderDrawer(){
         +'<div><div class="debt-report-v3__drawer-kpi-lbl">'+(isAR?'Còn phải thu':'Còn phải trả')+'</div><div class="debt-report-v3__drawer-kpi-val" style="color:#DC2626">'+_dv3Money(s.remain)+' VND</div></div>'
         +'<div><div class="debt-report-v3__drawer-kpi-lbl">Tỷ lệ đã '+(isAR?'thu':'trả')+'</div>'+_dv3ProgressBar(pct)+'</div>'
       +'</div>'
-      +'<div style="font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px;margin:14px 0 8px">Danh sách các lô ('+rows.length+')</div>'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin:14px 0 8px">'
+        +'<span style="font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px">Danh sách các lô ('+rows.length+'/'+allRowsForPartner.length+')</span>'
+        +'<span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+          +statusTabHtml
+          +'<button class="btn sm" style="font-weight:700;color:#0F766E;border-color:#0F766E66" onclick="_dv3TriggerBulkPayment('+isAR+')"><i class="ti ti-credit-card-pay"></i> Cập nhật TT hàng loạt</button>'
+        +'</span>'
+      +'</div>'
       +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table debt-report-v3__table--dense">'
-        +'<thead><tr><th>BOOKING NO</th><th>ETD</th><th>MBL</th><th>ROUTE</th><th style="text-align:right">TỔNG</th><th style="text-align:right">ĐÃ '+(isAR?'THU':'TRẢ')+'</th><th style="text-align:right">CÒN LẠI</th><th>TRẠNG THÁI</th></tr></thead>'
-        +'<tbody>'+(bodyRows||'<tr><td colspan="8" style="text-align:center;padding:1.25rem;color:#94A3B8">Không có lô nào</td></tr>')+'</tbody>'
+        +'<thead><tr><th style="width:28px;text-align:center"><input type="checkbox" title="Chọn tất cả" onchange="_dv3ToggleAllVisible(this,'+isAR+')" style="cursor:pointer"/></th><th>BOOKING NO</th><th>ETD</th><th>MBL</th><th>ROUTE</th><th style="text-align:right">TỔNG</th><th style="text-align:right">ĐÃ '+(isAR?'THU':'TRẢ')+'</th><th style="text-align:right">CÒN LẠI</th><th>TRẠNG THÁI</th></tr></thead>'
+        +'<tbody>'+(bodyRows||'<tr><td colspan="9" style="text-align:center;padding:1.25rem;color:#94A3B8">Không có lô nào khớp bộ lọc</td></tr>')+'</tbody>'
       +'</table></div>'
     +'</div>';
   requestAnimationFrame(function(){
@@ -10967,9 +11011,19 @@ window.renderDebtReportV3=renderDebtReportV3;
 // theo từng NCC hiện đang hiển thị, không viết lại logic xuất Excel.
 // Chọn/bỏ chọn TẤT CẢ checkbox ĐANG HIỂN THỊ trong bảng Chi tiết (không giới hạn theo 1 đối tác như
 // _cnToggleAllAR/_cnToggleAllAP cũ, vì bảng V3 hiện chung nhiều đối tác trong 1 bảng phẳng).
+// Trả về phạm vi DOM đúng để quét checkbox — nếu Drawer đang mở (đè lên bảng chính qua backdrop,
+// người dùng KHÔNG THỂ tương tác bảng chính lúc này), CHỈ quét trong Drawer; ngược lại quét toàn
+// trang (bảng chính). Tránh rủi ro lẫn lộn giữa checkbox đã tick sẵn ở bảng chính (từ trước khi mở
+// Drawer) với checkbox vừa tick trong Drawer — đảm bảo "Cập nhật TT hàng loạt" luôn áp dụng đúng
+// đúng tập hợp lô hàng người dùng đang thao tác, không lẫn nguồn khác.
+function _dv3BulkScopeRoot(){
+  return (window._debtV3&&window._debtV3.drawerOpen)?(g('dv3Drawer')||document):document;
+}
+
 function _dv3ToggleAllVisible(masterEl,isAR){
   const cls=isAR?'cn-ar-chk':'cn-ap-chk';
-  Array.from(document.querySelectorAll('.'+cls)).forEach(function(c){
+  const root=_dv3BulkScopeRoot();
+  Array.from(root.querySelectorAll('.'+cls)).forEach(function(c){
     c.checked=masterEl.checked; _cnBulkChkChange(c);
   });
 }
@@ -10983,10 +11037,20 @@ window._dv3ToggleAllVisible=_dv3ToggleAllVisible;
 function _dv3TriggerBulkPayment(isAR){
   const cls=isAR?'cn-ar-chk':'cn-ap-chk';
   const attr=isAR?'data-sh':'data-partner';
-  const checked=Array.from(document.querySelectorAll('.'+cls)).filter(function(c){return c.checked;});
+  const root=_dv3BulkScopeRoot();
+  const checked=Array.from(root.querySelectorAll('.'+cls)).filter(function(c){return c.checked;});
   if(!checked.length){toast('Chưa chọn lô hàng nào — tick chọn ở cột đầu bảng trước','error');return;}
   const partners=[...new Set(checked.map(function(c){return c.getAttribute(attr);}))];
   if(partners.length>1){toast('Các lô đã chọn thuộc nhiều '+(isAR?'Shipper':'NCC')+' khác nhau — vui lòng chỉ chọn lô của CÙNG 1 '+(isAR?'Shipper':'NCC')+' cho mỗi lần cập nhật','error');return;}
+  // LỚP AN TOÀN CUỐI: _cnOpenBulkAR()/_cnOpenBulkAP() (hàm gốc) tự quét TOÀN TRANG khi build danh
+  // sách cho popup — nếu đang ở Drawer, chủ động bỏ tick mọi checkbox NGOÀI Drawer (cùng class) để
+  // đảm bảo popup chỉ nhận đúng tập lô hàng người dùng đang thao tác, không lẫn lựa chọn cũ ở bảng
+  // chính phía sau backdrop.
+  if(root!==document){
+    Array.from(document.querySelectorAll('.'+cls)).forEach(function(c){
+      if(!root.contains(c)&&c.checked){ c.checked=false; _cnBulkChkChange(c); }
+    });
+  }
   if(isAR)_cnOpenBulkAR(partners[0]); else _cnOpenBulkAP(partners[0]);
 }
 window._dv3TriggerBulkPayment=_dv3TriggerBulkPayment;
@@ -11101,9 +11165,15 @@ function _tcSupplierBreakdown(filterOpts){
   });
   // Cũng tổng hợp từ chi phí nhập tay (costing.items) có gắn NCC
   allR.forEach(function(r){
+    // SỬA LỖI: trước đây vòng lặp này THIẾU HẲN filter ETD from/to VÀ filter supplier (khác vòng lặp
+    // SVCS ở trên đã có đủ) — khiến khi lọc theo 1 NCC cụ thể, chi phí nhập tay của NCC KHÁC vẫn lọt
+    // qua, gây hiện tượng "nhiều kết quả cho 1 lần lọc" đúng như báo cáo.
+    if(fo.from&&(r.etd||'')<fo.from)return;
+    if(fo.to&&(r.etd||'')>fo.to)return;
     const items=((r.costing||{}).items)||[];
     items.forEach(function(it,idx){
       if(!it.partnerRef)return;
+      if(fo.supplier&&it.partnerRef!==fo.supplier)return;
       const supplierKey=it.partnerRef;
       const cur=it.cur||'VND';
       const amt=it.amt||(it.price||0)*(it.qty||1)||0;
@@ -23945,6 +24015,11 @@ function openCostingLot(id,tt){
   renderCostingSidebar(); // cập nhật trạng thái "active" trên thẻ vừa bấm
   const r=cache[tt].find(function(x){return x._id===id;})||{};
   const key='lot_'+id;
+  // SỬA LỖI TAB TÍCH LŨY: Costing Report là luồng xem TỪNG LÔ MỘT qua sidebar (đã có xác nhận đóng
+  // lô trước khi chuyển ở trên) — chỉ nên giữ ĐÚNG 1 TAB tại một thời điểm, KHÔNG để tab của các lô
+  // đã xem trước đó còn tồn lại phía trên (khác với luồng openDetail()/Shipment List chính, nơi nhiều
+  // tab cùng lúc là chủ đích — nên KHÔNG sửa hàm openDetail() gốc, chỉ sửa riêng ở đây).
+  _openTabs=_openTabs.filter(function(x){return x.key===key;});
   let t=_openTabs.find(function(x){return x.key===key;});
   if(!t){t={key:key,type:'lot',id:id,tt:tt,label:(r.jobNo||r.bookingNo||'Lô hàng'),tab:'costing'};_openTabs.push(t);}
   else{t.tab='costing';}
