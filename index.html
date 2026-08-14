@@ -848,7 +848,10 @@ function _ensureSvcInCatalog(svcs){
     // Tên: ưu tiên _name đã lưu, rồi tên built-in, cuối cùng là key
     const nm=svcs[k]._name||_BUILTIN_SVC_NAMES[k]||k;
     const isBuiltin=!!_BUILTIN_SVC_NAMES[k];
-    SVCS.push({key:k,name:nm,code:svcs[k]._code||(isBuiltin?genSvcCode(nm,SVCS):''),custom:!isBuiltin,default:false,_orphan:true});
+    // Mã: ưu tiên _code đã lưu (từ bản fix mới) — nếu là dữ liệu CŨ lưu từ trước khi có fix (thiếu
+    // _code), tự sinh mã hợp lý qua genSvcCode() thay vì để trống (tránh hiển thị rỗng/lạ).
+    const cd=svcs[k]._code||genSvcCode(nm,SVCS);
+    SVCS.push({key:k,name:nm,code:cd,custom:!isBuiltin,default:false,_orphan:true});
   });
 }
 window._ensureSvcInCatalog=_ensureSvcInCatalog;
@@ -1111,7 +1114,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.75';
+window.APP_BUILD='v3.76';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5401,7 +5404,10 @@ async function saveDetailSvc(){
     if(prev.dnData)svcs[s.key].dnData=prev.dnData;
     if(prev.dnAt)svcs[s.key].dnAt=prev.dnAt;
     if(prev.svcStatus)svcs[s.key].svcStatus=prev.svcStatus;
-    if(s.custom)svcs[s.key]._name=gS('sname_'+s.key)?.value||s.name;
+    if(s.custom){
+      svcs[s.key]._name=gS('sname_'+s.key)?.value||s.name;
+      svcs[s.key]._code=s.code; // SỬA LỖI: trước đây chỉ lưu _name, thiếu _code khiến máy khác không khôi phục đúng mã (VD "CHO2") khi mở lại lô — đây chính là nguyên nhân "code hiển thị tên khác hẳn trên máy khác"
+    }
   });
   // FIX: các dịch vụ ĐÃ XÓA (có trong dữ liệu cũ nhưng không còn trong grid) phải bị xóa hẳn,
   // không để merge:true của Firestore tự khôi phục. Dùng FieldValue.delete() cho từng key đã bỏ.
