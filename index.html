@@ -1114,7 +1114,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.76';
+window.APP_BUILD='v3.77';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6739,8 +6739,13 @@ function openInvoice(id, tt, tempR){
   const svcs=r.svcs||{};
   _ensureSvcInCatalog(svcs);
   // Split services: Yes (có HĐ) and No (không HĐ), exclude Waived
-  const svcsYes=SVCS.filter(s=>svcs[s.key]?.on && (svcs[s.key]?.invoice||'Yes')==='Yes');
-  const svcsNo=SVCS.filter(s=>svcs[s.key]?.on && svcs[s.key]?.invoice==='No');
+  let svcsYes=SVCS.filter(s=>svcs[s.key]?.on && (svcs[s.key]?.invoice||'Yes')==='Yes');
+  let svcsNo=SVCS.filter(s=>svcs[s.key]?.on && svcs[s.key]?.invoice==='No');
+  // Lọc theo phạm vi đã chọn ở popup "Tạo DN" (Có hóa đơn/Không hóa đơn/Cả 2) — mặc định 'both' nếu
+  // chưa set (tương thích ngược hoàn toàn với các nơi khác đang gọi openInvoice() trực tiếp).
+  const dnScope=window._dnScopeFilter||'both';
+  if(dnScope==='yes') svcsNo=[];
+  else if(dnScope==='no') svcsYes=[];
   const activeSvcs=[...svcsYes,...svcsNo]; // combined for ROE calc
   const allActiveSvcs=_applySvcOrder(SVCS.filter(s=>svcs[s.key]?.on),r.svcOrder); // for summary
 
@@ -6790,7 +6795,8 @@ function openInvoice(id, tt, tempR){
     <div class="mftr">
       <button class="btn" onclick="closeOv('invOv')">Đóng</button>
       <button class="btn blu" onclick="sendEmailDN('${id}','${tt}')"><i class="ti ti-mail"></i> Send Debit note</button>
-      <button class="btn pri" onclick="printDN()"><i class="ti ti-printer"></i> In / PDF</button>
+      <button class="btn pri" onclick="printDN()"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>
+      <button class="btn" style="color:#0F6E56;border-color:#0F6E56" onclick="exportDnExcel()"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
     </div>
   </div>`;
 
@@ -6806,7 +6812,12 @@ function openInvoice(id, tt, tempR){
     if(fi>=0)_startIdx=fi;
     window._dnFilterParty=null;
   }
-  window._dnData={r,svcs,activeSvcs,svcsYes,svcsNo,allActiveSvcs,sp,cp,cnNm,shipperName,dateStr,dnNo,containers,tt,allParties,currentPartyIdx:_startIdx};
+  // Xây dựng bản svcs ĐÃ LỌC theo phạm vi (chỉ giữ dịch vụ thuộc svcsYes/svcsNo sau khi lọc ở trên) —
+  // để printDN()/_buildDnPdfBlob() (đọc lại window._dnData.svcs) cũng tôn trọng ĐÚNG phạm vi đã chọn
+  // ở popup "Tạo DN", không chỉ riêng phần xem trước trên màn hình.
+  const allowedKeys=new Set([...svcsYes,...svcsNo].map(s=>s.key));
+  const svcsScoped=dnScope==='both'?svcs:Object.fromEntries(Object.entries(svcs).filter(([k])=>allowedKeys.has(k)||!svcs[k]?.on));
+  window._dnData={r,svcs:svcsScoped,activeSvcs,svcsYes,svcsNo,allActiveSvcs,sp,cp,cnNm,shipperName,dateStr,dnNo,containers,tt,allParties,currentPartyIdx:_startIdx};
   switchPartyTab&&switchPartyTab(_startIdx);
   rebuildInvoicePreview();
 }
@@ -8767,11 +8778,228 @@ function previewDN(){
   openOv('dnOv');
 }
 function printDN(){
-  const a=g('dnPrintArea'); if(!a)return;
-  const w=window.open('','_blank');
-  w.document.write(`<!DOCTYPE html><html><head><title>Debit Note</title><style>body{font-family:Arial,sans-serif;padding:28px;font-size:12px;color:#1a1a18}strong{font-weight:600}.bdg-b{background:#E6F1FB;color:#0C447C;padding:2px 7px;border-radius:20px;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:7px 9px}th{background:#f7f7f5;font-weight:600;text-align:left}</style></head><body>${a.innerHTML}</body></html>`);
-  w.document.close(); w.focus(); setTimeout(()=>w.print(),500);
+  const d=window._dnData;
+  if(!d){ toast('Không có dữ liệu Debit Note để xuất PDF','error'); return; }
+  const r=d.r, svcs=d.svcs;
+  const allParties=d.allParties&&d.allParties.length?d.allParties:[''];
+  const currentParty=allParties[d.currentPartyIdx||0]||'';
+  const dnMap=r.dnByParty||{};
+  const dnNo=(dnMap[currentParty]&&dnMap[currentParty].trim())
+    ||(dnMap['(Không party)']&&dnMap['(Không party)'].trim())
+    ||(r.dnNo&&r.dnNo.trim())
+    ||d.dnNo;
+  const shipperKey=d.shipperKey||r.shipper||r.supplier||'';
+  const cneeKey=d.cnNm||r.cnee||r.consignee||'';
+  const sp=d.sp||cache.partners[shipperKey]||{};
+  const cp=d.cp||cache.partners[cneeKey]||{};
+  const debitDate=new Date().toLocaleDateString('en-GB').split('/').join('-'); // dd-mm-yyyy
+  setLoading(true,'Đang tạo file PDF Debit Note...');
+  _loadJsPdf(function(){
+    if(!window.jspdf||!window.jspdf.jsPDF){
+      setLoading(false);
+      toast('Không tạo được PDF — thư viện chưa sẵn sàng, thử lại sau','error');
+      return;
+    }
+    _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,function(blob,err){
+      setLoading(false);
+      if(!blob||!blob.size){
+        toast('Lỗi tạo PDF'+(err?(': '+err):''),'error');
+        return;
+      }
+      const fileName='DebitNote_'+(dnNo||r.bookingNo||'').replace(/[^A-Za-z0-9-]/g,'_')+'.pdf';
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download=fileName; a.click();
+      URL.revokeObjectURL(url);
+      toast('Đã tạo file PDF: '+fileName);
+    });
+  });
 }
+
+// Xuất Excel Debit Note — ĐÚNG layout PDF (_buildDnPdfBlob ở trên), dùng lại CHÍNH XÁC logic tính
+// toán (lọc theo party+scope, nhóm VAT, grand total, bằng chữ) — không viết lại công thức, chỉ đổi
+// phần XUẤT RA (Excel thay vì PDF), dùng ExcelJS với style/border/merge chuyên nghiệp.
+async function exportDnExcel(){
+  const d=window._dnData;
+  if(!d){ toast('Không có dữ liệu Debit Note để xuất Excel','error'); return; }
+  const r=d.r, svcs=d.svcs;
+  const allParties=d.allParties&&d.allParties.length?d.allParties:[''];
+  const currentParty=allParties[d.currentPartyIdx||0]||'';
+  const dnMap=r.dnByParty||{};
+  const dnNo=(dnMap[currentParty]&&dnMap[currentParty].trim())||(dnMap['(Không party)']&&dnMap['(Không party)'].trim())||(r.dnNo&&r.dnNo.trim())||d.dnNo;
+  const shipperKey=d.shipperKey||r.shipper||r.supplier||'';
+  const cneeKey=d.cnNm||r.cnee||r.consignee||'';
+  const sp=d.sp||cache.partners[shipperKey]||{};
+  const cp=d.cp||cache.partners[cneeKey]||{};
+  const debitDate=new Date().toLocaleDateString('en-GB').split('/').join('-');
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){ toast('Đang tải thư viện Excel, thử lại sau','error'); return; }
+  setLoading(true,'Đang tạo file Excel Debit Note...');
+  try{
+    const roe=parseFloat(g('roeInput')?.value)||r.roe||26390;
+    const allActiveSvcs=_applySvcOrder(SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;}),r.svcOrder);
+    function svcMatchParty(s){ const p=(svcs[s.key]&&svcs[s.key].party||'').trim(); if(!currentParty)return true; return p===currentParty; }
+    const svcsYes=allActiveSvcs.filter(function(s){return (svcs[s.key].invoice||'Yes')==='Yes'&&svcMatchParty(s);});
+    const svcsNo=allActiveSvcs.filter(function(s){return svcs[s.key].invoice==='No'&&svcMatchParty(s);});
+    function amtOf(s){ const sv=svcs[s.key]; const amt=sv.amount||(sv.price||0)*(sv.qty||1); const cur=sv.cur||'USD'; return cur==='VND'?amt:Math.round(amt*roe); }
+    let grandVND=0; const vatGroups={'0%':0,'8%':0,'10%':0};
+    [...svcsYes,...svcsNo].forEach(function(s){ const sv=svcs[s.key]; const amtVND=amtOf(s); grandVND+=amtVND; const vat=sv.vat||'0%'; if(vatGroups[vat]===undefined)vatGroups[vat]=0; vatGroups[vat]+=amtVND; });
+    const sub8=vatGroups['8%']||0, sub10=vatGroups['10%']||0;
+    const vatAmt=Math.round(sub8*0.08+sub10*0.10);
+    const grandWithVAT=Math.round(grandVND+vatAmt);
+
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoSea ERP'; wb.created=new Date();
+    const ws=wb.addWorksheet('Debit Note',{views:[{showGridLines:false}]});
+    ws.columns=[{width:4},{width:34},{width:12},{width:8},{width:8},{width:6},{width:9},{width:15},{width:14}];
+    const NAVY='FF103A6F', PRIMARY='FF0F766E', WARNING='FFF59E0B', GREY='FF64748B', LIGHTBG='FFEFF6FF', LIGHTGRAY='FFF7F8FA', BORDERC='FFE5E7EB';
+    const thin={style:'thin',color:{argb:'FFD0D5DD'}};
+    const B=function(){return {top:thin,left:thin,bottom:thin,right:thin};};
+    const NCOLS=9;
+    let row=1;
+    const merge=function(r1,c1,r2,c2){ try{ws.mergeCells(r1,c1,r2,c2);}catch(e){} };
+
+    // HEADER
+    ws.getCell(row,2).value='COCOSEA CO., LTD'; ws.getCell(row,2).font={name:'Arial',size:14,bold:true,color:{argb:PRIMARY}};
+    merge(row,7,row,9); ws.getCell(row,7).value='DEBIT NOTE'; ws.getCell(row,7).font={name:'Arial',size:16,bold:true,color:{argb:NAVY}}; ws.getCell(row,7).alignment={horizontal:'right'};
+    row++;
+    ws.getCell(row,2).value='Keep Going . Keep Growing'; ws.getCell(row,2).font={name:'Arial',size:9,italic:true,color:{argb:GREY}};
+    merge(row,7,row,9); ws.getCell(row,7).value='STATEMENT OF CHARGES  •  Currency: VND'; ws.getCell(row,7).font={name:'Arial',size:8.5,color:{argb:GREY}}; ws.getCell(row,7).alignment={horizontal:'right'};
+    row+=2;
+
+    // DEBIT NO / DATE card
+    merge(row,2,row,4); ws.getCell(row,2).value='DEBIT NO'; ws.getCell(row,2).font={name:'Arial',size:8,bold:true,color:{argb:GREY}};
+    merge(row,7,row,9); ws.getCell(row,7).value='DEBIT DATE'; ws.getCell(row,7).font={name:'Arial',size:8,bold:true,color:{argb:GREY}};
+    row++;
+    merge(row,2,row,4); ws.getCell(row,2).value=dnNo; ws.getCell(row,2).font={name:'Arial',size:11,bold:true,color:{argb:NAVY}};
+    merge(row,7,row,9); ws.getCell(row,7).value=debitDate; ws.getCell(row,7).font={name:'Arial',size:11,bold:true,color:{argb:NAVY}};
+    row+=2;
+
+    function sectionHdr(label){
+      merge(row,2,row,9);
+      const c=ws.getCell(row,2); c.value=label.toUpperCase(); c.font={name:'Arial',size:10,bold:true,color:{argb:'FFFFFFFF'}};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:NAVY}}; c.alignment={vertical:'middle'};
+      ws.getRow(row).height=18;
+      for(let ci=2;ci<=9;ci++)ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:NAVY}};
+      row++;
+    }
+    function kvRow(label,value){
+      ws.getCell(row,2).value=label; ws.getCell(row,2).font={name:'Arial',size:9.5,bold:true,color:{argb:GREY}};
+      merge(row,3,row,9); const vc=ws.getCell(row,3); vc.value=value; vc.font={name:'Arial',size:9.5,color:{argb:'FF1A2E2A'}};
+      for(let ci=2;ci<=9;ci++)ws.getCell(row,ci).border=B();
+      row++;
+    }
+
+    // BILLING TO
+    sectionHdr('Billing To');
+    const billingName=(currentParty&&currentParty!==shipperKey&&cache.partners[currentParty])?(cache.partners[currentParty].fullname||currentParty):(sp.fullname||shipperKey||'-');
+    kvRow('Customer',billingName);
+    kvRow('Tax ID',(sp.mst||'-')+'      Language: Vi');
+    kvRow('Address',sp.addr||'-');
+    row++;
+
+    // SHIPMENT DETAIL
+    sectionHdr('Shipment Detail');
+    const contStr=(r.containers||[]).filter(function(ct){return ct&&ct.no;}).map(function(ct){return ct.no;}).join(', ');
+    kvRow('Shipper',sp.fullname||shipperKey||'-');
+    kvRow('Consignee',cp.fullname||cneeKey||'-');
+    kvRow('B/L No',(r.mblNo||'-')+'      Volume: '+(r.vol||'')+(r.typeCont?' x '+r.typeCont:''));
+    kvRow('Vessel',(r.vessel||'-')+(r.voy?' V.'+r.voy:'')+'      Commodity: '+(r.tenHang||'-'));
+    kvRow('POL',(r.pol||'-')+'      POD: '+(r.pod||'-'));
+    kvRow('So T.Khai',(r.soTkhai||'-')+'      ETD: '+(r.etd||'-'));
+    if(contStr)kvRow('Container(s)',contStr);
+    row++;
+
+    // CHARGE DETAIL
+    merge(row,2,row,6); ws.getCell(row,2).value='CHARGE DETAIL'; ws.getCell(row,2).font={name:'Arial',size:10,bold:true,color:{argb:'FFFFFFFF'}};
+    merge(row,7,row,9); ws.getCell(row,7).value='ROE: '+Math.round(roe).toLocaleString()+' VND/USD'; ws.getCell(row,7).font={name:'Arial',size:9,bold:true,color:{argb:'FFFFFFFF'}}; ws.getCell(row,7).alignment={horizontal:'right',vertical:'middle'};
+    for(let ci=2;ci<=9;ci++)ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:NAVY}};
+    ws.getRow(row).height=18; row++;
+
+    const heads=['No.','Service Item','Price','Curr','VAT','Qty','Unit','Amount (VND)','VAT Amt (VND)'];
+    heads.forEach(function(h,i){ const c=ws.getCell(row,i+1); c.value=h; c.font={name:'Arial',size:9,bold:true,color:{argb:NAVY}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:LIGHTBG}}; c.border=B(); c.alignment={horizontal:i>=2?'right':'left',vertical:'middle'}; });
+    row++;
+
+    function pushGroup(label,list,startIdx,showInclVat){
+      if(!list.length)return startIdx;
+      merge(row,1,row,9); const hc=ws.getCell(row,1); hc.value=label; hc.font={name:'Arial',size:9,bold:true,color:{argb:'FFFFFFFF'}};
+      for(let ci=1;ci<=9;ci++)ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:NAVY}};
+      row++;
+      let sum=0,sumVat=0;
+      list.forEach(function(s,i){
+        const sv=svcs[s.key]; const amtVND=amtOf(s); sum+=amtVND;
+        const vatRate=parseFloat((sv.vat||'0%').replace('%',''))||0;
+        const vatAmtRow=vatRate>0?Math.round(amtVND*vatRate/100):0;
+        sumVat+=vatAmtRow;
+        const vals=[startIdx+i+1, sv.customName||s.name, sv.price||0, sv.cur||'USD', sv.vat||'0%', sv.qty||1, sv.unit||'Unit', amtVND, vatAmtRow>0?vatAmtRow:null];
+        vals.forEach(function(v,ci){
+          const c=ws.getCell(row,ci+1); c.value=v; c.border=B(); c.font={name:'Arial',size:9};
+          if(ci===2||ci===7||ci===8){ c.numFmt='#,##0'; c.alignment={horizontal:'right'}; }
+          if(ci===5)c.alignment={horizontal:'right'};
+          if(ci===7)c.font={name:'Arial',size:9,bold:true,color:{argb:PRIMARY}};
+          if(ci===8)c.font={name:'Arial',size:9,color:{argb:WARNING}};
+          if(v===null){c.value='—';c.alignment={horizontal:'right'};}
+        });
+        row++;
+      });
+      merge(row,1,row,7); const sc=ws.getCell(row,1); sc.value='Subtotal (VND):'; sc.font={name:'Arial',size:9,bold:true}; sc.alignment={horizontal:'right'};
+      const sv2=ws.getCell(row,8); sv2.value=sum; sv2.numFmt='#,##0'; sv2.font={name:'Arial',size:9,bold:true,color:{argb:NAVY}}; sv2.alignment={horizontal:'right'};
+      const svat=ws.getCell(row,9); svat.value=sumVat>0?sumVat:''; svat.numFmt='#,##0'; svat.font={name:'Arial',size:9,color:{argb:WARNING}}; svat.alignment={horizontal:'right'};
+      for(let ci=1;ci<=9;ci++){ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:LIGHTGRAY}};ws.getCell(row,ci).border=B();}
+      row++;
+      if(showInclVat){
+        merge(row,1,row,8); const ic=ws.getCell(row,1); ic.value='Subtotal (VND) incl. VAT:'; ic.font={name:'Arial',size:9,bold:true}; ic.alignment={horizontal:'right'};
+        const iv=ws.getCell(row,9); iv.value=sum+sumVat; iv.numFmt='#,##0'; iv.font={name:'Arial',size:9,bold:true,color:{argb:NAVY}}; iv.alignment={horizontal:'right'};
+        for(let ci=1;ci<=9;ci++){ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:LIGHTBG}};ws.getCell(row,ci).border=B();}
+        row++;
+      }
+      return startIdx+list.length;
+    }
+    let idx=0;
+    idx=pushGroup('A. PHÍ CÓ HÓA ĐƠN (INVOICE = YES)',svcsYes,idx,true);
+    idx=pushGroup('B. PHÍ KHÔNG HÓA ĐƠN (INVOICE = NO)',svcsNo,idx,false);
+
+    merge(row,1,row,7); const gc=ws.getCell(row,1); gc.value='GRAND TOTAL (VND)'; gc.font={name:'Arial',size:11,bold:true,color:{argb:'FFFFFFFF'}}; gc.alignment={vertical:'middle'};
+    merge(row,8,row,9); const gv=ws.getCell(row,8); gv.value=grandWithVAT; gv.numFmt='#,##0'; gv.font={name:'Arial',size:11,bold:true,color:{argb:'FFFFFFFF'}}; gv.alignment={horizontal:'right',vertical:'middle'};
+    for(let ci=1;ci<=9;ci++)ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:NAVY}};
+    ws.getRow(row).height=20; row+=2;
+
+    // Bằng chữ
+    merge(row,4,row,9); const bc=ws.getCell(row,4); bc.value='Bằng chữ: '+_numToWordsVN(grandWithVAT); bc.font={name:'Arial',size:9.5,bold:true,italic:true,color:{argb:NAVY}}; bc.alignment={horizontal:'right'};
+    row+=2;
+
+    // NOTICE
+    merge(row,2,row,9); const nc=ws.getCell(row,2);
+    nc.value='NOTICE\n• Payment deadline: ATD +7 days or follow your service contract.\n• Invoice will be issued after your confirmation.';
+    nc.font={name:'Arial',size:9,color:{argb:'FFB45309'}}; nc.alignment={wrapText:true,vertical:'top'};
+    nc.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFFBEB'}};
+    for(let ci=2;ci<=9;ci++){ws.getCell(row,ci).border=B();ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFFBEB'}};}
+    ws.getRow(row).height=42; row+=2;
+
+    // BANK ACCOUNT
+    sectionHdr('Bank Account');
+    const banksData=window._bankAccounts||{company:[],personal:[]};
+    const coAccs=(Array.isArray(banksData)?banksData:(banksData.company||[])).filter(function(b){return b.showOnDN;});
+    ['TÀI KHOẢN CÔNG TY'].forEach(function(){}); // giữ đúng thứ tự hiển thị như PDF
+    merge(row,2,row,9); const bh=ws.getCell(row,2); bh.value='TÀI KHOẢN CÔNG TY'; bh.font={name:'Arial',size:9,bold:true,color:{argb:'FFFFFFFF'}};
+    for(let ci=2;ci<=9;ci++)ws.getCell(row,ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:PRIMARY}};
+    row++;
+    (coAccs.length?coAccs:[null]).forEach(function(b){
+      kvRow('Chủ tài khoản',b?(b.beneficiary||'—'):'Chưa cấu hình');
+      kvRow('Số tài khoản',b?(b.account||'—'):'—');
+      kvRow('Ngân hàng',b?(b.bank||'—'):'—');
+    });
+
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/octet-stream'});
+    const url=URL.createObjectURL(blob);
+    const fname='DebitNote_'+(dnNo||r.bookingNo||'').replace(/[^A-Za-z0-9-]/g,'_')+'.xlsx';
+    const a=document.createElement('a'); a.href=url; a.download=fname; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã tạo file Excel: '+fname);
+  }catch(e){ toast('Lỗi tạo Excel: '+e.message,'error'); }
+  setLoading(false);
+}
+window.exportDnExcel=exportDnExcel;
 
 /* ─────────────────────────────────────────────
    TASKS
@@ -21517,7 +21745,8 @@ function buildDnPartyRows(r,svcs){
         +invoiceSection
         +'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
           +'<input type="text" id="dnParty_'+i+'" data-party="'+p+'" value="'+dnNo+'" placeholder="Số DN" oninput="_dnPartyInputChange(this,'+i+')" style="font-size:12px;font-weight:700;color:#1a4b8c;flex:1;border:1px solid var(--border-light);border-radius:6px;padding:5px 8px"/>'
-          +'<button class="btn red" id="btnXuatDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập Số DN trước khi xuất"')+' onclick="exportDebitForParty(this.dataset.party)" style="font-size:12px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Xuất DN</button>'
+          +'<button class="btn red" id="btnXuatDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập Số DN trước khi xuất"')+' onclick="openDnScopePicker(this.dataset.party)" style="font-size:12px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Tạo DN</button>'
+          +'<button class="btn blu" id="btnEmailDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập Số DN trước khi gửi"')+' onclick="_dnDirectSendEmail(this.dataset.party)" style="font-size:12px;white-space:nowrap"><i class="ti ti-mail"></i> Send Email DN</button>'
         +'</div>'
       +'</div>'
     +'</div>';
@@ -21555,6 +21784,53 @@ async function savePayStatus(){
   }catch(e){toast('Lỗi: '+e.message,'error');}
 }
 window.savePayStatus=savePayStatus;
+
+// Popup chọn phạm vi dịch vụ đưa vào Debit Note — bước MỚI thêm trước khi mở xem trước DN (nút
+// "Tạo DN", đổi tên từ "Xuất DN" cũ). Lựa chọn được lưu vào window._dnScopeFilter, openInvoice() đọc
+// biến này để lọc đúng svcsYes/svcsNo — mặc định 'both' nếu không qua popup này (tương thích ngược).
+function openDnScopePicker(party){
+  const safeParty=(party||'').replace(/'/g,"\\'");
+  g('combineOv').innerHTML='<div class="modal" style="max-width:420px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-file-invoice" style="margin-right:6px"></i>Tạo Debit Note</div>'
+    +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:14px 16px">'
+      +'<div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px">Chọn phạm vi dịch vụ đưa vào Debit Note:</div>'
+      +'<div style="display:flex;flex-direction:column;gap:8px">'
+        +'<button class="btn" onclick="_dnScopeChosen(\'yes\',\''+safeParty+'\')" style="justify-content:flex-start;padding:10px 14px;font-size:13px"><i class="ti ti-file-invoice" style="color:var(--green);margin-right:8px"></i>Có hóa đơn <span style="color:var(--text-tertiary);font-weight:400;margin-left:4px">(Invoice = Yes)</span></button>'
+        +'<button class="btn" onclick="_dnScopeChosen(\'no\',\''+safeParty+'\')" style="justify-content:flex-start;padding:10px 14px;font-size:13px"><i class="ti ti-file-off" style="color:var(--text-secondary);margin-right:8px"></i>Không hóa đơn <span style="color:var(--text-tertiary);font-weight:400;margin-left:4px">(Invoice = No)</span></button>'
+        +'<button class="btn pri" onclick="_dnScopeChosen(\'both\',\''+safeParty+'\')" style="justify-content:flex-start;padding:10px 14px;font-size:13px"><i class="ti ti-files" style="margin-right:8px"></i>Cả 2</button>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+  openOv('combineOv');
+}
+window.openDnScopePicker=openDnScopePicker;
+
+function _dnScopeChosen(scope,party){
+  window._dnScopeFilter=scope;
+  closeOv('combineOv');
+  exportDebitForParty(party);
+}
+window._dnScopeChosen=_dnScopeChosen;
+
+// "Send Email DN" — gửi thẳng, LUÔN đủ cả 2 phần (không qua bước chọn phạm vi), theo đúng yêu cầu.
+// Set window._dnData tối giản (chỉ allParties/currentPartyIdx) để sendEmailDN() gửi ĐÚNG party đã
+// bấm, không bị lẫn sang party khác của cùng lô hàng (lô có thể có nhiều Booking Party).
+async function _dnDirectSendEmail(party){
+  window._dnScopeFilter='both';
+  const r=cache[detailTt].find(x=>x._id===detailId)||{};
+  const dnByParty=r.dnByParty||{};
+  document.querySelectorAll('[id^="dnParty_"]').forEach(function(el){
+    const p=el.dataset.party; if(p)dnByParty[p]=el.value;
+  });
+  try{ await fsSet(colName(detailTt),detailId,{dnByParty}); }catch(e){}
+  const ci=cache[detailTt].findIndex(x=>x._id===detailId);
+  if(ci>=0)cache[detailTt][ci].dnByParty=dnByParty;
+  const partyKey=party==='(Không party)'?'':party;
+  window._dnData={allParties:[partyKey],currentPartyIdx:0};
+  sendEmailDN(detailId,detailTt);
+}
+window._dnDirectSendEmail=_dnDirectSendEmail;
 
 async function exportDebitForParty(party){
   // Save the DN numbers per party first
