@@ -1114,7 +1114,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.77';
+window.APP_BUILD='v3.78';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9479,6 +9479,7 @@ function renderThuChi(){
     {k:'luong',label:'Payroll',icon:'ti-users-group'},
     {k:'danhmuc',label:'Categories',icon:'ti-category'},
     {k:'baocao',label:'Financial Report',icon:'ti-chart-line'},
+    {k:'quyettoan',label:'Quyết toán',icon:'ti-clipboard-check'},
     {k:'costing',label:'Costing Report',icon:'ti-calculator'},
   ];
   pg.innerHTML=`
@@ -9785,6 +9786,7 @@ function renderTcBody(){
     }
     else if(tcTab==='danhmuc') body.innerHTML=renderTcDanhMuc();
     else if(tcTab==='baocao') body.innerHTML=renderTcBaoCao();
+    else if(tcTab==='quyettoan') renderQuyetToan();
     else if(tcTab==='luong'){ body.innerHTML=renderTcPayroll(); _tcPayrollAfterRender(); }
     else if(tcTab==='costing') renderCostingReport('tcBody');
   }catch(e){
@@ -13011,6 +13013,741 @@ function _tcKpiCard(icon,label,value,pctChange,color,sparkSvg,invertColor){
     +'<div class="tcbc-kpi-chg" style="color:'+pctColor+'"><i class="ti '+pctIcon+'" style="font-size:12px"></i> '+Math.abs(pctChange)+'% so với kỳ trước</div>'
     +'<div class="tcbc-kpi-spark">'+sparkSvg+'</div>'
   +'</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+//  QUYẾT TOÁN KỲ TÀI CHÍNH — Finance → Financial Report → Quyết toán
+//  TOÀN BỘ số liệu TÁI SỬ DỤNG các hàm/logic tính toán đã có (không viết lại công thức):
+//  _tcInvoiceRevenueByStatus/_tcLotCostByStatus (doanh thu/chi phí theo Invoice/Costing),
+//  _tcTotalBalanceUpTo/_tcPrevDay (Cash Book), _debtV3ComputeAR/_debtV3ComputeAP (công nợ).
+//  Costing (Đã costing/Đã lock) tính trực tiếp theo ĐÚNG điều kiện đã dùng ở Costing Report
+//  (r.status/r.costingStatus/r.locked/r.priceLocked) — không gọi runCostingReport() vì hàm đó
+//  đọc filter từ DOM của TRANG Costing Report, không dùng được ở module khác.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+window._qtState=window._qtState||{from:'',to:'',periodDoc:null,checklistLocal:{}};
+
+// ── Doanh thu: TÁI SỬ DỤNG _tcInvoiceRevenueByStatus (đã thu/còn phải thu/tổng) — chỉ BỔ SUNG
+// thêm breakdown Có HĐ/Không HĐ (spec mục 8), tính theo ĐÚNG cách svcs[key].invoice='Yes'/'No'
+// đã dùng thống nhất ở Debit Note/Invoice tab, không phát minh công thức mới. ──
+function _qtComputeRevenue(from,to){
+  const base=_tcInvoiceRevenueByStatus(from,to); // {paid,unpaid,total} — TÁI SỬ DỤNG NGUYÊN VẸN
+  const roe=26390;
+  let hasVND=0, noVND=0;
+  const allR=[...cache.xuat,...cache.nhap];
+  allR.forEach(function(r){
+    if(!r.etd||r.etd<from||r.etd>to)return;
+    const svcs=r.svcs||{};
+    Object.values(svcs).forEach(function(sv){
+      if(!sv||!sv.on||sv.invoice==='Waived')return;
+      const amt=sv.amount||(sv.price||0)*(sv.qty||1);
+      const amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
+      if(sv.invoice==='No'){ noVND+=amtVND; return; }
+      const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;
+      hasVND+=Math.round(amtVND*(1+vr/100));
+    });
+  });
+  return {hasInvoice:hasVND,noInvoice:noVND,total:base.total,paid:base.paid,remain:base.unpaid};
+}
+
+// ── Chi phí: TÁI SỬ DỤNG _tcLotCostByStatus (Costing) + cộng thêm Chi phí Cash Book (giao dịch
+// "chi" không gắn lô hàng — chi phí vận hành khác) để có đủ 3 nguồn theo spec mục 9. ──
+function _qtComputeCost(from,to){
+  const costingCost=_tcLotCostByStatus(from,to); // {paid,unpaid,total} — TÁI SỬ DỤNG NGUYÊN VẸN
+  const roe=26390;
+  const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to&&t.type==='chi';});
+  let cashBookCost=0, unclassified=0;
+  txInPeriod.forEach(function(t){
+    const amtVND=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);
+    cashBookCost+=amtVND;
+    if(!t.category)unclassified++;
+  });
+  return {costing:costingCost.total,cashBook:cashBookCost,total:costingCost.total+cashBookCost,unclassifiedCount:unclassified,costingPaid:costingCost.paid,costingUnpaid:costingCost.unpaid};
+}
+
+// ── Cash Book: TÁI SỬ DỤNG _tcTotalBalanceUpTo/_tcPrevDay (đã dùng ở Báo cáo tài chính) ──
+function _qtComputeCashBookSummary(from,to){
+  const roe=26390;
+  const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to;});
+  let thu=0,chi=0;
+  txInPeriod.forEach(function(t){
+    const amtVND=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);
+    if(t.type==='thu')thu+=amtVND; else chi+=amtVND;
+  });
+  const opening=_tcTotalBalanceUpTo(_tcPrevDay(from),to);
+  const closing=opening+thu-chi;
+  // Đối chiếu: đầu kỳ + thu - chi PHẢI khớp cuối kỳ tính theo _tcTotalBalanceUpTo(to,...) — nếu có
+  // giao dịch nằm ngoài cache.cashTx đã lọc (hiếm, ví dụ lỗi đồng bộ) sẽ lệch, cảnh báo cho người dùng.
+  const closingCheck=_tcTotalBalanceUpTo(to,to);
+  const diff=Math.round(closing-closingCheck);
+  return {opening:opening,thu:thu,chi:chi,closing:closing,hasDiff:Math.abs(diff)>1,diff:diff};
+}
+
+// ── Costing: tính TRỰC TIẾP theo ĐÚNG điều kiện đã dùng ở Costing Report (isCostingDone/
+// isPriceLocked — "đã lock = đã costing", đã sửa thống nhất trước đây) — không qua
+// runCostingReport() vì hàm đó đọc filter từ DOM trang Costing Report riêng. ──
+function _qtComputeCosting(from,to){
+  const allR=[...cache.xuat,...cache.nhap];
+  const filtered=allR.filter(function(r){return r.etd&&r.etd>=from&&r.etd<=to;});
+  let done=0,pending=0,locked=0,unlocked=0;
+  filtered.forEach(function(r){
+    const isLockedAny=!!r.locked||!!r.priceLocked;
+    const isCostingDone=r.status==='Đã Costing'||r.costingStatus==='Đã costing'||isLockedAny;
+    if(isCostingDone)done++; else pending++;
+    if(isLockedAny)locked++; else unlocked++;
+  });
+  return {total:filtered.length,done:done,pending:pending,locked:locked,unlocked:unlocked};
+}
+
+// ── Lô hàng: kiểm tra dữ liệu thiếu (thiếu costing/invoice/payment) — CHỈ CẢNH BÁO, không tự sửa. ──
+function _qtComputeShipmentCheck(from,to){
+  const allR=[...cache.xuat.map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...cache.nhap.map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
+  const filtered=allR.filter(function(r){return r.etd&&r.etd>=from&&r.etd<=to;});
+  let complete=0,processing=0;
+  const missingList=[];
+  filtered.forEach(function(r){
+    const svcs=r.svcs||{};
+    const hasActiveSvc=Object.values(svcs).some(function(sv){return sv&&sv.on;});
+    const isLockedAny=!!r.locked||!!r.priceLocked;
+    const isCostingDone=r.status==='Đã Costing'||r.costingStatus==='Đã costing'||isLockedAny;
+    const issues=[];
+    if(!hasActiveSvc)issues.push('thiếu dịch vụ/doanh thu');
+    if(!isCostingDone)issues.push('thiếu costing');
+    if(!r.dnPayments||!Object.keys(r.dnPayments).length)issues.push('thiếu payment');
+    if(issues.length){ processing++; missingList.push({id:r._id,tt:r._tt,bookingNo:r.bookingNo||r.jobNo||'',issues:issues}); }
+    else complete++;
+  });
+  return {total:filtered.length,complete:complete,processing:processing,missingList:missingList};
+}
+
+// ── Đối chiếu số dư từng tài khoản (spec mục 15) — TÁI SỬ DỤNG _tcAccountList/_tcAccountBalanceUpTo/
+// _tcStatsByAccount đã có, không viết lại. ──
+function _qtComputeAccountRecon(from,to){
+  const accs=_tcAccountList();
+  const prevDay=_tcPrevDay(from);
+  const statsByAcc=_tcStatsByAccount(from,to);
+  return accs.map(function(a){
+    const opening=_tcAccountBalanceUpTo(a.id,prevDay,to);
+    const st=statsByAcc[a.id]||{thu:0,chi:0};
+    const closing=opening+st.thu-st.chi;
+    return {id:a.id,label:a.label,opening:opening,thu:st.thu,chi:st.chi,closing:closing};
+  });
+}
+
+// ── Tổng hợp toàn bộ dữ liệu 1 kỳ — hàm CHÍNH được UI gọi, gộp tất cả các hàm con ở trên. ──
+// ── Tìm số ngày thanh toán (paymentDays) từ Hợp đồng ĐANG HIỆU LỰC của 1 đối tác — nếu có nhiều hợp
+// đồng, ưu tiên hợp đồng CÒN HIỆU LỰC (endDate>=hôm nay hoặc không có endDate), lấy bản mới nhất theo
+// startDate. Trả về null nếu đối tác KHÔNG có hợp đồng nào (KHÔNG tự bịa số ngày mặc định — theo đúng
+// nguyên tắc "không tự tạo dữ liệu giả"). ──
+function _qtFindPaymentDays(partnerKey){
+  const contracts=(window._contracts||[]).filter(function(c){return c.partnerB===partnerKey&&c.paymentDays;});
+  if(!contracts.length)return null;
+  const today=new Date().toISOString().slice(0,10);
+  const active=contracts.filter(function(c){return !c.endDate||c.endDate>=today;});
+  const pool=(active.length?active:contracts).slice().sort(function(a,b){return (b.startDate||'').localeCompare(a.startDate||'');});
+  return pool[0].paymentDays||null;
+}
+window._qtFindPaymentDays=_qtFindPaymentDays;
+
+function _qtAddDays(dateStr,days){
+  const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days);
+  return d.toISOString().slice(0,10);
+}
+
+// ── Phân loại công nợ phải thu theo hạn thanh toán — Hạn = ETD + paymentDays (theo đúng xác nhận:
+// "Thời hạn thanh toán công nợ = ETD + số ngày này"). Ngưỡng "Sắp đến hạn" mặc định 7 ngày tới (có
+// thể điều chỉnh sau nếu cần) — chỉ áp dụng cho các dòng CÒN NỢ (remain>0); dòng thuộc shipper KHÔNG
+// có hợp đồng/paymentDays được xếp riêng vào "unknown" (không đoán mò ngày). ──
+function _qtComputeArAging(arData,soonDays){
+  soonDays=soonDays||7;
+  const today=new Date().toISOString().slice(0,10);
+  const soonEdge=_qtAddDays(today,soonDays);
+  let overdue=0,soon=0,notDue=0,unknown=0;
+  const overdueRows=[];
+  arData.rows.forEach(function(r){
+    if(r.remain<=0.01)return;
+    const pd=_qtFindPaymentDays(r.shipper);
+    if(pd==null||!r.etd){ unknown+=r.remain; return; }
+    const due=_qtAddDays(r.etd,pd);
+    if(due<today){ overdue+=r.remain; overdueRows.push(Object.assign({},r,{dueDate:due})); }
+    else if(due<=soonEdge){ soon+=r.remain; }
+    else{ notDue+=r.remain; }
+  });
+  return {overdue:overdue,soon:soon,notDue:notDue,unknown:unknown,overdueRows:overdueRows,soonDays:soonDays};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+//  QUYẾT TOÁN — LỚP LƯU TRỮ FIRESTORE
+//  Collection MỚI, RIÊNG BIỆT 'financial_settlements' (1 document/kỳ) — không đụng chạm bất kỳ
+//  collection nào đang có (lots_xuat/lots_nhap/_config/...). Đây là dữ liệu HOÀN TOÀN MỚI (trạng
+//  thái quyết toán kỳ) không map được vào bất kỳ entity hiện có nào, nên buộc phải có collection
+//  riêng — nhưng KHÔNG tạo ra một "hệ thống kế toán thứ 2": mọi SỐ LIỆU vẫn tính từ dữ liệu gốc
+//  (lots/cashTx/contracts) qua các hàm _qtCompute* ở trên, collection này CHỈ lưu TRẠNG THÁI quy
+//  trình (đã kiểm tra/đã quyết toán/đã khóa/ghi chú/nhật ký) — không lưu lại số liệu tài chính.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+const QT_COLLECTION='financial_settlements';
+function _qtPeriodKey(from,to){ return from+'_'+to; }
+
+async function _qtLoadPeriod(from,to){
+  try{
+    const snap=await db.collection(QT_COLLECTION).doc(_qtPeriodKey(from,to)).get();
+    return snap.exists?snap.data():null;
+  }catch(e){ console.error('_qtLoadPeriod',e); return null; }
+}
+
+async function _qtCreatePeriod(from,to){
+  const key=_qtPeriodKey(from,to);
+  const doc={
+    from:from,to:to,status:'checking',
+    createdBy:(currentUser&&currentUser.email)||'',createdAt:Date.now(),
+    checklist:{},notes:'',auditLog:[{date:new Date().toISOString(),user:(currentUser&&currentUser.email)||'',action:'Bắt đầu kiểm tra kỳ',note:''}]
+  };
+  await fsSet(QT_COLLECTION,key,doc);
+  return doc;
+}
+
+async function _qtAddAuditLog(from,to,action,note){
+  const key=_qtPeriodKey(from,to);
+  const cur=await _qtLoadPeriod(from,to);
+  const log=(cur&&cur.auditLog)||[];
+  log.push({date:new Date().toISOString(),user:(currentUser&&currentUser.email)||'',action:action,note:note||''});
+  await fsSet(QT_COLLECTION,key,{auditLog:log});
+  return log;
+}
+
+// Bật/tắt 1 mục checklist THỦ CÔNG (chỉ áp dụng cho các mục cần người phụ trách tự xác nhận —
+// "Xác nhận lợi nhuận" — các mục còn lại được TỰ ĐỘNG suy ra từ dữ liệu thật, không lưu trạng thái).
+async function _qtToggleChecklist(from,to,itemKey,val){
+  const key=_qtPeriodKey(from,to);
+  const cur=await _qtLoadPeriod(from,to)||{};
+  const checklist=Object.assign({},cur.checklist||{});
+  checklist[itemKey]=val;
+  await fsSet(QT_COLLECTION,key,{checklist:checklist});
+  await _qtAddAuditLog(from,to,(val?'Đã xác nhận: ':'Bỏ xác nhận: ')+itemKey,'');
+  return checklist;
+}
+
+async function _qtSaveNote(from,to,note){
+  await fsSet(QT_COLLECTION,_qtPeriodKey(from,to),{notes:note});
+  toast('Đã lưu ghi chú');
+}
+
+async function _qtConfirmSettle(from,to){
+  const key=_qtPeriodKey(from,to);
+  await fsSet(QT_COLLECTION,key,{status:'settled',settledBy:(currentUser&&currentUser.email)||'',settledAt:Date.now()});
+  await _qtAddAuditLog(from,to,'Đã xác nhận quyết toán kỳ','');
+}
+
+async function _qtLockPeriod(from,to){
+  const key=_qtPeriodKey(from,to);
+  await fsSet(QT_COLLECTION,key,{status:'locked',lockedBy:(currentUser&&currentUser.email)||'',lockedAt:Date.now()});
+  await _qtAddAuditLog(from,to,'Đã khóa kỳ tài chính','');
+}
+
+async function _qtRequestUnlock(from,to){
+  await _qtAddAuditLog(from,to,'Yêu cầu mở khóa kỳ','Chờ Admin xử lý');
+  toast('Đã gửi yêu cầu mở khóa — chờ Admin xử lý');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+//  QUYẾT TOÁN — HELPER DỰNG UI
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function _qtMoney(v){ return Math.round(v||0).toLocaleString()+' VND'; }
+function _qtMoneyShort(v){
+  const a=Math.abs(v||0);
+  if(a>=1e9)return (v/1e9).toFixed(1)+'B';
+  if(a>=1e6)return (v/1e6).toFixed(1)+'M';
+  if(a>=1e3)return Math.round(v/1e3)+'K';
+  return String(Math.round(v||0));
+}
+function _qtKpi(label,value,sub,color,icon){
+  return '<div class="qt-kpi"><div class="qt-kpi-ic" style="background:'+color+'1a;color:'+color+'"><i class="ti '+icon+'"></i></div>'
+    +'<div><div class="qt-kpi-lbl">'+label+'</div><div class="qt-kpi-val" style="color:'+color+'">'+value+'</div>'
+    +(sub?'<div class="qt-kpi-sub">'+sub+'</div>':'')+'</div></div>';
+}
+function _qtSection(title,icon,contentHtml,actionHtml,color){
+  return '<div class="qt-card">'
+    +'<div class="qt-card-hd"><span><i class="ti '+icon+'" style="color:'+(color||'#0F766E')+';margin-right:7px"></i>'+title+'</span>'+(actionHtml||'')+'</div>'
+    +'<div class="qt-card-body">'+contentHtml+'</div>'
+  +'</div>';
+}
+function _qtKvRow(label,value,color){
+  return '<div class="qt-kv"><span>'+label+'</span><strong'+(color?' style="color:'+color+'"':'')+'>'+value+'</strong></div>';
+}
+
+// 10 mục checklist tiến độ — 8 mục ĐẦU tự động suy ra từ dữ liệu thật (không lưu trạng thái riêng,
+// luôn phản ánh đúng tình trạng hiện tại), 2 mục CUỐI cần người phụ trách tự xác nhận thủ công.
+function _qtBuildChecklist(data,periodDoc){
+  const cl=(periodDoc&&periodDoc.checklist)||{};
+  const hasUnpaid=(data.ar.grandRemain>0)||(data.ap.grandRemain>0);
+  const items=[
+    {label:'Kiểm tra doanh thu',ok:true,auto:true},
+    {label:'Kiểm tra Cash Book',ok:!data.cashBook.hasDiff,auto:true},
+    {label:'Kiểm tra công nợ khách hàng',ok:true,auto:true},
+    {label:'Kiểm tra công nợ nhà cung cấp',ok:true,auto:true},
+    {label:'Kiểm tra Costing',ok:data.costing.pending===0,auto:true},
+    {label:'Kiểm tra các lô hàng',ok:data.shipment.processing===0,auto:true},
+    {label:'Kiểm tra khoản chưa thanh toán',ok:!hasUnpaid,auto:true,warn:hasUnpaid},
+    {label:'Đối chiếu số dư tài khoản',ok:!data.cashBook.hasDiff,auto:true},
+    {label:'Xác nhận lợi nhuận',ok:!!cl.confirmProfit,auto:false,key:'confirmProfit'},
+    {label:'Khóa kỳ',ok:(periodDoc&&periodDoc.status==='locked'),auto:false,key:'lockPeriod'}
+  ];
+  const doneCount=items.filter(function(it){return it.ok;}).length;
+  return {items:items,doneCount:doneCount,total:items.length,pct:Math.round(doneCount/items.length*100)};
+}
+
+function _qtStatusBadge(status){
+  const map={
+    checking:{l:'ĐANG KIỂM TRA',c:'#D97706',bg:'#D9770615'},
+    ready:{l:'ĐỦ ĐIỀU KIỆN QUYẾT TOÁN',c:'#0F766E',bg:'#0F766E15'},
+    settled:{l:'ĐÃ QUYẾT TOÁN',c:'#059669',bg:'#05966915'},
+    locked:{l:'ĐÃ KHÓA',c:'#475569',bg:'#47556915'}
+  };
+  const s=map[status]||{l:'CHƯA QUYẾT TOÁN',c:'#94A3B8',bg:'#94A3B815'};
+  return '<span style="font-size:11px;font-weight:800;padding:4px 12px;border-radius:20px;background:'+s.bg+';color:'+s.c+'">● '+s.l+'</span>';
+}
+
+// ── "CẦN XỬ LÝ TRƯỚC KHI QUYẾT TOÁN" (mục 7) — liệt kê vấn đề, click "Xem" mở ĐÚNG module hiện có
+// (Costing Report / Báo cáo công nợ / Cash Book) — không tạo màn hình mới. ──
+function _qtRenderIssues(data){
+  const issues=[];
+  if(data.costing.pending>0)issues.push({icon:'ti-calculator',label:'Chưa Costing',count:data.costing.pending+' lô',level:'red',action:"switchTcTab('costing')"});
+  const arUnpaidCount=data.ar.rows.filter(function(r){return r.remain>0.01;}).length;
+  if(arUnpaidCount>0)issues.push({icon:'ti-arrow-down-circle',label:'Khoản phải thu chưa thanh toán',count:arUnpaidCount+' khoản',level:'red',action:"switchTcTab('congno');window._debtV3&&(window._debtV3.mode='ar')"});
+  const apUnpaidCount=data.ap.rows.filter(function(r){return r.remain>0.01;}).length;
+  if(apUnpaidCount>0)issues.push({icon:'ti-arrow-up-circle',label:'Khoản phải trả chưa thanh toán',count:apUnpaidCount+' khoản',level:'orange',action:"switchTcTab('congno');window._debtV3&&(window._debtV3.mode='ap')"});
+  if(data.cost.unclassifiedCount>0)issues.push({icon:'ti-help-circle',label:'Giao dịch Cash Book chưa phân loại',count:data.cost.unclassifiedCount+' giao dịch',level:'orange',action:"switchTcTab('soquy')"});
+  if(data.cashBook.hasDiff)issues.push({icon:'ti-scale',label:'Cash Book có chênh lệch cần kiểm tra',count:_qtMoney(Math.abs(data.cashBook.diff)),level:'red',action:"switchTcTab('soquy')"});
+  if(data.shipment.processing>0)issues.push({icon:'ti-package',label:'Lô hàng thiếu dữ liệu',count:data.shipment.processing+' lô',level:'orange',action:"switchTcTab('costing')"});
+
+  if(!issues.length){
+    return '<div class="qt-card"><div class="qt-card-hd" style="color:#059669"><i class="ti ti-circle-check"></i> CẦN XỬ LÝ TRƯỚC KHI QUYẾT TOÁN</div>'
+      +'<div class="qt-card-body"><div style="text-align:center;padding:1.2rem;color:#059669;font-weight:700"><i class="ti ti-circle-check" style="font-size:22px;display:block;margin-bottom:6px"></i>Không có dữ liệu thiếu</div></div></div>';
+  }
+  const rows=issues.map(function(it){
+    const colors={red:{c:'#DC2626',bg:'#DC262610'},orange:{c:'#D97706',bg:'#D9770610'}};
+    const cc=colors[it.level];
+    return '<div style="display:flex;align-items:center;gap:10px;padding:9px 11px;background:'+cc.bg+';border:1px solid '+cc.c+'22;border-radius:8px;margin-bottom:7px">'
+      +'<i class="ti '+it.icon+'" style="color:'+cc.c+';font-size:17px;flex-shrink:0"></i>'
+      +'<span style="flex:1;font-size:12.5px;font-weight:600;color:#334155">'+it.label+'</span>'
+      +'<span style="font-size:11.5px;font-weight:800;color:'+cc.c+'">'+it.count+'</span>'
+      +'<button class="btn sm" onclick="'+it.action+';renderThuChi()" style="font-size:11px">Xem →</button>'
+    +'</div>';
+  }).join('');
+  return '<div class="qt-card" style="border-color:#D9770655">'
+    +'<div class="qt-card-hd" style="color:#D97706"><i class="ti ti-alert-triangle"></i> CẦN XỬ LÝ TRƯỚC KHI QUYẾT TOÁN <span class="qt-count">'+issues.length+'</span></div>'
+    +'<div class="qt-card-body">'+rows+'</div>'
+  +'</div>';
+}
+
+// 1. DOANH THU
+function _qtRenderRevenueCard(data){
+  const content=_qtKvRow('Doanh thu có HĐ',_qtMoney(data.rev.hasInvoice))
+    +_qtKvRow('Doanh thu không HĐ',_qtMoney(data.rev.noInvoice))
+    +'<div class="qt-kv-total">'+_qtKvRow('TỔNG',_qtMoney(data.rev.total),'#0F766E')+'</div>'
+    +'<div style="height:1px;background:#EEF1F4;margin:8px 0"></div>'
+    +_qtKvRow('Đã thu',_qtMoney(data.rev.paid),'#059669')
+    +_qtKvRow('Còn phải thu',_qtMoney(data.rev.remain),data.rev.remain>0?'#DC2626':'#94A3B8');
+  return _qtSection('1. DOANH THU','ti-trending-up',content,'<button class="btn sm" onclick="switchTcTab(\'congno\');window._debtV3&&(window._debtV3.mode=\'ar\');renderThuChi()">Xem báo cáo công nợ</button>','#0F766E');
+}
+
+// 2. CHI PHÍ
+function _qtRenderCostCard(data){
+  const warn=data.cost.unclassifiedCount>0?'<div class="qt-warn-inline">⚠ '+data.cost.unclassifiedCount+' giao dịch Cash Book chưa phân loại — cần kiểm tra</div>':'';
+  const content=_qtKvRow('Chi phí Costing',_qtMoney(data.cost.costing))
+    +_qtKvRow('Chi phí Cash Book',_qtMoney(data.cost.cashBook))
+    +'<div class="qt-kv-total">'+_qtKvRow('TỔNG',_qtMoney(data.cost.total),'#DC2626')+'</div>'
+    +warn;
+  return _qtSection('2. CHI PHÍ','ti-trending-down',content,'<button class="btn sm" onclick="switchTcTab(\'costing\');renderThuChi()">Xem Costing</button>','#DC2626');
+}
+
+// 3. CASH BOOK
+function _qtRenderCashBookCard(data){
+  const diffWarn=data.cashBook.hasDiff?'<div class="qt-warn-inline">🔴 Có chênh lệch cần kiểm tra ('+_qtMoney(data.cashBook.diff)+')</div>':'';
+  const content=_qtKvRow('Số dư đầu kỳ',_qtMoney(data.cashBook.opening))
+    +_qtKvRow('Tổng thu',_qtMoney(data.cashBook.thu),'#059669')
+    +_qtKvRow('Tổng chi',_qtMoney(data.cashBook.chi),'#DC2626')
+    +'<div class="qt-kv-total">'+_qtKvRow('Số dư cuối kỳ',_qtMoney(data.cashBook.closing),'#0F766E')+'</div>'
+    +diffWarn;
+  return _qtSection('3. CASH BOOK','ti-cash-banknote',content,'<button class="btn sm" onclick="switchTcTab(\'soquy\');renderThuChi()">Xem Cash Book</button>','#0F766E');
+}
+
+// 4. PHẢI THU KHÁCH HÀNG — có breakdown hạn thanh toán (dựa trên paymentDays từ Hợp đồng)
+function _qtRenderArCard(data){
+  const ag=data.arAging;
+  const hasUnknown=ag.unknown>0;
+  const content=_qtKvRow('Tổng phải thu',_qtMoney(data.ar.grandTotal))
+    +_qtKvRow('Đã thu',_qtMoney(data.ar.grandPaid),'#059669')
+    +'<div class="qt-kv-total">'+_qtKvRow('Còn phải thu',_qtMoney(data.ar.grandRemain),'#DC2626')+'</div>'
+    +'<div style="height:1px;background:#EEF1F4;margin:8px 0"></div>'
+    +'<div style="font-size:10.5px;font-weight:700;color:#94A3B8;margin-bottom:6px">THEO HẠN THANH TOÁN (ETD + số ngày hợp đồng)</div>'
+    +_qtKvRow('🔴 Quá hạn',_qtMoney(ag.overdue),'#DC2626')
+    +_qtKvRow('🟠 Sắp đến hạn (≤'+ag.soonDays+' ngày)',_qtMoney(ag.soon),'#D97706')
+    +_qtKvRow('🟢 Chưa đến hạn',_qtMoney(ag.notDue),'#059669')
+    +(hasUnknown?_qtKvRow('⚪ Chưa xác định (chưa có hợp đồng)',_qtMoney(ag.unknown),'#94A3B8'):'');
+  return _qtSection('4. PHẢI THU KHÁCH HÀNG','ti-arrow-down-circle',content,'<button class="btn sm" onclick="switchTcTab(\'congno\');window._debtV3&&(window._debtV3.mode=\'ar\');renderThuChi()">Xem công nợ</button>','#DC2626');
+}
+
+// 5. PHẢI TRẢ NHÀ CUNG CẤP — phân nhóm theo NCC (top 5 lớn nhất)
+function _qtRenderApCard(data){
+  const top=data.ap.list.slice().sort(function(a,b){return b.remain-a.remain;}).filter(function(s){return s.remain>0.01;}).slice(0,5);
+  const rows=top.map(function(s){
+    return '<div class="qt-kv" style="cursor:pointer" onclick="switchTcTab(\'congno\');window._debtV3&&(window._debtV3.mode=\'ap\',window._debtV3.supplier=\''+s.partner.replace(/'/g,"\\'")+'\');renderThuChi()"><span>'+s.partner+'</span><strong style="color:#DC2626">'+_qtMoney(s.remain)+'</strong></div>';
+  }).join('')||'<div style="font-size:12px;color:#94A3B8;padding:6px 0">Không còn NCC nào chưa thanh toán</div>';
+  const content=_qtKvRow('Tổng phải trả',_qtMoney(data.ap.grandTotal))
+    +_qtKvRow('Đã trả',_qtMoney(data.ap.grandPaid),'#059669')
+    +'<div class="qt-kv-total">'+_qtKvRow('Còn phải trả',_qtMoney(data.ap.grandRemain),'#DC2626')+'</div>'
+    +'<div style="height:1px;background:#EEF1F4;margin:8px 0"></div>'
+    +rows;
+  return _qtSection('5. PHẢI TRẢ NHÀ CUNG CẤP','ti-arrow-up-circle',content,'<button class="btn sm" onclick="switchTcTab(\'congno\');window._debtV3&&(window._debtV3.mode=\'ap\');renderThuChi()">Xem công nợ</button>','#D97706');
+}
+
+// 6. COSTING
+function _qtRenderCostingCard(data){
+  const c=data.costing;
+  const warn=c.pending>0?'<div class="qt-warn-inline">🔴 Kỳ chưa đủ điều kiện quyết toán — còn '+c.pending+' lô chưa Costing</div>':'';
+  const content='<div style="text-align:center;font-size:22px;font-weight:800;color:#0F172A;margin-bottom:10px">'+c.total+' <span style="font-size:12px;font-weight:600;color:#94A3B8">lô</span></div>'
+    +_qtKvRow('Đã Costing',c.done+' lô','#059669')
+    +_qtKvRow('Chưa Costing',c.pending+' lô',c.pending>0?'#DC2626':'#94A3B8')
+    +_qtKvRow('Đã lock (duyệt)',c.locked+' lô','#059669')
+    +_qtKvRow('Chưa lock',c.unlocked+' lô',c.unlocked>0?'#D97706':'#94A3B8')
+    +warn;
+  return _qtSection('6. COSTING','ti-calculator',content,'<button class="btn sm" onclick="switchTcTab(\'costing\');renderThuChi()">Xem Costing Report</button>','#0F766E');
+}
+
+// 7. KIỂM TRA LÔ HÀNG
+function _qtRenderShipmentCard(data){
+  const s=data.shipment;
+  const listHtml=s.missingList.slice(0,8).map(function(m){
+    return '<div class="qt-kv" style="cursor:pointer" onclick="openDetail(\''+m.id+'\',\''+m.tt+'\')"><span style="color:#2563EB;font-weight:700">'+(m.bookingNo||'—')+'</span><span style="font-size:11px;color:#94A3B8">'+m.issues.join(', ')+'</span></div>';
+  }).join('');
+  const content='<div style="display:flex;gap:14px;margin-bottom:10px">'
+      +'<div><div class="qt-mini-lbl">Tổng số lô</div><div class="qt-mini-val">'+s.total+'</div></div>'
+      +'<div><div class="qt-mini-lbl">Hoàn tất</div><div class="qt-mini-val" style="color:#059669">'+s.complete+'</div></div>'
+      +'<div><div class="qt-mini-lbl">Thiếu dữ liệu</div><div class="qt-mini-val" style="color:'+(s.processing>0?'#DC2626':'#94A3B8')+'">'+s.processing+'</div></div>'
+    +'</div>'
+    +(listHtml?'<div style="font-size:10.5px;font-weight:700;color:#94A3B8;margin-bottom:4px">CÁC LÔ CẦN KIỂM TRA'+(s.missingList.length>8?' (8/'+s.missingList.length+')':'')+'</div>'+listHtml:'');
+  return _qtSection('7. KIỂM TRA LÔ HÀNG','ti-package',content,'','#0F766E');
+}
+
+// 8. ĐỐI CHIẾU SỐ DƯ TÀI KHOẢN
+function _qtRenderAccReconCard(data){
+  const rows=data.accRecon.map(function(a){
+    return '<div style="padding:8px 0;border-bottom:1px dashed #EEF1F4">'
+      +'<div style="font-weight:700;font-size:12px;color:#0F172A;margin-bottom:4px">'+a.label+'</div>'
+      +_qtKvRow('Đầu kỳ',_qtMoney(a.opening))+_qtKvRow('Thu',_qtMoney(a.thu),'#059669')+_qtKvRow('Chi',_qtMoney(a.chi),'#DC2626')+_qtKvRow('Cuối kỳ',_qtMoney(a.closing),'#0F766E')
+    +'</div>';
+  }).join('')||'<div style="font-size:12px;color:#94A3B8">Chưa cấu hình tài khoản</div>';
+  const status=data.cashBook.hasDiff?'<div class="qt-warn-inline">⚠ Chưa đối chiếu — có chênh lệch</div>':'<div style="color:#059669;font-size:12px;font-weight:700;margin-top:6px">✓ Đã đối chiếu</div>';
+  return _qtSection('8. ĐỐI CHIẾU SỐ DƯ','ti-scale',rows+status,'','#0F766E');
+}
+
+// ── TIẾN ĐỘ QUYẾT TOÁN (mục 6) ──
+function _qtRenderProgress(cl){
+  const rows=cl.items.map(function(it,i){
+    const num=String(i+1).padStart(2,'0');
+    const icon=it.ok?'✓':(it.warn?'⚠':'○');
+    const color=it.ok?'#059669':(it.warn?'#D97706':'#94A3B8');
+    const clickable=!it.auto?' style="cursor:pointer"':'';
+    const onclick=!it.auto?' onclick="_qtManualCheckToggle(\''+it.key+'\')"':'';
+    return '<div class="qt-progress-row"'+clickable+onclick+'><span style="color:'+color+';font-weight:800;width:20px;flex-shrink:0">'+icon+'</span><span style="color:#94A3B8;font-size:10.5px;width:22px;flex-shrink:0">'+num+'</span><span style="flex:1;font-size:12.5px;color:'+(it.ok?'#0F172A':'#64748B')+';font-weight:'+(it.ok?'600':'500')+'">'+it.label+'</span>'+(!it.auto?'<span style="font-size:10px;color:#94A3B8">'+(it.ok?'Bấm để bỏ':'Bấm để xác nhận')+'</span>':'')+'</div>';
+  }).join('');
+  return '<div class="qt-card">'
+    +'<div class="qt-card-hd"><span><i class="ti ti-list-check" style="color:#0F766E;margin-right:7px"></i>TIẾN ĐỘ QUYẾT TOÁN</span><span style="font-size:12.5px;font-weight:800;color:#0F766E">'+cl.doneCount+' / '+cl.total+' hoàn tất</span></div>'
+    +'<div class="qt-card-body">'
+      +'<div class="qt-progress-bar-track"><div class="qt-progress-bar-fill" style="width:'+cl.pct+'%"></div></div>'
+      +'<div style="text-align:right;font-size:11px;font-weight:700;color:#0F766E;margin:4px 0 12px">'+cl.pct+'%</div>'
+      +rows
+    +'</div>'
+  +'</div>';
+}
+
+// ── KẾT QUẢ KỲ TÀI CHÍNH (mục 16) — 4 số nổi bật + bar đơn giản (không cần chart phức tạp) ──
+function _qtRenderResult(data){
+  const maxV=Math.max(data.rev.total,data.cost.total,Math.abs(data.profit),1);
+  const barRow=function(label,val,color){
+    const pct=Math.max(2,Math.round(Math.abs(val)/maxV*100));
+    return '<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:#64748B;margin-bottom:3px"><span>'+label+'</span><span style="color:'+color+'">'+_qtMoneyShort(val)+'</span></div>'
+      +'<div style="height:9px;background:#EEF1F4;border-radius:5px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+';border-radius:5px"></div></div></div>';
+  };
+  return '<div class="qt-card qt-result-card">'
+    +'<div class="qt-card-hd" style="color:#fff"><i class="ti ti-report-money" style="margin-right:7px"></i>KẾT QUẢ KỲ TÀI CHÍNH</div>'
+    +'<div class="qt-card-body">'
+      +'<div class="qt-result-grid">'
+        +'<div><div class="qt-result-lbl">DOANH THU</div><div class="qt-result-val">'+_qtMoneyShort(data.rev.total)+'</div></div>'
+        +'<div><div class="qt-result-lbl">CHI PHÍ</div><div class="qt-result-val" style="color:#FCA5A5">'+_qtMoneyShort(data.cost.total)+'</div></div>'
+        +'<div><div class="qt-result-lbl">LỢI NHUẬN</div><div class="qt-result-val" style="color:#6EE7B7">'+_qtMoneyShort(data.profit)+'</div></div>'
+        +'<div><div class="qt-result-lbl">MARGIN</div><div class="qt-result-val">'+data.margin+'%</div></div>'
+      +'</div>'
+      +'<div style="background:rgba(255,255,255,.08);border-radius:10px;padding:14px;margin-top:14px">'
+        +barRow('Doanh thu',data.rev.total,'#6EE7B7')
+        +barRow('Chi phí',data.cost.total,'#FCA5A5')
+        +barRow('Lợi nhuận',data.profit,'#93C5FD')
+      +'</div>'
+    +'</div>'
+  +'</div>';
+}
+
+// ── SO SÁNH VỚI KỲ TRƯỚC (mục 17) — CHỈ hiện nếu tìm thấy dữ liệu kỳ liền trước (period tài chính
+// độ dài bằng nhau, liền kề). KHÔNG tạo dữ liệu giả nếu không tìm thấy. ──
+async function _qtRenderComparison(from,to,curData){
+  const days=Math.round((new Date(to)-new Date(from))/86400000)+1;
+  const prevTo=_qtAddDays(from,-1);
+  const prevFrom=_qtAddDays(prevTo,-(days-1));
+  const prevDoc=await _qtLoadPeriod(prevFrom,prevTo);
+  if(!prevDoc){
+    return '<div class="qt-card"><div class="qt-card-hd"><i class="ti ti-arrows-diff" style="color:#0F766E;margin-right:7px"></i>SO VỚI KỲ TRƯỚC</div>'
+      +'<div class="qt-card-body"><div style="text-align:center;padding:1rem;color:#94A3B8;font-size:12.5px">Chưa đủ dữ liệu để so sánh (kỳ trước liền kề '+prevFrom+' → '+prevTo+' chưa được kiểm tra/quyết toán)</div></div></div>';
+  }
+  const prevData=_qtComputeAll(prevFrom,prevTo);
+  const pctChange=function(cur,prev){ return prev>0?Math.round((cur-prev)/Math.abs(prev)*1000)/10:null; };
+  const row=function(label,cur,prev){
+    const pc=pctChange(cur,prev);
+    const up=pc!==null&&pc>=0;
+    return '<div style="text-align:center"><div class="qt-mini-lbl">'+label+'</div><div style="font-size:16px;font-weight:800;color:'+(pc===null?'#94A3B8':(up?'#059669':'#DC2626'))+'">'+(pc===null?'—':((up?'+':'')+pc+'%'))+'</div></div>';
+  };
+  return '<div class="qt-card"><div class="qt-card-hd"><i class="ti ti-arrows-diff" style="color:#0F766E;margin-right:7px"></i>SO VỚI KỲ TRƯỚC <span style="font-weight:400;color:#94A3B8;font-size:11px">('+prevFrom+' → '+prevTo+')</span></div>'
+    +'<div class="qt-card-body"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">'
+      +row('Doanh thu',curData.rev.total,prevData.rev.total)+row('Chi phí',curData.cost.total,prevData.cost.total)+row('Lợi nhuận',curData.profit,prevData.profit)+row('Margin',curData.margin,prevData.margin)
+    +'</div></div></div>';
+}
+
+// ── NHẬT KÝ QUYẾT TOÁN (mục 18) ──
+function _qtRenderAuditLog(periodDoc){
+  const log=(periodDoc&&periodDoc.auditLog)||[];
+  const rows=log.slice().reverse().map(function(l){
+    const d=new Date(l.date);
+    const dstr=isNaN(d)?l.date:d.toLocaleDateString('vi-VN')+' '+d.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'});
+    return '<div style="padding:8px 0;border-bottom:1px dashed #EEF1F4;font-size:12px">'
+      +'<div style="display:flex;justify-content:space-between"><strong style="color:#0F172A">'+l.action+'</strong><span style="color:#94A3B8;font-size:10.5px">'+dstr+'</span></div>'
+      +'<div style="color:#64748B;font-size:11px;margin-top:1px">'+(l.user||'—')+(l.note?' • '+l.note:'')+'</div>'
+    +'</div>';
+  }).join('')||'<div style="text-align:center;color:#94A3B8;font-size:12px;padding:1rem">Chưa có nhật ký</div>';
+  return '<div class="qt-card"><div class="qt-card-hd"><i class="ti ti-history" style="color:#0F766E;margin-right:7px"></i>LỊCH SỬ QUYẾT TOÁN</div><div class="qt-card-body" style="max-height:280px;overflow-y:auto">'+rows+'</div></div>';
+}
+
+// ── GHI CHÚ KỲ (mục 19) ──
+function _qtRenderNotes(periodDoc){
+  const notes=(periodDoc&&periodDoc.notes)||'';
+  return '<div class="qt-card"><div class="qt-card-hd"><i class="ti ti-notes" style="color:#0F766E;margin-right:7px"></i>GHI CHÚ QUYẾT TOÁN</div>'
+    +'<div class="qt-card-body">'
+      +'<textarea id="qtNoteInput" rows="3" placeholder="Ghi chú về kỳ này..." style="width:100%;box-sizing:border-box;font-family:inherit;font-size:12.5px;padding:9px;border:1px solid #E2E8F0;border-radius:8px;resize:vertical">'+notes+'</textarea>'
+      +'<button class="btn pri sm" style="margin-top:8px" onclick="_qtSaveNoteClick()"><i class="ti ti-device-floppy"></i> Lưu ghi chú</button>'
+    +'</div></div>';
+}
+
+// ── FINAL CHECK (mục 20-21) ──
+function _qtRenderFinalCheck(cl,from,to,periodDoc){
+  const allDone=cl.doneCount===cl.total;
+  const items=cl.items.map(function(it){
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px"><span style="color:'+(it.ok?'#059669':'#CBD5E1')+';font-size:15px">'+(it.ok?'☑':'☐')+'</span><span style="color:'+(it.ok?'#0F172A':'#94A3B8')+'">'+it.label+'</span></div>';
+  }).join('');
+  const isSettled=periodDoc&&(periodDoc.status==='settled'||periodDoc.status==='locked');
+  let actionHtml;
+  if(isSettled){
+    actionHtml='<div style="text-align:center;padding:10px;background:#05966912;border-radius:8px;color:#059669;font-weight:700"><i class="ti ti-circle-check"></i> ĐÃ QUYẾT TOÁN — '+(periodDoc.settledAt?new Date(periodDoc.settledAt).toLocaleDateString('vi-VN'):'')+' bởi '+(periodDoc.settledBy||'—')+'</div>';
+  } else if(allDone){
+    actionHtml='<button class="btn pri" style="width:100%;padding:12px;font-size:13.5px;font-weight:700" onclick="_qtOpenConfirmModal()"><i class="ti ti-circle-check"></i> XÁC NHẬN QUYẾT TOÁN</button>';
+  } else {
+    actionHtml='<button class="btn" disabled style="width:100%;padding:12px;font-size:13px;background:#F1F5F9;color:#94A3B8;cursor:not-allowed"><i class="ti ti-lock"></i> Chưa đủ điều kiện khóa kỳ ('+cl.doneCount+'/'+cl.total+')</button>';
+  }
+  return '<div class="qt-card" style="border:1.5px solid '+(allDone?'#0F766E55':'#E2E8F0')+'">'
+    +'<div class="qt-card-hd"><i class="ti ti-clipboard-check" style="color:#0F766E;margin-right:7px"></i>KIỂM TRA TRƯỚC KHI KHÓA KỲ</div>'
+    +'<div class="qt-card-body">'+items+'<div style="margin-top:14px">'+actionHtml+'</div></div>'
+  +'</div>';
+}
+
+// ── Màn hình chọn kỳ (chưa có kỳ nào đang mở) ──
+function _qtRenderPeriodPicker(){
+  const today=new Date();
+  const firstOfMonth=new Date(today.getFullYear(),today.getMonth(),1).toISOString().slice(0,10);
+  const lastOfMonth=new Date(today.getFullYear(),today.getMonth()+1,0).toISOString().slice(0,10);
+  return '<div class="qt-wrap">'
+    +'<div class="qt-header"><div><h2>QUYẾT TOÁN KỲ TÀI CHÍNH</h2><div class="qt-subtitle">Kiểm tra, đối chiếu và khóa kỳ tài chính</div></div></div>'
+    +'<div class="qt-card" style="max-width:520px;margin:20px auto">'
+      +'<div class="qt-card-hd">KỲ TÀI CHÍNH</div>'
+      +'<div class="qt-card-body">'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">'
+          +'<div style="flex:1"><label class="qt-lbl">Từ ngày</label><input type="date" id="qtFromPick" value="'+firstOfMonth+'" style="width:100%;box-sizing:border-box"/></div>'
+          +'<div style="color:#94A3B8;margin-top:14px">→</div>'
+          +'<div style="flex:1"><label class="qt-lbl">Đến ngày</label><input type="date" id="qtToPick" value="'+lastOfMonth+'" style="width:100%;box-sizing:border-box"/></div>'
+        +'</div>'
+        +'<button class="btn pri" style="width:100%;padding:11px" onclick="_qtSelectPeriod()"><i class="ti ti-search"></i> Chọn kỳ</button>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+}
+
+async function _qtSelectPeriod(){
+  const from=g('qtFromPick')?.value, to=g('qtToPick')?.value;
+  if(!from||!to){toast('Chọn đủ Từ ngày/Đến ngày','error');return;}
+  if(from>to){toast('"Từ ngày" phải trước "Đến ngày"','error');return;}
+  window._qtState.from=from; window._qtState.to=to;
+  await renderQuyetToan();
+}
+window._qtSelectPeriod=_qtSelectPeriod;
+
+// ── Xử lý sự kiện ──
+async function _qtManualCheckToggle(key){
+  const qt=window._qtState;
+  const cur=(qt.periodDoc&&qt.periodDoc.checklist&&qt.periodDoc.checklist[key])||false;
+  await _qtToggleChecklist(qt.from,qt.to,key,!cur);
+  await renderQuyetToan();
+}
+window._qtManualCheckToggle=_qtManualCheckToggle;
+
+async function _qtSaveNoteClick(){
+  const qt=window._qtState;
+  const val=g('qtNoteInput')?.value||'';
+  await _qtSaveNote(qt.from,qt.to,val);
+}
+window._qtSaveNoteClick=_qtSaveNoteClick;
+
+function _qtOpenConfirmModal(){
+  g('combineOv').innerHTML='<div class="modal" style="max-width:420px">'
+    +'<div class="mhdr"><div class="mtitle">XÁC NHẬN QUYẾT TOÁN</div><button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px">'
+      +'<p style="font-size:13px;color:#334155;line-height:1.6">Khi xác nhận quyết toán, kỳ tài chính sẽ được đánh dấu là đã hoàn tất.<br/><br/>Bạn có chắc chắn muốn quyết toán kỳ này?</p>'
+      +'<div style="display:flex;gap:8px;margin-top:16px">'
+        +'<button class="btn" style="flex:1" onclick="closeOv(\'combineOv\')">Hủy</button>'
+        +'<button class="btn pri" style="flex:1" onclick="_qtDoConfirmSettle()">Xác nhận quyết toán</button>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+  openOv('combineOv');
+}
+window._qtOpenConfirmModal=_qtOpenConfirmModal;
+
+async function _qtDoConfirmSettle(){
+  const qt=window._qtState;
+  closeOv('combineOv');
+  setLoading(true,'Đang xác nhận quyết toán...');
+  await _qtConfirmSettle(qt.from,qt.to);
+  setLoading(false);
+  toast('Đã xác nhận quyết toán kỳ');
+  await renderQuyetToan();
+}
+window._qtDoConfirmSettle=_qtDoConfirmSettle;
+
+async function _qtDoLockPeriod(){
+  if(!confirm('Khóa kỳ tài chính này? Sau khi khóa, các thao tác chỉnh sửa ở giao diện Quyết toán sẽ bị vô hiệu hóa.'))return;
+  const qt=window._qtState;
+  setLoading(true,'Đang khóa kỳ...');
+  await _qtLockPeriod(qt.from,qt.to);
+  setLoading(false);
+  toast('Đã khóa kỳ tài chính');
+  await renderQuyetToan();
+}
+window._qtDoLockPeriod=_qtDoLockPeriod;
+
+async function _qtDoRequestUnlock(){
+  const qt=window._qtState;
+  await _qtRequestUnlock(qt.from,qt.to);
+  await renderQuyetToan();
+}
+window._qtDoRequestUnlock=_qtDoRequestUnlock;
+
+function _qtChangePeriod(){ window._qtState.from=''; window._qtState.to=''; renderQuyetToan(); }
+window._qtChangePeriod=_qtChangePeriod;
+
+// ── HÀM RENDER CHÍNH ──
+async function renderQuyetToan(){
+  const body=g('tcBody'); if(!body)return;
+  const qt=window._qtState;
+  if(!qt.from||!qt.to){ body.innerHTML=_qtRenderPeriodPicker(); return; }
+
+  body.innerHTML='<div style="text-align:center;padding:3rem;color:#94A3B8"><i class="ti ti-loader-2" style="font-size:28px;animation:spin 1s linear infinite"></i><div style="margin-top:8px;font-size:12.5px">Đang tải dữ liệu kỳ '+qt.from+' → '+qt.to+'...</div></div>';
+
+  const periodDoc=await _qtLoadPeriod(qt.from,qt.to);
+  qt.periodDoc=periodDoc;
+  const data=_qtComputeAll(qt.from,qt.to);
+  qt.data=data;
+  const cl=_qtBuildChecklist(data,periodDoc);
+  const isLocked=periodDoc&&periodDoc.status==='locked';
+
+  const header='<div class="qt-header">'
+    +'<div><h2>QUYẾT TOÁN KỲ TÀI CHÍNH</h2><div class="qt-subtitle">Kiểm tra, đối chiếu và khóa kỳ tài chính</div></div>'
+    +'<div style="display:flex;align-items:center;gap:10px">'+_qtStatusBadge(periodDoc?periodDoc.status:'none')+'<button class="btn sm" onclick="_qtChangePeriod()"><i class="ti ti-calendar"></i> Đổi kỳ</button></div>'
+  +'</div>';
+
+  const periodCard='<div class="qt-card">'
+    +'<div class="qt-card-body" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">'
+      +'<div><div class="qt-lbl">KỲ TÀI CHÍNH</div><div style="font-size:16px;font-weight:800;color:#0F172A">'+qt.from+' → '+qt.to+'</div></div>'
+      +(periodDoc?('<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:11.5px;color:#64748B">'
+        +'<div>Ngày tạo<br/><strong style="color:#334155">'+(periodDoc.createdAt?new Date(periodDoc.createdAt).toLocaleDateString('vi-VN'):'—')+'</strong></div>'
+        +'<div>Người thực hiện<br/><strong style="color:#334155">'+(periodDoc.createdBy||'—')+'</strong></div>'
+        +(periodDoc.settledAt?('<div>Ngày quyết toán<br/><strong style="color:#059669">'+new Date(periodDoc.settledAt).toLocaleDateString('vi-VN')+'</strong></div><div>Người quyết toán<br/><strong style="color:#059669">'+(periodDoc.settledBy||'—')+'</strong></div>'):'')
+      +'</div>'):('<button class="btn pri" onclick="_qtCreatePeriodClick()"><i class="ti ti-plus"></i> Tạo kỳ quyết toán</button>'))
+    +'</div>'
+  +(isLocked?'<div class="qt-locked-banner"><i class="ti ti-lock"></i> KỲ ĐÃ KHÓA — Đây là kỳ tài chính đã khóa. <button class="btn sm" style="margin-left:8px" onclick="_qtDoRequestUnlock()">Yêu cầu mở khóa</button></div>':'')
+  +'</div>';
+
+  if(!periodDoc){
+    body.innerHTML=header+periodCard;
+    return;
+  }
+
+  const kpiRow='<div class="qt-kpi-row">'
+    +_qtKpi('DOANH THU',_qtMoneyShort(data.rev.total),data.rev.total.toLocaleString()+' VND','#0F766E','ti-trending-up')
+    +_qtKpi('CHI PHÍ',_qtMoneyShort(data.cost.total),data.cost.total.toLocaleString()+' VND','#DC2626','ti-trending-down')
+    +_qtKpi('LỢI NHUẬN',_qtMoneyShort(data.profit),data.profit.toLocaleString()+' VND',data.profit>=0?'#059669':'#DC2626','ti-report-money')
+    +_qtKpi('MARGIN',data.margin+'%','',data.margin>=0?'#0F766E':'#DC2626','ti-percentage')
+    +_qtKpi('ĐÃ THU',_qtMoneyShort(data.rev.paid),'','#059669','ti-circle-check')
+    +_qtKpi('CÒN PHẢI THU',_qtMoneyShort(data.rev.remain),'',data.rev.remain>0?'#DC2626':'#94A3B8','ti-hourglass')
+  +'</div>';
+
+  const comparisonHtml=await _qtRenderComparison(qt.from,qt.to,data);
+
+  body.innerHTML=header+periodCard+kpiRow
+    +_qtRenderProgress(cl)
+    +_qtRenderIssues(data)
+    +'<div class="qt-2col">'
+      +'<div>'+_qtRenderRevenueCard(data)+_qtRenderCashBookCard(data)+_qtRenderArCard(data)+_qtRenderShipmentCard(data)+'</div>'
+      +'<div>'+_qtRenderCostCard(data)+_qtRenderCostingCard(data)+_qtRenderApCard(data)+_qtRenderAccReconCard(data)+'</div>'
+    +'</div>'
+    +_qtRenderResult(data)
+    +comparisonHtml
+    +_qtRenderAuditLog(periodDoc)
+    +_qtRenderNotes(periodDoc)
+    +_qtRenderFinalCheck(cl,qt.from,qt.to,periodDoc)
+    +(periodDoc.status==='settled'?'<div class="qt-card" style="text-align:center;padding:16px"><button class="btn" style="background:#475569;color:#fff;padding:11px 24px" onclick="_qtDoLockPeriod()"><i class="ti ti-lock"></i> KHÓA KỲ</button></div>':'');
+}
+window.renderQuyetToan=renderQuyetToan;
+
+async function _qtCreatePeriodClick(){
+  const qt=window._qtState;
+  setLoading(true,'Đang tạo kỳ quyết toán...');
+  await _qtCreatePeriod(qt.from,qt.to);
+  setLoading(false);
+  await renderQuyetToan();
+}
+window._qtCreatePeriodClick=_qtCreatePeriodClick;
+
+function _qtComputeAll(from,to){
+  const rev=_qtComputeRevenue(from,to);
+  const cost=_qtComputeCost(from,to);
+  const cashBook=_qtComputeCashBookSummary(from,to);
+  const costing=_qtComputeCosting(from,to);
+  const shipment=_qtComputeShipmentCheck(from,to);
+  const accRecon=_qtComputeAccountRecon(from,to);
+  // Công nợ — TÁI SỬ DỤNG NGUYÊN VẸN _debtV3ComputeAR/_debtV3ComputeAP đã có (Báo cáo công nợ),
+  // truyền filter ETD theo đúng kỳ đang xét.
+  const prevShipper=window._debtV3&&window._debtV3.shipper, prevSupplier=window._debtV3&&window._debtV3.supplier;
+  const prevFrom=window._debtV3&&window._debtV3.from, prevTo=window._debtV3&&window._debtV3.to;
+  window._debtV3=window._debtV3||{};
+  window._debtV3.shipper=''; window._debtV3.supplier=''; window._debtV3.from=from; window._debtV3.to=to;
+  const ar=_debtV3ComputeAR();
+  const ap=_debtV3ComputeAP();
+  // Khôi phục lại state filter gốc của trang Báo cáo công nợ — không làm lệch nếu người dùng đang mở
+  // song song (an toàn tuyệt đối, không để lại tác dụng phụ ngoài phạm vi Quyết toán).
+  window._debtV3.shipper=prevShipper||''; window._debtV3.supplier=prevSupplier||''; window._debtV3.from=prevFrom||''; window._debtV3.to=prevTo||'';
+  const arAging=_qtComputeArAging(ar);
+
+  const profit=rev.total-cost.total;
+  const margin=rev.total>0?Math.round(profit/rev.total*1000)/10:0;
+
+  return {rev:rev,cost:cost,profit:profit,margin:margin,cashBook:cashBook,costing:costing,shipment:shipment,accRecon:accRecon,ar:ar,ap:ap,arAging:arAging};
 }
 
 function renderTcBaoCao(){
@@ -16484,6 +17221,57 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 
 .cashbook-v3__empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3rem 1rem;color:#94A3B8;text-align:center;font-size:12px;line-height:1.5}
 .cashbook-v3__empty i{font-size:34px;opacity:.35;margin-bottom:8px}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   QUYẾT TOÁN KỲ TÀI CHÍNH — CSS namespace RIÊNG BIỆT .qt-* (mục 29), không
+   ghi đè bất kỳ style toàn cục nào. Phong cách Enterprise Finance/Accounting.
+═══════════════════════════════════════════════════════════════════════ */
+.qt-wrap{font-family:inherit}
+.qt-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px}
+.qt-header h2{font-size:19px;font-weight:800;margin:0;color:#0F172A}
+.qt-subtitle{font-size:12px;color:#64748B;margin-top:2px}
+
+.qt-card{background:#fff;border:1px solid #E2E8F0;border-radius:10px;margin-bottom:14px;overflow:hidden}
+.qt-card-hd{display:flex;justify-content:space-between;align-items:center;padding:12px 15px;border-bottom:1px solid #F1F5F9;font-size:12px;font-weight:800;color:#0F172A;text-transform:uppercase;letter-spacing:.3px}
+.qt-card-body{padding:14px 15px}
+.qt-count{font-size:10px;font-weight:700;color:#64748B;background:#F5F7FA;border:1px solid #E2E8F0;border-radius:10px;padding:1px 8px;margin-left:6px}
+.qt-lbl{font-size:9.5px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px}
+
+.qt-locked-banner{display:flex;align-items:center;gap:8px;background:#47556912;color:#334155;font-weight:700;font-size:12.5px;padding:10px 15px;border-top:1px solid #E2E8F0}
+
+.qt-kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px}
+@media (max-width:1100px){.qt-kpi-row{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:640px){.qt-kpi-row{grid-auto-flow:column;grid-auto-columns:75%;overflow-x:auto;grid-template-columns:none}}
+.qt-kpi{background:#fff;border:1px solid #E2E8F0;border-radius:9px;padding:11px 13px;display:flex;gap:9px;align-items:flex-start}
+.qt-kpi-ic{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.qt-kpi-lbl{font-size:9px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.3px}
+.qt-kpi-val{font-size:16px;font-weight:800;line-height:1.3;margin-top:2px}
+.qt-kpi-sub{font-size:9.5px;color:#94A3B8;margin-top:1px}
+
+.qt-progress-bar-track{height:9px;background:#EEF1F4;border-radius:5px;overflow:hidden}
+.qt-progress-bar-fill{height:100%;background:linear-gradient(90deg,#0F766E,#14B8A6);border-radius:5px;transition:width .3s}
+.qt-progress-row{display:flex;align-items:center;gap:8px;padding:6px 4px;border-radius:6px}
+.qt-progress-row:hover{background:#F8FAFC}
+
+.qt-kv{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:12.5px;color:#334155;border-bottom:1px dashed #F1F5F9}
+.qt-kv:last-child{border-bottom:none}
+.qt-kv-total{border-top:1.5px solid #E2E8F0;margin-top:5px;padding-top:6px;font-weight:800}
+.qt-kv-total .qt-kv{border-bottom:none;font-size:13.5px}
+.qt-warn-inline{margin-top:8px;padding:7px 9px;background:#D9770612;border:1px solid #D9770633;border-radius:7px;font-size:11.5px;font-weight:600;color:#B45309}
+.qt-mini-lbl{font-size:9.5px;font-weight:700;color:#94A3B8;text-transform:uppercase}
+.qt-mini-val{font-size:18px;font-weight:800;color:#0F172A}
+
+.qt-2col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:1000px){.qt-2col{grid-template-columns:1fr}}
+
+.qt-result-card{background:linear-gradient(135deg,#0F766E,#0C5D57);border:none}
+.qt-result-card .qt-card-hd{border-bottom-color:rgba(255,255,255,.15)}
+.qt-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+@media (max-width:640px){.qt-result-grid{grid-template-columns:1fr 1fr}}
+.qt-result-lbl{font-size:9.5px;font-weight:700;color:rgba(255,255,255,.65);text-transform:uppercase;letter-spacing:.3px}
+.qt-result-val{font-size:20px;font-weight:800;color:#fff;margin-top:3px}
+
+
 .crm3-fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
 .crm3-fg .fi.full{grid-column:1/-1}
 .crm3-fg input,.crm3-fg select{max-width:340px}
@@ -21252,9 +22040,25 @@ async function toggleDocTrackEnabled(id, tt, checked){
   if(!can('editLot')){toast('Không có quyền','error');return;}
   try{
     const r=cache[tt].find(x=>x._id===id)||{};
+    // SỬA THEO YÊU CẦU: bắt buộc phải có ÍT NHẤT 1 dịch vụ đã ADD (bật "on") ở tab Dịch vụ của lô
+    // này thì mới cho phép BẬT theo dõi chứng từ — nếu chưa có dịch vụ nào, chặn lại và yêu cầu add
+    // dịch vụ trước (KHÔNG tự tạo dịch vụ mới thay người dùng).
+    if(checked){
+      const svcs=r.svcs||{};
+      const hasAnySvc=Object.keys(svcs).some(function(k){return svcs[k]&&svcs[k].on;});
+      if(!hasAnySvc){
+        toast('Lô này chưa có dịch vụ nào ở tab Dịch vụ — hãy add dịch vụ (VD: Phyto, Fumi, C/O...) trước khi bật theo dõi chứng từ','error');
+        return;
+      }
+    }
     const payload={docTrackEnabled:checked,updatedAt:Date.now()};
-    // Lần đầu bật (chưa từng có danh sách) → khởi tạo mặc định Bill/Phyto/Fumi/C.O
-    if(checked && !(r.docTrackKeys&&r.docTrackKeys.length)) payload.docTrackKeys=_docTrackDefaultKeys();
+    // Lần đầu bật (chưa từng có danh sách) → khởi tạo mặc định Bill/Phyto/Fumi/C.O, nhưng CHỈ lấy các
+    // dịch vụ trong số đó THỰC SỰ đã được add (on=true) ở lô này — không tự coi như đã chọn dịch vụ
+    // chưa tồn tại trên lô.
+    if(checked && !(r.docTrackKeys&&r.docTrackKeys.length)){
+      const svcs=r.svcs||{};
+      payload.docTrackKeys=_docTrackDefaultKeys().filter(function(k){return svcs[k]&&svcs[k].on;});
+    }
     await fsSet(colName(tt),id,payload);
     const idx=cache[tt].findIndex(x=>x._id===id);
     if(idx>=0)Object.assign(cache[tt][idx],payload);
@@ -21282,11 +22086,13 @@ function openDocTrackPopup(id, tt){
       +'<button class="rac red" title="Xóa khỏi danh sách theo dõi" data-id="'+id+'" data-tt="'+tt+'" data-key="'+key+'" onclick="removeDocTrackItem(this.dataset.id,this.dataset.tt,this.dataset.key)"><i class="ti ti-trash"></i></button>'
     +'</div>';
   }).join('');
+  const hasAnySvcForHint=Object.keys(r.svcs||{}).some(function(k){return r.svcs[k]&&r.svcs[k].on;});
   ov.innerHTML='<div class="modal" style="max-width:460px">'
     +'<div class="mhdr"><div><div class="mtitle">Theo dõi tiến độ chứng từ</div>'
     +'<div class="msub">'+(r.bookingNo||r.jobNo||'—')+' — '+(r.pol||'—')+' → '+(r.pod||'—')+'</div></div>'
     +'<button class="x" onclick="closeOv(\'docTrackOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="mbody" style="padding:16px 20px">'
+      +(!hasAnySvcForHint&&!r.docTrackEnabled?'<div style="display:flex;align-items:flex-start;gap:8px;padding:.6rem .8rem;background:rgba(217,119,6,.08);border:1px solid rgba(217,119,6,.25);border-radius:8px;margin-bottom:10px;font-size:11.5px;color:#92400e;line-height:1.5"><i class="ti ti-alert-triangle" style="flex-shrink:0;margin-top:1px"></i><span>Lô này chưa có dịch vụ nào ở tab Dịch vụ — cần add dịch vụ (VD: Phyto, Fumi, C/O...) trước khi bật theo dõi.</span></div>':'')
       +'<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-bottom:'+(r.docTrackEnabled?'10px':'0')+'">'
         +'<input type="checkbox" id="docTrackEnabledChkPopup" data-id="'+id+'" data-tt="'+tt+'" '+(r.docTrackEnabled?'checked':'')+' onchange="_docTrackPopupToggleEnabled(this)" style="width:18px;height:18px;cursor:pointer"/>'
         +'<span style="font-size:13px;font-weight:600">Bật theo dõi tiến độ chứng từ cho lô này</span>'
@@ -21353,13 +22159,26 @@ window.removeDocTrackItem=removeDocTrackItem;
 function openDocTrackAddPicker(id, tt){
   const r=cache[tt].find(x=>x._id===id); if(!r)return;
   const trackedKeys=r.docTrackKeys||[];
+  const svcs=r.svcs||{};
+  // SỬA LỖI: chỉ lấy dịch vụ ĐÃ ADD (bật "on") ở tab Dịch vụ của CHÍNH LÔ NÀY — trước đây liệt kê
+  // TOÀN BỘ danh mục SVCS (mọi dịch vụ có trong hệ thống, kể cả chưa từng add vào lô), khiến người
+  // dùng có thể "bật theo dõi" cho dịch vụ không tồn tại trên lô. Đúng yêu cầu: phải add dịch vụ vào
+  // tab Service trước, thì dịch vụ đó mới xuất hiện ở đây để chọn theo dõi.
+  const addedKeys=Object.keys(svcs).filter(function(k){return svcs[k]&&svcs[k].on;});
   function _buildList(q){
     const filtered=SVCS.filter(function(s){
-      if(trackedKeys.indexOf(s.key)>=0)return false;
+      if(addedKeys.indexOf(s.key)<0)return false; // CHƯA add vào lô -> không cho chọn
+      if(trackedKeys.indexOf(s.key)>=0)return false; // đã theo dõi rồi -> không hiện lại
       if(!q)return true;
       const ql=q.toLowerCase();
       return (s.key||'').toLowerCase().includes(ql)||(s.code||'').toLowerCase().includes(ql)||(s.name||'').toLowerCase().includes(ql);
     });
+    if(!filtered.length){
+      const reason=addedKeys.length?'Tất cả dịch vụ đã add vào lô đều đang được theo dõi.':'Lô này CHƯA có dịch vụ nào được add ở tab Dịch vụ — hãy add dịch vụ (VD: Phyto, Fumi, C/O...) trước, sau đó quay lại đây để bật theo dõi.';
+      return '<div style="padding:1.25rem 1rem;text-align:center;color:var(--text-secondary);font-size:12.5px;line-height:1.6">'+reason
+        +(addedKeys.length?'':'<div style="margin-top:10px"><button class="btn pri sm" onclick="closeOv(\'docTrackAddOv\');closeOv(\'docTrackOv\');goTab(\'xuat\');switchDetailTab(\'svc\')"><i class="ti ti-arrow-right"></i> Đi tới tab Dịch vụ</button></div>')
+      +'</div>';
+    }
     return filtered.map(function(s){
       const code=(s.code||s.key||'').toUpperCase();
       return'<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border-light);cursor:pointer" data-id="'+id+'" data-tt="'+tt+'" data-key="'+s.key+'" onclick="doAddDocTrackKey(this.dataset.id,this.dataset.tt,this.dataset.key)">'
@@ -21367,8 +22186,7 @@ function openDocTrackAddPicker(id, tt){
         +'<span style="font-size:12.5px;flex:1">'+s.name+'</span>'
         +'<button class="btn sm" data-id="'+id+'" data-tt="'+tt+'" data-key="'+s.key+'" onclick="event.stopPropagation();doAddDocTrackKey(this.dataset.id,this.dataset.tt,this.dataset.key)"><i class="ti ti-plus"></i></button>'
       +'</div>';
-    }).join('')
-    +(filtered.length===0?'<div style="padding:1rem;text-align:center;color:var(--text-secondary);font-size:12px">Không tìm thấy dịch vụ</div>':'');
+    }).join('');
   }
   let ov=g('docTrackAddOv');
   if(!ov){ov=document.createElement('div');ov.id='docTrackAddOv';ov.className='ov';document.body.appendChild(ov);}
@@ -21377,13 +22195,12 @@ function openDocTrackAddPicker(id, tt){
     +'<div class="mhdr"><div class="mtitle"><i class="ti ti-plus" style="margin-right:6px"></i>Thêm chứng từ theo dõi</div>'
     +'<button class="rac" onclick="closeOv(\'docTrackAddOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="mbody" style="padding:12px 16px 0">'
-      +'<input type="search" id="docTrackSearchInput" placeholder="Tìm theo code hoặc tên dịch vụ..." style="width:100%;font-size:13px;padding:8px 12px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:8px" oninput="document.getElementById(\'docTrackAddList\').innerHTML=window._buildDocTrackListFn(this.value)"/>'
+      +(addedKeys.length?'<input type="search" id="docTrackSearchInput" placeholder="Tìm theo code hoặc tên dịch vụ..." style="width:100%;font-size:13px;padding:8px 12px;border:1px solid var(--border-light);border-radius:8px;margin-bottom:8px" oninput="document.getElementById(\'docTrackAddList\').innerHTML=window._buildDocTrackListFn(this.value)"/>':'')
       +'<div id="docTrackAddList" style="max-height:320px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px">'
         +_buildList('')
       +'</div>'
     +'</div>'
-    +'<div class="mftr" style="display:flex;justify-content:space-between;gap:8px;padding:10px 16px;border-top:1px solid var(--border-light)">'
-      +'<button class="btn" data-id="'+id+'" data-tt="'+tt+'" onclick="doAddDocTrackKey(this.dataset.id,this.dataset.tt,\'__new__\')"><i class="ti ti-sparkles"></i> Tạo mới</button>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--border-light)">'
       +'<button class="btn" onclick="closeOv(\'docTrackAddOv\')">Đóng</button>'
     +'</div></div>';
   window._buildDocTrackListFn=_buildList;
