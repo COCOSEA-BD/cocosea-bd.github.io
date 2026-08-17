@@ -1114,7 +1114,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.78';
+window.APP_BUILD='v3.79';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -13584,7 +13584,8 @@ async function _qtSelectPeriod(){
   if(!from||!to){toast('Chọn đủ Từ ngày/Đến ngày','error');return;}
   if(from>to){toast('"Từ ngày" phải trước "Đến ngày"','error');return;}
   window._qtState.from=from; window._qtState.to=to;
-  await renderQuyetToan();
+  try{ await renderQuyetToan(); }
+  catch(e){ console.error('Lỗi chọn kỳ:',e); toast('Lỗi: '+(e&&e.message||e),'error'); }
 }
 window._qtSelectPeriod=_qtSelectPeriod;
 
@@ -13592,15 +13593,18 @@ window._qtSelectPeriod=_qtSelectPeriod;
 async function _qtManualCheckToggle(key){
   const qt=window._qtState;
   const cur=(qt.periodDoc&&qt.periodDoc.checklist&&qt.periodDoc.checklist[key])||false;
-  await _qtToggleChecklist(qt.from,qt.to,key,!cur);
-  await renderQuyetToan();
+  try{
+    await _qtToggleChecklist(qt.from,qt.to,key,!cur);
+    await renderQuyetToan();
+  }catch(e){ console.error('Lỗi xác nhận checklist:',e); toast('Lỗi: '+(e&&e.message||e),'error'); }
 }
 window._qtManualCheckToggle=_qtManualCheckToggle;
 
 async function _qtSaveNoteClick(){
   const qt=window._qtState;
   const val=g('qtNoteInput')?.value||'';
-  await _qtSaveNote(qt.from,qt.to,val);
+  try{ await _qtSaveNote(qt.from,qt.to,val); }
+  catch(e){ console.error('Lỗi lưu ghi chú:',e); toast('Lỗi lưu ghi chú: '+(e&&e.message||e),'error'); }
 }
 window._qtSaveNoteClick=_qtSaveNoteClick;
 
@@ -13623,10 +13627,16 @@ async function _qtDoConfirmSettle(){
   const qt=window._qtState;
   closeOv('combineOv');
   setLoading(true,'Đang xác nhận quyết toán...');
-  await _qtConfirmSettle(qt.from,qt.to);
-  setLoading(false);
-  toast('Đã xác nhận quyết toán kỳ');
-  await renderQuyetToan();
+  try{
+    await _qtConfirmSettle(qt.from,qt.to);
+    toast('Đã xác nhận quyết toán kỳ');
+    await renderQuyetToan();
+  }catch(e){
+    console.error('Lỗi xác nhận quyết toán:',e);
+    toast('Lỗi xác nhận quyết toán: '+(e&&e.message||e),'error');
+  }finally{
+    setLoading(false);
+  }
 }
 window._qtDoConfirmSettle=_qtDoConfirmSettle;
 
@@ -13634,17 +13644,25 @@ async function _qtDoLockPeriod(){
   if(!confirm('Khóa kỳ tài chính này? Sau khi khóa, các thao tác chỉnh sửa ở giao diện Quyết toán sẽ bị vô hiệu hóa.'))return;
   const qt=window._qtState;
   setLoading(true,'Đang khóa kỳ...');
-  await _qtLockPeriod(qt.from,qt.to);
-  setLoading(false);
-  toast('Đã khóa kỳ tài chính');
-  await renderQuyetToan();
+  try{
+    await _qtLockPeriod(qt.from,qt.to);
+    toast('Đã khóa kỳ tài chính');
+    await renderQuyetToan();
+  }catch(e){
+    console.error('Lỗi khóa kỳ:',e);
+    toast('Lỗi khóa kỳ: '+(e&&e.message||e),'error');
+  }finally{
+    setLoading(false);
+  }
 }
 window._qtDoLockPeriod=_qtDoLockPeriod;
 
 async function _qtDoRequestUnlock(){
   const qt=window._qtState;
-  await _qtRequestUnlock(qt.from,qt.to);
-  await renderQuyetToan();
+  try{
+    await _qtRequestUnlock(qt.from,qt.to);
+    await renderQuyetToan();
+  }catch(e){ console.error('Lỗi yêu cầu mở khóa:',e); toast('Lỗi: '+(e&&e.message||e),'error'); }
 }
 window._qtDoRequestUnlock=_qtDoRequestUnlock;
 
@@ -13659,12 +13677,23 @@ async function renderQuyetToan(){
 
   body.innerHTML='<div style="text-align:center;padding:3rem;color:#94A3B8"><i class="ti ti-loader-2" style="font-size:28px;animation:spin 1s linear infinite"></i><div style="margin-top:8px;font-size:12.5px">Đang tải dữ liệu kỳ '+qt.from+' → '+qt.to+'...</div></div>';
 
-  const periodDoc=await _qtLoadPeriod(qt.from,qt.to);
-  qt.periodDoc=periodDoc;
-  const data=_qtComputeAll(qt.from,qt.to);
-  qt.data=data;
-  const cl=_qtBuildChecklist(data,periodDoc);
-  const isLocked=periodDoc&&periodDoc.status==='locked';
+  let periodDoc,data,cl,isLocked;
+  try{
+    periodDoc=await _qtLoadPeriod(qt.from,qt.to);
+    qt.periodDoc=periodDoc;
+    data=_qtComputeAll(qt.from,qt.to);
+    qt.data=data;
+    cl=_qtBuildChecklist(data,periodDoc);
+    isLocked=periodDoc&&periodDoc.status==='locked';
+  }catch(e){
+    console.error('renderQuyetToan lỗi khi tải/tính dữ liệu:',e);
+    body.innerHTML='<div style="text-align:center;padding:3rem;color:#DC2626"><i class="ti ti-alert-triangle" style="font-size:28px"></i>'
+      +'<div style="margin-top:8px;font-size:13px;font-weight:600">Lỗi khi tải dữ liệu kỳ quyết toán</div>'
+      +'<div style="margin-top:4px;font-size:11.5px;color:#94A3B8">'+(e&&e.message||e)+'</div>'
+      +'<button class="btn sm" style="margin-top:12px" onclick="renderQuyetToan()"><i class="ti ti-refresh"></i> Thử lại</button>'
+    +'</div>';
+    return;
+  }
 
   const header='<div class="qt-header">'
     +'<div><h2>QUYẾT TOÁN KỲ TÀI CHÍNH</h2><div class="qt-subtitle">Kiểm tra, đối chiếu và khóa kỳ tài chính</div></div>'
@@ -13697,7 +13726,9 @@ async function renderQuyetToan(){
     +_qtKpi('CÒN PHẢI THU',_qtMoneyShort(data.rev.remain),'',data.rev.remain>0?'#DC2626':'#94A3B8','ti-hourglass')
   +'</div>';
 
-  const comparisonHtml=await _qtRenderComparison(qt.from,qt.to,data);
+  let comparisonHtml='';
+  try{ comparisonHtml=await _qtRenderComparison(qt.from,qt.to,data); }
+  catch(e){ console.error('Lỗi tải So sánh kỳ trước:',e); comparisonHtml=''; }
 
   body.innerHTML=header+periodCard+kpiRow
     +_qtRenderProgress(cl)
@@ -13718,9 +13749,15 @@ window.renderQuyetToan=renderQuyetToan;
 async function _qtCreatePeriodClick(){
   const qt=window._qtState;
   setLoading(true,'Đang tạo kỳ quyết toán...');
-  await _qtCreatePeriod(qt.from,qt.to);
-  setLoading(false);
-  await renderQuyetToan();
+  try{
+    await _qtCreatePeriod(qt.from,qt.to);
+    await renderQuyetToan();
+  }catch(e){
+    console.error('Lỗi tạo kỳ quyết toán:',e);
+    toast('Lỗi tạo kỳ quyết toán: '+(e&&e.message||e),'error');
+  }finally{
+    setLoading(false);
+  }
 }
 window._qtCreatePeriodClick=_qtCreatePeriodClick;
 
