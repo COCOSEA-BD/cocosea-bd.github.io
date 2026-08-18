@@ -1114,7 +1114,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.80';
+window.APP_BUILD='v3.81';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -11028,21 +11028,65 @@ function _dv3DetailTable(data,isAR,limit){
 function _dv3Warnings(data,isAR){
   const items=[];
   const bigDebtors=data.list.filter(function(s){return s.remain>0.01;}).length;
-  if(bigDebtors)items.push({icon:isAR?'ti-users':'ti-truck-delivery','text':bigDebtors+(isAR?' Shipper còn công nợ phải thu':' nhà cung cấp cần thanh toán'),color:isAR?'#DC2626':'#D97706'});
+  if(bigDebtors)items.push({type:'partnersUnpaid',icon:isAR?'ti-users':'ti-truck-delivery','text':bigDebtors+(isAR?' Shipper còn công nợ phải thu':' nhà cung cấp cần thanh toán'),color:isAR?'#DC2626':'#D97706'});
   const unpaidLots=data.rows.filter(function(r){return r.remain>0.01;}).length;
-  if(unpaidLots)items.push({icon:isAR?'ti-file-invoice':'ti-receipt','text':unpaidLots+(isAR?' lô hàng chưa thu đủ tiền':' khoản chi phí chưa thanh toán NCC'),color:isAR?'#DC2626':'#D97706'});
+  if(unpaidLots)items.push({type:'lotsUnpaid',icon:isAR?'ti-file-invoice':'ti-receipt','text':unpaidLots+(isAR?' lô hàng chưa thu đủ tiền':' khoản chi phí chưa thanh toán NCC'),color:isAR?'#DC2626':'#D97706'});
   const fullyPaidPartners=data.list.filter(function(s){return s.total>0&&s.remain<=0.01;}).length;
-  if(fullyPaidPartners)items.push({icon:'ti-circle-check','text':fullyPaidPartners+(isAR?' Shipper đã thu đủ':' NCC đã thanh toán đủ'),color:'#059669'});
-  if(!items.length)return '<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd" style="color:#059669"><i class="ti ti-circle-check"></i> Tất cả công nợ đã xử lý</div></div>';
-  return '<div class="debt-report-v3__card">'
+  if(fullyPaidPartners)items.push({type:'partnersPaid',icon:'ti-circle-check','text':fullyPaidPartners+(isAR?' Shipper đã thu đủ':' NCC đã thanh toán đủ'),color:'#059669'});
+  if(!items.length)return '<div class="debt-report-v3__card" style="margin-top:14px"><div class="debt-report-v3__card-hd" style="color:#059669"><i class="ti ti-circle-check"></i> Tất cả công nợ đã xử lý</div></div>';
+  return '<div class="debt-report-v3__card" style="margin-top:14px">'
     +'<div class="debt-report-v3__card-hd" style="color:#D97706"><i class="ti ti-alert-triangle"></i> CẦN XỬ LÝ</div>'
     +'<div style="display:flex;flex-direction:column;gap:8px">'
-      +items.map(function(it){return '<div style="display:flex;align-items:center;gap:9px;font-size:12.5px;padding:7px 9px;background:'+it.color+'0d;border-radius:8px;border:1px solid '+it.color+'22"><i class="ti '+it.icon+'" style="color:'+it.color+';font-size:15px;flex-shrink:0"></i><span style="color:#334155;font-weight:600">'+it.text+'</span></div>';}).join('')
+      +items.map(function(it){return '<div onclick="_dv3OpenWarningPopup(\''+it.type+'\','+isAR+')" style="display:flex;align-items:center;gap:9px;font-size:12.5px;padding:7px 9px;background:'+it.color+'0d;border-radius:8px;border:1px solid '+it.color+'22;cursor:pointer" onmouseover="this.style.background=\''+it.color+'1a\'" onmouseout="this.style.background=\''+it.color+'0d\'"><i class="ti '+it.icon+'" style="color:'+it.color+';font-size:15px;flex-shrink:0"></i><span style="color:#334155;font-weight:600;flex:1">'+it.text+'</span><i class="ti ti-chevron-right" style="color:'+it.color+';font-size:14px"></i></div>';}).join('')
     +'</div>'
   +'</div>';
 }
 
 // ── 2 card "Theo dõi thủ công" (giữ nguyên 100% chức năng cũ — openTcDebtForm/delTcDebt/cache.debts) ──
+// ── Popup chi tiết khi click 1 dòng "CẦN XỬ LÝ" — hiện đúng danh sách lô hàng/Shipper/NCC tương ứng
+// với cảnh báo đã bấm. Dùng lại _debtV3ComputeAR/AP (không tính lại từ đầu bằng công thức khác) và
+// mở tiếp đúng Drawer/chi tiết lô hàng đã có sẵn khi click vào 1 dòng bên trong popup. ──
+function _dv3OpenWarningPopup(warnType,isAR){
+  const data=isAR?_debtV3ComputeAR():_debtV3ComputeAP();
+  const partnerLbl=isAR?'Shipper':'NCC';
+  let title,bodyHtml;
+
+  if(warnType==='partnersUnpaid'||warnType==='partnersPaid'){
+    const list=data.list.filter(function(s){return warnType==='partnersUnpaid'?s.remain>0.01:(s.total>0&&s.remain<=0.01);});
+    title=warnType==='partnersUnpaid'?(partnerLbl+' còn công nợ '+(isAR?'phải thu':'phải trả')):(partnerLbl+' đã thanh toán đủ');
+    bodyHtml=list.map(function(s){
+      const pct=_dv3Pct(s.paid,s.total);
+      return '<div class="debt-report-v3__row" onclick="closeOv(\'combineOv\');_dv3OpenDrawer(\''+(isAR?'shipper':'supplier')+'\',\''+s.partner.replace(/'/g,"\\'")+'\')" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border-bottom:1px solid #F1F5F9;cursor:pointer">'
+        +'<span style="flex:1;font-weight:700;color:#0F172A;font-size:12.5px">'+s.partner+'</span>'
+        +'<span style="font-size:11.5px;color:#64748B">Tổng: '+_dv3Money(s.total)+'</span>'
+        +'<span style="font-size:11.5px;font-weight:700;color:'+(s.remain>0.01?'#DC2626':'#059669')+'">Còn: '+_dv3Money(s.remain)+'</span>'
+        +'<span style="font-size:10.5px;font-weight:700;color:#94A3B8;width:36px;text-align:right">'+pct+'%</span>'
+        +'<i class="ti ti-chevron-right" style="color:#CBD5E1"></i>'
+      +'</div>';
+    }).join('')||'<div style="padding:1.5rem;text-align:center;color:#94A3B8;font-size:12.5px">Không có dữ liệu</div>';
+  } else { // lotsUnpaid
+    const list=data.rows.filter(function(r){return r.remain>0.01;}).sort(function(a,b){return b.remain-a.remain;});
+    title=isAR?'Lô hàng chưa thu đủ tiền':'Khoản chi phí chưa thanh toán NCC';
+    bodyHtml=list.map(function(r){
+      return '<div class="debt-report-v3__row" onclick="closeOv(\'combineOv\');openDetail(\''+r.id+'\',\''+r.tt+'\''+(isAR?",'invoice'":'')+')" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border-bottom:1px solid #F1F5F9;cursor:pointer">'
+        +'<span style="font-weight:700;color:#2563EB;font-size:12.5px;min-width:90px">'+(r.bookingNo||'—')+'</span>'
+        +'<span style="flex:1;font-size:11.5px;color:#334155">'+(isAR?r.shipper:r.supplier)+'</span>'
+        +'<span style="font-size:11px;color:#94A3B8">'+(r.etd||'—')+'</span>'
+        +'<span style="font-size:11.5px;font-weight:700;color:#DC2626">'+_dv3Money(r.remain)+'</span>'
+        +'<i class="ti ti-chevron-right" style="color:#CBD5E1"></i>'
+      +'</div>';
+    }).join('')||'<div style="padding:1.5rem;text-align:center;color:#94A3B8;font-size:12.5px">Không có dữ liệu</div>';
+  }
+
+  g('combineOv').innerHTML='<div class="modal" style="max-width:560px">'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-alert-triangle" style="margin-right:6px;color:#D97706"></i>'+title+'</div>'
+    +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:0;max-height:60vh;overflow-y:auto">'+bodyHtml+'</div>'
+  +'</div>';
+  openOv('combineOv');
+}
+window._dv3OpenWarningPopup=_dv3OpenWarningPopup;
+
 function _dv3ManualDebtCard(title,list,color,addType){
   const totalByC={}, paidByC={};
   list.forEach(function(d){
@@ -11253,13 +11297,12 @@ function renderDebtReportV3(){
       +'</div>'
     +'</div>'
 
-    // ── Main dashboard: 2 cột (bảng đối tác | chart+cảnh báo) ──
+    // ── Main dashboard: 2 cột (bảng đối tác + cần xử lý | chart) ──
     +'<div class="debt-report-v3__main">'
-      +'<div class="debt-report-v3__main-left">'+_dv3PartnerTable(activeData,isAR)+'</div>'
+      +'<div class="debt-report-v3__main-left">'+_dv3PartnerTable(activeData,isAR)+_dv3Warnings(activeData,isAR)+'</div>'
       +'<div class="debt-report-v3__main-right">'
         +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">PHÂN BỔ CÔNG NỢ</div>'+_dv3BarChart(activeData.list,isAR)+'</div>'
         +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">TỶ TRỌNG CÒN PHẢI '+(isAR?'THU':'TRẢ')+'</div>'+_dv3Donut(activeData.list,activeData.grandRemain,'Còn phải '+(isAR?'thu':'trả'))+'</div>'
-        +_dv3Warnings(activeData,isAR)
       +'</div>'
     +'</div>'
 
