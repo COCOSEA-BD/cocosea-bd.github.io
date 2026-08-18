@@ -378,7 +378,7 @@ async function addNewIcd(){
 window.addNewIcd=addNewIcd;
 
 function loadCargoNames(){
-  db.collection('_config').doc('cargoNames').get().then(function(snap){
+  return db.collection('_config').doc('cargoNames').get().then(function(snap){
     let names=snap.exists?(snap.data().names||[]):[];
     // Normalize: support old string[] and new object[]
     window._cargoNames=names.map(function(n){
@@ -892,10 +892,18 @@ window._invMoveSvc=_invMoveSvc;
 // này chỉ khác nhau ở phí bao gồm, nhưng đều cần các hành vi đặc biệt như dịch vụ Trucking gốc: nút
 // nhảy sang tab Trucking, tự gợi ý NCC mặc định cho form Trucking, tự thêm số xe/tuyến vào tên dòng
 // Invoice).
+// Tách "key gốc" của 1 dịch vụ, bỏ hậu tố "_2"/"_3"... do doAddSvcByKey() tự thêm khi thêm cùng 1
+// dịch vụ nhiều lần (VD: 'trucking_2' -> 'trucking', 'ocf_3' -> 'ocf'). DÙNG CHUNG cho mọi nơi cần
+// nhận diện "đây có phải dịch vụ built-in X hay không" — đảm bảo nhận diện ĐÚNG cho CẢ bản gốc LẪN
+// bản sao, tránh lỗi các bản sao (thêm lần 2 trở đi) bị bỏ sót do so sánh key/code CHÍNH XÁC.
+function _svcKeyBase(key){ return (key||'').split('_')[0]; }
+window._svcKeyBase=_svcKeyBase;
+
 function _isTruckingLikeSvc(key){
-  if(key==='trucking')return true;
+  if(_svcKeyBase(key)==='trucking')return true;
   const s=SVCS.find(function(x){return x.key===key;});
-  return !!(s&&(s.code==='TRA'||s.code==='TRC'));
+  const codeBase=((s&&s.code)||'').toUpperCase().replace(/\d+$/,''); // "TRA2" -> "TRA"
+  return !!(s&&(codeBase==='TRA'||codeBase==='TRC'));
 }
 window._isTruckingLikeSvc=_isTruckingLikeSvc;
 
@@ -1114,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.81';
+window.APP_BUILD='v3.83';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4030,7 +4038,7 @@ function renderDetailPanel(r,tt){
         const rows=allOn.filter(function(s){return (svcs[s.key]?.invoice||'Yes')!=='Waived';}).map(function(s){
           const sv=svcs[s.key]||{};
           // OCF (code mới) và Freight (code cũ) đều là cước vận tải biển — luôn VAT 0%
-          const isOceanFreight2=(s.key==='ocf'||s.key==='freight');
+          const isOceanFreight2=(_svcKeyBase(s.key)==='ocf'||_svcKeyBase(s.key)==='freight');
           const invType=sv.invoice||'Yes';
           // Smart VAT default: cước tàu luôn 0%, invoice=No=0%, invoice=Yes=8%
           const smartVat=isOceanFreight2?'0%':(invType==='No'?'0%':'8%');
@@ -4047,7 +4055,7 @@ function renderDetailPanel(r,tt){
           const vatAmtVnd2=vatRate2>0?Math.round(amtVnd2*vatRate2/100):0;
           let autoName2=sv.customName||s.name;
           if(!sv.customName){
-            if(s.key==='freight'&&r.vessel){
+            if(_svcKeyBase(s.key)==='freight'&&r.vessel){
               autoName2=s.name+' (Số hiệu tàu: '+r.vessel+(r.voy?'/'+r.voy:'')+')';
             } else if(_isTruckingLikeSvc(s.key)){
               autoName2=s.name+(truckRoute2?' '+truckRoute2:'')+(truckNos2?', số xe '+truckNos2:'');
@@ -5358,7 +5366,7 @@ async function saveDetailSvc(){
     const descEl=gS('sd_'+s.key);
     const desc=descEl?descEl.value:(prev.desc||'');
     const showPrice=can('fillPrice')||can('viewCost');
-    const isOcf=(s.key==='ocf')||((s.code||'').toUpperCase()==='OCF');
+    const isOcf=(_svcKeyBase(s.key)==='ocf')||((s.code||'').toUpperCase()==='OCF');
     // Only update price fields if user has permission to see them — RIÊNG OCF: doc/cus cũng được điền đầy đủ (cost, SL, ĐV, Currency, NCC, VAT)
     const cost=(showPrice||isOcf)?(parseFloat(gS('scost_'+s.key)?.value)||0):(prev.cost||0);
     const svcQty=(showPrice||isOcf)?(parseFloat(gS('sqty_'+s.key)?.value)||1):(prev.svcQty||1);
@@ -5385,9 +5393,9 @@ async function saveDetailSvc(){
     // customName = "Chi hộ phí nâng container" — dùng ĐÚNG field customName đã có sẵn, tự động lan
     // tỏa sang Fill giá/Invoice/Costing/Debit Note/Export mà không cần sửa thêm nơi nào khác. Nếu ô
     // chi tiết để trống, customName về lại rỗng (hiển thị tên gốc "Chi hộ"/"Phí khác" như bình thường).
-    const svcCodeUpS=(s.code||s.key||'').toUpperCase();
+    const svcKeyBaseS=_svcKeyBase(s.key);
     let customNameVal=prev.customName||'';
-    if(svcCodeUpS==='OTH'||svcCodeUpS==='CHO'){
+    if(svcKeyBaseS==='other'||svcKeyBaseS==='disbursement'){
       const detailElS=gS('sdetail_'+s.key);
       if(detailElS){
         const detailTxt=(detailElS.value||'').trim();
@@ -5874,6 +5882,15 @@ window.LOT_SECTIONS=LOT_SECTIONS;
 
 function openLot(id, tt){
   lotIdx=id; currentTab=tt;
+  // SỬA LỖI: nếu window._cargoNames CHƯA kịp tải xong (loadCargoNames() chạy nền lúc khởi động app,
+  // có thể chưa xong nếu người dùng bấm "Thêm lô hàng" quá nhanh sau khi app vừa mở) — chủ động tải
+  // lại rồi TỰ VẼ LẠI đúng form này khi có dữ liệu, CHỈ khi người dùng vẫn đang mở đúng lô đó (tránh
+  // vẽ đè lên form/lô khác nếu người dùng đã đổi ý chuyển đi trong lúc chờ).
+  if(window._cargoNames===undefined){
+    loadCargoNames().then(function(){
+      if(lotIdx===id&&currentTab===tt)openLot(id,tt);
+    });
+  }
   const cols=tt==='xuat'?XCOLS:NCOLS;
   const r=id?cache[tt].find(x=>x._id===id)||{}:{};
   g('lotTitle').textContent=id?'Chỉnh sửa lô hàng':'Thêm lô hàng '+(tt==='xuat'?'Shipment List':'nhập khẩu');
@@ -5941,6 +5958,13 @@ function openBulkLot(tt){
   window._bulkPartnerOpts={pC:pC,pS:pS,pF:pF,pAll:pAll};
   _bulkRenderForm();
   openOv('bulkLotOv');
+  // SỬA LỖI: cùng race condition như openLot() — nếu window._cargoNames chưa kịp tải xong lúc mở
+  // form, tải lại rồi vẽ lại đúng form này khi có dữ liệu, CHỈ khi popup vẫn đang mở đúng loại lô đó.
+  if(window._cargoNames===undefined){
+    loadCargoNames().then(function(){
+      if(window._bulkTt===tt&&g('bulkLotOv')&&g('bulkLotOv').style.display!=='none')_bulkRenderForm();
+    });
+  }
 }
 window.openBulkLot=openBulkLot;
 
@@ -7300,7 +7324,7 @@ function svcRowHTML(s, sv){
     return`<option value="${cd}">${cd} — ${sx.name}</option>`;
   }).join('');
   const codeCell=`<span style="position:relative;display:block"><datalist id="${dlId}">${datalistOpts}</datalist><input type="text" id="scode_${s.key}" value="${curCode}" list="${dlId}" maxlength="10" title="Mã dịch vụ — gõ code để tìm nhanh" style="font-size:11px;font-weight:700;color:var(--blue);background:rgba(26,75,140,.07);border:1px solid rgba(26,75,140,.2);border-radius:4px;padding:2px 4px;width:100%;cursor:pointer;text-align:center;box-sizing:border-box;transition:width .15s" onfocus="this.dataset.prev=this.value;this.value='';this.style.width='160px'" onblur="var v=this.value.trim();if(!v){this.value=this.dataset.prev||'';this.style.width='100%';}else{this.style.width='100%';switchSvcCodeByCode('${s.key}',v)}" onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault()}"/></span>`;
-  const isOcfSvc=(s.key==='ocf')||((s.code||'').toUpperCase()==='OCF');
+  const isOcfSvc=(_svcKeyBase(s.key)==='ocf')||((s.code||'').toUpperCase()==='OCF');
   // ── OCF: LUÔN hiển thị ĐẦY ĐỦ cột (kể cả doc/cus) để điền trọn vẹn thông tin cước.
   // Dùng ĐÚNG grid chuẩn (khớp header chung của cả danh sách) cho các cột thường,
   // 2 cột riêng của OCF (Req.Pay + Trạng thái) đặt SAU CÙNG để không ảnh hưởng căn chỉnh
@@ -7388,7 +7412,7 @@ function svcRowHTML(s, sv){
     <input type="text" id="sremark_${s.key}" value="${(sv.apRemark||'').replace(/"/g,'&quot;')}" placeholder="Remark" ${(sv.on&&!locked)?'':'disabled'} style="font-size:11px"/>
     <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer" title="${locked?'Bỏ tick để chỉnh sửa lại dòng này':'Đánh dấu hoàn tất'}"/></div>
     <div style="display:flex;justify-content:flex-end;gap:3px">
-      ${(s.key==='stuffing')?`<button class="rac" onclick="switchDetailTab('scy')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-package"></i></button>`:''}
+      ${(_svcKeyBase(s.key)==='stuffing')?`<button class="rac" onclick="switchDetailTab('scy')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-package"></i></button>`:''}
       ${_isTruckingLikeSvc(s.key)?`<button class="rac" onclick="switchDetailTab('trucking')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-truck"></i></button>`:''}
       ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)"><i class="ti ti-file-check"></i></button>`:`<label class="rac" style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><i class="ti ti-upload"></i><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="handleSvcDnUpload(this,'${s.key}')"/></label>`}
       <button class="rac red" onclick="removeSvc('${s.key}')" ${lockedDis} title="${locked?(priceLockedFlag?lockTip:'Đã thanh toán — bỏ tick Finish để xóa'):'Xóa'}" style="font-size:13px"><i class="ti ti-trash"></i></button>
