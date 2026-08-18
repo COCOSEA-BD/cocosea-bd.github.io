@@ -1114,7 +1114,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.79';
+window.APP_BUILD='v3.80';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -10750,9 +10750,21 @@ function _debtV3ComputeAR(){
     const st=_computeArRowStatus(r,filterShipper,sh,sp2);
     const rowPaid=Math.min(rowAll, (st.paidYesVND||0)+(st.paidNoVND||0));
     byShipper[sh].total+=rowAll; byShipper[sh].paid+=rowPaid; byShipper[sh].lots+=1;
+    // Remark — lấy từ dnPayments[party].inv/noInv.remark, dùng ĐÚNG _arPartyKeysForLot() (cùng hàm
+    // đang dùng để tính paid/remain ở trên) để đảm bảo remark khớp đúng key thanh toán thực tế, không
+    // lệch nhau giữa 2 nơi. Gộp remark của cả phần Có HĐ/Không HĐ nếu khác nhau.
+    const dnPmForRemark=r.dnPayments||{};
+    const remarkKeys=_arPartyKeysForLot(r,filterShipper,sh,sp2);
+    const remarksSet=new Set();
+    remarkKeys.forEach(function(pk){
+      const pmd=dnPmForRemark[pk];
+      if(pmd&&pmd.inv&&pmd.inv.remark)remarksSet.add(pmd.inv.remark);
+      if(pmd&&pmd.noInv&&pmd.noInv.remark)remarksSet.add(pmd.noInv.remark);
+    });
     rows.push({
       id:r._id,tt:r._tt,bookingNo:r.bookingNo||r.jobNo||'',mbl:r.mblNo||'',etd:r.etd||'',
       route:(r.pol||'—')+' → '+(r.pod||'—'),shipper:sh,total:rowAll,paid:rowPaid,remain:Math.max(0,rowAll-rowPaid),
+      remark:[...remarksSet].join('; '),
       // Các field bổ sung — CHỈ để phục vụ popup "Cập nhật TT hàng loạt" (_cnOpenBulkAR đã có sẵn),
       // khớp đúng cấu trúc data-row mà popup đó đang đọc (booking/vol/typeCont/pod/amtYes/amtNo/amtAll).
       vol:r.vol||'',typeCont:r.typeCont||'',pod:r.pod||'',amtYes:rowTotalVND,amtNo:rowTotalNoVND,amtAll:rowAll
@@ -10782,6 +10794,9 @@ function _debtV3ComputeAP(){
       rows.push({id:l.lotId,tt:l.tt,bookingNo:l.bookingNo,mbl:l.mbl,etd:l.date,
         route:'—'+(l.pod?(' → '+l.pod):''),supplier:s.partner,name:l.name,total:l.amt,cur:l.cur,
         paid:l.paidStatus==='paid'?l.amt:0,remain:l.paidStatus==='paid'?0:l.amt,paidStatus:l.paidStatus,
+        // remark đọc TRỰC TIẾP từ l.remark (= sv.apRemark tab Service, đã được _tcSupplierBreakdown()
+        // gán sẵn) — đúng yêu cầu "đồng bộ với dịch vụ tương ứng ở tab service", không tạo bản sao.
+        remark:l.remark||'',
         // Bổ sung — phục vụ popup "Cập nhật TT hàng loạt" (_cnOpenBulkAP đã có sẵn), khớp đúng cấu
         // trúc data-row đang đọc (booking/vol/typeCont/pod/svcKey/amt/cur).
         vol:l.vol||'',typeCont:l.typeCont||'',pod:l.pod||'',svcKey:l.svcKey||''});
@@ -10988,6 +11003,7 @@ function _dv3DetailTable(data,isAR,limit){
       +'<td style="text-align:right;color:#059669">'+_dv3Money(r.paid)+'</td>'
       +'<td style="text-align:right;font-weight:700;color:'+(r.remain>0.01?'#DC2626':'#94A3B8')+'">'+_dv3Money(r.remain)+'</td>'
       +'<td><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;background:'+status.bg+';color:'+status.c+';white-space:nowrap">'+status.l+'</span></td>'
+      +'<td style="color:#64748B;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(r.remark||'').replace(/"/g,'&quot;')+'">'+(r.remark||'—')+'</td>'
     +'</tr>';
   }).join('');
   return '<div class="debt-report-v3__card">'
@@ -11001,8 +11017,8 @@ function _dv3DetailTable(data,isAR,limit){
       +'</span>'
     +'</div>'
     +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table debt-report-v3__table--dense">'
-      +'<thead><tr><th style="width:30px;text-align:center"><input type="checkbox" title="Chọn tất cả (đang hiển thị)" onchange="_dv3ToggleAllVisible(this,'+isAR+')" style="cursor:pointer"/></th><th>#</th><th>BOOKING NO</th><th>'+partnerLbl+'</th><th>MBL</th><th>ETD</th><th>HÀNH TRÌNH</th><th style="text-align:right">'+totalLbl+'</th><th style="text-align:right">'+paidLbl+'</th><th style="text-align:right">'+remainLbl+'</th><th>TRẠNG THÁI</th></tr></thead>'
-      +'<tbody>'+(rows||'<tr><td colspan="11" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>')+'</tbody>'
+      +'<thead><tr><th style="width:30px;text-align:center"><input type="checkbox" title="Chọn tất cả (đang hiển thị)" onchange="_dv3ToggleAllVisible(this,'+isAR+')" style="cursor:pointer"/></th><th>#</th><th>BOOKING NO</th><th>'+partnerLbl+'</th><th>MBL</th><th>ETD</th><th>HÀNH TRÌNH</th><th style="text-align:right">'+totalLbl+'</th><th style="text-align:right">'+paidLbl+'</th><th style="text-align:right">'+remainLbl+'</th><th>TRẠNG THÁI</th><th>REMARK</th></tr></thead>'
+      +'<tbody>'+(rows||'<tr><td colspan="12" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>')+'</tbody>'
     +'</table></div>'
   +'</div>';
 }
