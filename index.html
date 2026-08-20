@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.83';
+window.APP_BUILD='v3.84';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -23606,6 +23606,22 @@ window.renderOcean=renderOcean;
 
 const QUOTE_LOCAL_CHARGES=['THC','Bill Fee','Seal Fee','AMS','Telex Release'];
 const QUOTE_SERVICES=['Customs Clearance','Phytosanitary Certificate','Fumigation Certificate','Certificate of Origin','Inland Trucking (incl. lift on/off)','International Courier Service'];
+
+// Chuyển dữ liệu Local Charge/Service từ định dạng CŨ (Object khóa theo tên cố định, VD {THC:{...}})
+// sang định dạng MỚI (Array các dòng, mỗi dòng tự có field "name" riêng, cho phép sửa/xóa/thêm tự do)
+// — ĐẢM BẢO báo giá cũ đã lưu vẫn mở đúng, không mất dữ liệu (không tự ý ghi lại Firestore, chỉ
+// chuyển đổi TRONG BỘ NHỚ lúc hiển thị; dữ liệu gốc trên Firestore giữ nguyên cho tới khi người dùng
+// chủ động bấm Lưu lại).
+function _qRowsToArray(data,defaultNames){
+  if(Array.isArray(data))return data; // đã là định dạng MỚI — giữ nguyên
+  if(data&&typeof data==='object'&&Object.keys(data).length){
+    // Định dạng CŨ — chuyển từng {tên: {...}} thành {name:tên, ...}
+    return Object.keys(data).map(function(name){return Object.assign({name:name},data[name]);});
+  }
+  // Chưa có dữ liệu gì (báo giá hoàn toàn mới) — khởi tạo từ danh sách mặc định tiện dụng, người dùng
+  // vẫn có thể sửa/xóa/thêm tự do sau đó.
+  return (defaultNames||[]).map(function(name){return {name:name};});
+}
 const QUOTE_CONT_TYPES=['20DC','40HC','20RF','40RF'];
 let _quoteCargoTab='DC';
 
@@ -23705,7 +23721,7 @@ function startNewQuote(){
     window._qkCustomCols={};
     renderQuickQuoteForm();
   } else {
-    window._qTypes={};window._qLocal={};window._qService={};window._qPods=[];
+    window._qTypes={};window._qLocal=_qRowsToArray(null,QUOTE_LOCAL_CHARGES);window._qService=_qRowsToArray(null,QUOTE_SERVICES);window._qPods=[];
     renderQuoteForm();
   }
 }
@@ -23726,7 +23742,7 @@ function openQuotation(id){
     window._qkCustomCols=JSON.parse(JSON.stringify(q.qkCustomCols||{}));
     renderQuickQuoteForm();
   } else {
-    window._qTypes=q.types||{};window._qLocal=q.local||{};window._qService=q.service||{};window._qPods=q.pods||[];
+    window._qTypes=q.types||{};window._qLocal=_qRowsToArray(q.local,QUOTE_LOCAL_CHARGES);window._qService=_qRowsToArray(q.service,QUOTE_SERVICES);window._qPods=q.pods||[];
     renderQuoteForm();
   }
 }
@@ -24178,8 +24194,8 @@ function renderQuoteForm(){
   const pg=g('page-quote'); if(!pg)return;
   // Initialize state if first time
   if(!window._qTypes)window._qTypes={};
-  if(!window._qLocal)window._qLocal={};
-  if(!window._qService)window._qService={};
+  if(!window._qLocal)window._qLocal=_qRowsToArray(null,QUOTE_LOCAL_CHARGES);
+  if(!window._qService)window._qService=_qRowsToArray(null,QUOTE_SERVICES);
   if(!window._qPods)window._qPods=[];
   const shippers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'shipper')).map(p=>p.shortname).sort();
   const carriers=Object.values(cache.partners).filter(p=>_partnerHasType(p,'carrier')).map(p=>p.shortname).sort();
@@ -24315,12 +24331,11 @@ function renderQuoteForm(){
   <!-- 7. GHI CHÚ -->
   <div class="qt-card">
     <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-note"></i></span>Ghi chú</div>
-    <div class="qt-grid qt-grid-2">
-      <div class="qt-fld"><label>Payment Term</label><input type="text" id="q_payment" placeholder="VD: TT in advance"/></div>
-      <div class="qt-fld"><label>Free Time</label><input type="text" id="q_freetime" placeholder="VD: 14 days at POD"/></div>
-      <div class="qt-fld" style="grid-column:1/-1"><label>Routing</label><input type="text" id="q_routing" placeholder="VD: HCMC → Nansha (direct)"/></div>
-      <div class="qt-fld" style="grid-column:1/-1"><label>Special Note</label><textarea id="q_note" rows="3" placeholder="Ghi chú đặc biệt..."></textarea></div>
-    </div>
+    <div class="qt-fld"><textarea id="q_note" rows="6" placeholder="Ghi chú...&#10;Có thể ghi nhiều dòng"></textarea></div>
+    <!-- Giữ 3 field cũ ẩn đi (không hiển thị) — chỉ để KHÔNG làm mất dữ liệu của báo giá CŨ đã lưu
+         payment/freetime/routing trước khi đơn giản hóa form này; báo giá MỚI sẽ luôn để trống 3 field
+         này (không còn ô nhập, PDF/Email tự động ẩn nếu rỗng — xem quoteBuildHTML()). -->
+    <input type="hidden" id="q_payment"/><input type="hidden" id="q_freetime"/><input type="hidden" id="q_routing"/>
   </div>
 
   <div class="qt-actions">
@@ -24725,93 +24740,126 @@ window.quoteActiveTypes=quoteActiveTypes;
 
 function quoteRenderLocal(){
   const wrap=g('qLocalWrap'); if(!wrap)return;
+  window._qLocal=window._qLocal||[];
   const types=quoteActiveTypes();
   const curOpts=function(sel){return ['USD','VND','CNY','EUR'].map(function(cc){return '<option'+(cc===(sel||'USD')?' selected':'')+'>'+cc+'</option>';}).join('');};
   const typeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
-  const head='<table class="qt-table"><thead><tr><th style="width:20%">Charge Name</th><th style="width:12%">Currency</th>'+(types.length?typeHeads:'<th style="text-align:right">Amount</th>')+'<th>Remark</th></tr></thead><tbody>';
-  const rows=QUOTE_LOCAL_CHARGES.map(function(name){
-    const sv=(window._qLocal&&window._qLocal[name])||{};
+  const head='<table class="qt-table"><thead><tr><th style="width:20%">Charge Name</th><th style="width:12%">Currency</th>'+(types.length?typeHeads:'<th style="text-align:right">Amount</th>')+'<th>Remark</th><th style="width:34px"></th></tr></thead><tbody>';
+  const rows=window._qLocal.map(function(sv,idx){
     let priceCells;
     if(types.length){
       priceCells=types.map(function(t){
         const v=(sv.prices&&sv.prices[t])||'';
-        return '<td><input type="number" data-qlc="'+name+'" data-pt="'+t+'" value="'+v+'" placeholder="0" oninput="quoteLocalPrice(this)" style="text-align:right"/></td>';
+        return '<td><input type="number" data-qlc="'+idx+'" data-pt="'+t+'" value="'+v+'" placeholder="0" oninput="quoteLocalPrice(this)" style="text-align:right"/></td>';
       }).join('');
     } else {
-      priceCells='<td><input type="number" data-qlc="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteLocalInput(this)" style="text-align:right"/></td>';
+      priceCells='<td><input type="number" data-qlc="'+idx+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteLocalInput(this)" style="text-align:right"/></td>';
     }
     return '<tr>'
-      +'<td style="font-weight:600">'+name+'</td>'
-      +'<td><select data-qlc="'+name+'" data-f="cur" onchange="quoteLocalInput(this)">'+curOpts(sv.cur)+'</select></td>'
+      +'<td><input type="text" data-qlc="'+idx+'" data-f="name" value="'+(sv.name||'').replace(/"/g,'&quot;')+'" placeholder="Tên phí..." oninput="quoteLocalInput(this)" style="font-weight:600;border:none;background:transparent;width:100%;box-sizing:border-box;padding:2px 4px"/></td>'
+      +'<td><select data-qlc="'+idx+'" data-f="cur" onchange="quoteLocalInput(this)">'+curOpts(sv.cur)+'</select></td>'
       +priceCells
-      +'<td><input type="text" data-qlc="'+name+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteLocalInput(this)"/></td>'
+      +'<td><input type="text" data-qlc="'+idx+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteLocalInput(this)"/></td>'
+      +'<td style="text-align:center"><button class="rac red" onclick="quoteDelLocalRow('+idx+')" title="Xóa dòng"><i class="ti ti-trash"></i></button></td>'
     +'</tr>';
   }).join('');
-  wrap.innerHTML=head+rows+'</tbody></table>'+(types.length?'':'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">💡 Chọn loại container để nhập giá theo từng loại cont</div>');
+  wrap.innerHTML=head+(rows||'<tr><td colspan="6" style="text-align:center;padding:14px;color:var(--text-tertiary);font-size:12px">Chưa có khoản phí nào — bấm "Thêm dòng" để bắt đầu</td></tr>')+'</tbody></table>'
+    +'<button class="qt-btn" onclick="quoteAddLocalRow()" style="margin-top:8px"><i class="ti ti-plus"></i> Thêm dòng</button>'
+    +(types.length?'':'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">💡 Chọn loại container để nhập giá theo từng loại cont</div>');
 }
 
+function quoteAddLocalRow(){
+  window._qLocal=window._qLocal||[];
+  window._qLocal.push({name:''});
+  quoteRenderLocal();
+}
+window.quoteAddLocalRow=quoteAddLocalRow;
+
+function quoteDelLocalRow(idx){
+  window._qLocal.splice(idx,1);
+  quoteRenderLocal();
+  quoteRecalc();
+}
+window.quoteDelLocalRow=quoteDelLocalRow;
+
 function quoteLocalInput(el){
-  window._qLocal=window._qLocal||{};
-  const n=el.dataset.qlc;
-  window._qLocal[n]=window._qLocal[n]||{};
-  window._qLocal[n][el.dataset.f]=el.value;
+  window._qLocal=window._qLocal||[];
+  const idx=parseInt(el.dataset.qlc);
+  window._qLocal[idx]=window._qLocal[idx]||{};
+  window._qLocal[idx][el.dataset.f]=el.value;
   quoteRecalc();
 }
 function quoteLocalPrice(el){
-  window._qLocal=window._qLocal||{};
-  const n=el.dataset.qlc;
-  window._qLocal[n]=window._qLocal[n]||{};
-  window._qLocal[n].prices=window._qLocal[n].prices||{};
-  window._qLocal[n].prices[el.dataset.pt]=el.value;
+  window._qLocal=window._qLocal||[];
+  const idx=parseInt(el.dataset.qlc);
+  window._qLocal[idx]=window._qLocal[idx]||{};
+  window._qLocal[idx].prices=window._qLocal[idx].prices||{};
+  window._qLocal[idx].prices[el.dataset.pt]=el.value;
   quoteRecalc();
 }
 window.quoteLocalPrice=quoteLocalPrice;
 
 function quoteRenderServices(){
   const body=g('qServiceBody'); if(!body)return;
+  window._qService=window._qService||[];
   const types=quoteActiveTypes();
   const curOpts=function(sel){return ['USD','VND','CNY','EUR'].map(function(cc){return '<option'+(cc===(sel||'VND')?' selected':'')+'>'+cc+'</option>';}).join('');};
   // Header: checkbox + service name + [price per cont type...] + currency + remark
   const typeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
-  const head='<table class="qt-table"><thead><tr><th style="width:34px"></th><th>Service</th>'+(types.length?typeHeads:'<th style="text-align:right">Giá</th>')+'<th style="width:90px">Currency</th><th>Remark</th></tr></thead><tbody>';
-  const rows=QUOTE_SERVICES.map(function(name){
-    const sv=(window._qService&&window._qService[name])||{};
+  const head='<table class="qt-table"><thead><tr><th style="width:34px"></th><th>Service</th>'+(types.length?typeHeads:'<th style="text-align:right">Giá</th>')+'<th style="width:90px">Currency</th><th>Remark</th><th style="width:34px"></th></tr></thead><tbody>';
+  const rows=window._qService.map(function(sv,idx){
     const on=sv.on?'checked':'';
     let priceCells;
     if(types.length){
       priceCells=types.map(function(t){
         const v=(sv.prices&&sv.prices[t])||'';
-        return '<td><input type="number" data-qsv="'+name+'" data-pt="'+t+'" value="'+v+'" placeholder="0" oninput="quoteServicePrice(this)" style="text-align:right"/></td>';
+        return '<td><input type="number" data-qsv="'+idx+'" data-pt="'+t+'" value="'+v+'" placeholder="0" oninput="quoteServicePrice(this)" style="text-align:right"/></td>';
       }).join('');
     } else {
-      priceCells='<td><input type="number" data-qsv="'+name+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteServiceInput(this)" style="text-align:right"/></td>';
+      priceCells='<td><input type="number" data-qsv="'+idx+'" data-f="amount" value="'+(sv.amount||'')+'" placeholder="0" oninput="quoteServiceInput(this)" style="text-align:right"/></td>';
     }
     return '<tr class="'+(sv.on?'':'qt-off')+'">'
-      +'<td style="text-align:center"><input type="checkbox" data-qsv="'+name+'" data-f="on" '+on+' onchange="quoteServiceInput(this)" style="width:16px;height:16px;cursor:pointer"/></td>'
-      +'<td style="font-weight:600;font-size:12px">'+name+'</td>'
+      +'<td style="text-align:center"><input type="checkbox" data-qsv="'+idx+'" data-f="on" '+on+' onchange="quoteServiceInput(this)" style="width:16px;height:16px;cursor:pointer"/></td>'
+      +'<td><input type="text" data-qsv="'+idx+'" data-f="name" value="'+(sv.name||'').replace(/"/g,'&quot;')+'" placeholder="Tên dịch vụ..." oninput="quoteServiceInput(this)" style="font-weight:600;font-size:12px;border:none;background:transparent;width:100%;box-sizing:border-box;padding:2px 4px"/></td>'
       +priceCells
-      +'<td><select data-qsv="'+name+'" data-f="cur" onchange="quoteServiceInput(this)">'+curOpts(sv.cur)+'</select></td>'
-      +'<td><input type="text" data-qsv="'+name+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteServiceInput(this)"/></td>'
+      +'<td><select data-qsv="'+idx+'" data-f="cur" onchange="quoteServiceInput(this)">'+curOpts(sv.cur)+'</select></td>'
+      +'<td><input type="text" data-qsv="'+idx+'" data-f="remark" value="'+(sv.remark||'').replace(/"/g,'&quot;')+'" placeholder="Ghi chú" oninput="quoteServiceInput(this)"/></td>'
+      +'<td style="text-align:center"><button class="rac red" onclick="quoteDelServiceRow('+idx+')" title="Xóa dòng"><i class="ti ti-trash"></i></button></td>'
     +'</tr>';
   }).join('');
-  body.innerHTML=head+rows+'</tbody></table>'
+  body.innerHTML=head+(rows||'<tr><td colspan="6" style="text-align:center;padding:14px;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ nào — bấm "Thêm dòng" để bắt đầu</td></tr>')+'</tbody></table>'
+    +'<button class="qt-btn" onclick="quoteAddServiceRow()" style="margin-top:8px"><i class="ti ti-plus"></i> Thêm dòng</button>'
     +(types.length?'':'<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px">💡 Chọn loại container ở phần "Loại hàng" để nhập giá theo từng loại cont</div>');
 }
 
+function quoteAddServiceRow(){
+  window._qService=window._qService||[];
+  window._qService.push({name:'',on:true});
+  quoteRenderServices();
+}
+window.quoteAddServiceRow=quoteAddServiceRow;
+
+function quoteDelServiceRow(idx){
+  window._qService.splice(idx,1);
+  quoteRenderServices();
+  quoteRecalc();
+}
+window.quoteDelServiceRow=quoteDelServiceRow;
+
 function quoteServiceInput(el){
-  window._qService=window._qService||{};
-  const n=el.dataset.qsv;
-  window._qService[n]=window._qService[n]||{};
-  window._qService[n][el.dataset.f]=el.dataset.f==='on'?el.checked:el.value;
+  window._qService=window._qService||[];
+  const idx=parseInt(el.dataset.qsv);
+  window._qService[idx]=window._qService[idx]||{};
+  window._qService[idx][el.dataset.f]=el.dataset.f==='on'?el.checked:el.value;
   if(el.dataset.f==='on')quoteRenderServices();
   quoteRecalc();
 }
 function quoteServicePrice(el){
-  window._qService=window._qService||{};
-  const n=el.dataset.qsv;
-  window._qService[n]=window._qService[n]||{};
-  window._qService[n].prices=window._qService[n].prices||{};
-  window._qService[n].prices[el.dataset.pt]=el.value;
+  window._qService=window._qService||[];
+  const idx=parseInt(el.dataset.qsv);
+  window._qService[idx]=window._qService[idx]||{};
+  window._qService[idx].prices=window._qService[idx].prices||{};
+  window._qService[idx].prices[el.dataset.pt]=el.value;
   quoteRecalc();
 }
 window.quoteServicePrice=quoteServicePrice;
@@ -24850,7 +24898,7 @@ function quoteRecalc(){
   const oceanSums=quoteSumByCur(oceanItems,'price',false);
   // Local: sum per-cont-type prices (or flat amount if no types)
   const localSums={};
-  Object.values(window._qLocal||{}).forEach(function(l){
+  (window._qLocal||[]).forEach(function(l){
     const lc=l.cur||'USD';
     let tot=0;
     if(types.length&&l.prices){types.forEach(function(t){tot+=parseFloat(l.prices[t])||0;});}
@@ -24859,7 +24907,7 @@ function quoteRecalc(){
   });
   // Service: sum per-cont-type prices (or flat amount if no types)
   const svcSums={};
-  Object.values(window._qService||{}).forEach(function(s){
+  (window._qService||[]).forEach(function(s){
     if(!s.on)return;
     const sc=s.cur||'VND';
     let total=0;
@@ -24889,7 +24937,7 @@ function quoteGather(){
     no:g('q_no')?.value||'',date:g('q_date')?.value||'',sales:g('q_sales')?.value||'',
     customer:g('q_customer')?.value||'',commodity:g('q_commodity')?.value||'',
     pol:g('q_pol')?.value||'',curOcean:g('q_curOcean')?.value||'USD',
-    types:window._qTypes||{},pods:window._qPods||[],local:window._qLocal||{},service:window._qService||{},
+    types:window._qTypes||{},pods:window._qPods||[],local:window._qLocal||[],service:window._qService||[],
     payment:g('q_payment')?.value||'',freetime:g('q_freetime')?.value||'',routing:g('q_routing')?.value||'',note:g('q_note')?.value||'',
     savedAt:Date.now()
   };
@@ -24943,8 +24991,10 @@ function quoteBuildHTML(q){
 
   const localTypeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
   const localHead=types.length?localTypeHeads:'<th style="text-align:right">Amount</th>';
-  const localRows=QUOTE_LOCAL_CHARGES.map(function(n){
-    var l=q.local[n]||{};
+  const localArr=_qRowsToArray(q.local,QUOTE_LOCAL_CHARGES);
+  const localRows=localArr.map(function(l){
+    const n=l.name||'';
+    if(!n)return '';
     var has=types.length?(l.prices&&types.some(function(t){return parseFloat(l.prices[t])>0;})):parseFloat(l.amount)>0;
     if(!has)return '';
     var cells;
@@ -24955,8 +25005,10 @@ function quoteBuildHTML(q){
 
   // Service: per-cont-type columns
   const svcTypeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
-  const svcRows=QUOTE_SERVICES.map(function(n){
-    var s=q.service[n]||{};if(!s.on)return '';
+  const svcArr=_qRowsToArray(q.service,QUOTE_SERVICES);
+  const svcRows=svcArr.map(function(s){
+    const n=s.name||'';
+    if(!n||!s.on)return '';
     let cells;
     if(types.length){cells=types.map(function(t){var p=(s.prices&&s.prices[t]);return '<td style="text-align:right">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');}
     else cells='<td style="text-align:right">'+(s.amount?parseFloat(s.amount).toLocaleString():'-')+'</td>';
@@ -24976,13 +25028,13 @@ function quoteBuildHTML(q){
     +(oceanHTML?'<div class="sec"><div class="sec-t">Ocean Freight</div>'+oceanHTML+'</div>':'')
     +(localRows?'<div class="sec"><div class="sec-t">Local Charge</div><table><thead><tr><th>Charge</th><th>Currency</th>'+localHead+'<th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div>':'')
     +(svcRows?'<div class="sec"><div class="sec-t">Local Service</div><table><thead><tr><th>Service</th>'+svcHead+'<th>Currency</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div>':'')
-    +'<div class="sec"><div class="sec-t">Notes</div>'
+    +((q.payment||q.freetime||q.routing||q.note)?('<div class="sec"><div class="sec-t">Notes</div>'
       +'<div class="info">'
-      +'<div><b>Payment Term</b>'+q.payment+'</div>'
-      +'<div><b>Free Time</b>'+q.freetime+'</div>'
-      +'<div style="grid-column:1/-1"><b>Routing</b>'+q.routing+'</div>'
+      +(q.payment?'<div><b>Payment Term</b>'+q.payment+'</div>':'')
+      +(q.freetime?'<div><b>Free Time</b>'+q.freetime+'</div>':'')
+      +(q.routing?'<div style="grid-column:1/-1"><b>Routing</b>'+q.routing+'</div>':'')
       +(q.note?'<div style="grid-column:1/-1"><b>Special Note</b>'+q.note+'</div>':'')
-      +'</div></div>'
+      +'</div></div>'):'')
     +'<div class="foot"><strong>'+(window._companyInfo&&window._companyInfo.name||'COCOSEA CO., LTD')+'</strong><br>'
       +(window._companyInfo&&window._companyInfo.address||'')+'<br>'
       +'Hotline: '+(window._companyInfo&&window._companyInfo.hotline||'')+' • Email: '+(window._companyInfo&&window._companyInfo.email||'')+' • '+(window._companyInfo&&window._companyInfo.website||'')+'</div>'
