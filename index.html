@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.88';
+window.APP_BUILD='v3.89';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -12311,15 +12311,24 @@ function _openSvcPayCmdPopup(key){
   const sp=supplierKey?(cache.partners[supplierKey]||{}):{};
   const bookingNo=r.bookingNo||r.jobNo||'—';
   const nccName=sp.shortname||supplierKey||'—';
+  // Sà Lan lưu thông tin ngân hàng dạng TEXT TỰ DO trong field "remark" (STK ngân hàng / Ghi chú) —
+  // KHÁC với các loại đối tác khác (dùng field cấu trúc riêng acctName/bankAcc/bankName ở box "Thông
+  // tin ngân hàng"). Đọc ĐÚNG nguồn tương ứng, tránh hiện trống cho Sà Lan như trước đây.
+  const isSaLan=sp&&_partnerHasType&&_partnerHasType(sp,'salan');
   const acctName=sp.acctName||sp.enName||sp.fullname||'';
   const bankAcc=sp.bankAcc||'';
   const bankName=sp.bankName||'';
-  const missingBank=supplierKey&&!bankAcc&&!bankName;
+  const saLanBankText=(sp.remark||'').replace(/\r?\n+/g,' - ').trim();
+  const missingBank=supplierKey&&(isSaLan?!saLanBankText:(!bankAcc&&!bankName));
 
   const parts=[bookingNo, cost.toLocaleString()+' x '+qty+' '+unit+' = '+total.toLocaleString(), nccName];
-  if(bankAcc)parts.push(bankAcc);
-  if(bankName)parts.push(bankName);
-  if(acctName)parts.push(acctName);
+  if(isSaLan){
+    if(saLanBankText)parts.push(saLanBankText);
+  } else {
+    if(bankAcc)parts.push(bankAcc);
+    if(bankName)parts.push(bankName);
+    if(acctName)parts.push(acctName);
+  }
   const cmdText=parts.join(' - ');
 
   g('combineOv').innerHTML='<div class="modal" style="max-width:520px">'
@@ -14496,12 +14505,14 @@ function openPartnerModal(name){
     <div class="fi full"><label class="lbl">Tên tiếng Anh (Company)</label><input type="text" id="pf_enName" value="${p.enName||''}" placeholder="Full English company name"/></div>
     <div class="fi full"><label class="lbl">Tên tiếng Anh rút gọn (ký tên cuối văn bản, cũng dùng làm tên "To:" trên mail)</label><input type="text" id="pf_enShort" value="${p.enShort||''}" placeholder="VD: LINDA ASIA CO., LTD"/></div>
     <div class="fi full"><label class="lbl">Địa chỉ tiếng Anh</label><input type="text" id="pf_enAddr" value="${p.enAddr||''}" placeholder="English address"/></div>
-    <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Thông tin ngân hàng (cho Invoice)</div></div>
-    <div class="fi full"><label class="lbl">ACCOUNT NAME</label><input type="text" id="pf_acctName" value="${p.acctName||p.enName||''}" placeholder="Beneficiary name"/></div>
-    <div class="fi"><label class="lbl">ACCOUNT NUMBER (USD)</label><input type="text" id="pf_bankAcc" value="${p.bankAcc||''}" placeholder="USD account number"/></div>
-    <div class="fi"><label class="lbl">SWIFT CODE</label><input type="text" id="pf_swift" value="${p.swift||''}" placeholder="SGTTVNVX"/></div>
-    <div class="fi full"><label class="lbl">BANK NAME</label><input type="text" id="pf_bankName" value="${p.bankName||''}" placeholder="Bank name"/></div>
-    <div class="fi full"><label class="lbl">BANK ADDRESS</label><input type="text" id="pf_bankAddr" value="${p.bankAddr||''}" placeholder="Bank address"/></div>
+    </div>
+    <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Thông tin ngân hàng</div></div>
+    <div class="fi full"><label class="lbl">Tên chủ tài khoản</label><input type="text" id="pf_acctName" value="${p.acctName||p.enName||''}" placeholder="Beneficiary name"/></div>
+    <div class="fi"><label class="lbl">Số tài khoản</label><input type="text" id="pf_bankAcc" value="${p.bankAcc||''}" placeholder="Account number"/></div>
+    <div class="fi"><label class="lbl">SWIFT CODE (nếu có)</label><input type="text" id="pf_swift" value="${p.swift||''}" placeholder="SGTTVNVX"/></div>
+    <div class="fi full"><label class="lbl">Tên ngân hàng</label><input type="text" id="pf_bankName" value="${p.bankName||''}" placeholder="Bank name"/></div>
+    <div class="fi full"><label class="lbl">Địa chỉ ngân hàng (nếu có)</label><input type="text" id="pf_bankAddr" value="${p.bankAddr||''}" placeholder="Bank address"/></div>
+    <div id="pf_stampFields" style="display:${(p.types?p.types.includes('shipper'):p.type==='shipper')?'contents':'none'}">
     <div class="fi full" style="border-top:1px dashed var(--border-light);padding-top:.5rem;margin-top:.25rem"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.5px">Con mộc (chèn vào chứng từ)</div></div>
     <div class="fi full">
       <input type="hidden" id="pf_stamp" value="${p.stamp||''}"/>
@@ -14577,8 +14588,11 @@ function _partnerTypeChecksHtml(cls, curTypes, onchangeFn){
 // Hiện/ẩn phần thông tin Shipper (tiếng Anh) ngay khi tick/bỏ tick checkbox "Shipper"
 function _pfTypeChanged(){
   const checked=_readCheckedTypes('pf_type_cb');
+  const isShipper=checked.indexOf('shipper')>-1?'contents':'none';
   const el=g('pf_shipperFields');
-  if(el) el.style.display=checked.indexOf('shipper')>-1?'contents':'none';
+  if(el) el.style.display=isShipper;
+  const stampEl=g('pf_stampFields');
+  if(stampEl) stampEl.style.display=isShipper;
 }
 window._pfTypeChanged=_pfTypeChanged;
 
