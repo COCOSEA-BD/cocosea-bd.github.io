@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.89';
+window.APP_BUILD='v3.90';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1398,10 +1398,21 @@ auth.onAuthStateChanged(async (user) => {
       console.error('Profile load error:', e);
       currentProfile = {role:'admin',name:user.email,avatar:user.email.slice(0,2).toUpperCase(),email:user.email};
     }
+    // Tải cài đặt bảo mật TRƯỚC (cần biết deviceApproval bật/tắt trước khi quyết định có kiểm tra
+    // thiết bị hay không) — rồi mới quyết định vào thẳng app hay chặn lại chờ Admin duyệt.
+    await new Promise(function(resolve){ _loadSecuritySettings(resolve); });
+    if(_securitySettings.deviceApproval&&_securitySettings.deviceApproval.enabled&&currentProfile.role!=='admin'){
+      const deviceName=_detectDeviceName();
+      const devStatus=await _checkAndRegisterDevice(user.uid,user.email,deviceName);
+      if(devStatus!=='approved'){
+        setLoading(false);
+        showDevicePendingScreen(devStatus,deviceName);
+        return; // KHÔNG startListeners()/showApp() — thiết bị chưa được duyệt, không tải dữ liệu gì.
+      }
+    }
     startListeners();
     showApp();
     setLoading(false);
-    _loadSecuritySettings(function(){_applySecuritySettings();});
   } else {
     currentUser = null; currentProfile = null;
     _stopInactivityTracker();
@@ -1445,7 +1456,71 @@ async function doLogout(){
 let _inactivityTimer=null;
 let _inactivityListenerAttached=false;
 let _pwCheckTimer=null;
-let _securitySettings={inactivity:{enabled:false,minutes:30},password:{enabled:false,minutes:10080},backDashboard:{enabled:true,minutes:30}}; // defaults
+let _securitySettings={inactivity:{enabled:false,minutes:30},password:{enabled:false,minutes:10080},backDashboard:{enabled:true,minutes:30},deviceApproval:{enabled:false}}; // defaults
+
+// ═══════════════════════════════════════════════════════════════════════
+// QUẢN LÝ THIẾT BỊ THEO NGƯỜI DÙNG — mỗi thiết bị đăng nhập lần đầu cần
+// Admin duyệt mới được vào. Admin LUÔN miễn duyệt (an toàn — tránh tự khóa
+// chính mình khỏi hệ thống nếu đổi máy mà không còn Admin nào khác duyệt).
+// ═══════════════════════════════════════════════════════════════════════
+
+// Device ID — sinh 1 lần, lưu localStorage (bền vững theo TRÌNH DUYỆT/THIẾT BỊ này). Xóa dữ liệu
+// trình duyệt hoặc đổi trình duyệt khác sẽ được coi là thiết bị MỚI (đúng bản chất, không có cách nào
+// định danh phần cứng chính xác hơn từ web app).
+function _getDeviceId(){
+  let id=localStorage.getItem('cocoflow_device_id');
+  if(!id){
+    id='dev_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);
+    localStorage.setItem('cocoflow_device_id',id);
+  }
+  return id;
+}
+
+// Nhận diện tên thiết bị (hiển thị cho Admin dễ nhận biết) từ User-Agent — chỉ mang tính GỢI Ý, không
+// phải định danh chính xác tuyệt đối.
+function _detectDeviceName(){
+  const ua=navigator.userAgent||'';
+  let os='Unknown OS';
+  if(/Windows/.test(ua))os='Windows';
+  else if(/Mac OS X/.test(ua)&&!/iPhone|iPad|iPod/.test(ua))os='macOS';
+  else if(/Android/.test(ua))os='Android';
+  else if(/iPhone|iPad|iPod/.test(ua))os='iOS';
+  else if(/Linux/.test(ua))os='Linux';
+  let browser='Unknown Browser';
+  if(/Edg\//.test(ua))browser='Edge';
+  else if(/OPR\//.test(ua))browser='Opera';
+  else if(/Chrome\//.test(ua)&&!/Edg\//.test(ua))browser='Chrome';
+  else if(/Firefox\//.test(ua))browser='Firefox';
+  else if(/Safari\//.test(ua)&&!/Chrome\//.test(ua))browser='Safari';
+  return browser+' trên '+os;
+}
+
+// Kiểm tra/đăng ký thiết bị đang dùng cho user hiện tại — khóa document = uid_deviceId để TÁCH BIỆT
+// đúng từng user dù nhiều người dùng chung 1 máy/trình duyệt (mỗi user trên cùng máy có bản ghi
+// duyệt RIÊNG, không lây trạng thái của nhau). Trả về 'approved'/'pending'/'rejected'.
+async function _checkAndRegisterDevice(uid,email,deviceName){
+  const deviceId=_getDeviceId();
+  const docId=uid+'_'+deviceId;
+  try{
+    const snap=await db.collection('userDevices').doc(docId).get();
+    if(snap.exists){
+      const d=snap.data();
+      // Cập nhật lastSeenAt (không đổi status) — không await để không làm chậm luồng đăng nhập.
+      db.collection('userDevices').doc(docId).set({lastSeenAt:Date.now(),deviceName:deviceName},{merge:true}).catch(function(){});
+      return d.status||'pending';
+    }
+    // Thiết bị hoàn toàn mới — tạo bản ghi 'pending', LUÔN chờ Admin duyệt (không tự động duyệt).
+    await db.collection('userDevices').doc(docId).set({
+      uid:uid,email:email,deviceId:deviceId,deviceName:deviceName,userAgent:navigator.userAgent||'',
+      status:'pending',firstSeenAt:Date.now(),lastSeenAt:Date.now()
+    });
+    return 'pending';
+  }catch(e){
+    console.error('_checkAndRegisterDevice lỗi:',e);
+    // Lỗi kết nối/quyền — KHÔNG chặn đăng nhập (tránh khóa nhầm người dùng vì lỗi mạng tạm thời).
+    return 'approved';
+  }
+}
 
 // Load security settings từ Firestore (gọi khi user login)
 function _loadSecuritySettings(cb){
@@ -1920,6 +1995,49 @@ function _ovHdrBtns(id){
   +'</div>';
 }
 window._ovHdrBtns=_ovHdrBtns;
+
+function showDevicePendingScreen(status,deviceName){
+  setLoading(false);
+  g('loginWrap').style.display='none';
+  g('appShell').style.display='none';
+  let el=g('devicePendingWrap');
+  if(!el){ el=document.createElement('div'); el.id='devicePendingWrap'; document.body.appendChild(el); }
+  const isRejected=status==='rejected';
+  const icon=isRejected?'ti-ban':'ti-clock-hour-4';
+  const color=isRejected?'#DC2626':'#D97706';
+  const title=isRejected?'Thiết bị đã bị từ chối':'Thiết bị đang chờ phê duyệt';
+  const msg=isRejected
+    ?'Quản trị viên đã từ chối quyền truy cập cho thiết bị này. Vui lòng liên hệ Admin nếu đây là nhầm lẫn.'
+    :'Đây là lần đầu bạn đăng nhập trên thiết bị này. Quản trị viên cần phê duyệt trước khi bạn có thể sử dụng hệ thống. Vui lòng liên hệ Admin để được duyệt nhanh.';
+  el.style.cssText='display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0B1B2B;padding:20px;position:fixed;inset:0;z-index:9999';
+  el.innerHTML='<div style="background:#fff;border-radius:16px;padding:2.5rem 2rem;max-width:420px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
+    +'<div style="width:64px;height:64px;border-radius:50%;background:'+color+'15;display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem"><i class="ti '+icon+'" style="font-size:32px;color:'+color+'"></i></div>'
+    +'<h2 style="font-size:18px;font-weight:800;margin:0 0 .5rem;color:#0F172A">'+title+'</h2>'
+    +'<p style="font-size:13px;color:#64748B;line-height:1.6;margin:0 0 1.5rem">'+msg+'</p>'
+    +'<div style="background:#F5F7FA;border-radius:10px;padding:10px 14px;margin-bottom:1.5rem;text-align:left">'
+      +'<div style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;margin-bottom:3px">Thiết bị này</div>'
+      +'<div style="font-size:12.5px;font-weight:600;color:#334155">'+(deviceName||'—')+'</div>'
+    +'</div>'
+    +'<button class="btn pri" style="width:100%;padding:11px;margin-bottom:8px" onclick="_recheckDeviceApproval()"><i class="ti ti-refresh"></i> Kiểm tra lại</button>'
+    +'<button class="btn" style="width:100%;padding:11px" onclick="auth.signOut()"><i class="ti ti-logout"></i> Đăng xuất</button>'
+  +'</div>';
+}
+window.showDevicePendingScreen=showDevicePendingScreen;
+
+async function _recheckDeviceApproval(){
+  if(!currentUser){return;}
+  setLoading(true,'Đang kiểm tra...');
+  const deviceName=_detectDeviceName();
+  const status=await _checkAndRegisterDevice(currentUser.uid,currentUser.email,deviceName);
+  if(status==='approved'){
+    toast('Thiết bị đã được duyệt!');
+    startListeners(); showApp();
+  } else {
+    setLoading(false);
+    showDevicePendingScreen(status,deviceName);
+  }
+}
+window._recheckDeviceApproval=_recheckDeviceApproval;
 
 function showLogin(){
   setLoading(false);
@@ -19098,6 +19216,83 @@ function downloadEmlFile(id, tt){
   toast('Đã tải file .eml — mở bằng Outlook/Thunderbird để gửi.');
 }
 
+// Danh sách thiết bị theo người dùng — nhóm theo email, sort client-side (tránh phụ thuộc Firestore
+// index cho collection mới 'userDevices'). Admin luôn miễn duyệt nên không có bản ghi, không xuất
+// hiện trong danh sách này (đúng thiết kế).
+async function renderDeviceMgmtList(){
+  const el=g('deviceMgmtList'); if(!el)return;
+  el.innerHTML='Đang tải...';
+  try{
+    const snap=await db.collection('userDevices').get();
+    const devices=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+    devices.sort(function(a,b){return (b.lastSeenAt||0)-(a.lastSeenAt||0);});
+    if(!devices.length){ el.innerHTML='<div style="text-align:center;padding:1rem;color:var(--text-tertiary)">Chưa có thiết bị nào cần duyệt</div>'; return; }
+    const byUser={};
+    devices.forEach(function(d){
+      const key=d.email||d.uid||'?';
+      if(!byUser[key])byUser[key]=[];
+      byUser[key].push(d);
+    });
+    const statusBadge=function(status){
+      const map={pending:{l:'Chờ duyệt',c:'#D97706',bg:'#D9770615'},approved:{l:'Đã duyệt',c:'#059669',bg:'#05966915'},rejected:{l:'Từ chối',c:'#DC2626',bg:'#DC262615'}};
+      const s=map[status]||map.pending;
+      return '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:12px;background:'+s.bg+';color:'+s.c+'">'+s.l+'</span>';
+    };
+    el.innerHTML=Object.keys(byUser).sort().map(function(email){
+      const list=byUser[email];
+      const pendingCount=list.filter(function(d){return d.status==='pending';}).length;
+      return '<div style="border:1px solid var(--border-light);border-radius:8px;margin-bottom:8px;overflow:hidden">'
+        +'<div style="padding:8px 12px;background:var(--bg-secondary);font-weight:700;font-size:12.5px;display:flex;align-items:center;gap:8px">'
+          +'<i class="ti ti-user-circle"></i>'+email
+          +(pendingCount?'<span style="font-size:10px;font-weight:700;background:#D9770615;color:#D97706;padding:2px 8px;border-radius:12px">'+pendingCount+' chờ duyệt</span>':'')
+        +'</div>'
+        +list.map(function(d){
+          const dt=d.lastSeenAt?new Date(d.lastSeenAt).toLocaleString('vi-VN'):'—';
+          const first=d.firstSeenAt?new Date(d.firstSeenAt).toLocaleDateString('vi-VN'):'—';
+          return '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid var(--border-light);flex-wrap:wrap">'
+            +'<i class="ti ti-device-desktop" style="color:var(--text-tertiary)"></i>'
+            +'<div style="flex:1;min-width:160px"><div style="font-size:12px;font-weight:600">'+(d.deviceName||'—')+'</div><div style="font-size:10.5px;color:var(--text-tertiary)">Lần đầu: '+first+' • Hoạt động gần nhất: '+dt+'</div></div>'
+            +statusBadge(d.status)
+            +'<div style="display:flex;gap:4px">'
+              +(d.status!=='approved'?'<button class="btn sm" style="color:var(--green);border-color:var(--green)" onclick="_deviceSetStatus(\''+d._id+'\',\'approved\')"><i class="ti ti-check"></i> Duyệt</button>':'')
+              +(d.status!=='rejected'?'<button class="btn sm" style="color:var(--red);border-color:var(--red)" onclick="_deviceSetStatus(\''+d._id+'\',\'rejected\')"><i class="ti ti-x"></i> Từ chối</button>':'')
+              +(d.status==='approved'?'<button class="rac red" title="Thu hồi — bắt duyệt lại từ đầu" onclick="_deviceRevoke(\''+d._id+'\')"><i class="ti ti-trash"></i></button>':'')
+            +'</div>'
+          +'</div>';
+        }).join('')
+      +'</div>';
+    }).join('');
+  }catch(e){
+    el.innerHTML='<div style="color:var(--red);font-size:12px">Lỗi tải danh sách: '+e.message+'</div>';
+  }
+}
+window.renderDeviceMgmtList=renderDeviceMgmtList;
+
+async function _deviceSetStatus(docId,status){
+  if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
+  setLoading(true,'Đang cập nhật...');
+  try{
+    await db.collection('userDevices').doc(docId).set({status:status,approvedBy:currentUser.email,approvedAt:Date.now()},{merge:true});
+    toast(status==='approved'?'Đã duyệt thiết bị':'Đã từ chối thiết bị');
+    renderDeviceMgmtList();
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window._deviceSetStatus=_deviceSetStatus;
+
+async function _deviceRevoke(docId){
+  if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
+  if(!confirm('Thu hồi quyền truy cập thiết bị này? Người dùng sẽ phải chờ duyệt lại từ đầu.'))return;
+  setLoading(true,'Đang thu hồi...');
+  try{
+    await fsDel('userDevices',docId);
+    toast('Đã thu hồi — thiết bị này cần duyệt lại');
+    renderDeviceMgmtList();
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window._deviceRevoke=_deviceRevoke;
+
 async function saveSecuritySettings(){
   if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
   const inOn=g('set_inactivity_on')?.checked||false;
@@ -19107,12 +19302,14 @@ async function saveSecuritySettings(){
   const closeOn=g('set_close_on')?.checked||false;
   const dashOn=g('set_dash_on')?.checked||false;
   const dashMin=Math.max(1,parseInt(g('set_dash_min')?.value)||30);
+  const deviceOn=g('set_device_on')?.checked||false;
   // Luôn lưu giá trị người dùng nhập, bất kể toggle on/off
   const s={
     inactivity:{enabled:inOn,minutes:inMin},
     password:{enabled:pwOn,minutes:pwMin},
     closeLogout:closeOn,
     backDashboard:{enabled:dashOn,minutes:dashMin},
+    deviceApproval:{enabled:deviceOn},
     updatedAt:Date.now(),updatedBy:currentUser.email
   };
   // Optimistic update trước await để re-render hiển thị đúng
@@ -19129,10 +19326,12 @@ async function saveSecuritySettings(){
       const pwLabel=bodyEl.querySelector('#set_pw_label');
       const clLabel=bodyEl.querySelector('#set_close_label');
       const dashLabel=bodyEl.querySelector('#set_dash_label');
+      const deviceLabel=bodyEl.querySelector('#set_device_label');
       if(inLabel)inLabel.textContent=inOn?'Bật':'Tắt';
       if(pwLabel)pwLabel.textContent=pwOn?'Bật':'Tắt';
       if(clLabel)clLabel.textContent=closeOn?'Bật':'Tắt';
       if(dashLabel)dashLabel.textContent=dashOn?'Bật':'Tắt';
+      if(deviceLabel)deviceLabel.textContent=deviceOn?'Bật':'Tắt';
     }
   }catch(e){
     _securitySettings=Object.assign({},_securitySettings); // keep optimistic
@@ -21474,7 +21673,20 @@ function renderSettings(){
           +'<span id="set_close_label">'+(_securitySettings.closeLogout?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
+      // Quản lý thiết bị theo người dùng
+      +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+        +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Yêu cầu duyệt thiết bị đăng nhập</div><div style="font-size:11.5px;color:var(--text-secondary)">Thiết bị mới cần Admin phê duyệt mới được vào hệ thống. Admin luôn được miễn duyệt.</div></div>'
+        +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
+          +'<input type="checkbox" id="set_device_on" '+((_securitySettings.deviceApproval||{}).enabled?'checked':'')+' onchange="this.nextElementSibling.textContent=this.checked?\'Bật\':\'Tắt\'\" style="width:16px;height:16px"/>'
+          +'<span id="set_device_label">'+((_securitySettings.deviceApproval||{}).enabled?'Bật':'Tắt')+'</span>'
+        +'</label>'
       +'</div>'
+      +'</div>'
+    )
+    +stgBox('devices','ti-devices','Quản lý thiết bị theo người dùng',
+      '<button class="btn sm" onclick="renderDeviceMgmtList()"><i class="ti ti-refresh"></i> Tải lại</button>',
+      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Thiết bị đăng nhập lần đầu cần được duyệt ở đây mới sử dụng được hệ thống (nếu đã bật "Yêu cầu duyệt thiết bị đăng nhập" ở trên). Admin luôn được miễn duyệt nên sẽ không xuất hiện trong danh sách này.</div>'
+      +'<div id="deviceMgmtList" style="font-size:12.5px;color:var(--text-tertiary)">Đang tải...</div>'
     )
     +_contractPartyASettingsHtml()
     +_warehouseSettingsHtml()
@@ -21482,6 +21694,7 @@ function renderSettings(){
   renderCargoNamesList();
   renderAcctInfoList();
   renderWarehouseList();
+  renderDeviceMgmtList();
   if(typeof renderSvcCatList==='function')renderSvcCatList();
   // Inject Backup & Restore section
   const pgS=g('page-settings');
