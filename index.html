@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.86';
+window.APP_BUILD='v3.87';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -25713,33 +25713,33 @@ function renderTruckingReport(){
   // Thu thập tất cả rows trucking từ mọi lô
   let rows=[];
   allLots.forEach(function(r){
-    (r.truckings||[]).forEach(function(trk){
+    (r.truckings||[]).forEach(function(trk,idx){
       if(!trk||(!trk.date&&!trk.truckNo&&!trk.contNo))return;
       rows.push(Object.assign({},trk,{
-        _lotId:r._id, _tt:(r._tt||'xuat'),
+        _lotId:r._id, _tt:(r._tt||'xuat'), _itemIdx:idx,
         _bookingNo:r.bookingNo||r.jobNo||'—',
         _shipper:r.shipper||r.supplier||'—',
         _etd:r.etd||''
       }));
     });
   });
-  // Sort theo state hiện tại
+  // Sort theo state hiện tại — GIỮ NGUYÊN mặc định theo Ngày đóng (không đổi theo filter ETD)
   const _s=window._truckRptSort;
   rows.sort(function(a,b){
     const va=(a[_s.col]||''), vb=(b[_s.col]||'');
     return _s.dir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
   });
 
-  // Filter state
-  const fs=window._truckRptFilter=window._truckRptFilter||{shipper:'',wh:'',dateFrom:'',dateTo:'',status:'',cont:''};
+  // Filter state — ĐỔI sang lọc theo ETD của lô hàng (theo đúng yêu cầu), không còn lọc theo Ngày đóng
+  const fs=window._truckRptFilter=window._truckRptFilter||{shipper:'',wh:'',etdFrom:'',etdTo:'',cont:''};
 
   // Apply filters
   let filtered=rows.filter(function(r){
     if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
     if(fs.wh&&!(r.wh||'').toLowerCase().includes(fs.wh.toLowerCase()))return false;
     if(fs.cont&&!(r.contNo||'').toLowerCase().includes(fs.cont.toLowerCase()))return false;
-    if(fs.dateFrom&&(r.date||'')<fs.dateFrom)return false;
-    if(fs.dateTo&&(r.date||'')>fs.dateTo)return false;
+    if(fs.etdFrom&&(r._etd||'')<fs.etdFrom)return false;
+    if(fs.etdTo&&(r._etd||'')>fs.etdTo)return false;
     return true;
   });
 
@@ -25748,11 +25748,13 @@ function renderTruckingReport(){
 
   const bodyRows=filtered.map(function(r,i){
     const dateDisp=r.date?fmtDMY(r.date):'—';
+    const etdDisp=r._etd?fmtDMY(r._etd):'—';
     const bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
     return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\'trucking\')">'
       +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
       +'<td style="'+tdS+'"><span style="color:#1a4b8c;font-weight:600">'+(r.bookingNo||r._bookingNo||'—')+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-size:11.5px">'+(r._shipper||'—')+'</span></td>'
+      +'<td style="'+tdS+'"><span style="font-size:11px;color:var(--text-secondary)">'+etdDisp+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-weight:700;color:#1a4b8c">'+dateDisp+'</span></td>'
       +'<td style="'+tdS+'">'+(r.vol||'1')+'</td>'
       +'<td style="'+tdS+'">'+(r.typeCont||'—')+'</td>'
@@ -25776,27 +25778,33 @@ function renderTruckingReport(){
       +'<i class="ti ti-truck" style="font-size:20px;color:#1a4b8c"></i>'
       +'<h2 style="font-size:16px;font-weight:700;margin:0">Trucking Report</h2>'
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lệnh</span>'
-      +'<button class="btn sm" onclick="renderTruckingReport()" title="Tải lại dữ liệu mới nhất" style="margin-left:auto"><i class="ti ti-refresh"></i> Refresh</button>'
+      +'<div style="display:flex;gap:6px;margin-left:auto">'
+        +'<button class="btn sm" onclick="truckingReportExportExcel()" title="Xuất Excel (theo ETD đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+        +'<button class="btn sm" onclick="truckingReportExportPDF()" title="Xuất PDF (theo ETD đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
+        +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Số xe đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="truckingReportImportExcel(this)"/></label>'
+        +'<button class="btn sm" onclick="renderTruckingReport()" title="Tải lại dữ liệu mới nhất"><i class="ti ti-refresh"></i> Refresh</button>'
+      +'</div>'
     +'</div>'
     // Filters
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
       +'<input type="text" placeholder="🔍 Shipper/Supplier" value="'+(fs.shipper||'')+'" oninput="window._truckRptFilter.shipper=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:130px"/>'
       +'<input type="text" placeholder="🏭 Kho đóng hàng" value="'+(fs.wh||'')+'" oninput="window._truckRptFilter.wh=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:130px"/>'
       +'<input type="text" placeholder="🔢 Số Cont" value="'+(fs.cont||'')+'" oninput="window._truckRptFilter.cont=this.value;renderTruckingReport()" style="font-size:12px;flex:1;min-width:120px"/>'
-      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">Ngày:'
-        +'<input type="date" value="'+(fs.dateFrom||'')+'" oninput="window._truckRptFilter.dateFrom=this.value;renderTruckingReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">ETD:'
+        +'<input type="date" value="'+(fs.etdFrom||'')+'" oninput="window._truckRptFilter.etdFrom=this.value;renderTruckingReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
         +'<span>→</span>'
-        +'<input type="date" value="'+(fs.dateTo||'')+'" oninput="window._truckRptFilter.dateTo=this.value;renderTruckingReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+        +'<input type="date" value="'+(fs.etdTo||'')+'" oninput="window._truckRptFilter.etdTo=this.value;renderTruckingReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
       +'</div>'
-      +'<button class="btn sm" onclick="window._truckRptFilter={shipper:\'\',wh:\'\',cont:\'\',dateFrom:\'\',dateTo:\'\'};renderTruckingReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
+      +'<button class="btn sm" onclick="window._truckRptFilter={shipper:\'\',wh:\'\',cont:\'\',etdFrom:\'\',etdTo:\'\'};renderTruckingReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
     +'</div>'
     // Table
     +'<div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:10px">'
-    +'<table style="width:100%;border-collapse:collapse;min-width:900px">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:960px">'
       +'<thead><tr>'
         +'<th style="'+thS+';width:36px">#</th>'
         +'<th style="'+thS+'">Booking No</th>'
         +'<th style="'+thS+'">Shipper</th>'
+        +'<th style="'+thS+'">ETD</th>'
         +'<th style="'+thS+';cursor:pointer;user-select:none" onclick="window._truckRptSort={col:\'date\',dir:(window._truckRptSort.col===\'date\'&&window._truckRptSort.dir===\'desc\'?\'asc\':\'desc\')};renderTruckingReport()">Ngày đóng'+_sortIcon('date')+'</th>'
         +'<th style="'+thS+';width:40px">Vol</th>'
         +'<th style="'+thS+'">Type</th>'
@@ -25807,11 +25815,135 @@ function renderTruckingReport(){
         +'<th style="'+thS+'">Số cont</th>'
         +'<th style="'+thS+'">Số xe</th>'
       +'</tr></thead>'
-      +'<tbody>'+(bodyRows||'<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-truck" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu trucking</td></tr>')+'</tbody>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="13" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-truck" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu trucking</td></tr>')+'</tbody>'
     +'</table></div>'
   +'</div>';
 }
 window.renderTruckingReport=renderTruckingReport;
+
+async function truckingReportExportExcel(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const fs=window._truckRptFilter||{};
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=[];
+  allLots.forEach(function(r){
+    (r.truckings||[]).forEach(function(trk,idx){
+      if(!trk||(!trk.date&&!trk.truckNo&&!trk.contNo))return;
+      rows.push(Object.assign({},trk,{_lot:r,_lotId:r._id,_tt:(r._tt||'xuat'),_itemIdx:idx,
+        _bookingNo:r.bookingNo||r.jobNo||'—',_shipper:r.shipper||r.supplier||'—',_etd:r.etd||''}));
+    });
+  });
+  rows=rows.filter(function(r){
+    if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
+    if(fs.wh&&!(r.wh||'').toLowerCase().includes(fs.wh.toLowerCase()))return false;
+    if(fs.cont&&!(r.contNo||'').toLowerCase().includes(fs.cont.toLowerCase()))return false;
+    if(fs.etdFrom&&(r._etd||'')<fs.etdFrom)return false;
+    if(fs.etdTo&&(r._etd||'')>fs.etdTo)return false;
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  setLoading(true,'Đang tạo Excel...');
+  try{
+    const doneJobIds={};
+    for(const r of rows){ if(!doneJobIds[r._lotId]){ await _svcRptEnsureJobId(r._lot,r._tt); doneJobIds[r._lotId]=true; } }
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoFlow ERP'; wb.created=new Date();
+    const ws=wb.addWorksheet('Trucking Report');
+    // "STT dòng" — Item Index trong mảng truckings[] của lô, kết hợp với Job ID để khớp ĐÚNG dòng khi
+    // Import (1 lô có thể có nhiều dòng trucking khác nhau, không thể chỉ dùng Job ID).
+    const headers=['Job ID','STT dòng','Booking No','Shipper','ETD','Ngày đóng','Vol','Type','Kho đóng','Full Return','Route','NCC','Số cont','Số xe'];
+    ws.columns=[{width:11},{width:9},{width:16},{width:16},{width:12},{width:12},{width:7},{width:9},{width:16},{width:12},{width:14},{width:14},{width:14},{width:14}];
+    _svcRptXlsxHeader(ws,headers);
+    rows.forEach(function(r,i){
+      ws.addRow([
+        r._lot.jobNo||'', r._itemIdx, r.bookingNo||r._bookingNo||'', r._shipper||'',
+        r._etd?fmtDMY(r._etd):'', r.date?fmtDMY(r.date):'', r.vol||'1', r.typeCont||'',
+        r.wh||'', r.fullReturn||'', r.route||'', r.ncc||'', r.contNo||'', r.truckNo||''
+      ]);
+      _svcRptXlsxStyleDataRow(ws,i+2,[14]); // "Số xe" — cột cần điền
+    });
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='Trucking_Report_'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel — cột "Số xe" tô vàng là cột cần điền, giữ nguyên "Job ID" + "STT dòng" khi nhập lại');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.truckingReportExportExcel=truckingReportExportExcel;
+
+function truckingReportExportPDF(){
+  const fs=window._truckRptFilter||{};
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=[];
+  allLots.forEach(function(r){
+    (r.truckings||[]).forEach(function(trk){
+      if(!trk||(!trk.date&&!trk.truckNo&&!trk.contNo))return;
+      rows.push(Object.assign({},trk,{_bookingNo:r.bookingNo||r.jobNo||'—',_shipper:r.shipper||r.supplier||'—',_etd:r.etd||''}));
+    });
+  });
+  rows=rows.filter(function(r){
+    if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
+    if(fs.wh&&!(r.wh||'').toLowerCase().includes(fs.wh.toLowerCase()))return false;
+    if(fs.cont&&!(r.contNo||'').toLowerCase().includes(fs.cont.toLowerCase()))return false;
+    if(fs.etdFrom&&(r._etd||'')<fs.etdFrom)return false;
+    if(fs.etdTo&&(r._etd||'')>fs.etdTo)return false;
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  const headers=['Booking No','Shipper','ETD','Ngày đóng','Vol','Type','Kho đóng','Full Return','Route','NCC','Số cont','Số xe'];
+  const dataRows=rows.map(function(r){
+    return [r._bookingNo||'—', r._shipper||'—', r._etd?fmtDMY(r._etd):'—', r.date?fmtDMY(r.date):'—',
+      r.vol||'1', r.typeCont||'—', r.wh||'—', r.fullReturn||'—', r.route||'—', r.ncc||'—', r.contNo||'—', r.truckNo||'—'];
+  });
+  _svcRptExportPDF('Trucking Report',headers,dataRows,'ETD: '+(fs.etdFrom?fmtDMY(fs.etdFrom):'—')+' → '+(fs.etdTo?fmtDMY(fs.etdTo):'—'));
+}
+window.truckingReportExportPDF=truckingReportExportPDF;
+
+function truckingReportImportExcel(input){
+  const file=input.files[0]; if(!file)return;
+  _svcRptReadImportFile(file,async function(rows){
+    if(!rows)return;
+    if(!rows.length||rows[0]['STT dòng']===undefined){toast('File thiếu cột "STT dòng" — hãy dùng đúng file đã xuất từ hệ thống','error');return;}
+    setLoading(true,'Đang nhập dữ liệu...');
+    let matched=0,skipped=0,updated=0;
+    // Gom theo lô (Job ID) để chỉ ghi Firestore 1 LẦN/lô dù có nhiều dòng thay đổi trong cùng lô
+    const byLot={};
+    for(const row of rows){
+      const jobId=(row['Job ID']||'').toString().trim();
+      const itemIdx=parseInt(row['STT dòng']);
+      if(!jobId||isNaN(itemIdx)){skipped++;continue;}
+      let r=(cache.xuat||[]).find(function(x){return x.jobNo===jobId;});
+      let tt='xuat';
+      if(!r){ r=(cache.nhap||[]).find(function(x){return x.jobNo===jobId;}); tt='nhap'; }
+      if(!r||!r.truckings||!r.truckings[itemIdx]){skipped++;continue;}
+      matched++;
+      const newTruckNo=(row['Số xe']||'').toString().trim();
+      const curTruckNo=r.truckings[itemIdx].truckNo||'';
+      if(newTruckNo&&newTruckNo!==curTruckNo){
+        if(!byLot[r._id])byLot[r._id]={r:r,tt:tt,changes:[]};
+        byLot[r._id].changes.push({idx:itemIdx,truckNo:newTruckNo});
+      }
+    }
+    for(const lotId in byLot){
+      const info=byLot[lotId];
+      const newTruckings=info.r.truckings.slice();
+      info.changes.forEach(function(c){ newTruckings[c.idx]=Object.assign({},newTruckings[c.idx],{truckNo:c.truckNo}); });
+      try{
+        await fsSet(colName(info.tt),lotId,{truckings:newTruckings});
+        info.r.truckings=newTruckings;
+        updated+=info.changes.length;
+      }catch(e){ console.error('Lỗi lưu Số xe cho lô '+lotId,e); }
+    }
+    setLoading(false);
+    toast('Đã nhập: '+updated+' dòng cập nhật Số xe, '+matched+' dòng khớp đúng, '+skipped+' dòng bỏ qua (thiếu/sai Job ID hoặc STT dòng)');
+    renderTruckingReport();
+    input.value='';
+  });
+}
+window.truckingReportImportExcel=truckingReportImportExcel;
 
 // ─────────── SCY REPORT ───────────
 // ═══════════════════════════════════════════════════════════════════════
@@ -25819,6 +25951,101 @@ window.renderTruckingReport=renderTruckingReport;
 // ═══════════════════════════════════════════════════════════════════════
 function _coReportDefaultFrom(){ const d=new Date(); d.setDate(d.getDate()-5); return d.toISOString().slice(0,10); }
 function _coReportDefaultTo(){ const d=new Date(); d.setDate(d.getDate()+2); return d.toISOString().slice(0,10); }
+
+// ═══════════════════════════════════════════════════════════════════════
+// HELPER DÙNG CHUNG — Export Excel/PDF + Import Excel cho 4 Service Report
+// (C/O, Phyto, Trucking, SCY). Đặt TRƯỚC renderCOReport() để dùng chung.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Đảm bảo lô hàng CÓ Job ID — lô cũ (tạo trước khi có hệ thống Job ID tự sinh) có thể chưa có. Tự
+// gán bằng ĐÚNG getNextJobNo() đã có sẵn (không phát minh cơ chế sinh mã mới), LƯU LUÔN vào Firestore
+// + cache để lần sau không phải gán lại — Job ID là khóa DUY NHẤT dùng để khớp khi Import Excel.
+async function _svcRptEnsureJobId(r,tt){
+  if(r.jobNo)return r.jobNo;
+  const jobNo=getNextJobNo(r.loaiHang||(tt==='nhap'?'IM - Nhập khẩu':'XK - Xuất khẩu'));
+  try{
+    await fsSet(colName(tt),r._id,{jobNo:jobNo});
+    r.jobNo=jobNo;
+    const idx=(cache[tt]||[]).findIndex(function(x){return x._id===r._id;});
+    if(idx>=0)cache[tt][idx].jobNo=jobNo;
+  }catch(e){ console.error('_svcRptEnsureJobId lỗi lưu Job ID:',e); }
+  return jobNo;
+}
+
+const SVC_RPT_COLORS={navy:'FF0C2C52',accent:'FF185FA5',fillHead:'FF0C2C52',fillEdit:'FFFEF3C7',border:'FFE2E6EA',zebra:'FFF7F9FB'};
+
+function _svcRptXlsxHeader(ws,headers,editableCols){
+  ws.addRow(headers);
+  const hdRow=ws.getRow(1);
+  hdRow.eachCell(function(cell,colNum){
+    cell.font={bold:true,color:{argb:'FFFFFFFF'},size:10};
+    cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:SVC_RPT_COLORS.fillHead}};
+    cell.alignment={vertical:'middle',horizontal:'center',wrapText:true};
+    cell.border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
+  });
+  hdRow.height=28;
+}
+
+function _svcRptXlsxStyleDataRow(ws,rowNum,editableColIdx){
+  const row=ws.getRow(rowNum);
+  row.eachCell(function(cell,colNum){
+    cell.border={top:{style:'thin',color:{argb:SVC_RPT_COLORS.border}},left:{style:'thin',color:{argb:SVC_RPT_COLORS.border}},bottom:{style:'thin',color:{argb:SVC_RPT_COLORS.border}},right:{style:'thin',color:{argb:SVC_RPT_COLORS.border}}};
+    cell.font={size:10};
+    if(rowNum%2===0)cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:SVC_RPT_COLORS.zebra}};
+    if(editableColIdx&&editableColIdx.indexOf(colNum)>=0){
+      cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:SVC_RPT_COLORS.fillEdit}};
+      cell.font={size:10,bold:true};
+    }
+  });
+}
+
+// Đọc file Excel import — khớp CHÍNH XÁC theo tên header đã biết trước (không đoán mò/fuzzy-match
+// vì hàm export/import cùng 1 bộ, luôn cùng định dạng). Trả về mảng object {header: value} theo
+// đúng header dòng 1. Cột "Job ID" BẮT BUỘC phải có, dùng làm khóa khớp lô hàng.
+function _svcRptReadImportFile(file,cb){
+  const XLSX=window.XLSX;
+  if(!XLSX){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:false});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
+      if(grid.length<2){toast('File không có dữ liệu','error');cb(null);return;}
+      const headers=(grid[0]||[]).map(function(h){return (h||'').toString().trim();});
+      const jobIdCol=headers.indexOf('Job ID');
+      if(jobIdCol<0){toast('File thiếu cột "Job ID" — hãy dùng đúng file đã xuất từ hệ thống, không xóa/đổi tên cột này','error');cb(null);return;}
+      const rows=grid.slice(1).filter(function(row){return row.some(function(c){return c!=='';});}).map(function(row){
+        const o={};
+        headers.forEach(function(h,i){ if(h)o[h]=row[i]!==undefined?row[i]:''; });
+        return o;
+      });
+      cb(rows);
+    }catch(err){ toast('Lỗi đọc file: '+err.message,'error'); cb(null); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// PDF — mở cửa sổ mới + in trình duyệt (CHỈ để xem/in/chia sẻ, không dùng để nhập lại — theo đúng
+// xác nhận). Style tối giản, khớp đúng cột đang hiển thị trên trang.
+function _svcRptExportPDF(title,headers,rows,subtitle){
+  const css='<style>body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#1a1a18;padding:20px 26px;margin:0}'
+    +'.hd{background:linear-gradient(135deg,#0C2C52,#185FA5);color:#fff;padding:14px 18px;border-radius:8px;margin-bottom:14px}'
+    +'.hd h1{font-size:17px;margin:0}.hd .sub{font-size:10.5px;opacity:.85;margin-top:2px}'
+    +'table{width:100%;border-collapse:collapse;font-size:10px}'
+    +'th{background:#0C2C52;color:#fff;padding:5px 7px;text-align:left;font-size:8.5px;text-transform:uppercase}'
+    +'td{padding:4.5px 7px;border-bottom:1px solid #EDEFF2}tr:nth-child(even) td{background:#F7F9FB}'
+    +'@media print{body{padding:10px}@page{margin:8mm;size:A4 landscape}}</style>';
+  const headHtml='<tr>'+headers.map(function(h){return '<th>'+h+'</th>';}).join('')+'</tr>';
+  const bodyHtml=rows.map(function(row){return '<tr>'+row.map(function(c){return '<td>'+(c==null?'':c)+'</td>';}).join('')+'</tr>';}).join('');
+  const html='<!DOCTYPE html><html><head><meta charset="UTF-8">'+css+'<title>'+title+'</title></head><body>'
+    +'<div class="hd"><h1>'+title+'</h1><div class="sub">'+(subtitle||'')+' • '+rows.length+' dòng • Xuất lúc '+new Date().toLocaleString('vi-VN')+'</div></div>'
+    +'<table><thead>'+headHtml+'</thead><tbody>'+bodyHtml+'</tbody></table>'
+    +'</body></html>';
+  const w=window.open('','_blank','width=1100,height=750,scrollbars=yes');
+  w.document.write(html);w.document.close();w.focus();
+  setTimeout(function(){w.print();},500);
+}
 
 function renderCOReport(){
   const pg=g('page-co-report'); if(!pg)return;
@@ -25884,7 +26111,12 @@ function renderCOReport(){
       +'<i class="ti ti-certificate" style="font-size:20px;color:#7c3aed"></i>'
       +'<h2 style="font-size:16px;font-weight:700;margin:0">C/O Report — Chứng thư xuất xứ</h2>'
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lô hàng</span>'
-      +'<button class="rac" onclick="renderCOReport()" title="Tải lại dữ liệu mới nhất" style="width:30px;height:30px;margin-left:auto"><i class="ti ti-refresh"></i></button>'
+      +'<div style="display:flex;gap:6px;margin-left:auto">'
+        +'<button class="btn sm" onclick="coReportExportExcel()" title="Xuất Excel (theo dữ liệu đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+        +'<button class="btn sm" onclick="coReportExportPDF()" title="Xuất PDF (theo dữ liệu đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
+        +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Số C/O đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="coReportImportExcel(this)"/></label>'
+        +'<button class="rac" onclick="renderCOReport()" title="Tải lại dữ liệu mới nhất" style="width:30px;height:30px"><i class="ti ti-refresh"></i></button>'
+      +'</div>'
     +'</div>'
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
       +'<input type="text" placeholder="🔍 Tìm Job ID / Booking / MBL / Shipper / Cnee..." value="'+(fs.q||'')+'" oninput="window._coRptFilter.q=this.value;renderCOReport()" style="font-size:12px;flex:1;min-width:220px"/>'
@@ -25915,6 +26147,108 @@ function renderCOReport(){
   +'</div>';
 }
 window.renderCOReport=renderCOReport;
+
+async function coReportExportExcel(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const fs=window._coRptFilter||{};
+  const allLots=[...(cache.xuat||[])];
+  let rows=allLots.filter(function(r){ const sv=(r.svcs||{}).co; return sv&&sv.on; });
+  rows=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    if(fs.q){
+      const q=fs.q.toLowerCase();
+      const hay=[r.jobNo,r.bookingNo,r.mblNo,r.shipper,r.supplier,r.pod,r.cnee,r.consignee].join(' ').toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  setLoading(true,'Đang tạo Excel...');
+  try{
+    for(const r of rows)await _svcRptEnsureJobId(r,'xuat');
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoFlow ERP'; wb.created=new Date();
+    const ws=wb.addWorksheet('CO Report');
+    const headers=['Job ID','Booking No','MBL','Shipper','POD','Vessel/Voy','ETD','Số tờ khai','Số C/O','NCC','Số INV','Tên Cnee'];
+    ws.columns=[{width:11},{width:16},{width:14},{width:16},{width:14},{width:16},{width:12},{width:16},{width:16},{width:16},{width:14},{width:20}];
+    _svcRptXlsxHeader(ws,headers);
+    rows.forEach(function(r,i){
+      const cneeKey=r.cnee||r.consignee||'';
+      const cp=cache.partners[cneeKey]||{};
+      const tkList=(r.tkhaiList&&r.tkhaiList.length)?r.tkhaiList.map(function(t){return t.sotk;}).filter(Boolean):(r.soTkhai?[r.soTkhai]:[]);
+      ws.addRow([
+        r.jobNo||'', r.bookingNo||'', r.mblNo||'', r.shipper||r.supplier||'', r.pod||'',
+        (r.vessel||'')+(r.voy?' / '+r.voy:''), r.etd?fmtDMY(r.etd):'', tkList.join(', '),
+        (r.svcs&&r.svcs.co&&r.svcs.co.refNo)||'', (r.svcs&&r.svcs.co&&r.svcs.co.svcSupplier)||'',
+        (r.docData&&r.docData.invoiceNo)||'', cp.fullname||cneeKey||''
+      ]);
+      _svcRptXlsxStyleDataRow(ws,i+2,[9]);
+    });
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='CO_Report_'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel — cột "Số C/O" tô vàng là cột cần điền, giữ nguyên cột "Job ID" khi nhập lại');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.coReportExportExcel=coReportExportExcel;
+
+function coReportExportPDF(){
+  const fs=window._coRptFilter||{};
+  const allLots=[...(cache.xuat||[])];
+  let rows=allLots.filter(function(r){ const sv=(r.svcs||{}).co; return sv&&sv.on; });
+  rows=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  const headers=['Job ID','Booking/MBL','Shipper','POD','Vessel/Voy','ETD','Số tờ khai','Số C/O','NCC','Số INV','Tên Cnee'];
+  const dataRows=rows.map(function(r){
+    const cneeKey=r.cnee||r.consignee||''; const cp=cache.partners[cneeKey]||{};
+    const tkList=(r.tkhaiList&&r.tkhaiList.length)?r.tkhaiList.map(function(t){return t.sotk;}).filter(Boolean):(r.soTkhai?[r.soTkhai]:[]);
+    return [r.jobNo||'—', (r.bookingNo||'—')+(r.mblNo?' / '+r.mblNo:''), r.shipper||r.supplier||'—', r.pod||'—',
+      (r.vessel||'—')+(r.voy?'/'+r.voy:''), r.etd?fmtDMY(r.etd):'—', tkList.join(', ')||'—',
+      (r.svcs&&r.svcs.co&&r.svcs.co.refNo)||'—', (r.svcs&&r.svcs.co&&r.svcs.co.svcSupplier)||'—',
+      (r.docData&&r.docData.invoiceNo)||'—', cp.fullname||cneeKey||'—'];
+  });
+  _svcRptExportPDF('C/O Report — Chứng thư xuất xứ',headers,dataRows,'ETD: '+(fs.from?fmtDMY(fs.from):'—')+' → '+(fs.to?fmtDMY(fs.to):'—'));
+}
+window.coReportExportPDF=coReportExportPDF;
+
+function coReportImportExcel(input){
+  const file=input.files[0]; if(!file)return;
+  _svcRptReadImportFile(file,async function(rows){
+    if(!rows)return;
+    setLoading(true,'Đang nhập dữ liệu...');
+    let matched=0,skipped=0,updated=0;
+    for(const row of rows){
+      const jobId=(row['Job ID']||'').toString().trim();
+      if(!jobId){skipped++;continue;}
+      const r=(cache.xuat||[]).find(function(x){return x.jobNo===jobId;});
+      if(!r){skipped++;continue;}
+      matched++;
+      const newCoNo=(row['Số C/O']||'').toString().trim();
+      const curCoNo=(r.svcs&&r.svcs.co&&r.svcs.co.refNo)||'';
+      if(newCoNo&&newCoNo!==curCoNo){
+        try{
+          await fsSet('lots_xuat',r._id,{'svcs.co.refNo':newCoNo});
+          r.svcs=r.svcs||{}; r.svcs.co=r.svcs.co||{}; r.svcs.co.refNo=newCoNo;
+          updated++;
+        }catch(e){ console.error('Lỗi lưu Số C/O cho '+jobId,e); }
+      }
+    }
+    setLoading(false);
+    toast('Đã nhập: '+updated+' lô cập nhật Số C/O, '+matched+' lô khớp Job ID, '+skipped+' dòng bỏ qua (thiếu/sai Job ID)');
+    renderCOReport();
+    input.value='';
+  });
+}
+window.coReportImportExcel=coReportImportExcel;
 
 async function _coReportSaveRefNo(lotId,val){
   try{
@@ -26018,7 +26352,12 @@ function renderPhytoReport(){
       +'<i class="ti ti-vaccine" style="font-size:20px;color:#0E9F8A"></i>'
       +'<h2 style="font-size:16px;font-weight:700;margin:0">Phyto Report — Kiểm dịch thực vật</h2>'
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lô hàng</span>'
-      +'<button class="rac" onclick="renderPhytoReport()" title="Tải lại dữ liệu mới nhất" style="width:30px;height:30px;margin-left:auto"><i class="ti ti-refresh"></i></button>'
+      +'<div style="display:flex;gap:6px;margin-left:auto">'
+        +'<button class="btn sm" onclick="phytoReportExportExcel()" title="Xuất Excel (theo dữ liệu đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+        +'<button class="btn sm" onclick="phytoReportExportPDF()" title="Xuất PDF (theo dữ liệu đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
+        +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Số Phyto/Hóa đơn KD đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="phytoReportImportExcel(this)"/></label>'
+        +'<button class="rac" onclick="renderPhytoReport()" title="Tải lại dữ liệu mới nhất" style="width:30px;height:30px"><i class="ti ti-refresh"></i></button>'
+      +'</div>'
     +'</div>'
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
       +'<input type="text" placeholder="🔍 Tìm Job ID / Booking / MBL / Shipper / Cnee..." value="'+(fs.q||'')+'" oninput="window._phytoRptFilter.q=this.value;renderPhytoReport()" style="font-size:12px;flex:1;min-width:220px"/>'
@@ -26051,6 +26390,134 @@ function renderPhytoReport(){
 }
 window.renderPhytoReport=renderPhytoReport;
 
+async function phytoReportExportExcel(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const fs=window._phytoRptFilter||{};
+  const allLots=[...(cache.xuat||[])];
+  let rows=allLots.filter(function(r){
+    const svcs=r.svcs||{};
+    const phy=_findSvcByNameOrCode(svcs,'Kiểm dịch thực vật','PHY','phyto');
+    const hoa=_findSvcByNameOrCode(svcs,'Hóa đơn kiểm dịch','HOA',null);
+    return !!(phy&&hoa);
+  });
+  rows=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    if(fs.q){
+      const q=fs.q.toLowerCase();
+      const hay=[r.jobNo,r.bookingNo,r.mblNo,r.shipper,r.supplier,r.pod,r.cnee,r.consignee].join(' ').toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  setLoading(true,'Đang tạo Excel...');
+  try{
+    for(const r of rows)await _svcRptEnsureJobId(r,'xuat');
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoFlow ERP'; wb.created=new Date();
+    const ws=wb.addWorksheet('Phyto Report');
+    const headers=['Job ID','Booking No','MBL','Shipper','POD','Vessel/Voy','ETD','Số tờ khai','Số Phyto','Số Hóa đơn KD','NCC','Số INV','Tên Cnee'];
+    ws.columns=[{width:11},{width:16},{width:14},{width:16},{width:14},{width:16},{width:12},{width:16},{width:16},{width:16},{width:16},{width:14},{width:20}];
+    _svcRptXlsxHeader(ws,headers);
+    rows.forEach(function(r,i){
+      const cneeKey=r.cnee||r.consignee||'';
+      const cp=cache.partners[cneeKey]||{};
+      const tkList=(r.tkhaiList&&r.tkhaiList.length)?r.tkhaiList.map(function(t){return t.sotk;}).filter(Boolean):(r.soTkhai?[r.soTkhai]:[]);
+      const svcs=r.svcs||{};
+      const phy=_findSvcByNameOrCode(svcs,'Kiểm dịch thực vật','PHY','phyto');
+      const hoa=_findSvcByNameOrCode(svcs,'Hóa đơn kiểm dịch','HOA',null);
+      ws.addRow([
+        r.jobNo||'', r.bookingNo||'', r.mblNo||'', r.shipper||r.supplier||'', r.pod||'',
+        (r.vessel||'')+(r.voy?' / '+r.voy:''), r.etd?fmtDMY(r.etd):'', tkList.join(', '),
+        (phy&&phy.sv.refNo)||'', (hoa&&hoa.sv.refNo)||'',
+        (phy&&phy.sv.svcSupplier)||(hoa&&hoa.sv.svcSupplier)||'',
+        (r.docData&&r.docData.invoiceNo)||'', cp.fullname||cneeKey||''
+      ]);
+      _svcRptXlsxStyleDataRow(ws,i+2,[9,10]); // Số Phyto + Số Hóa đơn KD — 2 cột cần điền
+    });
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='Phyto_Report_'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel — 2 cột tô vàng là cột cần điền, giữ nguyên cột "Job ID" khi nhập lại');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.phytoReportExportExcel=phytoReportExportExcel;
+
+function phytoReportExportPDF(){
+  const fs=window._phytoRptFilter||{};
+  const allLots=[...(cache.xuat||[])];
+  let rows=allLots.filter(function(r){
+    const svcs=r.svcs||{};
+    const phy=_findSvcByNameOrCode(svcs,'Kiểm dịch thực vật','PHY','phyto');
+    const hoa=_findSvcByNameOrCode(svcs,'Hóa đơn kiểm dịch','HOA',null);
+    return !!(phy&&hoa);
+  });
+  rows=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  const headers=['Job ID','Booking/MBL','Shipper','POD','Vessel/Voy','ETD','Số tờ khai','Số Phyto','Số Hóa đơn KD','NCC','Số INV','Tên Cnee'];
+  const dataRows=rows.map(function(r){
+    const cneeKey=r.cnee||r.consignee||''; const cp=cache.partners[cneeKey]||{};
+    const tkList=(r.tkhaiList&&r.tkhaiList.length)?r.tkhaiList.map(function(t){return t.sotk;}).filter(Boolean):(r.soTkhai?[r.soTkhai]:[]);
+    const svcs=r.svcs||{};
+    const phy=_findSvcByNameOrCode(svcs,'Kiểm dịch thực vật','PHY','phyto');
+    const hoa=_findSvcByNameOrCode(svcs,'Hóa đơn kiểm dịch','HOA',null);
+    return [r.jobNo||'—', (r.bookingNo||'—')+(r.mblNo?' / '+r.mblNo:''), r.shipper||r.supplier||'—', r.pod||'—',
+      (r.vessel||'—')+(r.voy?'/'+r.voy:''), r.etd?fmtDMY(r.etd):'—', tkList.join(', ')||'—',
+      (phy&&phy.sv.refNo)||'—', (hoa&&hoa.sv.refNo)||'—',
+      (phy&&phy.sv.svcSupplier)||(hoa&&hoa.sv.svcSupplier)||'—',
+      (r.docData&&r.docData.invoiceNo)||'—', cp.fullname||cneeKey||'—'];
+  });
+  _svcRptExportPDF('Phyto Report — Kiểm dịch thực vật',headers,dataRows,'ETD: '+(fs.from?fmtDMY(fs.from):'—')+' → '+(fs.to?fmtDMY(fs.to):'—'));
+}
+window.phytoReportExportPDF=phytoReportExportPDF;
+
+function phytoReportImportExcel(input){
+  const file=input.files[0]; if(!file)return;
+  _svcRptReadImportFile(file,async function(rows){
+    if(!rows)return;
+    setLoading(true,'Đang nhập dữ liệu...');
+    let matched=0,skipped=0,updated=0;
+    for(const row of rows){
+      const jobId=(row['Job ID']||'').toString().trim();
+      if(!jobId){skipped++;continue;}
+      const r=(cache.xuat||[]).find(function(x){return x.jobNo===jobId;});
+      if(!r){skipped++;continue;}
+      matched++;
+      const svcs=r.svcs||{};
+      const phy=_findSvcByNameOrCode(svcs,'Kiểm dịch thực vật','PHY','phyto');
+      const hoa=_findSvcByNameOrCode(svcs,'Hóa đơn kiểm dịch','HOA',null);
+      const newPhyNo=(row['Số Phyto']||'').toString().trim();
+      const newHoaNo=(row['Số Hóa đơn KD']||'').toString().trim();
+      let changed=false;
+      const upd={};
+      if(phy&&newPhyNo&&newPhyNo!==(phy.sv.refNo||'')){ upd['svcs.'+phy.key+'.refNo']=newPhyNo; changed=true; }
+      if(hoa&&newHoaNo&&newHoaNo!==(hoa.sv.refNo||'')){ upd['svcs.'+hoa.key+'.refNo']=newHoaNo; changed=true; }
+      if(changed){
+        try{
+          await fsSet('lots_xuat',r._id,upd);
+          if(phy&&upd['svcs.'+phy.key+'.refNo']!==undefined)r.svcs[phy.key].refNo=newPhyNo;
+          if(hoa&&upd['svcs.'+hoa.key+'.refNo']!==undefined)r.svcs[hoa.key].refNo=newHoaNo;
+          updated++;
+        }catch(e){ console.error('Lỗi lưu Phyto/Hóa đơn KD cho '+jobId,e); }
+      }
+    }
+    setLoading(false);
+    toast('Đã nhập: '+updated+' lô cập nhật, '+matched+' lô khớp Job ID, '+skipped+' dòng bỏ qua (thiếu/sai Job ID)');
+    renderPhytoReport();
+    input.value='';
+  });
+}
+window.phytoReportImportExcel=phytoReportImportExcel;
+
 async function _phytoReportSaveRefNo(lotId,svcKey,val){
   if(!svcKey){toast('Không xác định được dịch vụ','error');return;}
   try{
@@ -26068,29 +26535,30 @@ function renderScyReport(){
   const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
   let rows=[];
   allLots.forEach(function(r){
-    (r.scyItems||[]).forEach(function(scy){
+    (r.scyItems||[]).forEach(function(scy,idx){
       if(!scy||(!scy.date&&!scy.icd))return;
       rows.push(Object.assign({},scy,{
-        _lotId:r._id, _tt:(r._tt||'xuat'),
+        _lotId:r._id, _tt:(r._tt||'xuat'), _itemIdx:idx,
         _bookingNo:r.bookingNo||r.jobNo||'—',
         _shipper:r.shipper||r.supplier||'—',
         _etd:r.etd||''
       }));
     });
   });
-  window._scyRptSort=window._scyRptSort||{col:'date',dir:'desc'}; // mặc định: ngày đóng mới nhất trước
+  window._scyRptSort=window._scyRptSort||{col:'date',dir:'desc'}; // GIỮ NGUYÊN mặc định: ngày đóng mới nhất trước
   const _ss=window._scyRptSort;
   rows.sort(function(a,b){
     const va=(a[_ss.col]||''), vb=(b[_ss.col]||'');
     return _ss.dir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
   });
 
-  const fs=window._scyRptFilter=window._scyRptFilter||{shipper:'',icd:'',dateFrom:'',dateTo:''};
+  // Filter — ĐỔI sang lọc theo ETD (theo đúng yêu cầu), không còn lọc theo Ngày đóng
+  const fs=window._scyRptFilter=window._scyRptFilter||{shipper:'',icd:'',etdFrom:'',etdTo:''};
   let filtered=rows.filter(function(r){
     if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
     if(fs.icd&&!(r.icd||'').toLowerCase().includes(fs.icd.toLowerCase()))return false;
-    if(fs.dateFrom&&(r.date||'')<fs.dateFrom)return false;
-    if(fs.dateTo&&(r.date||'')>fs.dateTo)return false;
+    if(fs.etdFrom&&(r._etd||'')<fs.etdFrom)return false;
+    if(fs.etdTo&&(r._etd||'')>fs.etdTo)return false;
     return true;
   });
 
@@ -26099,12 +26567,14 @@ function renderScyReport(){
 
   const bodyRows=filtered.map(function(r,i){
     const dateDisp=r.date?fmtDMY(r.date):'—';
+    const etdDisp=r._etd?fmtDMY(r._etd):'—';
     const bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
     const saLanName=r.saLan&&cache.partners[r.saLan]?(cache.partners[r.saLan].shortname||r.saLan):'—';
     return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\'scy\')">'
       +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
       +'<td style="'+tdS+'"><span style="color:#1a4b8c;font-weight:600">'+(r.bookingNo||r._bookingNo||'—')+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-size:11.5px">'+(r._shipper||'—')+'</span></td>'
+      +'<td style="'+tdS+'"><span style="font-size:11px;color:var(--text-secondary)">'+etdDisp+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-weight:700;color:#1a4b8c">'+dateDisp+'</span></td>'
       +'<td style="'+tdS+'">'+(r.vol||'1')+'</td>'
       +'<td style="'+tdS+'">'+(r.typeCont||'—')+'</td>'
@@ -26119,26 +26589,32 @@ function renderScyReport(){
       +'<i class="ti ti-package" style="font-size:20px;color:#1a4b8c"></i>'
       +'<h2 style="font-size:16px;font-weight:700;margin:0">SCY Report — Đóng hàng tại bãi</h2>'
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lệnh</span>'
-      +'<button class="btn sm" onclick="openPackingListPicker()" title="Xem/copy danh sách Cont/Seal đóng hàng theo ngày"><i class="ti ti-clipboard-list"></i> Packing List</button>'
-      +'<button class="btn sm" onclick="openSaLanDeclarePicker()" title="Xuất file Excel khai báo phương tiện sà lan ra/vào theo ngày đóng hàng"><i class="ti ti-anchor"></i> Khai báo sà lan</button>'
-      +'<button class="btn sm" onclick="renderScyReport()" title="Tải lại dữ liệu mới nhất" style="margin-left:auto"><i class="ti ti-refresh"></i> Refresh</button>'
+      +'<div style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">'
+        +'<button class="btn sm" onclick="openPackingListPicker()" title="Xem/copy danh sách Cont/Seal đóng hàng theo ngày"><i class="ti ti-clipboard-list"></i> Packing List</button>'
+        +'<button class="btn sm" onclick="openSaLanDeclarePicker()" title="Xuất file Excel khai báo phương tiện sà lan ra/vào theo ngày đóng hàng"><i class="ti ti-anchor"></i> Khai báo sà lan</button>'
+        +'<button class="btn sm" onclick="scyReportExportExcel()" title="Xuất Excel (theo ETD đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+        +'<button class="btn sm" onclick="scyReportExportPDF()" title="Xuất PDF (theo ETD đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
+        +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Sà lan/Ghi chú đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="scyReportImportExcel(this)"/></label>'
+        +'<button class="btn sm" onclick="renderScyReport()" title="Tải lại dữ liệu mới nhất"><i class="ti ti-refresh"></i> Refresh</button>'
+      +'</div>'
     +'</div>'
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
       +'<input type="text" placeholder="🔍 Shipper/Supplier" value="'+(fs.shipper||'')+'" oninput="window._scyRptFilter.shipper=this.value;renderScyReport()" style="font-size:12px;flex:1;min-width:130px"/>'
       +'<input type="text" placeholder="🏭 Bãi đóng hàng (ICD)" value="'+(fs.icd||'')+'" oninput="window._scyRptFilter.icd=this.value;renderScyReport()" style="font-size:12px;flex:1;min-width:130px"/>'
-      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">Ngày:'
-        +'<input type="date" value="'+(fs.dateFrom||'')+'" oninput="window._scyRptFilter.dateFrom=this.value;renderScyReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">ETD:'
+        +'<input type="date" value="'+(fs.etdFrom||'')+'" oninput="window._scyRptFilter.etdFrom=this.value;renderScyReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
         +'<span>→</span>'
-        +'<input type="date" value="'+(fs.dateTo||'')+'" oninput="window._scyRptFilter.dateTo=this.value;renderScyReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+        +'<input type="date" value="'+(fs.etdTo||'')+'" oninput="window._scyRptFilter.etdTo=this.value;renderScyReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
       +'</div>'
-      +'<button class="btn sm" onclick="window._scyRptFilter={shipper:\'\',icd:\'\',dateFrom:\'\',dateTo:\'\'};renderScyReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
+      +'<button class="btn sm" onclick="window._scyRptFilter={shipper:\'\',icd:\'\',etdFrom:\'\',etdTo:\'\'};renderScyReport()"><i class="ti ti-x"></i> Xóa lọc</button>'
     +'</div>'
     +'<div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:10px">'
-    +'<table style="width:100%;border-collapse:collapse;min-width:600px">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:680px">'
       +'<thead><tr>'
         +'<th style="'+thS+';width:36px">#</th>'
         +'<th style="'+thS+'">Booking No</th>'
         +'<th style="'+thS+'">Shipper</th>'
+        +'<th style="'+thS+'">ETD</th>'
         +'<th style="'+thS+';cursor:pointer;user-select:none" onclick="window._scyRptSort={col:\'date\',dir:(window._scyRptSort.col===\'date\'&&window._scyRptSort.dir===\'desc\'?\'asc\':\'desc\')};renderScyReport()">Ngày đóng'+(_ss.col==='date'?(_ss.dir==='desc'?' <i class="ti ti-chevron-down" style="font-size:9px;color:var(--green)"></i>':' <i class="ti ti-chevron-up" style="font-size:9px;color:var(--green)"></i>'):' <i class="ti ti-selector" style="font-size:9px;opacity:.4"></i>')+'</th>'
         +'<th style="'+thS+';width:40px">Vol</th>'
         +'<th style="'+thS+'">Type</th>'
@@ -26146,11 +26622,149 @@ function renderScyReport(){
         +'<th style="'+thS+'">Sà lan</th>'
         +'<th style="'+thS+'">Ghi chú</th>'
       +'</tr></thead>'
-      +'<tbody>'+(bodyRows||'<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-package" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu đóng bãi</td></tr>')+'</tbody>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-package" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu đóng bãi</td></tr>')+'</tbody>'
     +'</table></div>'
   +'</div>';
 }
 window.renderScyReport=renderScyReport;
+
+async function scyReportExportExcel(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const fs=window._scyRptFilter||{};
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=[];
+  allLots.forEach(function(r){
+    (r.scyItems||[]).forEach(function(scy,idx){
+      if(!scy||(!scy.date&&!scy.icd))return;
+      rows.push(Object.assign({},scy,{_lot:r,_lotId:r._id,_tt:(r._tt||'xuat'),_itemIdx:idx,
+        _bookingNo:r.bookingNo||r.jobNo||'—',_shipper:r.shipper||r.supplier||'—',_etd:r.etd||''}));
+    });
+  });
+  rows=rows.filter(function(r){
+    if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
+    if(fs.icd&&!(r.icd||'').toLowerCase().includes(fs.icd.toLowerCase()))return false;
+    if(fs.etdFrom&&(r._etd||'')<fs.etdFrom)return false;
+    if(fs.etdTo&&(r._etd||'')>fs.etdTo)return false;
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  setLoading(true,'Đang tạo Excel...');
+  try{
+    const doneJobIds={};
+    for(const r of rows){ if(!doneJobIds[r._lotId]){ await _svcRptEnsureJobId(r._lot,r._tt); doneJobIds[r._lotId]=true; } }
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoFlow ERP'; wb.created=new Date();
+    const ws=wb.addWorksheet('SCY Report');
+    const headers=['Job ID','STT dòng','Booking No','Shipper','ETD','Ngày đóng','Vol','Type','Bãi đóng hàng (ICD)','Sà lan','Ghi chú'];
+    ws.columns=[{width:11},{width:9},{width:16},{width:16},{width:12},{width:12},{width:7},{width:9},{width:20},{width:16},{width:24}];
+    _svcRptXlsxHeader(ws,headers);
+    rows.forEach(function(r,i){
+      const saLanName=r.saLan&&cache.partners[r.saLan]?(cache.partners[r.saLan].shortname||r.saLan):'';
+      ws.addRow([
+        r._lot.jobNo||'', r._itemIdx, r.bookingNo||r._bookingNo||'', r._shipper||'',
+        r._etd?fmtDMY(r._etd):'', r.date?fmtDMY(r.date):'', r.vol||'1', r.typeCont||'',
+        r.icd||'', saLanName, r.remark||''
+      ]);
+      _svcRptXlsxStyleDataRow(ws,i+2,[10,11]); // "Sà lan" + "Ghi chú" — 2 cột cần điền
+    });
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='SCY_Report_'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel — cột "Sà lan" phải gõ ĐÚNG tên đối tác đã có trong hệ thống (Danh mục Sà Lan), giữ nguyên "Job ID" + "STT dòng" khi nhập lại');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.scyReportExportExcel=scyReportExportExcel;
+
+function scyReportExportPDF(){
+  const fs=window._scyRptFilter||{};
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=[];
+  allLots.forEach(function(r){
+    (r.scyItems||[]).forEach(function(scy){
+      if(!scy||(!scy.date&&!scy.icd))return;
+      rows.push(Object.assign({},scy,{_bookingNo:r.bookingNo||r.jobNo||'—',_shipper:r.shipper||r.supplier||'—',_etd:r.etd||''}));
+    });
+  });
+  rows=rows.filter(function(r){
+    if(fs.shipper&&!(r._shipper||'').toLowerCase().includes(fs.shipper.toLowerCase()))return false;
+    if(fs.icd&&!(r.icd||'').toLowerCase().includes(fs.icd.toLowerCase()))return false;
+    if(fs.etdFrom&&(r._etd||'')<fs.etdFrom)return false;
+    if(fs.etdTo&&(r._etd||'')>fs.etdTo)return false;
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  const headers=['Booking No','Shipper','ETD','Ngày đóng','Vol','Type','Bãi đóng hàng (ICD)','Sà lan','Ghi chú'];
+  const dataRows=rows.map(function(r){
+    const saLanName=r.saLan&&cache.partners[r.saLan]?(cache.partners[r.saLan].shortname||r.saLan):'—';
+    return [r._bookingNo||'—', r._shipper||'—', r._etd?fmtDMY(r._etd):'—', r.date?fmtDMY(r.date):'—',
+      r.vol||'1', r.typeCont||'—', r.icd||'—', saLanName, r.remark||'—'];
+  });
+  _svcRptExportPDF('SCY Report — Đóng hàng tại bãi',headers,dataRows,'ETD: '+(fs.etdFrom?fmtDMY(fs.etdFrom):'—')+' → '+(fs.etdTo?fmtDMY(fs.etdTo):'—'));
+}
+window.scyReportExportPDF=scyReportExportPDF;
+
+function scyReportImportExcel(input){
+  const file=input.files[0]; if(!file)return;
+  _svcRptReadImportFile(file,async function(rows){
+    if(!rows)return;
+    if(!rows.length||rows[0]['STT dòng']===undefined){toast('File thiếu cột "STT dòng" — hãy dùng đúng file đã xuất từ hệ thống','error');return;}
+    setLoading(true,'Đang nhập dữ liệu...');
+    let matched=0,skipped=0,updated=0,saLanNotFound=0;
+    // Danh sách đối tác Sà Lan hiện có — khớp CHÍNH XÁC theo shortname, không đoán mò để tránh gán
+    // nhầm sang đối tác khác nếu người dùng gõ sai/gõ tắt.
+    const saLanPartners={};
+    Object.keys(cache.partners||{}).forEach(function(k){
+      const p=cache.partners[k];
+      if(p&&_partnerHasType(p,'salan'))saLanPartners[(p.shortname||k).toLowerCase()]=k;
+    });
+    const byLot={};
+    for(const row of rows){
+      const jobId=(row['Job ID']||'').toString().trim();
+      const itemIdx=parseInt(row['STT dòng']);
+      if(!jobId||isNaN(itemIdx)){skipped++;continue;}
+      let r=(cache.xuat||[]).find(function(x){return x.jobNo===jobId;});
+      let tt='xuat';
+      if(!r){ r=(cache.nhap||[]).find(function(x){return x.jobNo===jobId;}); tt='nhap'; }
+      if(!r||!r.scyItems||!r.scyItems[itemIdx]){skipped++;continue;}
+      matched++;
+      const cur=r.scyItems[itemIdx];
+      const newSaLanName=(row['Sà lan']||'').toString().trim();
+      const newRemark=(row['Ghi chú']||'').toString().trim();
+      const change={};
+      if(newSaLanName){
+        const key=saLanPartners[newSaLanName.toLowerCase()];
+        if(key&&key!==cur.saLan) change.saLan=key;
+        else if(!key) saLanNotFound++;
+      }
+      if(newRemark&&newRemark!==(cur.remark||'')) change.remark=newRemark;
+      if(Object.keys(change).length){
+        if(!byLot[r._id])byLot[r._id]={r:r,tt:tt,changes:[]};
+        byLot[r._id].changes.push({idx:itemIdx,change:change});
+      }
+    }
+    for(const lotId in byLot){
+      const info=byLot[lotId];
+      const newScyItems=info.r.scyItems.slice();
+      info.changes.forEach(function(c){ newScyItems[c.idx]=Object.assign({},newScyItems[c.idx],c.change); });
+      try{
+        await fsSet(colName(info.tt),lotId,{scyItems:newScyItems});
+        info.r.scyItems=newScyItems;
+        updated+=info.changes.length;
+      }catch(e){ console.error('Lỗi lưu SCY cho lô '+lotId,e); }
+    }
+    setLoading(false);
+    let msg='Đã nhập: '+updated+' dòng cập nhật, '+matched+' dòng khớp đúng, '+skipped+' dòng bỏ qua (thiếu/sai Job ID hoặc STT dòng)';
+    if(saLanNotFound)msg+='. ⚠ '+saLanNotFound+' dòng có tên Sà lan KHÔNG khớp đối tác nào trong hệ thống (kiểm tra lại tên đã gõ đúng chưa).';
+    toast(msg);
+    renderScyReport();
+    input.value='';
+  });
+}
+window.scyReportImportExcel=scyReportImportExcel;
 window.runCostingReport=runCostingReport;
 window.exportCostingExcel=exportCostingExcel;
 
