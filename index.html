@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.93';
+window.APP_BUILD='v3.94';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -19275,6 +19275,40 @@ async function renderDeviceMgmtList(){
 }
 window.renderDeviceMgmtList=renderDeviceMgmtList;
 
+// Test kết nối — Admin tự bấm thử GHI/ĐỌC/XÓA 1 bản ghi TEST vào userDevices (ĐÚNG y hệt cấu trúc mà
+// _checkAndRegisterDevice() dùng thật) — xác định NGAY LẬP TỨC Rule đã publish đúng chưa, không cần
+// chờ tài khoản khác đăng nhập thử mới biết.
+async function _deviceTestConnection(){
+  if(!currentUser){toast('Chưa đăng nhập','error');return;}
+  const testDocId='_test_'+currentUser.uid+'_'+Date.now();
+  setLoading(true,'Đang kiểm tra kết nối...');
+  try{
+    // Bước 1: Test CREATE — đúng cấu trúc rule yêu cầu (uid khớp chính mình, status bắt đầu 'pending')
+    await db.collection('userDevices').doc(testDocId).set({
+      uid:currentUser.uid,email:currentUser.email,deviceId:'test',deviceName:'[TEST] Kiểm tra kết nối',
+      userAgent:'test',status:'pending',firstSeenAt:Date.now(),lastSeenAt:Date.now()
+    });
+    // Bước 2: Test READ
+    const snap=await db.collection('userDevices').doc(testDocId).get();
+    if(!snap.exists)throw new Error('Ghi thành công nhưng đọc lại không thấy dữ liệu (bất thường)');
+    // Bước 3: Dọn dẹp — xóa bản ghi test (test luôn quyền delete = Admin)
+    await db.collection('userDevices').doc(testDocId).delete();
+    setLoading(false);
+    toast('✅ Kết nối OK — Firestore Rule cho "userDevices" đã hoạt động đúng (ghi/đọc/xóa đều thành công)');
+  }catch(e){
+    setLoading(false);
+    console.error('_deviceTestConnection lỗi:',e);
+    if(e.code==='permission-denied'){
+      toast('❌ LỖI QUYỀN: Rule "userDevices" CHƯA được publish (hoặc publish sai) — vào Firebase Console → Firestore → Rules để kiểm tra lại','error');
+    } else {
+      toast('❌ Lỗi kết nối: '+e.message,'error');
+    }
+    // Dọn dẹp nếu bước tạo thành công nhưng bước sau lỗi (tránh để sót bản ghi test)
+    try{ await db.collection('userDevices').doc(testDocId).delete(); }catch(_e2){}
+  }
+}
+window._deviceTestConnection=_deviceTestConnection;
+
 async function _deviceSetStatus(docId,status){
   if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
   setLoading(true,'Đang cập nhật...');
@@ -21691,7 +21725,8 @@ function renderSettings(){
       +'</div>'
     )
     +stgBox('devices','ti-devices','Quản lý thiết bị theo người dùng',
-      '<button class="btn sm" onclick="renderDeviceMgmtList()"><i class="ti ti-refresh"></i> Tải lại</button>',
+      '<button class="btn sm" onclick="renderDeviceMgmtList()"><i class="ti ti-refresh"></i> Tải lại</button>'
+      +'<button class="btn sm" onclick="_deviceTestConnection()"><i class="ti ti-plug"></i> Test kết nối</button>',
       '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Thiết bị đăng nhập lần đầu cần được duyệt ở đây mới sử dụng được hệ thống (nếu đã bật "Yêu cầu duyệt thiết bị đăng nhập" ở trên). Admin luôn được miễn duyệt nên sẽ không xuất hiện trong danh sách này.</div>'
       +'<div id="deviceMgmtList" style="font-size:12.5px;color:var(--text-tertiary)">Đang tải...</div>'
     )
