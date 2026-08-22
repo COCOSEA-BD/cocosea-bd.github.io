@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.99';
+window.APP_BUILD='v4.00';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -27965,21 +27965,18 @@ function _eportFallbackCopy(el){
 window._eportCopy=_eportCopy;
 
 // ═══════════════════════════════════════════════════════════════
-//  LOADING CONFIRM — Thông báo hàng lên tàu (EN + VI)
+//  LOADING CONFIRM — Thông báo hàng tàu chạy (EN + VI) + Email
 // ═══════════════════════════════════════════════════════════════
-function showLoadingConfirm(id,tt){
-  const cache_src=cache[tt]||[];
-  const r=cache_src.find(function(x){return x._id===id;})||{};
 
-  // Lấy tên khách hàng
+// Helper: build dữ liệu chung cho cả copy-text và email
+function _lcBuildData(id,tt){
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;})||{};
   const pt=cache.partners&&cache.partners[r.shipper||r.supplier||''];
   const customerName=(pt&&(pt.shortname||pt.name))||r.shipper||r.supplier||'[Khách hàng]';
+  const customerFullName=(pt&&pt.name)||r.shipper||r.supplier||'[Khách hàng]';
+  const toEmail=(pt&&pt.email)||'';
 
-  // Tổng số container & loại
-  const bookings=(r.bookings&&r.bookings.length)
-    ?r.bookings
-    :[{vol:r.vol||'',typeCont:r.typeCont||''}];
-  // Gộp container theo loại
+  const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{vol:r.vol||'',typeCont:r.typeCont||'',bookingNo:r.bookingNo||''}];
   const typeMap={};
   bookings.forEach(function(b){
     const t=(b.typeCont||r.typeCont||'').trim();
@@ -27990,71 +27987,55 @@ function showLoadingConfirm(id,tt){
     ?Object.keys(typeMap).map(function(t){return typeMap[t]+'x'+t;}).join(' + ')
     :(r.vol?r.vol+'x'+(r.typeCont||'CONT'):'—');
   const totalConts=Object.values(typeMap).reduce(function(a,b){return a+b;},0)||(parseInt(r.vol)||0);
-  const contLabel=totalConts
-    ?(totalConts+' Container'+(totalConts>1?'s':'')+(Object.keys(typeMap).length?' ('+contSummary+')':''))
-    :contSummary||'—';
+  const contLabel=(totalConts?(totalConts+' Container'+(totalConts>1?'s':'')):'—')+(contSummary&&contSummary!=='—'?' ('+contSummary+')':'');
 
-  // Ngày tháng
   const etdFmt=r.etd?r.etd.split('-').reverse().join('/'):r.etd||'—';
   const etaFmt=r.eta?r.eta.split('-').reverse().join('/'):r.eta||'—';
   const vesVoy=(r.vessel||'—')+(r.voy?' / V.'+r.voy:'');
+  const cnee=r.cnee||r.consignee||'—';
+  const mbl=r.mblNo||'—';
+  const pol=r.pol||'—'; const pod=r.pod||'—';
+  const carrier=r.carrier||'—';
 
-  // Booking string
-  const bkNos=bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', ')||(r.bookingNo||'—');
+  return {r,customerName,customerFullName,toEmail,contLabel,contSummary,totalConts,typeMap,
+          etdFmt,etaFmt,vesVoy,cnee,mbl,pol,pod,carrier};
+}
 
-  // ── Template tiếng ANH ──
+function showLoadingConfirm(id,tt){
+  const d=_lcBuildData(id,tt);
+  const r=d.r;
+  const SEP='─────────────────────────────';
+
+  // ── Template tiếng ANH (ngắn gọn, chỉ block thông tin)
   const textEN=[
-    '📦 LOADING CONFIRM',
-    '',
-    'Dear '+customerName+',',
-    '',
-    'We are pleased to inform you that your shipment has been loaded as scheduled. Please find the details below:',
-    '',
-    '─────────────────────────────',
-    '🚢  Vessel / Voyage : '+vesVoy,
-    '📍  POL → POD       : '+(r.pol||'—')+' → '+(r.pod||'—'),
-    '📅  ATD (Departure) : '+etdFmt,
-    '📅  ETA (Arrival)   : '+etaFmt,
-    '🏢  Carrier         : '+(r.carrier||'—'),
-    '📦  Cargo           : '+contLabel,
-    '📋  Booking No      : '+bkNos,
-    '─────────────────────────────',
-    '',
-    'Please note that the shipping documents (B/L draft, Packing List, Invoice) will be forwarded to you shortly for your review and approval.',
-    '',
-    'Should you have any questions or require further information, please do not hesitate to contact us.',
-    '',
-    'Best regards,',
-    'COCO SEA CO., LTD',
+    '📦 LOADING CONFIRM:',
+    SEP,
+    '🚢  Vessel / Voyage        : '+d.vesVoy,
+    '📍  POL → POD              : '+d.pol+' → '+d.pod,
+    '📅  ATD (Departure)        : '+d.etdFmt,
+    '📅  ETA (Arrival)          : '+d.etaFmt,
+    '🏢  Carrier                : '+d.carrier,
+    '📦  Cargo                  : '+d.contLabel,
+    '📋  MBL No.                : '+d.mbl,
+    '🏭  Consignee              : '+d.cnee,
+    SEP,
   ].join('\n');
 
-  // ── Template tiếng VIỆT ──
+  // ── Template tiếng VIỆT (ngắn gọn, chỉ block thông tin)
   const textVI=[
-    '📦 THÔNG BÁO HÀNG LÊN TÀU',
-    '',
-    'Kính gửi: '+customerName+',',
-    '',
-    'Chúng tôi xin thông báo lô hàng của Quý Khách đã được xếp lên tàu thành công theo đúng lịch trình. Chi tiết như sau:',
-    '',
-    '─────────────────────────────',
-    '🚢  Tàu / Chuyến       : '+vesVoy,
-    '📍  Cảng đi → Cảng đến : '+(r.pol||'—')+' → '+(r.pod||'—'),
-    '📅  Ngày tàu chạy (ATD): '+etdFmt,
-    '📅  Ngày dự kiến đến   : '+etaFmt,
-    '🏢  Hãng tàu           : '+(r.carrier||'—'),
-    '📦  Hàng hóa           : '+contLabel,
-    '📋  Số Booking         : '+bkNos,
-    '─────────────────────────────',
-    '',
-    'Chứng từ vận chuyển (Vận đơn B/L, Packing List, Invoice) sẽ được chuyển đến Quý Khách trong thời gian sớm nhất để kiểm tra và xác nhận.',
-    '',
-    'Mọi thắc mắc, xin vui lòng liên hệ chúng tôi. Trân trọng cảm ơn sự hợp tác của Quý Khách!',
-    '',
-    'Trân trọng,',
-    'COCO SEA CO., LTD',
+    '📦 THÔNG BÁO HÀNG TÀU CHẠY:',
+    SEP,
+    '🚢  Tàu / Chuyến                   : '+d.vesVoy,
+    '📍  Cảng đi → Cảng đến    : '+d.pol+' → '+d.pod,
+    '📅  Ngày tàu chạy (ATD)  : '+d.etdFmt,
+    '📅  Ngày dự kiến đến         : '+d.etaFmt,
+    '🏢  Hãng tàu                           : '+d.carrier,
+    '📦  Hàng hóa                          : '+d.contLabel,
+    '📋  Số MBL                              : '+d.mbl,
+    '🏭  Cnee                                  : '+d.cnee,
+    SEP,
   ].join('\n');
 
-  // Build modal
   const title='Loading Confirm — '+(r.jobNo||r.bookingNo||id);
   g('lcOv').innerHTML=`
   <div class="modal" style="max-width:660px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.2)">
@@ -28063,27 +28044,23 @@ function showLoadingConfirm(id,tt){
       <div style="font-size:14px;font-weight:700;color:#fff;flex:1">${title}</div>
       <button onclick="closeOv('lcOv')" style="color:#A7F3D0;font-size:18px;background:rgba(255,255,255,.15);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>
     </div>
-    <!-- Tab bar -->
+    <!-- Tab bar EN / VI -->
     <div style="display:flex;background:#f0fdf4;border-bottom:1px solid #D1FAE5">
-      <button id="lc-tab-en" onclick="_lcSwitchTab('en')" style="flex:1;padding:9px 0;font-size:12.5px;font-weight:700;color:#065F46;background:#D1FAE5;border:none;border-right:1px solid #A7F3D0;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
-        🇬🇧 English
-      </button>
-      <button id="lc-tab-vi" onclick="_lcSwitchTab('vi')" style="flex:1;padding:9px 0;font-size:12.5px;font-weight:600;color:#6B7280;background:transparent;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
-        🇻🇳 Tiếng Việt
-      </button>
+      <button id="lc-tab-en" onclick="_lcSwitchTab('en')" style="flex:1;padding:9px 0;font-size:12.5px;font-weight:700;color:#065F46;background:#D1FAE5;border:none;border-right:1px solid #A7F3D0;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">🇬🇧 English</button>
+      <button id="lc-tab-vi" onclick="_lcSwitchTab('vi')" style="flex:1;padding:9px 0;font-size:12.5px;font-weight:600;color:#6B7280;background:transparent;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">🇻🇳 Tiếng Việt</button>
     </div>
     <div style="padding:14px 18px;background:var(--bg-secondary)">
-      <textarea id="lcText" rows="18" style="font-family:'Courier New',monospace;font-size:12px;line-height:1.8;resize:vertical;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:.85rem 1rem;color:var(--text-primary);width:100%;box-sizing:border-box;outline:none">${textEN}</textarea>
-      <div style="font-size:10.5px;color:var(--text-tertiary);margin-top:4px"><i class="ti ti-pencil" style="font-size:11px"></i> Có thể chỉnh sửa trực tiếp trước khi copy — nội dung sẽ được paste hoàn hảo vào Zalo, email, ...</div>
+      <textarea id="lcText" rows="13" style="font-family:'Courier New',monospace;font-size:12.5px;line-height:1.9;resize:vertical;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:.85rem 1rem;color:var(--text-primary);width:100%;box-sizing:border-box;outline:none">${textEN}</textarea>
+      <div style="font-size:10.5px;color:var(--text-tertiary);margin-top:5px"><i class="ti ti-pencil" style="font-size:11px"></i> Có thể chỉnh sửa trực tiếp — paste hoàn hảo vào Zalo/Viber/chat</div>
     </div>
-    <div style="background:#f0fdf4;border-top:1px solid #D1FAE5;padding:10px 18px;display:flex;gap:8px;justify-content:flex-end;align-items:center">
+    <div style="background:#f0fdf4;border-top:1px solid #D1FAE5;padding:10px 18px;display:flex;gap:8px;align-items:center">
       <span id="lcCopied" style="font-size:12px;color:#059669;font-weight:700;opacity:0;transition:opacity .3s;margin-right:auto"><i class="ti ti-check"></i> Đã copy!</span>
+      <button class="btn" onclick="openLoadingConfirmEmail('${id}','${tt}')" style="font-size:12.5px;color:#1a4b8c;border-color:#1a4b8c"><i class="ti ti-mail"></i> Email</button>
       <button class="btn" onclick="closeOv('lcOv')" style="font-size:12.5px"><i class="ti ti-x"></i> Đóng</button>
-      <button class="btn pri" onclick="_lcCopy()" style="font-size:12.5px;background:#059669;border-color:#059669;padding:6px 16px"><i class="ti ti-copy"></i> Copy thông báo</button>
+      <button class="btn pri" onclick="_lcCopy()" style="font-size:12.5px;background:#059669;border-color:#059669;padding:6px 16px"><i class="ti ti-copy"></i> Copy</button>
     </div>
   </div>`;
 
-  // Lưu cả 2 nội dung vào dataset để switch tab
   var el=g('lcText');
   el.dataset.en=textEN;
   el.dataset.vi=textVI;
@@ -28096,12 +28073,14 @@ function _lcSwitchTab(lang){
   var btnEn=document.getElementById('lc-tab-en');
   var btnVi=document.getElementById('lc-tab-vi');
   if(btnEn&&btnVi){
+    var activeS='flex:1;padding:9px 0;font-size:12.5px;font-weight:700;color:#065F46;background:#D1FAE5;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px';
+    var inactS ='flex:1;padding:9px 0;font-size:12.5px;font-weight:600;color:#6B7280;background:transparent;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px';
     if(lang==='vi'){
-      btnVi.style.cssText='flex:1;padding:9px 0;font-size:12.5px;font-weight:700;color:#065F46;background:#D1FAE5;border:none;border-right:none;border-left:1px solid #A7F3D0;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px';
-      btnEn.style.cssText='flex:1;padding:9px 0;font-size:12.5px;font-weight:600;color:#6B7280;background:transparent;border:none;border-right:1px solid #A7F3D0;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px';
+      btnVi.style.cssText=activeS;
+      btnEn.style.cssText=inactS+';border-right:1px solid #A7F3D0';
     } else {
-      btnEn.style.cssText='flex:1;padding:9px 0;font-size:12.5px;font-weight:700;color:#065F46;background:#D1FAE5;border:none;border-right:1px solid #A7F3D0;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px';
-      btnVi.style.cssText='flex:1;padding:9px 0;font-size:12.5px;font-weight:600;color:#6B7280;background:transparent;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px';
+      btnEn.style.cssText=activeS+';border-right:1px solid #A7F3D0';
+      btnVi.style.cssText=inactS;
     }
   }
 }
@@ -28113,18 +28092,76 @@ function _lcCopy(){
       var lbl=g('lcCopied');
       if(lbl){lbl.style.opacity='1';setTimeout(function(){lbl.style.opacity='0';},2200);}
     }).catch(function(){_lcFallbackCopy(el);});
-  } else {
-    _lcFallbackCopy(el);
-  }
+  } else {_lcFallbackCopy(el);}
 }
 function _lcFallbackCopy(el){
   el.select();el.setSelectionRange(0,99999);
   try{document.execCommand('copy');toast('Đã copy!');}catch(e){toast('Copy thủ công: Ctrl+A, Ctrl+C','error');}
 }
 
+// ── Email Loading Confirm — HTML đẹp, layout chuẩn như Booking Confirm
+function openLoadingConfirmEmail(id,tt){
+  const d=_lcBuildData(id,tt);
+  const r=d.r;
+
+  // CC cố định giống booking confirm
+  const ccList=[
+    _findUserEmail(['hans','han']),
+    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
+    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
+  ].filter(Boolean);
+  const ccEmail=[...new Set(ccList)].join(', ');
+
+  const cellL='background:#eef2f7;border-bottom:1px solid #e2e8f0;padding:6px 12px;font-weight:600;font-size:12px;white-space:nowrap;vertical-align:top;width:155px;color:#334155';
+  const rowsData=[
+    ['Vessel / Voyage', d.vesVoy],
+    ['POL → POD',       d.pol+' &rarr; '+d.pod],
+    ['ATD (Departure)', d.etdFmt],
+    ['ETA (Arrival)',   d.etaFmt],
+    ['Carrier',         d.carrier],
+    ['Cargo',           d.contLabel],
+    ['MBL No.',         d.mbl],
+    ['Consignee',       d.cnee],
+  ];
+  const tblRows=rowsData.map(function(rw,i){
+    const bg=i%2===0?'#f8fafc':'#ffffff';
+    return '<tr>'
+      +'<td style="'+cellL+'">'+rw[0]+'</td>'
+      +'<td style="background:'+bg+';border-bottom:1px solid #e2e8f0;padding:6px 12px;font-size:12px;vertical-align:top;color:#0f172a">'+rw[1]+'</td>'
+    +'</tr>';
+  }).join('');
+
+  const routeShort=((d.pol||'').split(',')[0]||'').trim().toUpperCase()+' &rarr; '+((d.pod||'').split(',')[0]||'').trim().toUpperCase();
+  const bodyHtml=''
+    +'<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'
+    +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#065F46" style="background-color:#065F46;padding:14px 18px;border-radius:8px 8px 0 0">'
+      +'<div style="color:#A7F3D0;font-size:17px;font-weight:800;letter-spacing:.3px">LOADING CONFIRM</div>'
+      +'<div style="color:#6EE7B7;font-size:11.5px;margin-top:3px">'+routeShort+'</div>'
+    +'</td></tr></table>'
+    +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px"><tr><td style="padding:16px 18px">'
+    +'<p style="font-size:12.5px;margin:0 0 12px;line-height:1.6">To: <strong>'+d.customerFullName+'</strong><br>'
+    +'<span style="color:#475569">Dear Valued Customer,<br>We are pleased to inform you that your shipment has been successfully loaded on board. Please find the details below.</span></p>'
+    +'<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">'+tblRows+'</table>'
+    +'<p style="font-size:12px;margin:14px 0 0;color:#475569">The shipping documents (B/L draft, Packing List, Commercial Invoice) will be forwarded to you shortly for your review and approval. Please do not hesitate to contact us for any further assistance.</p>'
+    +_bookingEmailSignature()
+    +'</td></tr></table>'
+    +'</td></tr></table>';
+
+  const routeStr=((d.pol||'').split(',')[0]||'').trim().toUpperCase()+' - '+((d.pod||'').split(',')[0]||'').trim().toUpperCase();
+  const etdStr=r.etd?_fmtDMY(r.etd).replace(/-/g,' '):'';
+  const subject=['[Loading Confirm] '+routeStr, d.mbl!=='—'?d.mbl:'', d.carrier, etdStr?'ETD '+etdStr:'', r.shipper||r.supplier||''].filter(Boolean).join(' | ');
+
+  closeOv('lcOv');
+  _openEmailModal({
+    title:'Email Loading Confirm → '+(r.shipper||r.supplier||''),
+    to:d.toEmail, cc:ccEmail, subject:subject, bodyHtml:bodyHtml, attachments:[]
+  });
+}
+
 window.showLoadingConfirm=showLoadingConfirm;
 window._lcSwitchTab=_lcSwitchTab;
 window._lcCopy=_lcCopy;
+window.openLoadingConfirmEmail=openLoadingConfirmEmail;
 
 
 function exportContSealExcel(bkNo){
