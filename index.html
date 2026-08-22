@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.94';
+window.APP_BUILD='v3.96';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1404,11 +1404,11 @@ auth.onAuthStateChanged(async (user) => {
     console.log('COCOFLOW [Device]: deviceApproval.enabled =',(_securitySettings.deviceApproval||{}).enabled,'| role =',currentProfile.role);
     if(_securitySettings.deviceApproval&&_securitySettings.deviceApproval.enabled&&currentProfile.role!=='admin'){
       const deviceName=_detectDeviceName();
-      const devStatus=await _checkAndRegisterDevice(user.uid,user.email,deviceName);
-      console.log('COCOFLOW [Device]: trạng thái thiết bị =',devStatus);
-      if(devStatus!=='approved'){
+      const devResult=await _checkAndRegisterDevice(user.uid,user.email,deviceName);
+      console.log('COCOFLOW [Device]: trạng thái thiết bị =',devResult.status);
+      if(devResult.status!=='approved'){
         setLoading(false);
-        showDevicePendingScreen(devStatus,deviceName);
+        showDevicePendingScreen(devResult.status,deviceName,devResult.customName);
         return; // KHÔNG startListeners()/showApp() — thiết bị chưa được duyệt, không tải dữ liệu gì.
       }
     } else if(currentProfile.role==='admin'){
@@ -1511,21 +1511,21 @@ async function _checkAndRegisterDevice(uid,email,deviceName){
       const d=snap.data();
       // Cập nhật lastSeenAt (không đổi status) — không await để không làm chậm luồng đăng nhập.
       db.collection('userDevices').doc(docId).set({lastSeenAt:Date.now(),deviceName:deviceName},{merge:true}).catch(function(){});
-      return d.status||'pending';
+      return {status:d.status||'pending',customName:d.customName||''};
     }
     // Thiết bị hoàn toàn mới — tạo bản ghi 'pending', LUÔN chờ Admin duyệt (không tự động duyệt).
     await db.collection('userDevices').doc(docId).set({
       uid:uid,email:email,deviceId:deviceId,deviceName:deviceName,userAgent:navigator.userAgent||'',
       status:'pending',firstSeenAt:Date.now(),lastSeenAt:Date.now()
     });
-    return 'pending';
+    return {status:'pending',customName:''};
   }catch(e){
     console.error('_checkAndRegisterDevice lỗi:',e);
     if(e&&e.code==='permission-denied'){
       toast('⚠ Lỗi quyền Firestore khi kiểm tra thiết bị — có thể CHƯA publish Security Rule cho collection "userDevices". Đăng nhập vẫn tiếp tục bình thường (không chặn).','error');
     }
     // Lỗi kết nối/quyền — KHÔNG chặn đăng nhập (tránh khóa nhầm người dùng vì lỗi mạng tạm thời).
-    return 'approved';
+    return {status:'approved',customName:''};
   }
 }
 
@@ -2003,7 +2003,7 @@ function _ovHdrBtns(id){
 }
 window._ovHdrBtns=_ovHdrBtns;
 
-function showDevicePendingScreen(status,deviceName){
+function showDevicePendingScreen(status,deviceName,customName){
   setLoading(false);
   g('loginWrap').style.display='none';
   g('appShell').style.display='none';
@@ -2021,27 +2021,51 @@ function showDevicePendingScreen(status,deviceName){
     +'<div style="width:64px;height:64px;border-radius:50%;background:'+color+'15;display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem"><i class="ti '+icon+'" style="font-size:32px;color:'+color+'"></i></div>'
     +'<h2 style="font-size:18px;font-weight:800;margin:0 0 .5rem;color:#0F172A">'+title+'</h2>'
     +'<p style="font-size:13px;color:#64748B;line-height:1.6;margin:0 0 1.5rem">'+msg+'</p>'
-    +'<div style="background:#F5F7FA;border-radius:10px;padding:10px 14px;margin-bottom:1.5rem;text-align:left">'
-      +'<div style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;margin-bottom:3px">Thiết bị này</div>'
+    +'<div style="background:#F5F7FA;border-radius:10px;padding:10px 14px;margin-bottom:1rem;text-align:left">'
+      +'<div style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;margin-bottom:3px">Thiết bị này (tự nhận diện)</div>'
       +'<div style="font-size:12.5px;font-weight:600;color:#334155">'+(deviceName||'—')+'</div>'
     +'</div>'
+    +(isRejected?'':(
+      '<div style="text-align:left;margin-bottom:1.5rem">'
+        +'<label style="font-size:10.5px;font-weight:700;color:#64748B;display:block;margin-bottom:4px">Đặt tên riêng cho thiết bị này (giúp Admin dễ nhận diện hơn)</label>'
+        +'<div style="display:flex;gap:6px">'
+          +'<input type="text" id="devCustomNameInput" value="'+(customName||'').replace(/"/g,'&quot;')+'" placeholder="VD: Laptop cá nhân, Máy bàn văn phòng..." style="flex:1;font-size:12.5px;padding:8px 10px;border:1px solid #E2E8F0;border-radius:8px;box-sizing:border-box"/>'
+          +'<button class="btn sm" onclick="_saveDeviceCustomName()" style="flex-shrink:0">Lưu</button>'
+        +'</div>'
+      +'</div>'
+    ))
     +'<button class="btn pri" style="width:100%;padding:11px;margin-bottom:8px" onclick="_recheckDeviceApproval()"><i class="ti ti-refresh"></i> Kiểm tra lại</button>'
     +'<button class="btn" style="width:100%;padding:11px" onclick="auth.signOut()"><i class="ti ti-logout"></i> Đăng xuất</button>'
   +'</div>';
 }
 window.showDevicePendingScreen=showDevicePendingScreen;
 
+// Lưu tên riêng cho thiết bị (do chính người dùng đặt) - giúp Admin nhận diện dễ hơn nhiều so với chỉ
+// tên trình duyệt/hệ điều hành tự động (dễ trùng giữa nhiều máy, VD nhiều máy cùng "Chrome trên Windows").
+async function _saveDeviceCustomName(){
+  if(!currentUser)return;
+  const val=(g('devCustomNameInput')?.value||'').trim();
+  if(!val){toast('Nhập tên thiết bị trước khi lưu','error');return;}
+  const deviceId=_getDeviceId();
+  const docId=currentUser.uid+'_'+deviceId;
+  try{
+    await db.collection('userDevices').doc(docId).set({customName:val},{merge:true});
+    toast('Đã lưu tên thiết bị — Admin sẽ thấy tên này khi duyệt');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+}
+window._saveDeviceCustomName=_saveDeviceCustomName;
+
 async function _recheckDeviceApproval(){
   if(!currentUser){return;}
   setLoading(true,'Đang kiểm tra...');
   const deviceName=_detectDeviceName();
-  const status=await _checkAndRegisterDevice(currentUser.uid,currentUser.email,deviceName);
-  if(status==='approved'){
+  const result=await _checkAndRegisterDevice(currentUser.uid,currentUser.email,deviceName);
+  if(result.status==='approved'){
     toast('Thiết bị đã được duyệt!');
     startListeners(); showApp();
   } else {
     setLoading(false);
-    showDevicePendingScreen(status,deviceName);
+    showDevicePendingScreen(result.status,deviceName,result.customName);
   }
 }
 window._recheckDeviceApproval=_recheckDeviceApproval;
@@ -13106,6 +13130,14 @@ function _tcLotCostByStatus(from,to){
       const amtVND=(it.cur||'VND')==='VND'?amt:Math.round(amt*roe);
       if(it.apPaidStatus==='paid')paid+=amtVND; else unpaid+=amtVND;
     });
+    // COM/KB (hoa hồng) — CHƯA có field theo dõi trạng thái đã trả (apPaidStatus), nên tính vào
+    // "unpaid" theo mặc định an toàn (giống các cost item khác thiếu field này cũng rơi vào nhánh
+    // else ở trên) — dùng ĐÚNG helper _comKbThanhTien/_comKbThucChi đã có sẵn.
+    const comKbAll=[].concat((r.comKb&&r.comKb.com)||[],(r.comKb&&r.comKb.kb)||[]);
+    comKbAll.forEach(function(row){
+      const tt=_comKbThanhTien(row.amount,row.vol);
+      unpaid+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||roe);
+    });
   });
   return {paid:paid,unpaid:unpaid,total:paid+unpaid};
 }
@@ -14813,7 +14845,7 @@ function renderCrmDetail(){
   const isSaLan=p.type==='salan';
   const isShipper=_partnerHasType(p,'shipper');
   const tabs=isSaLan
-    ?[{k:'general',label:'Info',icon:'ti-info-circle'}]
+    ?[{k:'general',label:'Info',icon:'ti-info-circle'},{k:'shipment',label:'Shipment',icon:'ti-ship'},{k:'finance',label:'Finance',icon:'ti-currency-dollar'}]
     :[
       {k:'overview',label:'Tổng quan',icon:'ti-layout-dashboard'},
       {k:'general',label:'Thông tin',icon:'ti-info-circle'},
@@ -14829,7 +14861,7 @@ function renderCrmDetail(){
       {k:'files',label:'Files',icon:'ti-folder'},
       {k:'email',label:'Email',icon:'ti-mail'},
     ];
-  if(isSaLan) crmDetailTab='general';
+  if(isSaLan && ['general','shipment','finance'].indexOf(crmDetailTab)<0) crmDetailTab='general';
   if(!isSaLan && crmDetailTab==='report') crmDetailTab='overview';
 
   // ── FULL PAGE MODE: Customer 360 Workspace ──
@@ -15017,7 +15049,7 @@ window.saveCrmSaLan=saveCrmSaLan;
 function renderCrmDetailBody(){
   const body=g('crmDetailBody'); if(!body)return;
   const p=cache.partners[crmDetailKey]||{};
-  if(p.type==='salan'){
+  if(p.type==='salan'&&crmDetailTab==='general'){
     body.innerHTML=`
     <div class="crm3-info-grid2">
     <div class="crm3-info-card">
@@ -15435,7 +15467,19 @@ window._crmAvatarColor=_crmAvatarColor;
 
 function _crmPartnerLots(partnerKey){
   const allR=[...(cache.xuat||[]).map(function(r){return Object.assign({},r,{_tt:'xuat'});}),...(cache.nhap||[]).map(function(r){return Object.assign({},r,{_tt:'nhap'});})];
-  return allR.filter(function(r){return (r.shipper||r.supplier||'')===partnerKey;});
+  return allR.filter(function(r){
+    if((r.shipper||r.supplier||'')===partnerKey)return true;
+    if((r.carrier||'')===partnerKey)return true;
+    // NCC gán theo TỪNG dịch vụ (svcSupplier) — cách phổ biến nhất để gán NCC cho 1 lô hàng, trước
+    // đây HOÀN TOÀN bị bỏ sót khiến các nhóm NCC/Carrier "không có thông tin" ở tab Shipment/Finance.
+    const svcs=r.svcs||{};
+    if(Object.keys(svcs).some(function(k){return svcs[k]&&svcs[k].on&&svcs[k].svcSupplier===partnerKey;}))return true;
+    // Công ty vận chuyển (Trucking) gán theo từng dòng trucking
+    if((r.truckings||[]).some(function(t){return t&&t.ncc===partnerKey;}))return true;
+    // Sà Lan gán theo từng dòng SCY (đóng hàng tại bãi)
+    if((r.scyItems||[]).some(function(s){return s&&s.saLan===partnerKey;}))return true;
+    return false;
+  });
 }
 window._crmPartnerLots=_crmPartnerLots;
 
@@ -15443,15 +15487,21 @@ window._crmPartnerLots=_crmPartnerLots;
 // và Costing (svcs cost + costing.items) của TỪNG lô hàng, quy đổi VND theo tỷ giá cố định — cùng
 // phương pháp đã dùng ở updateCostingTotal()/Costing Report, đảm bảo số liệu khớp 100% với các
 // báo cáo hiện có, không phát minh công thức mới.
-function _crmPartnerFinance(lots){
+function _crmPartnerFinance(lots,partnerKey){
   const roe=26390;
   let revVND=0, costVND=0;
   lots.forEach(function(r){
+    const isShipperOfThisLot=(r.shipper||r.supplier||'')===partnerKey;
     const svcs=r.svcs||{};
     Object.keys(svcs).forEach(function(k){
       const sv=svcs[k]; if(!sv||!sv.on)return;
-      // Doanh thu: theo Fill giá (price*qty), chỉ tính dịch vụ có xuất hóa đơn (invoice!=='No')
-      if(sv.invoice!=='No'){
+      // Chi phí PHÍA đối tác này — nếu đối tác là Shipper của lô, tính TOÀN BỘ chi phí lô (đúng bản
+      // chất cũ: lợi nhuận Shipper mang lại). Nếu là NCC/Carrier/Sà Lan, CHỈ tính đúng dịch vụ THUỘC
+      // VỀ đối tác đó (svcSupplier khớp, hoặc r.carrier khớp cho dịch vụ OCF/Freight).
+      const belongsToPartner=isShipperOfThisLot||sv.svcSupplier===partnerKey||((k==='ocf'||k==='freight')&&r.carrier===partnerKey);
+      if(!belongsToPartner)return;
+      // Doanh thu: CHỈ tính khi đối tác là Shipper (đối tác phía chi phí không phát sinh doanh thu)
+      if(isShipperOfThisLot&&sv.invoice!=='No'){
         const amt=(parseFloat(sv.price)||0)*(parseFloat(sv.qty)||1);
         revVND+=(sv.cur==='VND'?amt:Math.round(amt*roe));
       }
@@ -15461,11 +15511,14 @@ function _crmPartnerFinance(lots){
         costVND+=(sv.svcCur==='VND'?camt:Math.round(camt*roe));
       }
     });
-    // Chi phí thủ công (Costing tab - các dòng tự thêm ngoài dịch vụ)
-    ((r.costing&&r.costing.items)||[]).forEach(function(it){
-      const amt=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1)+(parseFloat(it.vatAmt)||0);
-      costVND+=(it.cur==='VND'?amt:Math.round(amt*roe));
-    });
+    // Chi phí thủ công (Costing tab - các dòng tự thêm ngoài dịch vụ) — CHỈ tính vào lô mà đối tác là
+    // Shipper (không có field NCC riêng cho từng dòng để lọc chính xác hơn).
+    if(isShipperOfThisLot){
+      ((r.costing&&r.costing.items)||[]).forEach(function(it){
+        const amt=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1)+(parseFloat(it.vatAmt)||0);
+        costVND+=(it.cur==='VND'?amt:Math.round(amt*roe));
+      });
+    }
   });
   return {revVND:revVND,costVND:costVND,profitVND:revVND-costVND,margin:revVND>0?Math.round((revVND-costVND)/revVND*100):0};
 }
@@ -15481,7 +15534,7 @@ function _crmOverviewAfterRender(){
   const box=g('crmOverviewBody'); if(!box)return;
   const p=cache.partners[crmDetailKey]||{};
   const lots=_crmPartnerLots(crmDetailKey);
-  const fin=_crmPartnerFinance(lots);
+  const fin=_crmPartnerFinance(lots,crmDetailKey);
   const totalCont=lots.reduce(function(s,r){return s+(parseInt(r.vol)||0);},0);
   const activeCount=lots.filter(function(r){return !r.locked&&r.status!=='Delivered'&&r.status!=='Hoàn tất';}).length;
 
@@ -15644,7 +15697,7 @@ window._crmRenderShipList=_crmRenderShipList;
 // ═══ TAB: FINANCE — Receivable/Payable/Outstanding/Overdue thật, Invoice/Debit Note gần đây ═══
 function renderCrmFinanceTab(p){
   const lots=_crmPartnerLots(crmDetailKey);
-  const fin=_crmPartnerFinance(lots);
+  const fin=_crmPartnerFinance(lots,crmDetailKey);
   const today=new Date().toISOString().slice(0,10);
   // Outstanding/Overdue: dựa trên các dịch vụ invoice=Yes CHƯA thanh toán (apPaidStatus!=='paid') — party là chính đối tác này
   let outstandingVND=0, overdueVND=0;
@@ -15834,6 +15887,7 @@ function renderCrmGeneralTab(p){
         <div class="fi full"><label class="lbl">Địa chỉ tiếng Anh</label><input type="text" id="cg_enAddr" value="${(p.enAddr||'').replace(/"/g,'&quot;')}" placeholder="English address"/></div>
       </div>
     </div>
+    </div>
     <div class="crm3-info-card" style="grid-row:span 2">
       <div class="crm3-info-card-hd"><i class="ti ti-building-bank"></i>Thông tin ngân hàng</div>
       <div class="fg crm3-fg">
@@ -15848,6 +15902,7 @@ function renderCrmGeneralTab(p){
         <div class="fi full"><label class="lbl">BANK ADDRESS</label><input type="text" id="cg_bankAddr" value="${(p.bankAddr||'').replace(/"/g,'&quot;')}" placeholder="Bank address"/></div>
       </div>
     </div>
+    <div id="cg_stampFields" style="display:${isShipper?'contents':'none'}">
     <div class="crm3-info-card">
       <div class="crm3-info-card-hd"><i class="ti ti-stamp"></i>Con mộc (chèn vào chứng từ)</div>
       <input type="hidden" id="cg_stamp" value="${p.stamp||''}"/>
@@ -15870,8 +15925,11 @@ function renderCrmGeneralTab(p){
 }
 function _cgTypeChanged(){
   const checked=_readCheckedTypes('cg_type_cb');
+  const isShipper=checked.indexOf('shipper')>-1?'contents':'none';
   const el=g('cg_shipperFields');
-  if(el) el.style.display=checked.indexOf('shipper')>-1?'contents':'none';
+  if(el) el.style.display=isShipper;
+  const stampEl=g('cg_stampFields');
+  if(stampEl) stampEl.style.display=isShipper;
 }
 window._cgTypeChanged=_cgTypeChanged;
 function onCrmStampUpload(input){
@@ -19256,11 +19314,21 @@ async function renderDeviceMgmtList(){
         +list.map(function(d){
           const dt=d.lastSeenAt?new Date(d.lastSeenAt).toLocaleString('vi-VN'):'—';
           const first=d.firstSeenAt?new Date(d.firstSeenAt).toLocaleDateString('vi-VN'):'—';
+          // Tên riêng do NGƯỜI DÙNG tự đặt (nếu có) làm tên CHÍNH, nổi bật hơn nhiều so với tên tự
+          // nhận diện qua trình duyệt/hệ điều hành (dễ trùng giữa nhiều máy) — tên tự nhận diện chỉ
+          // hiện làm phụ đề nhỏ bên dưới.
+          const mainName=d.customName||d.deviceName||'—';
+          const subName=d.customName?(d.deviceName||''):'';
           return '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid var(--border-light);flex-wrap:wrap">'
             +'<i class="ti ti-device-desktop" style="color:var(--text-tertiary)"></i>'
-            +'<div style="flex:1;min-width:160px"><div style="font-size:12px;font-weight:600">'+(d.deviceName||'—')+'</div><div style="font-size:10.5px;color:var(--text-tertiary)">Lần đầu: '+first+' • Hoạt động gần nhất: '+dt+'</div></div>'
+            +'<div style="flex:1;min-width:160px">'
+              +'<div style="font-size:12px;font-weight:700;color:#0F172A">'+mainName+'</div>'
+              +(subName?'<div style="font-size:10px;color:var(--text-tertiary)">'+subName+'</div>':'')
+              +'<div style="font-size:10.5px;color:var(--text-tertiary)">Lần đầu: '+first+' • Hoạt động gần nhất: '+dt+'</div>'
+            +'</div>'
             +statusBadge(d.status)
             +'<div style="display:flex;gap:4px">'
+              +'<button class="rac" title="Đổi tên thiết bị" onclick="_deviceRename(\''+d._id+'\',\''+mainName.replace(/'/g,"\\'")+'\')"><i class="ti ti-edit"></i></button>'
               +(d.status!=='approved'?'<button class="btn sm" style="color:var(--green);border-color:var(--green)" onclick="_deviceSetStatus(\''+d._id+'\',\'approved\')"><i class="ti ti-check"></i> Duyệt</button>':'')
               +(d.status!=='rejected'?'<button class="btn sm" style="color:var(--red);border-color:var(--red)" onclick="_deviceSetStatus(\''+d._id+'\',\'rejected\')"><i class="ti ti-x"></i> Từ chối</button>':'')
               +(d.status==='approved'?'<button class="rac red" title="Thu hồi — bắt duyệt lại từ đầu" onclick="_deviceRevoke(\''+d._id+'\')"><i class="ti ti-trash"></i></button>':'')
@@ -19274,6 +19342,24 @@ async function renderDeviceMgmtList(){
   }
 }
 window.renderDeviceMgmtList=renderDeviceMgmtList;
+
+// Admin tự đổi tên thiết bị trực tiếp — phòng khi user không tự đặt tên (chỉ có tên tự nhận diện qua
+// trình duyệt/hệ điều hành), hoặc Admin muốn chuẩn hóa cách đặt tên cho dễ quản lý.
+async function _deviceRename(docId,curName){
+  if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
+  const val=prompt('Đặt tên riêng cho thiết bị này:',curName==='—'?'':curName);
+  if(val===null)return; // Hủy
+  const trimmed=val.trim();
+  if(!trimmed){toast('Tên không được để trống','error');return;}
+  setLoading(true,'Đang lưu...');
+  try{
+    await db.collection('userDevices').doc(docId).set({customName:trimmed},{merge:true});
+    toast('Đã đổi tên thiết bị');
+    renderDeviceMgmtList();
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window._deviceRename=_deviceRename;
 
 // Test kết nối — Admin tự bấm thử GHI/ĐỌC/XÓA 1 bản ghi TEST vào userDevices (ĐÚNG y hệt cấu trúc mà
 // _checkAndRegisterDevice() dùng thật) — xác định NGAY LẬP TỨC Rule đã publish đúng chưa, không cần
@@ -21649,20 +21735,6 @@ function renderSettings(){
     +stgBox('ports','ti-anchor','Danh mục Các cảng và ICD',
       '',
       _renderPortsIcdSettingsContent()
-    )
-
-    +stgBox('docrepair','ti-alert-triangle','Khắc phục Document quá giới hạn (1MB)',
-      '',
-      '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Firestore giới hạn cứng <b>1MB/document</b>. Các file Debit Note/chứng từ upload <b>trước bản sửa lỗi</b> được lưu trực tiếp dạng base64 trong document, có thể khiến lô hàng vượt giới hạn và <b>không lưu được gì nữa</b> (kể cả đổi trạng thái thanh toán). Từ bản này, file upload mới đã chuyển sang Firebase Storage (nhẹ hơn nhiều). Công cụ dưới đây dọn dữ liệu base64 CŨ khỏi 1 lô cụ thể để mở khóa lại — sau khi dọn, cần <b>upload lại</b> các file Debit Note/chứng từ của lô đó (đường link cũ sẽ mất, do dữ liệu base64 gây lỗi đã bị xóa).</div>'
-      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:.75rem">'
-        +'<select id="docrepairTt" style="width:120px"><option value="xuat">Xuất khẩu</option><option value="nhap">Nhập khẩu</option></select>'
-        +'<input type="text" id="docrepairId" placeholder="ID document (VD: mq4jkgnwy8yr — copy từ thông báo lỗi)" style="flex:1;min-width:260px"/>'
-        +'<button class="btn pri" onclick="repairOversizedDoc()"><i class="ti ti-tool"></i> Dọn & Khắc phục</button>'
-      +'</div>'
-      +'<div style="display:flex;gap:8px;margin-bottom:.75rem">'
-        +'<button class="btn" onclick="scanOversizedDocs()"><i class="ti ti-search"></i> Quét toàn bộ lô có nguy cơ (dữ liệu base64 cũ)</button>'
-      +'</div>'
-      +'<div id="docrepairResult" style="font-size:12px"></div>'
     )
 
     +stgBox('bank','ti-building-bank','Tài khoản ngân hàng',
@@ -25548,6 +25620,18 @@ function runCostingReport(){
       const amt=it.price?it.price*(it.qty||1):(it.amt||0);
       totalCostPreVatVND+=cvVND(amt, it.cur||'VND');
     });
+    // COM/KB (hoa hồng) — CHƯA được tính vào chi phí đầu vào ở đây trước đây (khác với phần tính
+    // RIÊNG TỪNG LÔ ở tab Costing của lô hàng, vốn đã đúng từ trước) — dùng ĐÚNG helper
+    // _comKbThanhTien/_comKbThucChi đã có sẵn, không phát minh công thức mới. Hoa hồng không có khái
+    // niệm VAT riêng nên cộng thẳng vào CẢ totalCostVND (có VAT) lẫn totalCostPreVatVND (trước VAT).
+    const comKbAll=[].concat((r.comKb&&r.comKb.com)||[],(r.comKb&&r.comKb.kb)||[]);
+    let totalComKbVND=0;
+    comKbAll.forEach(function(row){
+      const tt=_comKbThanhTien(row.amount,row.vol);
+      totalComKbVND+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||roe);
+    });
+    totalCostVND+=totalComKbVND;
+    totalCostPreVatVND+=totalComKbVND;
     const profitVND=totalRevVND-totalCostPreVatVND;
     const pct=totalRevVND>0?Math.round(profitVND/totalRevVND*100):0;
 
