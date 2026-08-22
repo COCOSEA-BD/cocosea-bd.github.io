@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v3.90';
+window.APP_BUILD='v3.91';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1401,14 +1401,18 @@ auth.onAuthStateChanged(async (user) => {
     // Tải cài đặt bảo mật TRƯỚC (cần biết deviceApproval bật/tắt trước khi quyết định có kiểm tra
     // thiết bị hay không) — rồi mới quyết định vào thẳng app hay chặn lại chờ Admin duyệt.
     await new Promise(function(resolve){ _loadSecuritySettings(resolve); });
+    console.log('COCOFLOW [Device]: deviceApproval.enabled =',(_securitySettings.deviceApproval||{}).enabled,'| role =',currentProfile.role);
     if(_securitySettings.deviceApproval&&_securitySettings.deviceApproval.enabled&&currentProfile.role!=='admin'){
       const deviceName=_detectDeviceName();
       const devStatus=await _checkAndRegisterDevice(user.uid,user.email,deviceName);
+      console.log('COCOFLOW [Device]: trạng thái thiết bị =',devStatus);
       if(devStatus!=='approved'){
         setLoading(false);
         showDevicePendingScreen(devStatus,deviceName);
         return; // KHÔNG startListeners()/showApp() — thiết bị chưa được duyệt, không tải dữ liệu gì.
       }
+    } else if(currentProfile.role==='admin'){
+      console.log('COCOFLOW [Device]: Admin — miễn kiểm tra thiết bị (theo đúng thiết kế).');
     }
     startListeners();
     showApp();
@@ -1517,6 +1521,9 @@ async function _checkAndRegisterDevice(uid,email,deviceName){
     return 'pending';
   }catch(e){
     console.error('_checkAndRegisterDevice lỗi:',e);
+    if(e&&e.code==='permission-denied'){
+      toast('⚠ Lỗi quyền Firestore khi kiểm tra thiết bị — có thể CHƯA publish Security Rule cho collection "userDevices". Đăng nhập vẫn tiếp tục bình thường (không chặn).','error');
+    }
     // Lỗi kết nối/quyền — KHÔNG chặn đăng nhập (tránh khóa nhầm người dùng vì lỗi mạng tạm thời).
     return 'approved';
   }
