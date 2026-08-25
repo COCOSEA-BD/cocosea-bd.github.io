@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.01';
+window.APP_BUILD='v4.02';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9516,9 +9516,18 @@ function runDebtReport(){
       +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
         +'<thead><tr>'
           +'<th style="'+thS+';width:32px"><input type="checkbox" title="Chọn tất cả" onchange="_cnToggleAllAR(this,\''+sh.replace(/'/g,"\\'")+'\')" style="cursor:pointer"/></th>'
-          +'<th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Tên hàng</th><th style="'+thS+'">Vol/Type</th><th style="'+thS+'">Doanh thu có HĐ (có VAT)</th><th style="'+thS+'">Doanh thu không hóa đơn</th><th style="'+thS+'">Total</th><th style="'+thS+'">Trạng thái TT</th>'
+          +'<th style="'+thS+'">Booking No</th><th style="'+thS+'">Loại</th><th style="'+thS+'">ETD</th><th style="'+thS+'">MBL</th><th style="'+thS+'">Hành trình</th><th style="'+thS+'">Tên hàng</th><th style="'+thS+'">Vol/Type</th><th style="'+thS+'">Thanh toán Cty (Invoice = Yes)</th><th style="'+thS+'">Thanh toán cá nhân (Invoice = No)</th><th style="'+thS+'">Total</th><th style="'+thS+'">Trạng thái TT</th>'
         +'</tr></thead>'
-        +'<tbody>'+rows+'</tbody>'
+        +'<tbody>'
+          +'<tr id="cn-ar-total-'+sh.replace(/[^a-zA-Z0-9]/g,'_')+'" style="background:var(--bg-secondary);font-weight:700;border-bottom:2px solid var(--border-light)">'
+            +'<td colspan="8" style="padding:5px 9px;font-size:11px;color:var(--text-secondary)"><i class="ti ti-calculator" style="font-size:11px"></i> Tổng cộng (đã chọn)</td>'
+            +'<td style="padding:5px 9px;font-size:12px;color:var(--green)" id="cn-ar-tot-yes-'+sh.replace(/[^a-zA-Z0-9]/g,'_')+'">—</td>'
+            +'<td style="padding:5px 9px;font-size:12px;color:var(--orange)" id="cn-ar-tot-no-'+sh.replace(/[^a-zA-Z0-9]/g,'_')+'">—</td>'
+            +'<td style="padding:5px 9px;font-size:12px;color:var(--blue)" id="cn-ar-tot-all-'+sh.replace(/[^a-zA-Z0-9]/g,'_')+'">—</td>'
+            +'<td style="padding:5px 9px"></td>'
+          +'</tr>'
+          +rows
+        +'</tbody>'
       +'</table></div>'
     +'</div>';
   });
@@ -10921,7 +10930,7 @@ function _debtV3ComputeAR(){
   const rows=[]; // dùng cho bảng "Chi tiết phải thu" (theo từng lô)
   filtered.forEach(function(r){
     const sh=filterShipper||r.shipper||r.supplier||'(Không rõ)';
-    if(!byShipper[sh])byShipper[sh]={partner:sh,total:0,paid:0,lots:0};
+    if(!byShipper[sh])byShipper[sh]={partner:sh,total:0,paid:0,lots:0,totalYes:0,totalNo:0,paidYes:0,paidNo:0};
     const svcs=r.svcs||{};
     const sp2=cache.partners[sh]||{};
     let rowTotalVND=0, rowTotalNoVND=0;
@@ -10941,6 +10950,10 @@ function _debtV3ComputeAR(){
     const st=_computeArRowStatus(r,filterShipper,sh,sp2);
     const rowPaid=Math.min(rowAll, (st.paidYesVND||0)+(st.paidNoVND||0));
     byShipper[sh].total+=rowAll; byShipper[sh].paid+=rowPaid; byShipper[sh].lots+=1;
+    byShipper[sh].totalYes+=rowTotalVND;
+    byShipper[sh].totalNo+=rowTotalNoVND;
+    byShipper[sh].paidYes+=Math.min(rowTotalVND,st.paidYesVND||0);
+    byShipper[sh].paidNo+=Math.min(rowTotalNoVND,st.paidNoVND||0);
     // Remark — lấy từ dnPayments[party].inv/noInv.remark, dùng ĐÚNG _arPartyKeysForLot() (cùng hàm
     // đang dùng để tính paid/remain ở trên) để đảm bảo remark khớp đúng key thanh toán thực tế, không
     // lệch nhau giữa 2 nơi. Gộp remark của cả phần Có HĐ/Không HĐ nếu khác nhau.
@@ -10961,7 +10974,7 @@ function _debtV3ComputeAR(){
       vol:r.vol||'',typeCont:r.typeCont||'',pod:r.pod||'',amtYes:rowTotalVND,amtNo:rowTotalNoVND,amtAll:rowAll
     });
   });
-  const list=Object.values(byShipper).map(function(s){return Object.assign({},s,{remain:Math.max(0,s.total-s.paid)});})
+  const list=Object.values(byShipper).map(function(s){return Object.assign({},s,{remain:Math.max(0,s.total-s.paid),remainYes:Math.max(0,s.totalYes-s.paidYes),remainNo:Math.max(0,s.totalNo-s.paidNo)});})
     .sort(function(a,b){return b.total-a.total;});
   const grandTotal=list.reduce(function(a,s){return a+s.total;},0);
   const grandPaid=list.reduce(function(a,s){return a+s.paid;},0);
@@ -11095,6 +11108,59 @@ function _dv3Donut(list,totalRemain,centerLabel){
     +'<div style="flex:1;min-width:130px">'+legend+'</div>'
   +'</div>';
 }
+// ── Donut AR: TỶ TRỌNG CÒN PHẢI THU — chia theo Thanh toán Cty + Cá nhân cho từng shipper ──
+const DV3_DONUT_AR_COLORS_CTY=['#2563EB','#0891B2','#7C3AED','#0369A1','#1D4ED8','#4338CA'];
+const DV3_DONUT_AR_COLORS_CN=['#D97706','#EA580C','#B45309','#C2410C','#92400E','#78350F'];
+function _dv3DonutAR(list,totalRemain){
+  const withRemain=list.filter(function(s){return s.remain>0.01;});
+  if(!withRemain.length||totalRemain<=0)return '<div style="text-align:center;padding:2.5rem 1rem;color:#94A3B8;font-size:12px">Không còn công nợ</div>';
+  // Hiển thị tối đa 5 shipper lớn nhất (theo remain), phần còn lại gộp vào "Khác"
+  let top=withRemain.slice(0,5);
+  let others=withRemain.slice(5);
+  // Mỗi shipper cho 2 phần: Cty (remainYes) + Cá nhân (remainNo)
+  const segments=[]; // [{label, val, color}]
+  top.forEach(function(s,i){
+    if((s.remainYes||0)>0.01)segments.push({label:s.partner+' (Cty)',val:s.remainYes||0,color:DV3_DONUT_AR_COLORS_CTY[i%DV3_DONUT_AR_COLORS_CTY.length]});
+    if((s.remainNo||0)>0.01)segments.push({label:s.partner+' (CN)',val:s.remainNo||0,color:DV3_DONUT_AR_COLORS_CN[i%DV3_DONUT_AR_COLORS_CN.length]});
+  });
+  if(others.length){
+    const otherYes=others.reduce(function(a,s){return a+(s.remainYes||0);},0);
+    const otherNo=others.reduce(function(a,s){return a+(s.remainNo||0);},0);
+    if(otherYes>0.01)segments.push({label:'Khác (Cty)',val:otherYes,color:'#94A3B8'});
+    if(otherNo>0.01)segments.push({label:'Khác (CN)',val:otherNo,color:'#CBD5E1'});
+  }
+  if(!segments.length)return '<div style="text-align:center;padding:2.5rem 1rem;color:#94A3B8;font-size:12px">Không có dữ liệu</div>';
+  let acc=0;
+  const stops=segments.map(function(e){
+    const pct=e.val/totalRemain*100, from=acc, to=acc+pct; acc=to;
+    return e.color+' '+from.toFixed(2)+'% '+to.toFixed(2)+'%';
+  }).join(',');
+  const legend=segments.map(function(e){
+    const pct=Math.round(e.val/totalRemain*1000)/10;
+    return '<div style="display:flex;align-items:center;gap:7px;font-size:11px;margin-bottom:5px">'
+      +'<span style="width:8px;height:8px;border-radius:2px;background:'+e.color+';flex-shrink:0"></span>'
+      +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155;font-weight:600" title="'+e.label+'">'+e.label+'</span>'
+      +'<span style="font-weight:700;color:#0F172A">'+pct+'%</span>'
+    +'</div>';
+  }).join('');
+  // Legend header
+  const legendHdr='<div style="display:flex;gap:12px;margin-bottom:8px;font-size:10px;font-weight:700;text-transform:uppercase;color:#64748B">'
+    +'<span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:#2563EB;display:inline-block"></span>Thanh toán Cty</span>'
+    +'<span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:#D97706;display:inline-block"></span>Thanh toán cá nhân</span>'
+  +'</div>';
+  return '<div style="display:flex;flex-direction:column;gap:10px">'
+    +'<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
+      +'<div style="width:118px;height:118px;border-radius:50%;background:conic-gradient('+stops+');flex-shrink:0;position:relative">'
+        +'<div style="position:absolute;inset:22px;background:#fff;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:inset 0 0 0 1px #F1F3F6">'
+          +'<div style="font-size:13px;font-weight:800;color:#0F172A">'+_dv3FmtShort(totalRemain)+'</div>'
+          +'<div style="font-size:8px;color:#94A3B8;text-align:center;line-height:1.15">Còn phải thu</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="flex:1;min-width:130px">'+legendHdr+legend+'</div>'
+    +'</div>'
+  +'</div>';
+}
+
 function _dv3FmtShort(v){
   const a=Math.abs(v||0);
   if(a>=1e9)return (v/1e9).toFixed(2)+'B';
@@ -11493,7 +11559,7 @@ function renderDebtReportV3(){
       +'<div class="debt-report-v3__main-left">'+_dv3PartnerTable(activeData,isAR)+_dv3Warnings(activeData,isAR)+'</div>'
       +'<div class="debt-report-v3__main-right">'
         +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">PHÂN BỔ CÔNG NỢ</div>'+_dv3BarChart(activeData.list,isAR)+'</div>'
-        +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">TỶ TRỌNG CÒN PHẢI '+(isAR?'THU':'TRẢ')+'</div>'+_dv3Donut(activeData.list,activeData.grandRemain,'Còn phải '+(isAR?'thu':'trả'))+'</div>'
+        +'<div class="debt-report-v3__card"><div class="debt-report-v3__card-hd">TỶ TRỌNG CÒN PHẢI '+(isAR?'THU':'TRẢ')+'</div>'+(isAR?_dv3DonutAR(activeData.list,activeData.grandRemain):_dv3Donut(activeData.list,activeData.grandRemain,'Còn phải trả'))+'</div>'
       +'</div>'
     +'</div>'
 
@@ -18123,6 +18189,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
         <div id="page-scy-report" style="display:none"></div>
         <div id="page-co-report" style="display:none"></div>
         <div id="page-phyto-report" style="display:none"></div>
+        <div id="page-fumi-report" style="display:none"></div>
       </div>
     </div>
   </div>
@@ -26117,7 +26184,8 @@ const SVC_REPORT_TABS=[
   {key:'trucking',icon:'ti-truck',label:'Trucking',pageId:'page-trucking-report',renderFn:'renderTruckingReport'},
   {key:'scy',icon:'ti-package',label:'SCY',pageId:'page-scy-report',renderFn:'renderScyReport'},
   {key:'co',icon:'ti-certificate',label:'C/O',pageId:'page-co-report',renderFn:'renderCOReport'},
-  {key:'phyto',icon:'ti-vaccine',label:'Phyto',pageId:'page-phyto-report',renderFn:'renderPhytoReport'}
+  {key:'phyto',icon:'ti-vaccine',label:'Phyto',pageId:'page-phyto-report',renderFn:'renderPhytoReport'},
+  {key:'fumi',icon:'ti-spray',label:'Fumi',pageId:'page-fumi-report',renderFn:'renderFumiReport'}
 ];
 function renderServiceReport(){
   const sw=g('svcReportTabSwitch');
@@ -26964,6 +27032,244 @@ async function _phytoReportSaveRefNo(lotId,svcKey,val){
   }catch(e){ toast('Lỗi: '+e.message,'error'); }
 }
 window._phytoReportSaveRefNo=_phytoReportSaveRefNo;
+
+// ═══ FUMI REPORT — Dịch vụ Hun trùng hàng hóa ═══
+function _fumiReportDefaultFrom(){ const d=new Date(); d.setDate(d.getDate()-5); return d.toISOString().slice(0,10); }
+function _fumiReportDefaultTo(){ const d=new Date(); d.setDate(d.getDate()+2); return d.toISOString().slice(0,10); }
+
+function renderFumiReport(){
+  const pg=g('page-fumi-report'); if(!pg)return;
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=allLots.filter(function(r){
+    const svcs=r.svcs||{};
+    const fum=_findSvcByNameOrCode(svcs,'Hun trùng','FUM','fumi');
+    return !!fum;
+  });
+
+  window._fumiRptSort=window._fumiRptSort||{dir:'desc'};
+  const sortDir=window._fumiRptSort.dir;
+  rows.sort(function(a,b){
+    const va=a.etd||'', vb=b.etd||'';
+    return sortDir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
+  });
+
+  const fs=window._fumiRptFilter=window._fumiRptFilter||{q:'',from:_fumiReportDefaultFrom(),to:_fumiReportDefaultTo()};
+  const filtered=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    if(fs.q){
+      const q=fs.q.toLowerCase();
+      const hay=[r.jobNo,r.bookingNo,r.mblNo,r.shipper,r.supplier,r.pod,r.cnee,r.consignee].join(' ').toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    return true;
+  });
+
+  const thS='padding:7px 9px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-light);white-space:nowrap;background:var(--bg-secondary)';
+  const tdS='padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:middle';
+
+  const bodyRows=filtered.map(function(r,i){
+    const bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
+    const shipperKey=r.shipper||r.supplier||'—';
+    const cneeKey=r.cnee||r.consignee||'';
+    const cp=cache.partners[cneeKey]||{};
+    const cneeDisp=cp.fullname||cneeKey||'—';
+    const tt=r.loai==='Xuất'?'xuat':'nhap';
+    const svcs=r.svcs||{};
+    const fum=_findSvcByNameOrCode(svcs,'Hun trùng','FUM','fumi');
+    const fumNo=(fum&&fum.sv.refNo)||'';
+    const nccDisp=(fum&&fum.sv.svcSupplier)||'';
+    const invNo=(r.docData&&r.docData.invoiceNo)||'';
+    return '<tr style="'+bg+'">'
+      +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
+      +'<td style="'+tdS+'"><button class="plink" style="font-weight:600;color:var(--blue);background:none;border:none;cursor:pointer;padding:0" onclick="openDetail(\''+r._id+'\',\''+tt+'\')">'+(r.jobNo||'—')+'</button></td>'
+      +'<td style="'+tdS+'"><span class="bdg '+(tt==='xuat'?'bdg-b':'bdg-a')+'">'+(r.loai||'—')+'</span></td>'
+      +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.bookingNo||'—')+'</div>'+(r.mblNo?'<div style="font-size:10.5px;color:var(--text-tertiary)"># '+r.mblNo+'</div>':'')+'</td>'
+      +'<td style="'+tdS+'">'+shipperKey+'</td>'
+      +'<td style="'+tdS+'">'+(r.pod||'—')+'</td>'
+      +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.vessel||'—')+'</div>'+(r.voy?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+r.voy+'</div>':'')+'</td>'
+      +'<td style="'+tdS+';font-weight:700;color:#1a4b8c">'+(r.etd?fmtDMY(r.etd):'—')+'</td>'
+      +'<td style="'+tdS+'"><input type="text" value="'+fumNo.replace(/"/g,'&quot;')+'" placeholder="Nhập số Fumi" onchange="_fumiReportSaveRefNo(\''+r._id+'\',\''+tt+'\',\''+(fum?fum.key:'')+'\',this.value)" style="font-size:11.5px;width:120px;padding:3px 6px"/></td>'
+      +'<td style="'+tdS+'">'+(nccDisp||'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
+      +'<td style="'+tdS+'">'+(invNo||'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
+      +'<td style="'+tdS+'">'+cneeDisp+'</td>'
+    +'</tr>';
+  }).join('');
+
+  const sortIcon=sortDir==='desc'?'ti-sort-descending':'ti-sort-ascending';
+  pg.innerHTML='<div style="padding:1rem 1.25rem">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">'
+      +'<i class="ti ti-spray" style="font-size:20px;color:#B45309"></i>'
+      +'<h2 style="font-size:16px;font-weight:700;margin:0">Fumi Report — Dịch vụ Hun trùng hàng hóa</h2>'
+      +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lô hàng</span>'
+      +'<div style="display:flex;gap:6px;margin-left:auto">'
+        +'<button class="btn sm" onclick="fumiReportExportExcel()" title="Xuất Excel (theo dữ liệu đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+        +'<button class="btn sm" onclick="fumiReportExportPDF()" title="Xuất PDF (theo dữ liệu đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
+        +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Số Fumi đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="fumiReportImportExcel(this)"/></label>'
+        +'<button class="rac" onclick="renderFumiReport()" title="Tải lại dữ liệu mới nhất" style="width:30px;height:30px"><i class="ti ti-refresh"></i></button>'
+      +'</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-light)">'
+      +'<input type="text" placeholder="🔍 Tìm Job ID / Booking / MBL / Shipper / Cnee..." value="'+(fs.q||'')+'" oninput="window._fumiRptFilter.q=this.value;renderFumiReport()" style="font-size:12px;flex:1;min-width:220px"/>'
+      +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">ETD:'
+        +'<input type="date" value="'+(fs.from||'')+'" oninput="window._fumiRptFilter.from=this.value;renderFumiReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+        +'<span>→</span>'
+        +'<input type="date" value="'+(fs.to||'')+'" oninput="window._fumiRptFilter.to=this.value;renderFumiReport()" style="font-size:11.5px;width:135px;padding:5px 6px"/>'
+      +'</div>'
+      +'<button class="btn sm" onclick="window._fumiRptFilter={q:\'\',from:_fumiReportDefaultFrom(),to:_fumiReportDefaultTo()};renderFumiReport()"><i class="ti ti-refresh"></i> Reset</button>'
+    +'</div>'
+    +'<div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:10px"><table style="width:100%;border-collapse:collapse">'
+      +'<thead><tr>'
+        +'<th style="'+thS+';width:34px">#</th>'
+        +'<th style="'+thS+'">Job ID</th>'
+        +'<th style="'+thS+'">Loại</th>'
+        +'<th style="'+thS+'">Booking/MBL</th>'
+        +'<th style="'+thS+'">Shipper</th>'
+        +'<th style="'+thS+'">POD</th>'
+        +'<th style="'+thS+'">Vessel/Voy</th>'
+        +'<th style="'+thS+';cursor:pointer" onclick="window._fumiRptSort.dir=window._fumiRptSort.dir===\'desc\'?\'asc\':\'desc\';renderFumiReport()">ETD <i class="ti '+sortIcon+'" style="font-size:12px"></i></th>'
+        +'<th style="'+thS+'">Số Fumi</th>'
+        +'<th style="'+thS+'">NCC</th>'
+        +'<th style="'+thS+'">Số INV</th>'
+        +'<th style="'+thS+'">Tên Cnee</th>'
+      +'</tr></thead>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="12" style="padding:2rem;text-align:center;color:var(--text-tertiary)">Không có lô hàng nào có dịch vụ Hun trùng trong khoảng thời gian này.</td></tr>')+'</tbody>'
+    +'</table></div>'
+  +'</div>';
+}
+window.renderFumiReport=renderFumiReport;
+
+async function fumiReportExportExcel(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const fs=window._fumiRptFilter||{};
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=allLots.filter(function(r){
+    const svcs=r.svcs||{};
+    const fum=_findSvcByNameOrCode(svcs,'Hun trùng','FUM','fumi');
+    return !!fum;
+  });
+  rows=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    if(fs.q){
+      const q=fs.q.toLowerCase();
+      const hay=[r.jobNo,r.bookingNo,r.mblNo,r.shipper,r.supplier,r.pod,r.cnee,r.consignee].join(' ').toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  setLoading(true,'Đang tạo Excel...');
+  try{
+    for(const r of rows)await _svcRptEnsureJobId(r,(r.loai==='Xuất'?'xuat':'nhap'));
+    const wb=new ExcelJS.Workbook();
+    wb.creator='CocoFlow ERP'; wb.created=new Date();
+    const ws=wb.addWorksheet('Fumi Report');
+    const headers=['Job ID','Loại','Booking No','MBL','Shipper','POD','Vessel/Voy','ETD','Số Fumi','NCC','Số INV','Tên Cnee'];
+    ws.columns=[{width:11},{width:7},{width:16},{width:14},{width:16},{width:14},{width:16},{width:12},{width:18},{width:16},{width:14},{width:20}];
+    _svcRptXlsxHeader(ws,headers);
+    rows.forEach(function(r,i){
+      const cneeKey=r.cnee||r.consignee||'';
+      const cp=cache.partners[cneeKey]||{};
+      const svcs=r.svcs||{};
+      const fum=_findSvcByNameOrCode(svcs,'Hun trùng','FUM','fumi');
+      ws.addRow([
+        r.jobNo||'', r.loai||'', r.bookingNo||'', r.mblNo||'', r.shipper||r.supplier||'', r.pod||'',
+        (r.vessel||'')+(r.voy?' / '+r.voy:''), r.etd?fmtDMY(r.etd):'',
+        (fum&&fum.sv.refNo)||'',
+        (fum&&fum.sv.svcSupplier)||'',
+        (r.docData&&r.docData.invoiceNo)||'', cp.fullname||cneeKey||''
+      ]);
+      _svcRptXlsxStyleDataRow(ws,i+2,[9]); // Số Fumi — cột cần điền
+    });
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='Fumi_Report_'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Đã xuất Excel — cột tô vàng là cột cần điền, giữ nguyên cột "Job ID" khi nhập lại');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+window.fumiReportExportExcel=fumiReportExportExcel;
+
+function fumiReportExportPDF(){
+  const fs=window._fumiRptFilter||{};
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  let rows=allLots.filter(function(r){
+    const svcs=r.svcs||{};
+    const fum=_findSvcByNameOrCode(svcs,'Hun trùng','FUM','fumi');
+    return !!fum;
+  });
+  rows=rows.filter(function(r){
+    if(fs.from&&(r.etd||'')<fs.from)return false;
+    if(fs.to&&(r.etd||'')>fs.to)return false;
+    return true;
+  });
+  if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  const headers=['Job ID','Loại','Booking/MBL','Shipper','POD','Vessel/Voy','ETD','Số Fumi','NCC','Số INV','Tên Cnee'];
+  const dataRows=rows.map(function(r){
+    const cneeKey=r.cnee||r.consignee||''; const cp=cache.partners[cneeKey]||{};
+    const svcs=r.svcs||{};
+    const fum=_findSvcByNameOrCode(svcs,'Hun trùng','FUM','fumi');
+    return [r.jobNo||'—', r.loai||'—', (r.bookingNo||'—')+(r.mblNo?' / '+r.mblNo:''), r.shipper||r.supplier||'—', r.pod||'—',
+      (r.vessel||'—')+(r.voy?'/'+r.voy:''), r.etd?fmtDMY(r.etd):'—',
+      (fum&&fum.sv.refNo)||'—',
+      (fum&&fum.sv.svcSupplier)||'—',
+      (r.docData&&r.docData.invoiceNo)||'—', cp.fullname||cneeKey||'—'];
+  });
+  _svcRptExportPDF('Fumi Report — Dịch vụ Hun trùng hàng hóa',headers,dataRows,'ETD: '+(fs.from?fmtDMY(fs.from):'—')+' → '+(fs.to?fmtDMY(fs.to):'—'));
+}
+window.fumiReportExportPDF=fumiReportExportPDF;
+
+function fumiReportImportExcel(input){
+  const file=input.files[0]; if(!file)return;
+  _svcRptReadImportFile(file,async function(rows){
+    if(!rows)return;
+    setLoading(true,'Đang nhập dữ liệu...');
+    let matched=0,skipped=0,updated=0;
+    for(const row of rows){
+      const jobId=(row['Job ID']||'').toString().trim();
+      if(!jobId){skipped++;continue;}
+      const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+      const r=allLots.find(function(x){return x.jobNo===jobId;});
+      if(!r){skipped++;continue;}
+      matched++;
+      const tt=r.loai==='Xuất'?'xuat':'nhap';
+      const svcs=r.svcs||{};
+      const fum=_findSvcByNameOrCode(svcs,'Hun trùng','FUM','fumi');
+      const newFumNo=(row['Số Fumi']||'').toString().trim();
+      let changed=false;
+      const upd={};
+      if(fum&&newFumNo&&newFumNo!==(fum.sv.refNo||'')){ upd['svcs.'+fum.key+'.refNo']=newFumNo; changed=true; }
+      if(changed){
+        try{
+          await fsSet('lots_'+tt,r._id,upd);
+          if(fum&&upd['svcs.'+fum.key+'.refNo']!==undefined)r.svcs[fum.key].refNo=newFumNo;
+          updated++;
+        }catch(e){ console.error('Lỗi lưu Fumi cho '+jobId,e); }
+      }
+    }
+    setLoading(false);
+    toast('Đã nhập: '+updated+' lô cập nhật, '+matched+' lô khớp Job ID, '+skipped+' dòng bỏ qua (thiếu/sai Job ID)');
+    renderFumiReport();
+    input.value='';
+  });
+}
+window.fumiReportImportExcel=fumiReportImportExcel;
+
+async function _fumiReportSaveRefNo(lotId,tt,svcKey,val){
+  if(!svcKey){toast('Không xác định được dịch vụ','error');return;}
+  try{
+    const upd={}; upd['svcs.'+svcKey+'.refNo']=val;
+    await fsSet('lots_'+tt,lotId,upd);
+    const r=((tt==='xuat'?cache.xuat:cache.nhap)||[]).find(function(x){return x._id===lotId;});
+    if(r){ r.svcs=r.svcs||{}; r.svcs[svcKey]=r.svcs[svcKey]||{}; r.svcs[svcKey].refNo=val; }
+    toast('Đã lưu');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+}
+window._fumiReportSaveRefNo=_fumiReportSaveRefNo;
 
 function renderScyReport(){
   const pg=g('page-scy-report'); if(!pg)return;
@@ -33588,13 +33894,40 @@ function _cnBulkChkChange(el){
   const row=JSON.parse(el.getAttribute('data-row').replace(/&quot;/g,'"'));
   if(el.checked) window._cnBulkChecked[row.id]=row;
   else delete window._cnBulkChecked[row.id];
+  const sh=el.getAttribute('data-sh');
+  if(sh)_cnUpdateARSelTotal(sh);
 }
 window._cnBulkChkChange=_cnBulkChkChange;
 
+function _cnUpdateARSelTotal(sh){
+  const safeId=sh.replace(/[^a-zA-Z0-9]/g,'_');
+  const elYes=document.getElementById('cn-ar-tot-yes-'+safeId);
+  const elNo=document.getElementById('cn-ar-tot-no-'+safeId);
+  const elAll=document.getElementById('cn-ar-tot-all-'+safeId);
+  if(!elYes||!elNo||!elAll)return;
+  let sumYes=0,sumNo=0,sumAll=0;
+  const chks=document.querySelectorAll('.cn-ar-chk');
+  chks.forEach(function(c){
+    if(c.getAttribute('data-sh')===sh&&c.checked){
+      const row=JSON.parse(c.getAttribute('data-row').replace(/&quot;/g,'"'));
+      sumYes+=(row.amtYes||0); sumNo+=(row.amtNo||0); sumAll+=(row.amtAll||0);
+    }
+  });
+  const any=sumAll>0;
+  elYes.textContent=any?sumYes.toLocaleString()+' VND':'—';
+  elNo.textContent=any?sumNo.toLocaleString()+' VND':'—';
+  elAll.textContent=any?sumAll.toLocaleString()+' VND':'—';
+}
+window._cnUpdateARSelTotal=_cnUpdateARSelTotal;
+
 function _cnToggleAllAR(masterEl,sh){
   Array.from(document.querySelectorAll('.cn-ar-chk')).filter(function(c){return c.getAttribute('data-sh')===sh;}).forEach(function(c){
-    c.checked=masterEl.checked; _cnBulkChkChange(c);
+    c.checked=masterEl.checked;
+    const row=JSON.parse(c.getAttribute('data-row').replace(/&quot;/g,'"'));
+    if(c.checked) window._cnBulkChecked[row.id]=row;
+    else delete window._cnBulkChecked[row.id];
   });
+  _cnUpdateARSelTotal(sh);
 }
 window._cnToggleAllAR=_cnToggleAllAR;
 
