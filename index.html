@@ -1122,7 +1122,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.03';
+window.APP_BUILD='v4.04';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -18219,6 +18219,12 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 <!-- LOADING CONFIRM MODAL -->
 <div class="ov" id="lcOv" style="padding:.75rem"></div>
 
+<!-- VT LOADING CONFIRM LIST MODAL -->
+<div class="ov" id="vtLcOv" style="padding:.75rem"></div>
+
+<!-- VT DELAY NOTICE MODAL -->
+<div class="ov" id="vtDnOv" style="padding:.75rem"></div>
+
 <!-- OCEAN FREIGHT RATE MODAL -->
 <div class="ov" id="oceanOv" style="padding:.75rem"></div>
 
@@ -30604,10 +30610,12 @@ function _vtRenderRightPanelHtml(){
     +(v.transships&&v.transships.length?'<div style="padding:0 18px 16px"><div class="ofr-section-hd"><i class="ti ti-transfer"></i>Cảng chuyển tải</div>'
       +v.transships.map(function(ts){return '<div style="font-size:12px;padding:6px 10px;background:var(--bg-secondary);border-radius:8px;margin-bottom:4px">'+(ts.port||'—')+(ts.eta?' · ETA '+fmtDMYshort(ts.eta):'')+'</div>';}).join('')
     +'</div>':'')
-    +'<div style="padding:0 18px 18px;display:flex;gap:8px">'
+    +'<div style="padding:0 18px 18px;display:flex;gap:8px;flex-wrap:wrap">'
       +'<button class="btn ofr-btn navy sm" onclick="openVesselEditor(\''+voyId+'\')"><i class="ti ti-edit"></i> Edit</button>'
       +'<button class="btn ofr-btn ghost sm" onclick="duplicateVoyage(\''+voyId+'\')"><i class="ti ti-copy"></i> Duplicate</button>'
       +'<button class="btn ofr-btn ghost sm" onclick="_vtOpenAssignPicker(\''+voyId+'\')"><i class="ti ti-package-import"></i> Assign Shipment</button>'
+      +'<button class="btn sm" onclick="showVtLoadingConfirmList(\''+voyId+'\')" style="background:#065F46;border-color:#065F46;color:#fff"><i class="ti ti-circle-check"></i> Loading Confirm</button>'
+      +'<button class="btn sm" onclick="showVtDelayNotice(\''+voyId+'\')" style="background:#92400E;border-color:#92400E;color:#fff"><i class="ti ti-alert-triangle"></i> Delay Notice</button>'
       +'<button class="btn red sm" onclick="deleteVessel(\''+voyId+'\')" style="margin-left:auto"><i class="ti ti-trash"></i></button>'
     +'</div>';
   } else if(tab==='ship'){
@@ -30705,6 +30713,377 @@ async function duplicateVoyage(voyId){
   setLoading(false);
 }
 window.duplicateVoyage=duplicateVoyage;
+
+// ═══════════════════════════════════════════════════════════════
+//  VT — LOADING CONFIRM (vessel-level: list tất cả lô trên tàu)
+// ═══════════════════════════════════════════════════════════════
+function showVtLoadingConfirmList(voyId){
+  const v=(cache.vessels||[]).find(function(x){return x._id===voyId;});
+  if(!v)return;
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  const lots=allLots.filter(function(l){
+    return (l.vessel||'').toUpperCase()===(v.vessel||'').toUpperCase()&&(l.voy||'')===(v.voy||'');
+  });
+  const fmtDate=function(iso){return iso?iso.split('-').reverse().join('/'):'—';};
+  const title='Loading Confirm — '+(v.vessel||'—')+' / '+(v.voy||'—');
+
+  let rows='';
+  if(!lots.length){
+    rows='<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px"><i class="ti ti-package-off" style="font-size:22px;display:block;margin-bottom:6px;opacity:.4"></i>Chưa có shipment nào trên chuyến này</div>';
+  } else {
+    rows=lots.map(function(l){
+      const tt=cache.xuat.indexOf(l)>=0?'xuat':'nhap';
+      const pt=cache.partners&&cache.partners[l.shipper||l.supplier||''];
+      const cust=(pt&&(pt.shortname||pt.name))||l.shipper||l.supplier||'—';
+      const jobNo=l.jobNo||l.bookingNo||'—';
+      const bookings=(l.bookings&&l.bookings.length)?l.bookings:[{vol:l.vol||'',typeCont:l.typeCont||''}];
+      const typeMap={};
+      bookings.forEach(function(b){const t=(b.typeCont||l.typeCont||'').trim();const vi=parseInt(b.vol)||0;if(t&&vi){typeMap[t]=(typeMap[t]||0)+vi;}});
+      const contS=Object.keys(typeMap).length?Object.keys(typeMap).map(function(t){return typeMap[t]+'x'+t;}).join(' + '):(l.vol?l.vol+'x'+(l.typeCont||'CONT'):'—');
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border-light)">'
+        +'<div style="flex:1;min-width:0">'
+          +'<div style="font-size:12.5px;font-weight:700;color:var(--text-primary)">'+jobNo+'</div>'
+          +'<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px">'+cust+' &nbsp;·&nbsp; '+contS+'</div>'
+        +'</div>'
+        +'<button class="btn sm" style="background:#065F46;border-color:#065F46;color:#fff;font-size:11.5px;white-space:nowrap" '
+          +'onclick="closeOv(\'vtLcOv\');setTimeout(function(){showLoadingConfirm(\''+l._id+'\',\''+tt+'\');},120)">'
+          +'<i class="ti ti-circle-check"></i> Loading Confirm'
+        +'</button>'
+      +'</div>';
+    }).join('');
+  }
+
+  g('vtLcOv').innerHTML=''
+    +'<div class="modal" style="max-width:640px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.2)">'
+      +'<div style="background:linear-gradient(135deg,#065F46,#059669);padding:12px 18px;display:flex;align-items:center;gap:10px">'
+        +'<i class="ti ti-circle-check" style="font-size:20px;color:#A7F3D0"></i>'
+        +'<div style="font-size:14px;font-weight:700;color:#fff;flex:1">'+title+'</div>'
+        +'<button onclick="closeOv(\'vtLcOv\')" style="color:#A7F3D0;font-size:18px;background:rgba(255,255,255,.15);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>'
+      +'</div>'
+      +'<div style="font-size:11.5px;color:var(--text-secondary);padding:10px 16px 0;display:flex;align-items:center;gap:6px">'
+        +'<i class="ti ti-ship" style="color:#059669"></i>'
+        +'ETD: '+fmtDate(v.etd)+' &nbsp;·&nbsp; POL: '+(v.pol||'—')+' &nbsp;·&nbsp; '+(lots.length)+' shipment'
+      +'</div>'
+      +'<div style="max-height:420px;overflow-y:auto;margin-top:8px">'+rows+'</div>'
+      +'<div style="padding:12px 16px;border-top:1px solid var(--border-light);text-align:right">'
+        +'<button class="btn" onclick="closeOv(\'vtLcOv\')" style="font-size:12.5px"><i class="ti ti-x"></i> Đóng</button>'
+      +'</div>'
+    +'</div>';
+  openOv('vtLcOv');
+}
+window.showVtLoadingConfirmList=showVtLoadingConfirmList;
+
+// ═══════════════════════════════════════════════════════════════
+//  VT — DELAY NOTICE (thông báo lịch tàu thay đổi)
+// ═══════════════════════════════════════════════════════════════
+function showVtDelayNotice(voyId){
+  const v=(cache.vessels||[]).find(function(x){return x._id===voyId;});
+  if(!v)return;
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  const lots=allLots.filter(function(l){
+    return (l.vessel||'').toUpperCase()===(v.vessel||'').toUpperCase()&&(l.voy||'')===(v.voy||'');
+  });
+  const fmtDate=function(iso){return iso?iso.split('-').reverse().join('/'):'—';};
+  const title='Delay Notice — '+(v.vessel||'—')+' / '+(v.voy||'—');
+  const podFirst=(v.pods||[])[0]||{};
+
+  g('vtDnOv').innerHTML=_vtDnBuildFormHtml(voyId,v,lots,podFirst,fmtDate,title);
+  openOv('vtDnOv');
+}
+window.showVtDelayNotice=showVtDelayNotice;
+
+function _vtDnBuildFormHtml(voyId,v,lots,podFirst,fmtDate,title){
+  const iS='font-size:12.5px;padding:7px 10px;border:1px solid var(--border-light);border-radius:8px;background:var(--bg-primary);color:var(--text-primary);width:100%;box-sizing:border-box';
+  const lbS='font-size:11.5px;font-weight:700;color:var(--text-secondary);margin-bottom:4px;display:block';
+
+  // Format datetime-local value from stored "2026-08-19 11:00" or ISO
+  const toDatetimeLocal=function(s){
+    if(!s)return '';
+    // If it looks like "2026-08-19 11:00" → "2026-08-19T11:00"
+    return s.replace(' ','T').slice(0,16);
+  };
+
+  return '<div class="modal" style="max-width:640px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.2)">'
+    +'<div style="background:linear-gradient(135deg,#92400E,#D97706);padding:12px 18px;display:flex;align-items:center;gap:10px">'
+      +'<i class="ti ti-alert-triangle" style="font-size:20px;color:#FDE68A"></i>'
+      +'<div style="font-size:14px;font-weight:700;color:#fff;flex:1">'+title+'</div>'
+      +'<button onclick="closeOv(\'vtDnOv\')" style="color:#FDE68A;font-size:18px;background:rgba(255,255,255,.15);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>'
+    +'</div>'
+    // Current values reference
+    +'<div style="padding:14px 18px 0">'
+      +'<div style="background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px">'
+        +'<div style="font-weight:700;color:var(--text-secondary);font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px"><i class="ti ti-clock"></i> Lịch hiện tại</div>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">'
+          +'<div><div style="font-size:10.5px;color:var(--text-tertiary)">ETD</div><div style="font-weight:700;color:var(--orange)">'+fmtDate(v.etd)+'</div></div>'
+          +'<div><div style="font-size:10.5px;color:var(--text-tertiary)">CY Cutoff</div><div style="font-weight:700;color:var(--orange)">'+(v.cutoffCY||'—')+'</div></div>'
+          +'<div><div style="font-size:10.5px;color:var(--text-tertiary)">SI Cutoff</div><div style="font-weight:700;color:var(--orange)">'+(v.cutoffSI||'—')+'</div></div>'
+        +'</div>'
+      +'</div>'
+      // New values inputs
+      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">'
+        +'<div><label style="'+lbS+'">ETD mới</label><input type="date" id="vtDnEtd" value="'+(v.etd||'')+'" style="'+iS+'"/></div>'
+        +'<div><label style="'+lbS+'">CY Cutoff mới</label><input type="datetime-local" id="vtDnCy" value="'+toDatetimeLocal(v.cutoffCY||'')+'" style="'+iS+'"/></div>'
+        +'<div><label style="'+lbS+'">SI Cutoff mới</label><input type="datetime-local" id="vtDnSi" value="'+toDatetimeLocal(v.cutoffSI||'')+'" style="'+iS+'"/></div>'
+      +'</div>'
+      +'<div style="margin-bottom:16px"><label style="'+lbS+'">Lý do delay (tuỳ chọn)</label>'
+        +'<input type="text" id="vtDnReason" placeholder="VD: Tàu trễ lịch, thời tiết xấu..." style="'+iS+'"/>'
+      +'</div>'
+    +'</div>'
+    +'<div style="padding:0 18px 16px;display:flex;gap:8px;justify-content:flex-end">'
+      +'<button class="btn" onclick="closeOv(\'vtDnOv\')" style="font-size:12.5px"><i class="ti ti-x"></i> Huỷ</button>'
+      +'<button class="btn sm" style="background:#92400E;border-color:#92400E;color:#fff;font-size:12.5px" onclick="_vtDnSave(\''+voyId+'\')"><i class="ti ti-device-floppy"></i> Lưu & Cập nhật</button>'
+    +'</div>'
+  +'</div>';
+}
+window._vtDnBuildFormHtml=_vtDnBuildFormHtml;
+
+async function _vtDnSave(voyId){
+  const v=(cache.vessels||[]).find(function(x){return x._id===voyId;});
+  if(!v)return;
+  const etdOld=v.etd||''; const cyOld=v.cutoffCY||''; const siOld=v.cutoffSI||'';
+
+  const etdNew=(document.getElementById('vtDnEtd')||{}).value||'';
+  const cyRaw=(document.getElementById('vtDnCy')||{}).value||'';
+  const siRaw=(document.getElementById('vtDnSi')||{}).value||'';
+  const reason=(document.getElementById('vtDnReason')||{}).value||'';
+
+  // Format datetime-local → "2026-08-23 11:00"
+  const fmtDT=function(s){return s?s.replace('T',' ').slice(0,16):'';};
+  const cyNew=fmtDT(cyRaw); const siNew=fmtDT(siRaw);
+
+  if(!etdNew&&!cyNew&&!siNew){toast('Chưa nhập thông tin lịch mới','error');return;}
+
+  setLoading(true,'Đang cập nhật lịch tàu...');
+  try{
+    const upd={updatedAt:Date.now(),updatedBy:currentUser.email};
+    if(etdNew)upd.etd=etdNew;
+    if(cyNew)upd.cutoffCY=cyNew;
+    if(siNew)upd.cutoffSI=siNew;
+    // Save delay history
+    const delayHistory=(v.delayHistory||[]).concat([{
+      at:Date.now(),by:currentUser.email,
+      etdOld,etdNew,cyOld,cyNew:cyNew||cyOld,siOld,siNew:siNew||siOld,reason
+    }]);
+    upd.delayHistory=delayHistory;
+    await fsSet('vessels',voyId,upd);
+    toast('Đã cập nhật lịch tàu');
+    // Refresh panel
+    const panel=g('vtRightPanel'); if(panel)panel.innerHTML=_vtRenderRightPanelHtml();
+  }catch(e){toast('Lỗi: '+e.message,'error');setLoading(false);return;}
+  setLoading(false);
+
+  // After save: ask about notifications
+  const allLots=[...(cache.xuat||[]),...(cache.nhap||[])];
+  const lots=allLots.filter(function(l){
+    return (l.vessel||'').toUpperCase()===(v.vessel||'').toUpperCase()&&(l.voy||'')===(v.voy||'');
+  });
+  if(!lots.length){closeOv('vtDnOv');return;}
+
+  // Reload updated vessel
+  const vUp=(cache.vessels||[]).find(function(x){return x._id===voyId;})||v;
+  _vtDnShowNotify(voyId,vUp,lots,etdOld,cyOld,siOld,reason);
+}
+window._vtDnSave=_vtDnSave;
+
+function _vtDnShowNotify(voyId,v,lots,etdOld,cyOld,siOld,reason){
+  const fmtDate=function(iso){return iso?iso.split('-').reverse().join('/'):'—';};
+  const etdNew=v.etd||''; const cyNew=v.cutoffCY||''; const siNew=v.cutoffSI||'';
+  const SEP='─────────────────────────────';
+  const vesVoy=(v.vessel||'—')+(v.voy?' / V.'+v.voy:'');
+  const podFirst=(v.pods||[])[0]||{};
+  const pol=v.pol||'—'; const pod=podFirst.pod||'—';
+
+  // Group lots by shipper
+  const byShipper={};
+  lots.forEach(function(l){
+    const tt=cache.xuat.indexOf(l)>=0?'xuat':'nhap';
+    const sh=l.shipper||l.supplier||'—';
+    if(!byShipper[sh])byShipper[sh]={lots:[],email:''};
+    byShipper[sh].lots.push({l:l,tt:tt});
+    const pt=cache.partners&&cache.partners[sh];
+    if(pt&&pt.email&&!byShipper[sh].email)byShipper[sh].email=pt.email;
+  });
+
+  const buildTemplate=function(sh,entry,lang){
+    const pt=cache.partners&&cache.partners[sh];
+    const custName=(pt&&(pt.shortname||pt.name))||sh;
+    const lotLines=entry.lots.map(function(item){
+      const l=item.l;
+      const jobNo=l.jobNo||l.bookingNo||'—';
+      const bookings=(l.bookings&&l.bookings.length)?l.bookings:[{vol:l.vol||'',typeCont:l.typeCont||''}];
+      const typeMap={};
+      bookings.forEach(function(b){const t=(b.typeCont||l.typeCont||'').trim();const vi=parseInt(b.vol)||0;if(t&&vi){typeMap[t]=(typeMap[t]||0)+vi;}});
+      const contS=Object.keys(typeMap).length?Object.keys(typeMap).map(function(t){return typeMap[t]+'x'+t;}).join(' + '):(l.vol?l.vol+'x'+(l.typeCont||'CONT'):'—');
+      return lang==='en'
+        ?('  • Job: '+jobNo+' | '+contS+(l.bookingNo&&l.bookingNo!==jobNo?' | BKG: '+l.bookingNo:''))
+        :('  • Job: '+jobNo+' | '+contS+(l.bookingNo&&l.bookingNo!==jobNo?' | BKG: '+l.bookingNo:''));
+    }).join('\n');
+
+    if(lang==='en'){
+      return [
+        '⚠️ DELAY NOTICE — SCHEDULE UPDATE:',SEP,
+        '🚢 Vessel / Voyage : '+vesVoy,
+        '📍 POL → POD       : '+pol+' → '+pod,
+        '📅 ETD (Old → New) : '+fmtDate(etdOld)+' → '+fmtDate(etdNew),
+        '⏰ CY Cutoff (Old) : '+(cyOld||'—')+' → '+(cyNew||cyOld||'—'),
+        '⏰ SI Cutoff (Old) : '+(siOld||'—')+' → '+(siNew||siOld||'—'),
+        (reason?'📝 Reason          : '+reason:''),
+        SEP,
+        '📦 Your shipment(s):',lotLines,SEP,
+        'We sincerely apologize for any inconvenience caused. Please contact us for further assistance.',
+      ].filter(function(x){return x!=='';}).join('\n');
+    } else {
+      return [
+        '⚠️ THÔNG BÁO LỊCH TÀU THAY ĐỔI:',SEP,
+        '🚢 Tàu / Chuyến       : '+vesVoy,
+        '📍 Cảng đi → Cảng đến : '+pol+' → '+pod,
+        '📅 ETD (Cũ → Mới)     : '+fmtDate(etdOld)+' → '+fmtDate(etdNew),
+        '⏰ CY Cutoff (Cũ → Mới): '+(cyOld||'—')+' → '+(cyNew||cyOld||'—'),
+        '⏰ SI Cutoff (Cũ → Mới): '+(siOld||'—')+' → '+(siNew||siOld||'—'),
+        (reason?'📝 Lý do              : '+reason:''),
+        SEP,
+        '📦 Lô hàng của quý khách:',lotLines,SEP,
+        'Chúng tôi xin lỗi vì sự bất tiện này. Vui lòng liên hệ chúng tôi nếu cần hỗ trợ thêm.',
+      ].filter(function(x){return x!=='';}).join('\n');
+    }
+  };
+
+  const shippers=Object.keys(byShipper);
+  let shipperCards=shippers.map(function(sh,idx){
+    const entry=byShipper[sh];
+    const pt=cache.partners&&cache.partners[sh];
+    const custName=(pt&&(pt.shortname||pt.name))||sh;
+    const textEN=buildTemplate(sh,entry,'en');
+    const textVI=buildTemplate(sh,entry,'vi');
+    const safeIdx='vt_dn_'+idx;
+    const toEmail=entry.email||'';
+    return '<div style="border:1px solid var(--border-light);border-radius:10px;margin-bottom:12px;overflow:hidden">'
+      +'<div style="background:var(--bg-secondary);padding:8px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-light)">'
+        +'<i class="ti ti-user" style="font-size:13px;color:#D97706"></i>'
+        +'<div style="font-size:13px;font-weight:700;flex:1">'+custName+'</div>'
+        +'<span style="font-size:11px;color:var(--text-tertiary)">'+entry.lots.length+' lô</span>'
+      +'</div>'
+      // Tab EN/VI
+      +'<div style="display:flex;background:#FFFBEB;border-bottom:1px solid #FDE68A">'
+        +'<button id="vt-dn-tab-en-'+idx+'" onclick="_vtDnSwitchTab('+idx+',\'en\')" style="flex:1;padding:7px 0;font-size:11.5px;font-weight:700;color:#92400E;background:#FDE68A;border:none;border-right:1px solid #FCD34D;cursor:pointer">🇬🇧 English</button>'
+        +'<button id="vt-dn-tab-vi-'+idx+'" onclick="_vtDnSwitchTab('+idx+',\'vi\')" style="flex:1;padding:7px 0;font-size:11.5px;font-weight:600;color:#9CA3AF;background:transparent;border:none;cursor:pointer">🇻🇳 Tiếng Việt</button>'
+      +'</div>'
+      +'<div style="padding:10px 14px">'
+        +'<textarea id="vt-dn-text-'+idx+'" rows="11" data-en="'+textEN.replace(/"/g,'&quot;').replace(/\n/g,'&#10;')+'" data-vi="'+textVI.replace(/"/g,'&quot;').replace(/\n/g,'&#10;')+'" '
+          +'style="font-family:\'Courier New\',monospace;font-size:11.5px;line-height:1.85;resize:vertical;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;padding:.75rem;color:var(--text-primary);width:100%;box-sizing:border-box;outline:none">'+textEN+'</textarea>'
+        +'<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end;align-items:center">'
+          +'<span id="vt-dn-copied-'+idx+'" style="font-size:11.5px;color:#D97706;font-weight:700;opacity:0;transition:opacity .3s;margin-right:auto"><i class="ti ti-check"></i> Đã copy!</span>'
+          +(toEmail?'<button class="btn" onclick="_vtDnSendEmail('+idx+',\''+voyId+'\',\''+sh.replace(/'/g,"\\'")+'\')" style="font-size:11.5px;color:#1a4b8c;border-color:#1a4b8c"><i class="ti ti-mail"></i> Email</button>':'')
+          +'<button class="btn sm" style="background:#D97706;border-color:#D97706;color:#fff;font-size:11.5px" onclick="_vtDnCopy('+idx+')"><i class="ti ti-copy"></i> Copy Zalo</button>'
+        +'</div>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+
+  const notifyHtml='<div class="modal" style="max-width:660px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.2)">'
+    +'<div style="background:linear-gradient(135deg,#92400E,#D97706);padding:12px 18px;display:flex;align-items:center;gap:10px">'
+      +'<i class="ti ti-alert-triangle" style="font-size:20px;color:#FDE68A"></i>'
+      +'<div style="font-size:14px;font-weight:700;color:#fff;flex:1">Gửi thông báo Delay Notice</div>'
+      +'<button onclick="closeOv(\'vtDnOv\')" style="color:#FDE68A;font-size:18px;background:rgba(255,255,255,.15);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>'
+    +'</div>'
+    +'<div style="padding:12px 16px;background:#FFFBEB;border-bottom:1px solid #FDE68A;font-size:12px;color:#92400E;display:flex;align-items:center;gap:8px">'
+      +'<i class="ti ti-info-circle"></i>'
+      +'Đã cập nhật lịch tàu thành công. Copy từng thông báo để gửi Zalo, hoặc bấm Email để gửi trực tiếp.'
+    +'</div>'
+    +'<div style="padding:14px 16px;max-height:500px;overflow-y:auto">'+shipperCards+'</div>'
+    +'<div style="padding:10px 16px;border-top:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center">'
+      +'<span style="font-size:12px;color:var(--text-secondary)">'+shippers.length+' shipper · '+lots.length+' lô hàng</span>'
+      +'<button class="btn" onclick="closeOv(\'vtDnOv\')" style="font-size:12.5px"><i class="ti ti-x"></i> Đóng</button>'
+    +'</div>'
+  +'</div>';
+
+  g('vtDnOv').innerHTML=notifyHtml;
+  // Store templates for tab switching
+  window._vtDnShippers=shippers;
+  window._vtDnByShipper=byShipper;
+  window._vtDnBuildTemplate=buildTemplate;
+}
+window._vtDnShowNotify=_vtDnShowNotify;
+
+function _vtDnSwitchTab(idx,lang){
+  var ta=document.getElementById('vt-dn-text-'+idx); if(!ta)return;
+  ta.value=lang==='vi'?(ta.dataset.vi||'').replace(/&#10;/g,'\n'):(ta.dataset.en||'').replace(/&#10;/g,'\n');
+  var btnEn=document.getElementById('vt-dn-tab-en-'+idx);
+  var btnVi=document.getElementById('vt-dn-tab-vi-'+idx);
+  var aS='flex:1;padding:7px 0;font-size:11.5px;font-weight:700;color:#92400E;background:#FDE68A;border:none;cursor:pointer';
+  var iS='flex:1;padding:7px 0;font-size:11.5px;font-weight:600;color:#9CA3AF;background:transparent;border:none;cursor:pointer';
+  if(btnEn&&btnVi){
+    if(lang==='vi'){btnVi.style.cssText=aS;btnEn.style.cssText=iS+';border-right:1px solid #FCD34D';}
+    else{btnEn.style.cssText=aS+';border-right:1px solid #FCD34D';btnVi.style.cssText=iS;}
+  }
+}
+window._vtDnSwitchTab=_vtDnSwitchTab;
+
+function _vtDnCopy(idx){
+  var ta=document.getElementById('vt-dn-text-'+idx); if(!ta)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(ta.value).then(function(){
+      var lbl=document.getElementById('vt-dn-copied-'+idx);
+      if(lbl){lbl.style.opacity='1';setTimeout(function(){lbl.style.opacity='0';},2200);}
+    }).catch(function(){ta.select();try{document.execCommand('copy');}catch(e){}});
+  } else {ta.select();try{document.execCommand('copy');}catch(e){}}
+}
+window._vtDnCopy=_vtDnCopy;
+
+function _vtDnSendEmail(idx,voyId,sh){
+  const v=(cache.vessels||[]).find(function(x){return x._id===voyId;}); if(!v)return;
+  const pt=cache.partners&&cache.partners[sh];
+  const toEmail=(pt&&pt.email)||'';
+  const custFull=(pt&&pt.name)||sh;
+  const podFirst=(v.pods||[])[0]||{};
+  const pol=v.pol||'—'; const pod=podFirst.pod||'—';
+  const carrier=(v.carriers||[]).join(', ')||'—';
+  const fmtDate=function(iso){return iso?iso.split('-').reverse().join('/'):'—';};
+  const ta=document.getElementById('vt-dn-text-'+idx); if(!ta)return;
+  const bodyText=ta.value;
+
+  const ccList=[
+    _findUserEmail(['hans','han']),
+    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
+    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
+  ].filter(Boolean);
+  const ccEmail=[...new Set(ccList)].join(', ');
+
+  const routeShort=((pol||'').split(',')[0]||'').trim().toUpperCase()+' &rarr; '+((pod||'').split(',')[0]||'').trim().toUpperCase();
+  const cellL='background:#fef3c7;border-bottom:1px solid #fde68a;padding:6px 12px;font-weight:600;font-size:12px;white-space:nowrap;vertical-align:top;width:155px;color:#92400E';
+  const rowsData=[
+    ['Vessel / Voyage', (v.vessel||'—')+(v.voy?' / V.'+v.voy:'')],
+    ['POL &rarr; POD', pol+' &rarr; '+pod],
+    ['ETD (Mới)', fmtDate(v.etd)],
+    ['CY Cutoff (Mới)', v.cutoffCY||'—'],
+    ['SI Cutoff (Mới)', v.cutoffSI||'—'],
+    ['Carrier', carrier],
+  ];
+  const tblRows=rowsData.map(function(rw,i){
+    const bg=i%2===0?'#fffbeb':'#ffffff';
+    return '<tr><td style="'+cellL+'">'+rw[0]+'</td>'
+      +'<td style="background:'+bg+';border-bottom:1px solid #fde68a;padding:6px 12px;font-size:12px;vertical-align:top;color:#0f172a">'+rw[1]+'</td></tr>';
+  }).join('');
+
+  const bodyHtml='<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'
+    +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#92400E" style="background-color:#92400E;padding:14px 18px;border-radius:8px 8px 0 0">'
+      +'<div style="color:#FDE68A;font-size:17px;font-weight:800;letter-spacing:.3px">⚠️ DELAY NOTICE — SCHEDULE UPDATE</div>'
+      +'<div style="color:#FCD34D;font-size:11.5px;margin-top:3px">'+routeShort+'</div>'
+    +'</td></tr></table>'
+    +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #fde68a;border-top:none;border-radius:0 0 8px 8px"><tr><td style="padding:16px 18px">'
+    +'<p style="font-size:12.5px;margin:0 0 12px;line-height:1.6">To: <strong>'+custFull+'</strong><br>'
+    +'<span style="color:#475569">Dear Valued Customer,<br>We would like to inform you of an update to the vessel schedule. Please see the revised details below.</span></p>'
+    +'<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;border:1px solid #fde68a;border-radius:6px;overflow:hidden">'+tblRows+'</table>'
+    +'<p style="font-size:12px;margin:14px 0 0;color:#475569">We sincerely apologize for any inconvenience this may cause. Please do not hesitate to contact us for further assistance.</p>'
+    +_bookingEmailSignature()
+    +'</td></tr></table>'
+    +'</td></tr></table>';
+
+  const etdStr=v.etd?_fmtDMY(v.etd).replace(/-/g,' '):'';
+  const subject='[Delay Notice] '+(v.vessel||'—')+' / V.'+(v.voy||'—')+' | ETD '+etdStr+' | '+(carrier);
+  openEmailCompose({to:toEmail,cc:ccEmail,subject:subject,bodyHtml:bodyHtml});
+}
+window._vtDnSendEmail=_vtDnSendEmail;
 
 // ═══════════════ ASSIGN SHIPMENT ═══════════════
 // Mở picker tìm & gán 1 shipment (lô hàng) CHƯA thuộc chuyến này vào chuyến đang xem — chỉ ghi field
