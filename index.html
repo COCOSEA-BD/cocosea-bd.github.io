@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.07';
+window.APP_BUILD='v4.09';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5968,14 +5968,33 @@ function _lotFieldHtml(c, r, ctx){
   }
   if(c.type==='transshipBlock'){
     const ts=r.transships||[];
+    // v4.08: Lấy danh sách cảng chuyển tải từ tàu tương ứng (vessel+voy)
+    const _vesForTs=(cache.vessels||[]).find(function(v){return v.vessel===r.vessel&&v.voy===r.voy;});
+    const _vesTsPorts=(_vesForTs&&_vesForTs.transships||[]).filter(function(p){return p.port;});
+    window._lotVesselTsPorts=_vesTsPorts; // dùng lại ở lotTsAddRow / lotTsCountryChange
+    const _buildTsPortOpts=function(selPort,country){
+      // optgroup "Theo tàu" — luôn hiển thị nếu tàu có cảng
+      const vesGrp=_vesTsPorts.length
+        ?('<optgroup label="🚢 Theo tàu">'+_vesTsPorts.map(function(vp){
+            return '<option'+(vp.port===selPort?' selected':'')
+              +' data-ts-eta="'+(vp.eta||'')+'" data-ts-tt="'+(vp.tt!=null?vp.tt:'')+'" data-ts-country="'+(vp.country||'')+'">'+vp.port+'</option>';
+          }).join('')+'</optgroup>')
+        :'';
+      // optgroup "Theo quốc gia" — lọc theo country nếu đã chọn
+      const cPorts=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:PORTS;
+      const alreadyInVes=_vesTsPorts.some(function(vp){return vp.port===selPort;});
+      const stdGrp='<optgroup label="Theo quốc gia"><option value="">— Chọn cảng —</option>'
+        +cPorts.map(function(pt){return '<option'+(pt===selPort&&!alreadyInVes?' selected':'')+'>'+pt+'</option>';}).join('')
+        +'</optgroup>';
+      return vesGrp+stdGrp;
+    };
     const tsRowHtml=function(p,i){
       const tsCountry=p.country||'';
-      const tsPorts=(tsCountry&&PORTS_BY_COUNTRY[tsCountry])?PORTS_BY_COUNTRY[tsCountry]:PORTS;
       const cOptsRow='<option value="">— Quốc gia —</option>'+PORT_COUNTRIES.map(function(cn){return '<option'+(cn===tsCountry?' selected':'')+'>'+cn+'</option>';}).join('');
-      const pOptsRow='<option value="">— Chọn cảng —</option>'+tsPorts.map(function(pt){return '<option'+(pt===p.port?' selected':'')+'>'+pt+'</option>';}).join('');
+      const pOptsRow=_buildTsPortOpts(p.port,tsCountry);
       return '<div style="display:flex;gap:5px;margin-bottom:5px;align-items:center" data-ts-lot-row>'
         +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px">'+cOptsRow+'</select>'
-        +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="port" style="flex:1.5;font-size:12px">'+pOptsRow+'</select>'
+        +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="port" onchange="lotTsPortChange(this)" style="flex:1.5;font-size:12px">'+pOptsRow+'</select>'
         +'<input type="number" data-ts-lot-i="'+i+'" data-ts-lot-k="tt" value="'+(p.tt!=null?p.tt:'')+'" min="0" placeholder="T/T" title="Transit time ngày" style="width:50px;font-size:12px;text-align:center"/>'
         +'<input type="date" data-ts-lot-i="'+i+'" data-ts-lot-k="eta" value="'+(p.eta||'')+'" style="width:130px;font-size:12px"/>'
         +'<button class="rac red" onclick="lotTsDelRow('+i+')" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>'
@@ -6491,6 +6510,24 @@ document.addEventListener('keydown',function(e){
   if((e.ctrlKey||e.metaKey)&&(e.key==='s'||e.key==='S')){ e.preventDefault(); saveLot(); }
   else if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){ e.preventDefault(); saveLot(); }
 });
+// v4.08: helper build port options kèm optgroup "Theo tàu" (dùng chung)
+function _buildLotTsPortOpts(selPort,country){
+  const _vtp=window._lotVesselTsPorts||[];
+  const vesGrp=_vtp.length
+    ?('<optgroup label="🚢 Theo tàu">'+_vtp.map(function(vp){
+        return '<option'+(vp.port===selPort?' selected':'')
+          +' data-ts-eta="'+(vp.eta||'')+'" data-ts-tt="'+(vp.tt!=null?vp.tt:'')+'" data-ts-country="'+(vp.country||'')+'">'+vp.port+'</option>';
+      }).join('')+'</optgroup>')
+    :'';
+  const cPorts=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:PORTS;
+  const alreadyInVes=_vtp.some(function(vp){return vp.port===selPort;});
+  const stdGrp='<optgroup label="Theo quốc gia"><option value="">— Chọn cảng —</option>'
+    +cPorts.map(function(pt){return '<option'+(pt===selPort&&!alreadyInVes?' selected':'')+'>'+pt+'</option>';}).join('')
+    +'</optgroup>';
+  return vesGrp+stdGrp;
+}
+window._buildLotTsPortOpts=_buildLotTsPortOpts;
+
 function lotTsAddRow(){
   const list=g('lotTransshipList'); if(!list)return;
   const existing=list.querySelectorAll('[data-ts-lot-row]').length;
@@ -6498,20 +6535,38 @@ function lotTsAddRow(){
   list.querySelectorAll('div:not([data-ts-lot-row])').forEach(function(d){if(d.textContent.includes('direct'))d.remove();});
   const div=document.createElement('div');
   div.setAttribute('data-ts-lot-row','');
-  div.innerHTML=`<select data-ts-lot-i="${existing}" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px"><option value="">— Quốc gia —</option>${PORT_COUNTRIES.map(cn=>`<option>${cn}</option>`).join('')}</select><select data-ts-lot-i="${existing}" data-ts-lot-k="port" style="flex:1.5;font-size:12px"><option value="">— Chọn cảng —</option></select><input type="number" data-ts-lot-i="${existing}" data-ts-lot-k="tt" placeholder="T/T" style="width:50px;font-size:12px;text-align:center"/><input type="date" data-ts-lot-i="${existing}" data-ts-lot-k="eta" style="width:130px;font-size:12px"/><button class="rac red" onclick="this.parentNode.remove()" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>`;
+  const portOpts=_buildLotTsPortOpts('','');
+  div.innerHTML='<select data-ts-lot-i="'+existing+'" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px"><option value="">— Quốc gia —</option>'+PORT_COUNTRIES.map(function(cn){return '<option>'+cn+'</option>';}).join('')+'</select>'
+    +'<select data-ts-lot-i="'+existing+'" data-ts-lot-k="port" onchange="lotTsPortChange(this)" style="flex:1.5;font-size:12px">'+portOpts+'</select>'
+    +'<input type="number" data-ts-lot-i="'+existing+'" data-ts-lot-k="tt" placeholder="T/T" style="width:50px;font-size:12px;text-align:center"/>'
+    +'<input type="date" data-ts-lot-i="'+existing+'" data-ts-lot-k="eta" style="width:130px;font-size:12px"/>'
+    +'<button class="rac red" onclick="this.parentNode.remove()" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>';
   div.style.cssText='display:flex;gap:5px;margin-bottom:5px;align-items:center';
   list.appendChild(div);
 }
 window.lotTsAddRow=lotTsAddRow;
 
 function lotTsCountryChange(sel){
-  const i=sel.dataset.tsLotI;
   const country=sel.value;
-  const ports=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:PORTS;
   const portSel=sel.parentNode.querySelector('[data-ts-lot-k="port"]');
-  if(portSel)portSel.innerHTML='<option value="">— Chọn cảng —</option>'+ports.map(function(p){return '<option>'+p+'</option>';}).join('');
+  if(portSel)portSel.innerHTML=_buildLotTsPortOpts('',country);
 }
 window.lotTsCountryChange=lotTsCountryChange;
+
+// v4.08: Khi chọn cảng từ optgroup "Theo tàu" — tự điền ETA và T/T còn trống
+function lotTsPortChange(sel){
+  const row=sel.parentNode;
+  const opt=sel.options[sel.selectedIndex];
+  if(!opt)return;
+  const tsEta=opt.getAttribute('data-ts-eta')||'';
+  const tsTt=opt.getAttribute('data-ts-tt');
+  const tsCountry=opt.getAttribute('data-ts-country')||'';
+  // Chỉ auto-fill nếu ô đang trống (không ghi đè dữ liệu người dùng đã nhập)
+  if(tsEta){const etaEl=row.querySelector('[data-ts-lot-k="eta"]');if(etaEl&&!etaEl.value)etaEl.value=tsEta;}
+  if(tsTt!=null&&tsTt!==''){const ttEl=row.querySelector('[data-ts-lot-k="tt"]');if(ttEl&&!ttEl.value)ttEl.value=tsTt;}
+  if(tsCountry){const ctryEl=row.querySelector('[data-ts-lot-k="country"]');if(ctryEl&&!ctryEl.value)ctryEl.value=tsCountry;}
+}
+window.lotTsPortChange=lotTsPortChange;
 
 function lotTsDelRow(idx){
   const list=g('lotTransshipList'); if(!list)return;
@@ -7690,10 +7745,20 @@ async function openBookingEmail(id,tt){
   }
   const volDisplay=volLines.join('<br>')+(r.tenHang?('<br>'+r.tenHang):'');
   const podFull=(r.pod||'—');
-  // Port of Transit: nếu lô không có ICD/cảng trung chuyển riêng, lấy = Port of Discharge (không ẩn
-  // hẳn dòng này như trước) — theo đúng yêu cầu.
-  // Port of Transit: nếu lô không có ICD/cảng chuyển tải, mặc định = POD
-  const potFull=(r.icd||r.transship||r.pod||'—');
+  // v4.08: Port of Transit — ưu tiên r.transships[] (mảng cảng chuyển tải mới),
+  // rồi icd/transship cũ, rồi POD.
+  let potFull;
+  if(r.transships&&r.transships.length){
+    potFull=r.transships.map(function(ts){
+      let s=ts.port||'—';
+      const ttVal=(ts.tt!=null&&ts.tt!=='')?ts.tt:null;
+      if(ttVal!=null)s+=' (T/T '+ttVal+' ngày)';
+      if(ts.eta)s+=' · ETA '+_emailFmtDate(ts.eta);
+      return s;
+    }).join('<br>');
+  }else{
+    potFull=r.pod||'—';
+  }
   const fmtDT=function(v){return v||'—';};
 
   // Bảng thông tin — Booking Party đặt trên Shipper (lô cũ: bookingParty = shipper)
@@ -27990,10 +28055,50 @@ function showKhaiEport(bkNo){
 
 function showCheckEport(bkNo){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
-  const containers=getBookingContainers(r,bkNo);
-  const text=containers.map(function(c){return c.no;}).join(', ');
-  showEportModal('Check Eport — '+(bkNo||'')+' — Danh sách Container', text);
+  const containers=getBookingContainers(r,bkNo).filter(function(c){return c.no;});
+  // v4.09: mỗi cont 1 dòng (format phù hợp ô nhập của Eport)
+  const contList=containers.map(function(c){return c.no;}).join('\n');
+  const eportUrl='https://eport.saigonnewport.com.vn/ContainerInformation';
+  // Hiển thị modal với nút "Mở trang Eport" nổi bật bên cạnh Copy
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:520px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+    <div style="background:#15803D;padding:12px 18px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-clipboard-check" style="font-size:18px;color:#dcfce7"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">Check Eport${bkNo?' — '+bkNo:''}</div>
+      <button onclick="closeOv('eportOv')" style="color:#dcfce7;font-size:18px;background:rgba(255,255,255,.15);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:14px 18px;background:var(--bg-secondary)">
+      <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px"><i class="ti ti-info-circle" style="font-size:12px"></i> Danh sách <strong>${containers.length}</strong> container — Copy rồi Paste vào ô <em>Container No.</em> trên trang Eport:</div>
+      <textarea id="eportCheckText" rows="8" style="font-family:'Courier New',monospace;font-size:13px;line-height:1.8;resize:vertical;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:.75rem 1rem;color:var(--text-primary);width:100%;box-sizing:border-box;outline:none">${contList}</textarea>
+    </div>
+    <div style="background:#f0fdf4;border-top:1px solid #bbf7d0;padding:10px 18px;display:flex;gap:8px;justify-content:flex-end;align-items:center">
+      <span id="eportCheckCopied" style="font-size:12px;color:#16a34a;font-weight:600;opacity:0;transition:opacity .3s;margin-right:auto">✓ Đã copy!</span>
+      <button class="btn" onclick="closeOv('eportOv')" style="font-size:12.5px"><i class="ti ti-x"></i> Đóng</button>
+      <button class="btn" onclick="_checkEportCopy()" style="font-size:12.5px;color:#16a34a;border-color:#16a34a"><i class="ti ti-copy"></i> Copy</button>
+      <button class="btn" onclick="_checkEportOpen()" style="font-size:12.5px;background:#15803D;border-color:#15803D;color:#fff;font-weight:700"><i class="ti ti-external-link"></i> Copy &amp; Mở Eport</button>
+    </div>
+  </div>`;
+  openOv('eportOv');
 }
+// v4.09: Copy danh sách cont từ modal Check Eport
+function _checkEportCopy(){
+  const el=g('eportCheckText'); if(!el)return;
+  const txt=el.value;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(function(){
+      const lbl=g('eportCheckCopied');
+      if(lbl){lbl.style.opacity='1';setTimeout(function(){lbl.style.opacity='0';},2000);}
+    }).catch(function(){el.select();document.execCommand('copy');});
+  }else{el.select();document.execCommand('copy');}
+}
+window._checkEportCopy=_checkEportCopy;
+// v4.09: Copy + mở trang Eport Saigon Newport
+function _checkEportOpen(){
+  _checkEportCopy();
+  window.open('https://eport.saigonnewport.com.vn/ContainerInformation','_blank');
+  toast('Đã copy danh sách cont — Paste vào ô Container No. trên trang Eport vừa mở');
+}
+window._checkEportOpen=_checkEportOpen;
 
 
 function showFumiReport(bkNo){
