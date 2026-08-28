@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.10';
+window.APP_BUILD='v4.12';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2771,6 +2771,17 @@ function _wsSidebarHTML(tt){
     </div>
 
     <div class="ws-side-card">
+      <div class="ws-side-hdr"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Cảnh báo<span class="ws-side-link" onclick="computeShipmentKpis('${tt}')" title="Tải lại"><i class="ti ti-refresh"></i></span></div>
+      <div id="kpiVst_${tt}" style="font-family:var(--font-disp);font-size:22px;font-weight:800;color:var(--warning-dark)">
+        <div>— <span style="font-size:11px;font-weight:500;color:var(--text-tertiary);font-family:inherit">lô cần VST</span></div>
+        <div style="margin-top:2px">— <span style="font-size:11px;font-weight:500;color:var(--text-tertiary);font-family:inherit">lô cần gửi Ctừ</span></div>
+      </div>
+      <div id="vstWarnBar_${tt}" style="margin-top:8px"></div>
+      <!-- Giữ nguyên id cũ để không phá logic computeShipmentKpis() -->
+      <div style="display:none"><span id="kpiTotal_${tt}"></span><span id="kpiPending_${tt}"></span></div>
+    </div>
+
+    <div class="ws-side-card">
       <div class="ws-side-hdr"><i class="ti ti-calendar"></i> Lịch &amp; tàu sắp chạy<span class="ws-side-link" onclick="goTab('notes')">Xem tất cả</span></div>
       <div class="ws-cal">
         <div class="kpi-cal-grid" style="margin-bottom:3px">${CAL_DOW.map(function(d){return '<div class="kpi-cal-dow">'+d+'</div>';}).join('')}</div>
@@ -2785,17 +2796,6 @@ function _wsSidebarHTML(tt){
     </div>
 
     ${_wsNotesCardHTML()}
-
-    <div class="ws-side-card">
-      <div class="ws-side-hdr"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Cảnh báo<span class="ws-side-link" onclick="computeShipmentKpis('${tt}')" title="Tải lại"><i class="ti ti-refresh"></i></span></div>
-      <div id="kpiVst_${tt}" style="font-family:var(--font-disp);font-size:22px;font-weight:800;color:var(--warning-dark)">
-        <div>— <span style="font-size:11px;font-weight:500;color:var(--text-tertiary);font-family:inherit">lô cần VST</span></div>
-        <div style="margin-top:2px">— <span style="font-size:11px;font-weight:500;color:var(--text-tertiary);font-family:inherit">lô cần gửi Ctừ</span></div>
-      </div>
-      <div id="vstWarnBar_${tt}" style="margin-top:8px"></div>
-      <!-- Giữ nguyên id cũ để không phá logic computeShipmentKpis() -->
-      <div style="display:none"><span id="kpiTotal_${tt}"></span><span id="kpiPending_${tt}"></span></div>
-    </div>
 
   </div>`;
 }
@@ -3461,7 +3461,68 @@ window.openDocMakerTab=openDocMakerTab;
 window.switchToTab=switchToTab;
 window.closeTab=closeTab;
 
+/* ═══════════════════════════════════════════════════════════════
+   UNSAVED CHANGES — Cảnh báo chưa lưu khi chuyển tab / đóng trang
+═══════════════════════════════════════════════════════════════ */
+window._tabDirty=false;
+// Các tab có thể có dữ liệu chưa lưu
+const _DIRTY_TABS_LIST=['cont','svc','costing','price','trucking','scy','docmaker','invoice'];
+// Map tab → tên hàm lưu tương ứng
+const _DIRTY_SAVE_MAP={cont:'saveContSealAll',svc:'saveSvc',costing:'saveCosting',price:'saveSvc',trucking:'saveTruckings',scy:'saveScyItems',docmaker:'dmSaveData'};
+
+// Lắng nghe input/change trong detailPanel → mark dirty
+(function(){
+  function _markDirty(e){
+    if(!_DIRTY_TABS_LIST.includes(detailTab))return;
+    const panel=document.getElementById('detailPanel')||document.getElementById('xuat-lot-view');
+    if(panel&&panel.contains(e.target))window._tabDirty=true;
+  }
+  document.addEventListener('input',_markDirty,true);
+  document.addEventListener('change',_markDirty,true);
+  // Cảnh báo khi đóng/tải lại trình duyệt
+  window.addEventListener('beforeunload',function(e){
+    if(window._tabDirty){e.preventDefault();e.returnValue='';}
+  });
+})();
+
+// Hiện modal cảnh báo chưa lưu, rồi gọi fn() để tiếp tục
+function _checkTabDirtyThenRun(fn){
+  if(!window._tabDirty){fn();return;}
+  const tab=detailTab;
+  const saveFnName=_DIRTY_SAVE_MAP[tab];
+  // Xoá modal cũ nếu có
+  const _oldOv=document.getElementById('tabDirtyOv');if(_oldOv)_oldOv.remove();
+  const ov=document.createElement('div');
+  ov.id='tabDirtyOv';
+  ov.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center';
+  ov.innerHTML='<div style="background:var(--bg-card,#fff);border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,.25);max-width:400px;width:90%;overflow:hidden">'
+    +'<div style="padding:18px 20px 12px;border-bottom:1px solid var(--border-light,#e5e7eb);display:flex;align-items:center;gap:10px">'
+    +'<i class="ti ti-alert-circle" style="font-size:22px;color:#D97706"></i>'
+    +'<div style="font-weight:700;font-size:15px;color:var(--text-primary)">Chưa lưu thay đổi</div></div>'
+    +'<div style="padding:16px 20px;font-size:13.5px;color:var(--text-secondary);line-height:1.6">'
+    +'Trang hiện tại vẫn <strong>chưa được lưu</strong>. Bạn có muốn lưu trước khi chuyển trang không?</div>'
+    +'<div style="padding:12px 20px 18px;display:flex;justify-content:flex-end;gap:10px">'
+    +'<button id="_tdNoSave" class="btn" style="min-width:110px">Không lưu</button>'
+    +(saveFnName?'<button id="_tdSave" class="btn pri" style="min-width:110px"><i class="ti ti-device-floppy"></i> Lưu</button>':'')
+    +'</div></div>';
+  document.body.appendChild(ov);
+  function _rmOv(){const el=document.getElementById('tabDirtyOv');if(el)el.remove();}
+  document.getElementById('_tdNoSave').onclick=function(){window._tabDirty=false;_rmOv();fn();};
+  if(saveFnName&&window[saveFnName]){
+    document.getElementById('_tdSave').onclick=async function(){
+      _rmOv();
+      try{await window[saveFnName]();}catch(e){console.error(e);}
+      window._tabDirty=false;
+      fn();
+    };
+  }
+}
+window._checkTabDirtyThenRun=_checkTabDirtyThenRun;
+
 function switchDetailTab(tab){
+  _checkTabDirtyThenRun(function(){_switchDetailTabNow(tab);});
+}
+function _switchDetailTabNow(tab){
   detailTab=tab;
   const at=_openTabs&&_openTabs.find(x=>x.key===_activeTabKey);
   if(at)at.tab=tab;
@@ -3471,6 +3532,7 @@ function switchDetailTab(tab){
     const _lt=_xuatLotTabs&&_xuatLotTabs.find(x=>x.id===_xuatCurTab);
     if(_lt)_lt.dpTab=tab;
   }
+  window._tabDirty=false;
   renderDetailPanel(r,detailTt);
 }
 
@@ -5108,6 +5170,7 @@ async function saveContSealAll(){
       }
     }
 
+    window._tabDirty=false;
     toast('Đã lưu tất cả Cont/Seal');
     logLotEvent(detailId,detailTt,'cont','Cập nhật Cont/Seal',allConts.length+' container');
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -5617,6 +5680,7 @@ async function saveDetailSvc(){
       removedKeys.forEach(function(k){delMap['svcs.'+k]=firebase.firestore.FieldValue.delete();});
       await db.collection(colName(_svcTt)).doc(_svcId).update(delMap);
     }
+    window._tabDirty=false;
     toast('Đã lưu dịch vụ');
     logLotEvent(_svcId,_svcTt,'svc','Cập nhật dịch vụ',svcDetailText);
     // Cập nhật cache NGAY (listener Firestore là async) để re-render không bị khôi phục dịch vụ đã xóa
@@ -5736,10 +5800,24 @@ function refreshCneeOptions(){
   const shKey=g('f_shipper')?.value||g('f_supplier')?.value||'';
   const sp=cache.partners[shKey]||{};
   const cnees=sp.cnees||[];
+  window._f_cnee_all=cnees;
   const cur=cneeEl.value;
   cneeEl.innerHTML=cnees.length?('<option value="">— Chọn Cnee —</option>'+cnees.map(function(cn){return '<option'+(cn.name===cur?' selected':'')+'>'+cn.name+'</option>';}).join('')):'<option value="">(Shipper chưa có Cnee)</option>';
+  // Reset search input
+  const srch=g('f_cnee_srch');if(srch)srch.value='';
 }
 window.refreshCneeOptions=refreshCneeOptions;
+
+function _filterCneeOpts(inp){
+  const sel=g('f_cnee');if(!sel)return;
+  const q=(inp.value||'').toLowerCase().trim();
+  const all=window._f_cnee_all||[];
+  const cur=sel.value;
+  sel.innerHTML='<option value="">— Chọn Cnee —</option>'
+    +all.filter(function(cn){return !q||(cn.name||'').toLowerCase().includes(q);})
+       .map(function(cn){return '<option'+(cn.name===cur?' selected':'')+'>'+cn.name+'</option>';}).join('');
+}
+window._filterCneeOpts=_filterCneeOpts;
 
 // ═══ COM/KB — Hoa hồng Sale line (COM) & Booking Party/Shipper (KB) ═══
 // Data model trên lô: r.comKb = {com:[{recipient,recipientPartner,amount,vol,cur,method,remark}], kb:[...]}
@@ -5919,7 +5997,7 @@ window._lotColsForSection=_lotColsForSection;
 // Render HTML cho 1 field — logic GIỮ NGUYÊN 100% so với bản gốc (chỉ tách ra thành hàm riêng để
 // gọi lại được theo từng nhóm/section thay vì luôn luôn render phẳng toàn bộ 1 lần).
 function _lotFieldHtml(c, r, ctx){
-  const val=r[c.k]||'';
+  const val=c.k==='status'?(r[c.k]||'Confirm'):(r[c.k]||'');
   const full=(c.k==='tenHang'||c.k==='pol'||c.k==='pod')?' full':'';
   const initCargo=ctx.initCargo, initCont=ctx.initCont, pC=ctx.pC, pS=ctx.pS, pF=ctx.pF, pAll=ctx.pAll;
   if(c.type==='select'){
@@ -6016,10 +6094,14 @@ function _lotFieldHtml(c, r, ctx){
     const shKey=r.shipper||r.supplier||'';
     const sp2=cache.partners[shKey]||{};
     const cnees=sp2.cnees||[];
+    window._f_cnee_all=cnees;
     const opts=cnees.map(function(cn){return `<option${cn.name===val?' selected':''}>${cn.name}</option>`;}).join('');
     const wrapStyle=c.compact?'display:inline-flex;flex-direction:column;gap:2px;flex:2;min-width:200px;max-width:320px':'';
     const divClass=c.compact?'':'fi'+full;
-    return`<div ${wrapStyle?`style="${wrapStyle}"`:`class="${divClass}"`}><label class="lbl" ${c.compact?'style="font-size:9.5px"':''}>${c.l}</label><select id="f_${c.k}">${cnees.length?'<option value="">— Chọn Cnee —</option>'+opts:'<option value="">(Chọn Shipper trước)</option>'}</select></div>`;
+    const srchInp=cnees.length
+      ?`<input type="text" id="f_cnee_srch" placeholder="🔍 Tìm cnee..." oninput="_filterCneeOpts(this)" autocomplete="off" style="margin-bottom:3px;font-size:12px;padding:3px 8px;border:1px solid var(--border-light);border-radius:6px;width:100%;box-sizing:border-box;outline:none">`
+      :'';
+    return`<div ${wrapStyle?`style="${wrapStyle}"`:`class="${divClass}"`}><label class="lbl" ${c.compact?'style="font-size:9.5px"':''}>${c.l}</label>${srchInp}<select id="f_${c.k}">${cnees.length?'<option value="">— Chọn Cnee —</option>'+opts:'<option value="">(Chọn Shipper trước)</option>'}</select></div>`;
   }
   if(c.k==='tenHang'){
     const names=window._cargoNames||[];
@@ -6459,7 +6541,7 @@ async function _bulkCreateLots(){
         // f_status còn sót giá trị từ phiên làm việc trước (VD: vừa sửa 1 lô có status Confirm trước
         // khi mở form Thêm hàng loạt), giá trị đó sẽ áp dụng NHẦM cho MỌI lô trong đợt tạo này thay vì
         // đúng mặc định 'Booking request' như tạo lô đơn lẻ bình thường.
-        if(g('f_status'))g('f_status').value='Booking request';
+        if(g('f_status'))g('f_status').value='Confirm';
         if(g('f_pod'))g('f_pod').value=row.pod||shared.pod;
         if(g('f_mblNo'))g('f_mblNo').value=row.mblNo||'';
         // Booking block: dựng lại đúng 1 dòng cho lô NÀY (dùng đúng bookingRowHtml có sẵn)
@@ -8396,6 +8478,7 @@ async function saveTruckings(){
     await fsSet(colName(detailTt),detailId,payload);
     const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
     if(ci>=0){cache[detailTt][ci].truckings=rows; cache[detailTt][ci].bookingConts=bookingConts;}
+    window._tabDirty=false;
     toast('Đã lưu '+rows.length+' dòng Trucking — Cont/Seal đã đồng bộ');
     logLotEvent(detailId,detailTt,'trucking','Cập nhật Trucking',rows.length+' dòng');
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -8554,6 +8637,7 @@ async function saveScyItems(){
     await fsSet(colName(detailTt),detailId,{scyItems:rows,updatedAt:Date.now(),updatedBy:currentUser.email});
     const ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
     if(ci>=0)cache[detailTt][ci].scyItems=rows;
+    window._tabDirty=false;
     toast('Đã lưu '+rows.length+' lệnh đóng bãi');
     logLotEvent(detailId,detailTt,'scy','Cập nhật SCY',rows.length+' lệnh đóng bãi');
   }catch(e){toast('Lỗi: '+e.message,'error');}
@@ -10364,6 +10448,7 @@ function renderTcSoQuyV3(){
       <input type="date" id="tcToSel" value="${tcTo}" onchange="tcTo=this.value;renderTcBody()"/>
       <button class="btn pri" style="background:#0F766E;border-color:#0F766E" onclick="openTcVoucher('thu')"><i class="ti ti-plus"></i> Phiếu Thu</button>
       <button class="btn red" onclick="openTcVoucher('chi')"><i class="ti ti-minus"></i> Phiếu Chi</button>
+      <button class="btn" style="color:#166534;border-color:#166534;background:#f0fdf4" onclick="exportCashBookExcel()" title="Xuất danh sách giao dịch ra file Excel"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
       ${currentProfile?.role==='admin'?'<button class="btn" onclick="backfillCashBookFromHistory()" title="Quét toàn bộ lô hàng đã thanh toán nhưng chưa có giao dịch Sổ quỹ"><i class="ti ti-history"></i></button>':''}
       ${currentProfile?.role==='admin'?'<button class="btn" onclick="cleanDuplicateCashTx()" title="Dọn các giao dịch tự động bị trùng"><i class="ti ti-eraser"></i></button>':''}
     </div>
@@ -10388,6 +10473,184 @@ function renderTcSoQuyV3(){
   </div>`;
 }
 window.renderTcSoQuyV3=renderTcSoQuyV3;
+
+/* ════════════════════════════════════════════════════════════════
+   CASH BOOK — Xuất Excel (HTML-as-XLS, UTF-8, layout chuyên nghiệp)
+════════════════════════════════════════════════════════════════ */
+function exportCashBookExcel(){
+  // ── Áp dụng đúng bộ lọc đang dùng trên màn hình ──
+  const q=(window._tcSearchQ||'');
+  let list=(cache.cashTx||[]).slice();
+  if(tcAccFilter) list=list.filter(function(t){return t.account===tcAccFilter;});
+  if(tcFrom) list=list.filter(function(t){return !t.date||t.date>=tcFrom;});
+  if(tcTo) list=list.filter(function(t){return !t.date||t.date<=tcTo;});
+  if(q) list=list.filter(function(t){
+    const s=(t.description||'')+' '+(t.category||'')+' '+(t.lotRef?(t.lotRef.bookingNo||'')+(t.lotRef.mblNo||'')+(t.lotRef.jobNo||''):'');
+    return s.toLowerCase().includes(q.toLowerCase());
+  });
+  const thuList=(tcTypeFilter&&tcTypeFilter!=='thu')?[]:list.filter(function(t){return t.type==='thu';});
+  const chiList=(tcTypeFilter&&tcTypeFilter!=='chi')?[]:list.filter(function(t){return t.type==='chi';});
+
+  // Gộp & sắp xếp theo ngày tăng dần để xuất Excel
+  const allTx=list.slice().sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+
+  const tongThu=thuList.reduce(function(s,t){return s+(t.currency==='VND'||!t.currency?(t.amount||0):0);},0);
+  const tongChi=chiList.reduce(function(s,t){return s+(t.currency==='VND'||!t.currency?(t.amount||0):0);},0);
+  const openingVND=tcFrom?_tcTotalBalanceUpTo(_tcPrevDay(tcFrom),tcFrom):_tcTotalBalanceUpTo('','9999-12-31');
+  const closingVND=openingVND+tongThu-tongChi;
+
+  // ── Thông tin kỳ ──
+  const fmtDate=function(d){return d?d.split('-').reverse().join('/'):'';};
+  const periodStr=(tcFrom||tcTo)?('Kỳ: '+(tcFrom?fmtDate(tcFrom):'—')+' → '+(tcTo?fmtDate(tcTo):'nay')):'Toàn bộ dữ liệu';
+  const accStr=tcAccFilter?('Tài khoản: '+_tcAccountLabel(tcAccFilter)):'Tất cả tài khoản';
+  const typeStr=tcTypeFilter==='thu'?'Chỉ Thu':tcTypeFilter==='chi'?'Chỉ Chi':'Thu & Chi';
+  const exportDate='Ngày xuất: '+new Date().toLocaleDateString('vi-VN');
+  const fileName='CashBook_'+(tcFrom||'all')+(tcTo?'_'+tcTo:'')+'.xls';
+
+  // ── Palette màu ──
+  const CLR={
+    headerBg:'#0F766E', headerFg:'#FFFFFF',
+    thuBg:'#F0FDF4', thuFg:'#14532D', thuAmt:'#0F766E',
+    chiBg:'#FEF2F2', chiFg:'#7F1D1D', chiAmt:'#DC2626',
+    summaryBg:'#F8FAFC', summaryBorder:'#CBD5E1',
+    totalBg:'#FFF7ED', totalFg:'#7C2D12',
+    altBg:'#F9FAFB',
+    titleBg:'#134E4A', titleFg:'#FFFFFF',
+    subBg:'#CCFBF1',
+  };
+
+  // ── Styles inline ──
+  const css=`
+    body{font-family:Arial,sans-serif;font-size:11pt;}
+    table{border-collapse:collapse;width:100%;}
+    td,th{padding:6px 10px;vertical-align:middle;}
+    .title{background:${CLR.titleBg};color:${CLR.titleFg};font-size:16pt;font-weight:bold;text-align:center;letter-spacing:1px;}
+    .sub{background:${CLR.subBg};color:#134E4A;font-size:10pt;text-align:center;}
+    .section-hd{background:#E2E8F0;font-weight:bold;font-size:10pt;color:#1E293B;padding:5px 10px;}
+    .sum-lbl{color:#64748B;font-size:10pt;padding:5px 10px 5px 20px;}
+    .sum-val{font-weight:bold;font-size:11pt;text-align:right;padding:5px 20px 5px 10px;}
+    .opening{color:#0F172A;}
+    .thu-color{color:${CLR.thuAmt};}
+    .chi-color{color:${CLR.chiAmt};}
+    .closing-pos{color:#0F172A;font-size:12pt;}
+    .closing-neg{color:${CLR.chiAmt};font-size:12pt;}
+    .col-hd{background:${CLR.headerBg};color:${CLR.headerFg};font-weight:bold;font-size:10pt;text-align:center;border:1px solid #065F46;}
+    .thu-row td{background:${CLR.thuBg};color:${CLR.thuFg};border-bottom:1px solid #D1FAE5;}
+    .chi-row td{background:${CLR.chiBg};color:${CLR.chiFg};border-bottom:1px solid #FEE2E2;}
+    .alt-row td{background:${CLR.altBg};}
+    .amt-thu{color:${CLR.thuAmt};font-weight:600;text-align:right;}
+    .amt-chi{color:${CLR.chiAmt};font-weight:600;text-align:right;}
+    .total-row td{background:${CLR.totalBg};font-weight:bold;color:${CLR.totalFg};border-top:2px solid #F97316;font-size:10.5pt;}
+    .stt{text-align:center;color:#94A3B8;font-size:9.5pt;}
+    .date-cell{white-space:nowrap;text-align:center;}
+    .type-thu{background:#DCFCE7;color:#166534;border-radius:4px;padding:2px 7px;font-size:9pt;font-weight:bold;}
+    .type-chi{background:#FEE2E2;color:#991B1B;border-radius:4px;padding:2px 7px;font-size:9pt;font-weight:bold;}
+    .lot-ref{color:#2563EB;font-size:9.5pt;}
+    .empty-note{text-align:center;color:#94A3B8;font-style:italic;padding:12px;}
+  `;
+
+  // ── Build rows ──
+  const escH=function(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');};
+  const fmtAmt=function(n,cur){if(!n&&n!==0)return '—';return n.toLocaleString()+' '+(cur||'VND');};
+  const COLS=9;
+
+  let rows='';
+  if(!allTx.length){
+    rows='<tr><td class="empty-note" colspan="'+COLS+'">Không có giao dịch nào trong khoảng thời gian đã chọn.</td></tr>';
+  } else {
+    allTx.forEach(function(t,i){
+      const isThu=t.type==='thu';
+      const lotRef=t.lotRef?(t.lotRef.bookingNo||t.lotRef.jobNo||t.lotRef.mblNo||''):'';
+      const rowCls=isThu?'thu-row':'chi-row';
+      const typeBadge=isThu?'<span class="type-thu">THU</span>':'<span class="type-chi">CHI</span>';
+      const thuAmt=isThu?fmtAmt(t.amount,t.currency):'';
+      const chiAmt=!isThu?fmtAmt(t.amount,t.currency):'';
+      rows+='<tr class="'+rowCls+'">'
+        +'<td class="stt">'+(i+1)+'</td>'
+        +'<td class="date-cell">'+escH(fmtDate(t.date))+'</td>'
+        +'<td style="text-align:center">'+typeBadge+'</td>'
+        +'<td>'+escH(t.description||t.category||'—')+'</td>'
+        +'<td>'+escH(t.category||'—')+'</td>'
+        +'<td>'+escH(_tcAccountLabel(t.account))+'</td>'
+        +'<td class="lot-ref">'+escH(lotRef)+'</td>'
+        +'<td class="amt-thu">'+escH(thuAmt)+'</td>'
+        +'<td class="amt-chi">'+escH(chiAmt)+'</td>'
+        +'</tr>';
+    });
+  }
+
+  // ── Dòng tổng cộng ──
+  const totalRow='<tr class="total-row">'
+    +'<td colspan="7" style="text-align:right;padding-right:16px">TỔNG CỘNG</td>'
+    +'<td style="text-align:right">'+tongThu.toLocaleString()+' VND</td>'
+    +'<td style="text-align:right">'+tongChi.toLocaleString()+' VND</td>'
+    +'</tr>';
+
+  // ── Full HTML ──
+  const closingCls=closingVND>=0?'closing-pos':'closing-neg';
+  const html='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">'
+  +'<head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>'
+  +'<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>'
+  +'<x:Name>Cash Book</x:Name>'
+  +'<x:WorksheetOptions><x:FreezePanes/><x:FrozenNoSplit/><x:SplitHorizontal>12</x:SplitHorizontal><x:TopRowBottomPane>12</x:TopRowBottomPane></x:WorksheetOptions>'
+  +'</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->'
+  +'<style>'+css+'</style></head><body>'
+  +'<table>'
+
+  // ── Tiêu đề ──
+  +'<tr><td class="title" colspan="'+COLS+'">🏦 COCOSEA — SỔ QUỸ / CASH BOOK</td></tr>'
+  +'<tr><td class="sub" colspan="'+COLS+'">'+escH(periodStr)+' &nbsp;|&nbsp; '+escH(accStr)+' &nbsp;|&nbsp; '+escH(typeStr)+'</td></tr>'
+  +'<tr><td class="sub" colspan="'+COLS+'" style="font-size:9pt;color:#0F766E">'+escH(exportDate)+'</td></tr>'
+  +'<tr><td colspan="'+COLS+'" style="padding:4px"></td></tr>'
+
+  // ── Tóm tắt ──
+  +'<tr><td class="section-hd" colspan="'+COLS+'"><i>📊</i> TÓM TẮT</td></tr>'
+  +'<tr>'
+    +'<td class="sum-lbl" colspan="6">Số dư đầu kỳ</td>'
+    +'<td class="sum-val opening" colspan="3">'+openingVND.toLocaleString()+' VND</td>'
+  +'</tr>'
+  +'<tr>'
+    +'<td class="sum-lbl" colspan="6">Tổng Thu</td>'
+    +'<td class="sum-val thu-color" colspan="3">+ '+tongThu.toLocaleString()+' VND</td>'
+  +'</tr>'
+  +'<tr>'
+    +'<td class="sum-lbl" colspan="6">Tổng Chi</td>'
+    +'<td class="sum-val chi-color" colspan="3">− '+tongChi.toLocaleString()+' VND</td>'
+  +'</tr>'
+  +'<tr style="border-top:2px solid #CBD5E1">'
+    +'<td class="sum-lbl" colspan="6" style="font-weight:bold;font-size:11pt">Số dư '+(tcTo?'cuối kỳ':'hiện tại')+'</td>'
+    +'<td class="sum-val '+closingCls+'" colspan="3">'+closingVND.toLocaleString()+' VND</td>'
+  +'</tr>'
+  +'<tr><td colspan="'+COLS+'" style="padding:4px"></td></tr>'
+
+  // ── Bảng chi tiết ──
+  +'<tr><td class="section-hd" colspan="'+COLS+'"><i>📋</i> CHI TIẾT GIAO DỊCH ('+allTx.length+' giao dịch)</td></tr>'
+  +'<tr>'
+    +'<th class="col-hd" style="width:4%">STT</th>'
+    +'<th class="col-hd" style="width:9%">Ngày</th>'
+    +'<th class="col-hd" style="width:6%">Loại</th>'
+    +'<th class="col-hd" style="width:26%">Diễn giải</th>'
+    +'<th class="col-hd" style="width:13%">Danh mục</th>'
+    +'<th class="col-hd" style="width:13%">Tài khoản</th>'
+    +'<th class="col-hd" style="width:9%">Lô hàng</th>'
+    +'<th class="col-hd" style="width:10%">Thu (VND)</th>'
+    +'<th class="col-hd" style="width:10%">Chi (VND)</th>'
+  +'</tr>'
+  +rows
+  +totalRow
+  +'</table></body></html>';
+
+  // ── Download ──
+  const blob=new Blob(['﻿'+html],{type:'application/vnd.ms-excel;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=fileName;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url);},2000);
+  toast('Đã xuất '+(allTx.length)+' giao dịch → '+fileName);
+}
+window.exportCashBookExcel=exportCashBookExcel;
 
 function renderTcSoQuy(){
   const accs=_tcAccountList();
@@ -23698,6 +23961,7 @@ async function saveCosting(){
   try{
     await fsSet(colName(_scTt),_scId,{costing,updatedAt:Date.now()});
     _tempCosting=null;
+    window._tabDirty=false;
     toast('Đã lưu Costing');
     logLotEvent(_scId,_scTt,'costing','Cập nhật Costing','Đã lưu dữ liệu costing');
     if(detailId===_scId && detailTt===_scTt){
@@ -33588,6 +33852,7 @@ async function dmSaveData(){
     // update cache so the saved list reflects immediately
     const arr=cache[_dmLot._tt]||[];const ci=arr.findIndex(x=>x._id===_dmLot._id);if(ci>=0)arr[ci].docData=docData;
     if(window.renderDmSavedList)renderDmSavedList();
+    window._tabDirty=false;
     toast('Đã lưu thông tin Document Maker');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
