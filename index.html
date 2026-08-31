@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.13';
+window.APP_BUILD='v4.14';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5061,6 +5061,9 @@ async function saveContSealAll(){
   }
   const bookings=(r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo||'',vol:parseInt(r.vol)||1,typeCont:r.typeCont||'40HC'}];
   const bookingConts={};
+  // posBookingConts: giữ đầy đủ VỊ TRÍ từng dòng (kể cả dòng rỗng cont no) để đồng bộ trucking ĐÚNG thứ tự
+  // Không lưu Firestore — chỉ dùng nội bộ khi sync cont/seal → trucking
+  const posBookingConts={};
   const panelAll=_getContPanel();
   // Collect containers + tờ khai cho TỪNG booking, đọc theo đúng tbody section của booking đó
   // (tránh việc querySelectorAll theo class quét nhầm cont của booking khác khi trùng bkKey).
@@ -5070,6 +5073,7 @@ async function saveContSealAll(){
     // Containers — đọc từ đúng tbody.contBody_<bkKey> thứ bkIndex
     // (nếu có nhiều section trùng bkKey, lấy đúng section theo thứ tự booking)
     const conts=[];
+    const posConts=[]; // tất cả dòng kể cả rỗng, giữ đúng vị trí
     if(panelAll){
       const bodies=panelAll.querySelectorAll('tbody.contBody_'+bkKey);
       // Chọn đúng section: nếu chỉ có 1 → dùng nó; nếu nhiều (trùng bkKey) → theo thứ tự xuất hiện
@@ -5079,10 +5083,13 @@ async function saveContSealAll(){
           const get=function(cls){const el=tr.querySelector('.'+cls+'_'+bkKey);return el?el.value:'';};
           const noEl=tr.querySelector('.cno_'+bkKey);
           const no=noEl?noEl.value.trim().toUpperCase():'';
+          // posConts: đưa vào mọi dòng để bảo toàn vị trí khi map sang trucking
+          posConts.push({no,seal:get('cseal'),tare:parseFloat(get('ctare'))||0,date:get('cdate')});
           if(no)conts.push({no,seal:get('cseal'),pkg:parseFloat(get('cpkg'))||0,nw:parseFloat(get('cnw'))||0,gw:parseFloat(get('cgw'))||0,tare:parseFloat(get('ctare'))||0,date:get('cdate')});
         });
       }
     }
+    posBookingConts[bkKey]=posConts;
     // PkgUnit
     const puEl=panelAll&&panelAll.querySelector('.cPkgUnit[data-bk="'+bkNo+'"]');
     const pkgUnit=puEl?puEl.value:'Bales';
@@ -5146,13 +5153,14 @@ async function saveContSealAll(){
         const frVal=(bkData.tkhaiList&&bkData.tkhaiList[0]&&bkData.tkhaiList[0].fullReturn)||'';
         let patch={};
         if(frVal)patch.fullReturn=frVal; // Full Return đồng bộ theo booking, áp dụng cho mọi dòng trucking của booking đó
-        if(bkData.containers&&bkData.containers.length){
+        const posConts=posBookingConts[bkKey]||bkData.containers||[];
+        if(posConts.length){
           // Tìm tất cả trucking row cho cùng booking (normalize giống nhau) để khớp đúng vị trí cont
           const trksForBk=currentTruckings.filter(function(t){
             return (((t.bookingNo||'').trim())||(r.bookingNo||'')).trim()===bkNo;
           });
           const truckIdx=trksForBk.indexOf(trk);
-          const cont=truckIdx>=0?bkData.containers[truckIdx]:null;
+          const cont=truckIdx>=0?posConts[truckIdx]:null;
           if(cont&&cont.no){
             patch.contNo=cont.no.trim().toUpperCase();
             if(cont.seal)patch.seal=cont.seal;
