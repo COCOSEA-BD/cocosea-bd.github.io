@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.15';
+window.APP_BUILD='v4.16';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3750,7 +3750,8 @@ function renderDetailPanel(r,tt){
       const bkData=bookingConts[bkKey]||{};
       // Backward compat: old jobs store containers in r.containers (no bookingConts).
       // For the first/only booking, fall back to r.containers if this booking has no saved conts.
-      let conts=bkData.containers||[];
+      // posContainers giữ đầy đủ vị trí (kể cả dòng rỗng) để hiển thị đúng STT
+      let conts=bkData.posContainers||bkData.containers||[];
       if(conts.length===0 && bk===bookings[0] && (r.containers&&r.containers.length) && !(r.bookingConts&&Object.keys(r.bookingConts).length)){
         conts=r.containers;
       }
@@ -5105,7 +5106,7 @@ async function saveContSealAll(){
         if(sotk||macc||pl||fullReturn)tkhaiList.push({sotk,macc,pl,fullReturn});
       });
     }
-    bookingConts[bkKey]={containers:conts,pkgUnit,tkhaiList,bookingNo:bkNo};
+    bookingConts[bkKey]={containers:conts,posContainers:posConts,pkgUnit,tkhaiList,bookingNo:bkNo};
   });
   // Also compute legacy fields from all containers — DEDUP theo cont no chuẩn hóa
   // để flat array `containers` không bao giờ chứa cont trùng (nguồn gây lỗi lặp ở Document Maker tổng).
@@ -8466,16 +8467,19 @@ async function saveTruckings(){
     });
     // Cập nhật contNo/seal/tare/date trong bookingConts từ trucking rows (đồng bộ theo từng cont, khớp theo vị trí trong booking)
     Object.keys(byBk).forEach(function(bkKey){
-      if(!bookingConts[bkKey])bookingConts[bkKey]={containers:[]};
-      const bkConts=bookingConts[bkKey].containers||[];
+      if(!bookingConts[bkKey])bookingConts[bkKey]={containers:[],posContainers:[]};
+      // Dùng posContainers để giữ đúng vị trí (bao gồm dòng rỗng); fallback về containers nếu chưa có
+      const posConts=(bookingConts[bkKey].posContainers||bookingConts[bkKey].containers||[]).slice();
       byBk[bkKey].forEach(function(t,i){
-        if(!bkConts[i])bkConts[i]={};
-        if(t.contNo)bkConts[i].no=t.contNo; // Link contNo sang Cont/Seal
-        if(t.seal)bkConts[i].seal=t.seal;
-        if(t.tare!=null&&t.tare!=='')bkConts[i].tare=parseFloat(t.tare)||0;
-        if(t.date)bkConts[i].date=t.date; // Ngày đóng hàng — cùng field 'date' với Cont/Seal
+        if(!posConts[i])posConts[i]={};
+        if(t.contNo)posConts[i].no=t.contNo; // Link contNo sang Cont/Seal
+        if(t.seal)posConts[i].seal=t.seal;
+        if(t.tare!=null&&t.tare!=='')posConts[i].tare=parseFloat(t.tare)||0;
+        if(t.date)posConts[i].date=t.date; // Ngày đóng hàng — cùng field 'date' với Cont/Seal
       });
-      bookingConts[bkKey].containers=bkConts;
+      bookingConts[bkKey].posContainers=posConts;
+      // Rebuild containers (chỉ dòng có cont no) từ posContainers để Document Maker etc. không bị lỗi
+      bookingConts[bkKey].containers=posConts.filter(function(c){return c&&(c.no||'').trim();});
       // Full Return — theo từng booking (không phải theo từng cont), lấy từ dòng trucking đầu tiên
       // của booking đó có giá trị, ghi vào tkhaiList[0] — đúng nơi getBookingInfo()/Khai Eport đọc ra.
       const frVal=(byBk[bkKey].find(function(t){return t.fullReturn;})||{}).fullReturn;
