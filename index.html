@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.21';
+window.APP_BUILD='v4.22';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5178,9 +5178,18 @@ async function saveContSealAll(){
       });
       if(changed){
         await db.collection(colName(detailTt)).doc(detailId).update({truckings:updatedTruckings,updatedAt:Date.now()});
+        // v4.22: Cập nhật truckings trong cache ngay để tránh race condition
+        const _ciT=cache[detailTt].findIndex(function(x){return x._id===detailId;});
+        if(_ciT>=0)cache[detailTt][_ciT].truckings=updatedTruckings;
       }
     }
 
+    // v4.22: Cập nhật bookingConts/containers trong cache ngay (không chờ onSnapshot)
+    const _ci=cache[detailTt].findIndex(function(x){return x._id===detailId;});
+    if(_ci>=0){
+      cache[detailTt][_ci].bookingConts=bookingConts;
+      cache[detailTt][_ci].containers=allConts;
+    }
     window._tabDirty=false;
     toast('Đã lưu tất cả Cont/Seal');
     logLotEvent(detailId,detailTt,'cont','Cập nhật Cont/Seal',allConts.length+' container');
@@ -8585,6 +8594,10 @@ function _scyIcdOpts(icdDefault,selected){
   if(icdDefault&&!whs.find(function(w){return w.name===icdDefault;})){
     opts+='<option value="'+icdDefault.replace(/"/g,'&quot;')+'"'+(icdDefault===selected?' selected':'')+'>'+icdDefault+'</option>';
   }
+  // v4.22: Bảo toàn giá trị đã lưu: nếu selected khác icdDefault và cũng không có trong danh sách, vẫn thêm vào
+  if(selected&&selected!==icdDefault&&!whs.find(function(w){return w.name===selected;})){
+    opts+='<option value="'+selected.replace(/"/g,'&quot;')+'" selected>'+selected+'</option>';
+  }
   opts+=whs.map(function(w){
     return '<option value="'+(w.name||'').replace(/"/g,'&quot;')+'"'+(w.name===selected?' selected':'')+'>'+(w.name||'')+(w.location?' — '+w.location:'')+'</option>';
   }).join('');
@@ -8599,7 +8612,12 @@ function _scyTableRowHtml(row,i,bkList,icdDefault){
   const bkSel=bkList.length>1?('<select id="scy_bk_'+i+'" style="'+sel+'">'+_truckingBkOpts(bkList,row.bookingNo)+'</select>'):('<input type="text" id="scy_bk_'+i+'" value="'+(bkList[0]||row.bookingNo||'').replace(/"/g,'&quot;')+'" style="'+inp+'" readonly/>');
   // Dropdown chọn Sà lan — lấy từ CRM (đối tác loại "salan")
   const saLanList=Object.keys(cache.partners||{}).filter(function(k){return cache.partners[k]&&cache.partners[k].type==='salan';});
-  const saLanOpts='<option value="">— Chọn sà lan —</option>'+saLanList.map(function(k){
+  // v4.22: Bảo toàn giá trị đã lưu nếu không còn trong danh sách đối tác
+  let saLanOpts='<option value="">— Chọn sà lan —</option>';
+  if(row.saLan&&!saLanList.includes(row.saLan)){
+    saLanOpts+='<option value="'+row.saLan.replace(/"/g,'&quot;')+'" selected>'+row.saLan+'</option>';
+  }
+  saLanOpts+=saLanList.map(function(k){
     const sp=cache.partners[k];
     const label=sp.shortname||k;
     return '<option value="'+k.replace(/"/g,'&quot;')+'"'+(k===row.saLan?' selected':'')+'>'+label+'</option>';
@@ -29539,7 +29557,9 @@ async function _dmDoExportExcel(){
   function docNosBlock(ws,r,d,showInv){
     r=setLbl(ws,r,1,'CONTRACT No.',d.contractNo,{mergeValueTo:3});
     if(showInv){ws.getCell(r-1,4).value='INVOICE No.';ws.getCell(r-1,4).font={bold:true,size:9.5};ws.getCell(r-1,5).value=d.invoiceNo;ws.mergeCells(r-1,5,r-1,6);}
-    r=setLbl(ws,r,1,'Date',d.date,{mergeValueTo:3});
+    // v4.22: Dùng ngày riêng cho từng loại chứng từ (khớp PDF: contractDate cho Contract, invoiceDate cho Invoice)
+    const docDate=showInv?(d.invoiceDate||d.date):(d.contractDate||d.date);
+    r=setLbl(ws,r,1,'Date',docDate,{mergeValueTo:3});
     return r;
   }
   // Chữ ký (giống _dmSign)
