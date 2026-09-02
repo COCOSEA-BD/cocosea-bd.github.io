@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.22';
+window.APP_BUILD='v4.23';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -22208,11 +22208,16 @@ function renderSettings(){
   if(window._settingsOpen.warehouse===undefined) window._settingsOpen.warehouse=false;
   if(window._settingsOpen.security===undefined) window._settingsOpen.security=false;
   // Không force-open bất kỳ box nào — giữ nguyên state user đã chọn
+  // v4.23: Tab state — mặc định tab đầu tiên
+  if(!window._settingsTab) window._settingsTab='data';
 
   function stgBox(key, icon, title, btnHtml, contentHtml){
     const open=window._settingsOpen[key];
-    return '<div class="table-card" style="margin-bottom:.5rem">'
-      +'<div onclick="_stgToggle(\''+key+'\')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer;border-radius:10px;" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'">'        +'<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti '+icon+'" style="font-size:15px"></i>'+title+'</div>'        +'<i class="ti ti-chevron-'+(open?'down':'right')+'" id="stg_icon_'+key+'" style="font-size:13px;color:var(--text-tertiary)"></i>'      +'</div>'
+    return '<div class="table-card" style="margin-bottom:.5rem" data-stg-card="'+title+'">'
+      +'<div onclick="_stgToggle(\''+key+'\')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer;border-radius:10px;" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'">'
+        +'<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti '+icon+'" style="font-size:15px"></i>'+title+'</div>'
+        +'<i class="ti ti-chevron-'+(open?'down':'right')+'" id="stg_icon_'+key+'" style="font-size:13px;color:var(--text-tertiary)"></i>'
+      +'</div>'
       +'<div id="stg_body_'+key+'" style="display:'+(open?'block':'none')+';padding:0 1.1rem 1rem">'
         +contentHtml
         +(btnHtml?'<div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">'+btnHtml+'</div>':'')
@@ -22220,14 +22225,47 @@ function renderSettings(){
     +'</div>';
   }
 
-  pg.innerHTML='<div style="font-weight:700;font-size:15px;margin-bottom:1rem;display:flex;align-items:center;gap:8px"><i class="ti ti-settings" style="font-size:18px"></i>Cài đặt hệ thống</div>'
+  // ── v4.23 Tab navigation ──────────────────────────────────────────────
+  const _tabs=[
+    {id:'data',    icon:'ti-database',       label:'Dữ liệu & Danh mục'},
+    {id:'finance', icon:'ti-coin',           label:'Tài chính & Thanh toán'},
+    {id:'ops',     icon:'ti-ship',           label:'Vận hành Logistics'},
+    {id:'users',   icon:'ti-users',          label:'Người dùng & Bảo mật'},
+    {id:'business',icon:'ti-building',       label:'Doanh nghiệp & Hợp đồng'},
+    {id:'backup',  icon:'ti-database-export',label:'Dữ liệu & Sao lưu'},
+  ];
+  const _activeTab=window._settingsTab||'data';
 
-    +stgBox('utils','ti-database','Tiện ích dữ liệu',
+  const tabNavHtml='<div style="display:flex;gap:2px;overflow-x:auto;padding-bottom:0;margin-bottom:1.25rem;border-bottom:2px solid var(--border-light);-webkit-overflow-scrolling:touch;scrollbar-width:none">'
+    +_tabs.map(function(t){
+      const active=t.id===_activeTab;
+      return '<button onclick="_stgSwitchTab(\''+t.id+'\')" id="stg_tabbtn_'+t.id+'"'
+        +' style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;padding:8px 13px;flex-shrink:0;'
+        +'border:none;border-bottom:2px solid '+(active?'#1a4b8c':'transparent')+';margin-bottom:-2px;'
+        +'background:none;cursor:pointer;font-size:12px;font-weight:'+(active?'700':'500')+';'
+        +'color:'+(active?'#1a4b8c':'var(--text-secondary)')+';border-radius:4px 4px 0 0;transition:color .15s,border-color .15s">'
+        +'<i class="ti '+t.icon+'" style="font-size:14px"></i>'+t.label
+      +'</button>';
+    }).join('')
+  +'</div>';
+
+  const searchHtml='<div style="position:relative;margin-bottom:1rem">'
+    +'<i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--text-tertiary);pointer-events:none"></i>'
+    +'<input type="text" id="stgSearchBox" placeholder="Tìm kiếm cài đặt..." oninput="_stgSearch(this.value)"'
+    +' style="width:100%;box-sizing:border-box;padding:8px 12px 8px 34px;font-size:12.5px;border-radius:8px;border:1px solid var(--border-light);background:var(--bg-secondary)"/>'
+  +'</div>';
+
+  function tabPanel(id,content){
+    return '<div id="stg_tab_'+id+'" style="display:'+(id===_activeTab?'block':'none')+'">'+content+'</div>';
+  }
+
+  // ── TAB 1: Dữ liệu & Danh mục ────────────────────────────────────────
+  const tab1Html=
+    stgBox('utils','ti-database','Tiện ích dữ liệu',
       '<button class="btn" onclick="migrateJobNos()"><i class="ti ti-wand"></i> Tạo Job ID cho lô hàng cũ</button>'
       +'<button class="btn" onclick="migrateDnNos()"><i class="ti ti-file-invoice"></i> Cấp số DN cho lô cũ</button>',
       '<div style="font-size:12px;color:var(--text-secondary)">Tạo số Job ID và Debit Note cho tất cả lô hàng cũ chưa có (chỉ cần chạy 1 lần).</div>'
     )
-
     +stgBox('svc','ti-list-details','Danh mục dịch vụ',
       '<button class="btn '+(window._svcCatalogLocked?'pri':'red')+'" onclick="toggleSvcCatalogLock()"><i class="ti ti-'+(window._svcCatalogLocked?'lock-open':'lock')+'"></i> '+(window._svcCatalogLocked?'Mở khóa':'Khóa lại')+'</button>'
       +'<button class="btn" onclick="addSvcCatRow()" '+(window._svcCatalogLocked?'disabled':'')+'><i class="ti ti-plus"></i> Thêm dịch vụ</button>'
@@ -22238,13 +22276,15 @@ function renderSettings(){
       +'<div style="display:grid;grid-template-columns:90px 1fr 110px 36px;gap:8px;padding:0 2px 4px;font-size:10px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase"><div>Mã</div><div>Tên dịch vụ</div><div style="text-align:center">Mặc định</div><div></div></div>'
       +'<div id="svcCatList"></div>'
     )
-
     +stgBox('ports','ti-anchor','Danh mục Các cảng và ICD',
       '',
       _renderPortsIcdSettingsContent()
     )
+    +_warehouseSettingsHtml();
 
-    +stgBox('bank','ti-building-bank','Tài khoản ngân hàng',
+  // ── TAB 2: Tài chính & Thanh toán ────────────────────────────────────
+  const tab2Html=
+    stgBox('bank','ti-building-bank','Tài khoản ngân hàng',
       '<button class="btn pri" onclick="saveBankAccounts()"><i class="ti ti-check"></i> Lưu tài khoản ngân hàng</button>',
       '<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-bottom:.5rem;display:flex;align-items:center;gap:5px"><i class="ti ti-building" style="font-size:13px"></i>Tài khoản Công ty</div>'
       +'<div id="bankRowsCo">'+bankRowsHtml(coBanks,'co')+'</div>'
@@ -22252,13 +22292,21 @@ function renderSettings(){
       +'<div style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-bottom:.5rem;display:flex;align-items:center;gap:5px"><i class="ti ti-user" style="font-size:13px"></i>Tài khoản Cá nhân</div>'
       +'<div id="bankRowsPers">'+bankRowsHtml(persBanks,'pers')+'</div>'
       +'<div style="margin-top:.4rem"><button class="btn sm" data-btype="pers" onclick="addBankRow(this.dataset.btype)"><i class="ti ti-plus"></i> Thêm TK Cá nhân</button></div>'
-    )
+    );
 
-    +stgBox('security','ti-shield-lock','Bảo mật & Phiên làm việc',
+  // ── TAB 3: Vận hành Logistics (chưa có module) ───────────────────────
+  const tab3Html='<div class="table-card" style="padding:2.5rem 1.5rem;text-align:center">'
+    +'<i class="ti ti-ship" style="font-size:42px;color:var(--text-tertiary);opacity:.3;display:block;margin-bottom:1rem"></i>'
+    +'<div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:.4rem">Chưa có cài đặt trong nhóm này</div>'
+    +'<div style="font-size:12px;color:var(--text-tertiary)">Các thiết lập vận hành logistics sẽ xuất hiện tại đây khi được bổ sung.</div>'
+  +'</div>';
+
+  // ── TAB 4: Người dùng & Bảo mật ──────────────────────────────────────
+  const tab4Html=
+    stgBox('security','ti-shield-lock','Bảo mật & Phiên làm việc',
       '<button class="btn pri" onclick="saveSecuritySettings()"><i class="ti ti-check"></i> Lưu cài đặt bảo mật</button>',
       '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Áp dụng cho <b>tất cả user</b>. Chỉ Admin được thay đổi.</div>'
       +'<div style="display:flex;flex-direction:column;gap:12px">'
-      // Inactivity
       +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Tự động đăng xuất khi không hoạt động</div><div style="font-size:11.5px;color:var(--text-secondary)">Đăng xuất người dùng sau khoảng thời gian nhất định không thao tác</div></div>'
         +'<input type="number" id="set_inactivity_min" value="'+((_securitySettings.inactivity||{}).minutes||30)+'" min="5" max="480" style="width:70px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
@@ -22267,7 +22315,6 @@ function renderSettings(){
           +'<span id="set_inactivity_label">'+((_securitySettings.inactivity||{}).enabled?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
-      // Back to Dashboard khi không hoạt động
       +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Tự động về Dashboard khi không hoạt động</div><div style="font-size:11.5px;color:var(--text-secondary)">Không đăng xuất — chỉ đưa người dùng về trang Dashboard sau khoảng thời gian không thao tác</div></div>'
         +'<input type="number" id="set_dash_min" value="'+((_securitySettings.backDashboard||{}).minutes||30)+'" min="1" max="480" style="width:70px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
@@ -22276,7 +22323,6 @@ function renderSettings(){
           +'<span id="set_dash_label">'+((_securitySettings.backDashboard||{}).enabled?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
-      // Password expiry
       +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Bắt buộc đổi mật khẩu định kỳ</div><div style="font-size:11.5px;color:var(--text-secondary)">Yêu cầu user đổi mật khẩu sau khoảng thời gian kể từ lần đổi cuối</div></div>'
         +'<input type="number" id="set_pw_min" value="'+((_securitySettings.password||{}).minutes||10080)+'" min="60" max="525600" style="width:80px;text-align:center;font-weight:700"/><span style="font-size:11.5px;color:var(--text-secondary)">phút</span>'
@@ -22285,7 +22331,6 @@ function renderSettings(){
           +'<span id="set_pw_label">'+((_securitySettings.password||{}).enabled?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
-      // Close-browser logout
       +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Đăng xuất khi tắt tab / trình duyệt</div><div style="font-size:11.5px;color:var(--text-secondary)">Yêu cầu đăng nhập lại mỗi khi mở lại ứng dụng</div></div>'
         +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
@@ -22293,7 +22338,6 @@ function renderSettings(){
           +'<span id="set_close_label">'+(_securitySettings.closeLogout?'Bật':'Tắt')+'</span>'
         +'</label>'
       +'</div>'
-      // Quản lý thiết bị theo người dùng
       +'<div style="display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
         +'<div style="flex:1"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Yêu cầu duyệt thiết bị đăng nhập</div><div style="font-size:11.5px;color:var(--text-secondary)">Thiết bị mới cần Admin phê duyệt mới được vào hệ thống. Admin luôn được miễn duyệt.</div></div>'
         +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600">'
@@ -22308,62 +22352,69 @@ function renderSettings(){
       +'<button class="btn sm" onclick="_deviceTestConnection()"><i class="ti ti-plug"></i> Test kết nối</button>',
       '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Thiết bị đăng nhập lần đầu cần được duyệt ở đây mới sử dụng được hệ thống (nếu đã bật "Yêu cầu duyệt thiết bị đăng nhập" ở trên). Admin luôn được miễn duyệt nên sẽ không xuất hiện trong danh sách này.</div>'
       +'<div id="deviceMgmtList" style="font-size:12.5px;color:var(--text-tertiary)">Đang tải...</div>'
-    )
-    +_contractPartyASettingsHtml()
-    +_warehouseSettingsHtml()
+    );
+
+  // ── TAB 5: Doanh nghiệp & Hợp đồng ──────────────────────────────────
+  const tab5Html=_contractPartyASettingsHtml();
+
+  // ── TAB 6: Dữ liệu & Sao lưu ─────────────────────────────────────────
+  const _bkOpen=!!(window._settingsOpen&&window._settingsOpen.backup);
+  const tab6Html='<div class="table-card" style="margin-bottom:.5rem" data-stg-card="Backup Restore Sao lưu dữ liệu">'
+    +'<div onclick="_stgToggle(\'backup\')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer;border-radius:10px;" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'">'
+      +'<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px"><i class="ti ti-database-export" style="font-size:15px"></i>Backup & Restore dữ liệu</div>'
+      +'<i class="ti ti-chevron-'+(_bkOpen?'down':'right')+'" id="stg_icon_backup" style="font-size:13px;color:var(--text-tertiary)"></i>'
+    +'</div>'
+    +'<div id="stg_body_backup" style="display:'+(_bkOpen?'block':'none')+';padding:0 1.1rem 1.25rem">'
+      +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:1rem">Xuất toàn bộ dữ liệu (lô hàng, đối tác, tàu, thu chi, giá cước...) ra file JSON. Có thể khôi phục khi cần hoặc chuyển sang môi trường khác.</div>'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap">'
+        +'<button class="btn pri" onclick="backupAllData()" style="background:#1a4b8c;border-color:#1a4b8c"><i class="ti ti-download"></i> Backup ngay</button>'
+        +'<label class="btn" style="cursor:pointer"><i class="ti ti-upload"></i> Restore từ file...<input type="file" accept=".json" style="display:none" onchange="restoreAllData(this)"/></label>'
+      +'</div>'
+      +'<div id="backupStatus" style="margin-top:.75rem;font-size:12px;min-height:20px"></div>'
+      +'<div style="margin-top:1.25rem;padding-top:1.25rem;border-top:1px dashed var(--border-light)">'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><i class="ti ti-file-spreadsheet" style="font-size:18px;color:#0F6E56"></i><div style="font-weight:700;font-size:13px;color:#0F6E56">Xuất Excel lưu trữ (theo mốc thời gian)</div></div>'
+        +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Trích xuất các lô hàng theo khoảng ETD ra file Excel — gồm thông tin lô, dịch vụ, chi phí, doanh thu invoice — để lưu trữ phòng khi mất dữ liệu.</div>'
+        +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
+          +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">Loại:</label>'
+          +'<select id="bkxLoai" style="font-size:12px"><option value="all">Xuất + Nhập</option><option value="xuat">Chỉ Xuất</option><option value="nhap">Chỉ Nhập</option></select>'
+          +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">ETD từ:</label>'
+          +'<input type="date" id="bkxFrom" style="font-size:11.5px;width:145px;padding:5px 6px"/>'
+          +'<label style="font-size:12px;color:var(--text-secondary)">đến:</label>'
+          +'<input type="date" id="bkxTo" style="font-size:11.5px;width:145px;padding:5px 6px"/>'
+          +'<button class="btn" onclick="backupExcelByDate()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-export"></i> Xuất Excel</button>'
+        +'</div>'
+        +'<div id="bkxStatus" style="margin-top:.6rem;font-size:12px;min-height:18px"></div>'
+      +'</div>'
+    +'</div>'
   +'</div>';
+
+  // ── Assemble full page ────────────────────────────────────────────────
+  pg.innerHTML=
+    '<div style="margin-bottom:1.5rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border-light)">'
+      +'<div style="display:flex;align-items:center;gap:12px">'
+        +'<div style="width:40px;height:40px;flex-shrink:0;border-radius:10px;background:linear-gradient(135deg,#1a4b8c 0%,#0F6E56 100%);display:flex;align-items:center;justify-content:center">'
+          +'<i class="ti ti-settings" style="font-size:21px;color:#fff"></i>'
+        +'</div>'
+        +'<div>'
+          +'<div style="font-weight:800;font-size:16px;color:var(--text-primary);line-height:1.2">⚙️ Cài đặt hệ thống</div>'
+          +'<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px">Quản lý cấu hình, dữ liệu và các thiết lập vận hành hệ thống</div>'
+        +'</div>'
+      +'</div>'
+    +'</div>'
+    +searchHtml
+    +tabNavHtml
+    +tabPanel('data',    tab1Html)
+    +tabPanel('finance', tab2Html)
+    +tabPanel('ops',     tab3Html)
+    +tabPanel('users',   tab4Html)
+    +tabPanel('business',tab5Html)
+    +tabPanel('backup',  tab6Html);
+
   renderCargoNamesList();
   renderAcctInfoList();
   renderWarehouseList();
   renderDeviceMgmtList();
   if(typeof renderSvcCatList==='function')renderSvcCatList();
-  // Inject Backup & Restore section
-  const pgS=g('page-settings');
-  if(pgS){
-    const _bkOpen=!!(window._settingsOpen&&window._settingsOpen.backup);
-    pgS.insertAdjacentHTML('beforeend',`
-    <div style="margin-top:1.5rem;background:var(--bg-primary);border-radius:12px;border:1.5px solid #1a4b8c30;overflow:hidden">
-      <div onclick="_stgToggle('backup')" style="display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;cursor:pointer" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
-        <div style="display:flex;align-items:center;gap:8px">
-          <i class="ti ti-database-export" style="font-size:18px;color:#1a4b8c"></i>
-          <div style="font-weight:700;font-size:13px;color:#1a4b8c">Backup & Restore dữ liệu</div>
-        </div>
-        <i class="ti ti-chevron-${_bkOpen?'down':'right'}" id="stg_icon_backup" style="font-size:13px;color:var(--text-tertiary)"></i>
-      </div>
-      <div id="stg_body_backup" style="display:${_bkOpen?'block':'none'};padding:0 1.1rem 1.25rem">
-      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:1rem">Xuất toàn bộ dữ liệu (lô hàng, đối tác, tàu, thu chi, giá cước...) ra file JSON. Có thể khôi phục khi cần hoặc chuyển sang môi trường khác.</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn pri" onclick="backupAllData()" style="background:#1a4b8c;border-color:#1a4b8c">
-          <i class="ti ti-download"></i> Backup ngay
-        </button>
-        <label class="btn" style="cursor:pointer">
-          <i class="ti ti-upload"></i> Restore từ file...
-          <input type="file" accept=".json" style="display:none" onchange="restoreAllData(this)"/>
-        </label>
-      </div>
-      <div id="backupStatus" style="margin-top:.75rem;font-size:12px;min-height:20px"></div>
-
-      <!-- Backup Excel theo mốc thời gian -->
-      <div style="margin-top:1.25rem;padding-top:1.25rem;border-top:1px dashed var(--border-light)">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <i class="ti ti-file-spreadsheet" style="font-size:18px;color:#0F6E56"></i>
-          <div style="font-weight:700;font-size:13px;color:#0F6E56">Xuất Excel lưu trữ (theo mốc thời gian)</div>
-        </div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Trích xuất các lô hàng theo khoảng ETD ra file Excel — gồm thông tin lô, dịch vụ, chi phí, doanh thu invoice — để lưu trữ phòng khi mất dữ liệu.</div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-          <label style="font-size:12px;color:var(--text-secondary);font-weight:600">Loại:</label>
-          <select id="bkxLoai" style="font-size:12px"><option value="all">Xuất + Nhập</option><option value="xuat">Chỉ Xuất</option><option value="nhap">Chỉ Nhập</option></select>
-          <label style="font-size:12px;color:var(--text-secondary);font-weight:600">ETD từ:</label>
-          <input type="date" id="bkxFrom" style="font-size:11.5px;width:145px;padding:5px 6px"/>
-          <label style="font-size:12px;color:var(--text-secondary)">đến:</label>
-          <input type="date" id="bkxTo" style="font-size:11.5px;width:145px;padding:5px 6px"/>
-          <button class="btn" onclick="backupExcelByDate()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-export"></i> Xuất Excel</button>
-        </div>
-        <div id="bkxStatus" style="margin-top:.6rem;font-size:12px;min-height:18px"></div>
-      </div>
-      </div>
-    </div>`);
-  }
 } // end renderSettings
 
 function _stgToggle(key){
@@ -22381,6 +22432,55 @@ function _stgToggle(key){
     if(key==='warehouse'&&typeof renderWarehouseList==='function')renderWarehouseList();  }
 }
 window._stgToggle=_stgToggle;
+
+// v4.23: Tab switcher cho Settings page
+function _stgSwitchTab(id){
+  window._settingsTab=id;
+  const tabIds=['data','finance','ops','users','business','backup'];
+  tabIds.forEach(function(t){
+    const panel=g('stg_tab_'+t);
+    const btn=g('stg_tabbtn_'+t);
+    const active=t===id;
+    if(panel)panel.style.display=active?'block':'none';
+    if(btn){
+      btn.style.fontWeight=active?'700':'500';
+      btn.style.color=active?'#1a4b8c':'var(--text-secondary)';
+      btn.style.borderBottom='2px solid '+(active?'#1a4b8c':'transparent');
+    }
+  });
+  // Clear search when switching tabs
+  const sb=g('stgSearchBox'); if(sb)sb.value='';
+}
+window._stgSwitchTab=_stgSwitchTab;
+
+// v4.23: Search filter cho Settings page
+function _stgSearch(q){
+  q=(q||'').trim().toLowerCase();
+  const tabIds=['data','finance','ops','users','business','backup'];
+  if(!q){
+    // Restore — chỉ hiện tab đang active
+    tabIds.forEach(function(t){
+      const panel=g('stg_tab_'+t);
+      if(panel)panel.style.display=(t===(window._settingsTab||'data'))?'block':'none';
+    });
+    return;
+  }
+  // Khi có từ khóa: hiện tất cả tab panel, ẩn card không khớp
+  tabIds.forEach(function(t){
+    const panel=g('stg_tab_'+t); if(!panel)return;
+    panel.style.display='block';
+    const cards=panel.querySelectorAll('[data-stg-card]');
+    let anyVisible=false;
+    cards.forEach(function(card){
+      const match=(card.dataset.stgCard||'').toLowerCase().indexOf(q)>=0;
+      card.style.display=match?'':'none';
+      if(match)anyVisible=true;
+    });
+    // Ẩn panel nếu không có card nào khớp
+    if(!anyVisible)panel.style.display='none';
+  });
+}
+window._stgSearch=_stgSearch;
 
 // ─────────── SETTINGS: Kho đóng hàng ───────────
 function warehouseRowHtml(w,i){
