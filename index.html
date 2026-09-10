@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.36';
+window.APP_BUILD='v4.37';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -20269,6 +20269,25 @@ function _bgToggleDoc(el){
   // Không re-render toàn bộ tab để tránh mất focus
 }
 
+function _bgTickAll(docIdx){
+  var st=window._bgState;
+  var d=st.docs[docIdx];
+  if(!d)return;
+  var safeDoc=d.replace(/[|'"\\]/g,'_');
+  var lots=_bgGetLots();
+  st.rowDocs=st.rowDocs||{};
+  lots.forEach(function(r,i){
+    var rowKey=(r._id||('row'+i)).toString().replace(/[|'"\\]/g,'_');
+    st.rowDocs[rowKey+'||'+safeDoc]=true;
+  });
+  // Cập nhật checkbox trực tiếp trên DOM không cần re-render
+  document.querySelectorAll('#notesBody input[type="checkbox"][data-key]').forEach(function(el){
+    var k=el.getAttribute('data-key');
+    if(k&&k.endsWith('||'+safeDoc)){el.checked=true;}
+  });
+}
+window._bgTickAll=_bgTickAll;
+
 function _bgAddCustomDoc(){
   var name=prompt('Tên chứng từ muốn thêm:','');
   if(!name||!name.trim())return;
@@ -20317,8 +20336,11 @@ function _bgRenderTable(){
   }
   var thS='padding:9px 10px;font-size:10.5px;font-weight:700;letter-spacing:.2px;white-space:nowrap;color:#fff';
   var tdS='padding:8px 10px;border-bottom:1px solid var(--border-light);font-size:11.5px;vertical-align:middle';
-  var docThs=docs.map(function(d){
-    return '<th style="'+thS+';text-align:center;min-width:62px">'+d+'</th>';
+  var docThs=docs.map(function(d,di){
+    return '<th style="'+thS+';text-align:center;min-width:62px;padding:6px 4px">'
+      +d
+      +'<br><button onclick="_bgTickAll('+di+')" title="Tick tất cả cột này" style="margin-top:4px;padding:1px 8px;font-size:9px;border-radius:4px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;cursor:pointer;white-space:nowrap">✓ all</button>'
+      +'</th>';
   }).join('');
   var rows=lots.map(function(r,i){
     var vol=r.vol||(r.vol===0?'0':'—');
@@ -20326,7 +20348,7 @@ function _bgRenderTable(){
     var volType=vol+(typeCont?' × '+typeCont:'');
     var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
     var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
-    var tenHang=r.commodity||r.description||r.goods||r.goodsDesc||'';
+    var tenHang=r.tenHang||'';
     var rowDocs=window._bgState.rowDocs||{};
     var rowKey=(r._id||('row'+i)).toString().replace(/[|'"\\]/g,'_');
     var docCells=docs.map(function(d){
@@ -20410,7 +20432,7 @@ function exportBanGiaoPDF(){
       var key=rowKey+'||'+d.replace(/[|'"\\]/g,'_');
       return '<td style="'+tdS+';text-align:center;font-size:13px;color:'+(rowDocs[key]?'#103A6F':'#CBD5E1')+';font-weight:700">'+(rowDocs[key]?'✓':'□')+'</td>';
     }).join('');
-    var tenHang=_nfc(r.commodity||r.description||r.goods||r.goodsDesc||'');
+    var tenHang=_nfc(r.tenHang||'');
     return '<tr style="background:'+bg+'">'
       +'<td style="'+tdS+';text-align:center;color:#64748B;font-weight:700">'+(i+1)+'</td>'
       +'<td style="'+tdS+';font-weight:600;color:#103A6F">'+_nfc(r.bookingNo||r.jobNo||'—')+'</td>'
@@ -20428,7 +20450,7 @@ function exportBanGiaoPDF(){
   var dateRange=(st.from?fd(st.from):'—')+' – '+(st.to?fd(st.to):'—');
 
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
-    +'<title>BBGT - '+_nfc(st.shipper||'All')+'</title>'
+    +'<title>'+bbNo+' – '+_nfc(st.shipper||'All')+'</title>'
     +'<style>*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
     +'body{font-family:\'Segoe UI\',Roboto,Arial,Helvetica,sans-serif;font-size:12px;color:#1a2e2a;padding:20px;background:#fff;line-height:1.4}'
     +'table{border-collapse:collapse;width:100%}'
@@ -20463,7 +20485,7 @@ function exportBanGiaoPDF(){
     +'<div style="display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:10px;margin-bottom:12px">'
       +'<div style="border:'+bd+';border-radius:9px;padding:10px 14px;background:#fff">'
         +'<div style="font-size:8.5px;color:#98A2B3;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Bên giao</div>'
-        +'<div style="font-weight:700;font-size:13px;color:#103A6F">COCOSEA CO., LTD</div>'
+        +'<div style="font-weight:700;font-size:13px;color:#103A6F">Công ty TNHH COCO SEA</div>'
         +'<div style="font-size:9.5px;color:#667085;margin-top:2px">Người giao: ................................</div>'
         +'<div style="font-size:9.5px;color:#667085;margin-top:1px">Chức vụ: ..................................</div>'
       +'</div>'
@@ -20577,7 +20599,7 @@ async function exportBanGiaoExcel(){
   if(logoBase64){
     try{
       var _imgId=wb.addImage({base64:logoBase64,extension:'png'});
-      ws.addImage(_imgId,{tl:{col:0,row:0},br:{col:2,row:3},editAs:'oneCell'});
+      ws.addImage(_imgId,{tl:{col:0,row:0},ext:{width:52,height:52}});
     }catch(e){}
   }
 
@@ -20611,7 +20633,7 @@ async function exportBanGiaoExcel(){
   ws.getRow(6).height=14;
   var infoCol1=Math.floor(totalCols/3), infoCol2=Math.floor(totalCols*2/3);
   ws.mergeCells(6,1,6,infoCol1);
-  setCell(6,1,'BÊN GIAO: COCOSEA CO., LTD   |   Người giao: ...............................',{font:{size:8,color:{argb:'FF334155'},bold:false},align:{horizontal:'left',vertical:'middle'}});
+  setCell(6,1,'BÊN GIAO: Công ty TNHH COCO SEA   |   Người giao: ...............................',{font:{size:8,color:{argb:'FF334155'},bold:false},align:{horizontal:'left',vertical:'middle'}});
   ws.mergeCells(6,infoCol1+1,6,infoCol2);
   setCell(6,infoCol1+1,'BÊN NHẬN: '+_nfc(st.shipper||'...............................')+'   |   Người nhận: ...............................',{font:{size:8,color:{argb:'FF334155'}},align:{horizontal:'left',vertical:'middle'}});
   ws.mergeCells(6,infoCol2+1,6,totalCols);
@@ -20645,7 +20667,7 @@ async function exportBanGiaoExcel(){
     var volType=vol+(typeCont?' × '+typeCont:'');
     var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
     var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
-    var tenHang=_nfc(r.commodity||r.description||r.goods||r.goodsDesc||'');
+    var tenHang=_nfc(r.tenHang||'');
     var bg=i%2===0?{argb:'FFFFFFFF'}:{argb:'FFF0F4FA'};
     var rowDocs=window._bgState.rowDocs||{};
     var rowKey=(r._id||('row'+i)).toString().replace(/[|'"\\]/g,'_');
