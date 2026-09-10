@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.34';
+window.APP_BUILD='v4.35';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -20180,14 +20180,443 @@ function renderNotesPage(){
       <button onclick="window._notesTab='calendar';renderNotesPage()" class="${_nt==='calendar'?'on':''}"><i class="ti ti-calendar"></i> Lịch</button>
       <button onclick="window._notesTab='shared';renderNotesPage()" class="${_nt==='shared'?'on':''}"><i class="ti ti-users"></i> Ghi chú chung</button>
       <button onclick="window._notesTab='personal';renderNotesPage()" class="${_nt==='personal'?'on':''}"><i class="ti ti-lock"></i> Ghi chú riêng</button>
+      <button onclick="window._notesTab='bangiao';renderNotesPage()" class="${_nt==='bangiao'?'on':''}"><i class="ti ti-file-certificate"></i> Bàn giao CT</button>
     </div>
   </div>
   <div id="notesBody"></div>`;
   if(window._notesTab==='calendar'){ renderCalendarTab(); }
   else if(window._notesTab==='shared'){ renderNotesSharedTab(); loadSharedNotes(); }
+  else if(window._notesTab==='bangiao'){ renderBanGiaoTab(); }
   else { renderNotesPersonalTab(); loadPersonalNotes(); }
 }
 window.renderNotesPage=renderNotesPage;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MODULE: BIÊN BẢN BÀN GIAO CHỨNG TỪ
+   Tab mới trong COCO NOTES — lọc lô hàng → xuất PDF / Excel
+═══════════════════════════════════════════════════════════════════════════ */
+window._bgState=window._bgState||{
+  shipper:'',from:'',to:'',
+  docs:['Bill of Lading','INV','PKL','Phyto','Fumi','C/O']
+};
+var BG_DOC_LIST=['Bill of Lading','INV','PKL','Phyto','Fumi','C/O','Health Cert','EUR.1'];
+
+function renderBanGiaoTab(){
+  var body=g('notesBody'); if(!body)return;
+  var st=window._bgState;
+  // Shipper options
+  var shipperList=Object.values(cache.partners||{})
+    .filter(function(p){return _partnerHasType&&_partnerHasType(p,'shipper');})
+    .map(function(p){return p.shortname;}).sort();
+  if(!shipperList.length){
+    // fallback: collect from lots
+    var sSet={};
+    ['xuat','nhap'].forEach(function(tt){(cache[tt]||[]).forEach(function(r){var s=r.shipper||r.supplier||'';if(s)sSet[s]=1;});});
+    shipperList=Object.keys(sSet).sort();
+  }
+  var shOpts='<option value="">— Tất cả Shipper —</option>'
+    +shipperList.map(function(s){return '<option value="'+s+'"'+(s===st.shipper?' selected':'')+'>'+s+'</option>';}).join('');
+
+  var docCheckboxes=BG_DOC_LIST.map(function(d){
+    var chk=st.docs.indexOf(d)>=0?' checked':'';
+    return '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer;white-space:nowrap">'
+      +'<input type="checkbox" value="'+d+'"'+chk+' onchange="_bgToggleDoc(this)"> '+d+'</label>';
+  }).join('');
+
+  body.innerHTML=
+    '<div style="padding:4px 0 16px">'
+    // ── Filter card ──
+    +'<div style="background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:12px;padding:14px 18px;margin-bottom:14px">'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">'
+        +'<div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px">'
+          +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary)">Shipper / Supplier</label>'
+          +'<select id="bg_shipper" onchange="window._bgState.shipper=this.value;renderBanGiaoTab()" style="padding:7px 10px;border-radius:8px;border:1px solid var(--border-light);font-size:12px;background:var(--bg-primary)">'+shOpts+'</select>'
+        +'</div>'
+        +'<div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:120px">'
+          +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary)">ETD từ</label>'
+          +'<input type="date" id="bg_from" value="'+st.from+'" onchange="window._bgState.from=this.value;renderBanGiaoTab()" style="padding:7px 10px;border-radius:8px;border:1px solid var(--border-light);font-size:12px;background:var(--bg-primary)">'
+        +'</div>'
+        +'<div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:120px">'
+          +'<label style="font-size:11px;font-weight:600;color:var(--text-secondary)">đến</label>'
+          +'<input type="date" id="bg_to" value="'+st.to+'" onchange="window._bgState.to=this.value;renderBanGiaoTab()" style="padding:7px 10px;border-radius:8px;border:1px solid var(--border-light);font-size:12px;background:var(--bg-primary)">'
+        +'</div>'
+        +'<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;padding-bottom:2px">'
+          +'<button class="btn" onclick="exportBanGiaoPDF()" style="color:#103A6F;border-color:#103A6F44;font-weight:600"><i class="ti ti-file-type-pdf"></i> Xuất PDF</button>'
+          +'<button class="btn" onclick="exportBanGiaoExcel()" style="color:#15803D;border-color:#15803D44;font-weight:600"><i class="ti ti-table-export"></i> Excel</button>'
+        +'</div>'
+      +'</div>'
+      +'<div style="margin-top:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+        +'<span style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-right:2px"><i class="ti ti-checkbox"></i> Chứng từ bàn giao:</span>'
+        +docCheckboxes
+      +'</div>'
+    +'</div>'
+    // ── Preview table ──
+    +_bgRenderTable()
+    +'</div>';
+}
+window.renderBanGiaoTab=renderBanGiaoTab;
+
+function _bgToggleDoc(el){
+  var d=el.value;
+  var idx=window._bgState.docs.indexOf(d);
+  if(el.checked){if(idx<0)window._bgState.docs.push(d);}
+  else{if(idx>=0)window._bgState.docs.splice(idx,1);}
+  // Không re-render toàn bộ tab để tránh mất focus
+}
+
+function _bgGetLots(){
+  var st=window._bgState;
+  var all=[];
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      var sh=r.shipper||r.supplier||'';
+      if(st.shipper&&sh!==st.shipper)return;
+      if(st.from&&(r.etd||'')<st.from)return;
+      if(st.to&&(r.etd||'')>st.to)return;
+      all.push(Object.assign({},r,{_tt:tt}));
+    });
+  });
+  all.sort(function(a,b){return (a.etd||'')>(b.etd||'')?1:-1;});
+  return all;
+}
+
+function _bgRenderTable(){
+  var lots=_bgGetLots();
+  var st=window._bgState;
+  var docs=st.docs;
+  if(!lots.length){
+    return '<div style="text-align:center;padding:48px;color:var(--text-secondary);font-size:13px">'
+      +'<i class="ti ti-file-off" style="font-size:32px;display:block;margin:0 auto 12px;opacity:.35"></i>'
+      +'Không có lô hàng phù hợp — thử chọn lại Shipper hoặc khoảng ETD</div>';
+  }
+  var thS='padding:9px 10px;font-size:10.5px;font-weight:700;letter-spacing:.2px;white-space:nowrap;color:#fff';
+  var tdS='padding:8px 10px;border-bottom:1px solid var(--border-light);font-size:11.5px;vertical-align:middle';
+  var docThs=docs.map(function(d){
+    return '<th style="'+thS+';text-align:center;min-width:60px">'+d+'</th>';
+  }).join('');
+  var rows=lots.map(function(r,i){
+    var vol=r.vol||(r.vol===0?'0':'—');
+    var typeCont=r.typeCont||'';
+    var volType=vol+(typeCont?' × '+typeCont:'');
+    var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
+    var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
+    var docCells=docs.map(function(){
+      return '<td style="'+tdS+';text-align:center;font-size:16px;color:#16a34a">□</td>';
+    }).join('');
+    return '<tr style="cursor:default">'
+      +'<td style="'+tdS+';text-align:center;color:#94A3B8;font-weight:700">'+(i+1)+'</td>'
+      +'<td style="'+tdS+'"><div style="font-weight:700;font-size:11.5px;color:var(--text-primary)">'+(r.bookingNo||r.jobNo||'—')+'</div><div style="font-size:10px;color:var(--text-secondary)">'+(r.mblNo||r.hblNo||'')+'</div></td>'
+      +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.vessel||'—')+'</div><div style="font-size:10px;color:var(--text-secondary)">V.'+(r.voy||'—')+'</div></td>'
+      +'<td style="'+tdS+';white-space:nowrap">'+(r.etd?fd(r.etd):'—')+'</td>'
+      +'<td style="'+tdS+';font-size:11px">'+(polShow)+'→'+(podShow)+'</td>'
+      +'<td style="'+tdS+';font-weight:600">'+volType+'</td>'
+      +docCells
+      +'<td style="'+tdS+'"></td>'
+      +'</tr>';
+  }).join('');
+  var docTdEmpty=docs.map(function(){return '<td></td>';}).join('');
+  return '<div style="overflow-x:auto;border-radius:11px;border:1px solid var(--border-light);box-shadow:0 1px 4px rgba(0,0,0,.06)">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:700px">'
+      +'<thead><tr style="background:#0C2F5A">'
+        +'<th style="'+thS+';text-align:center;width:40px">STT</th>'
+        +'<th style="'+thS+'">Booking No / MBL</th>'
+        +'<th style="'+thS+'">Vessel / Voy</th>'
+        +'<th style="'+thS+'">ETD</th>'
+        +'<th style="'+thS+'">POL → POD</th>'
+        +'<th style="'+thS+'">Vol × Type</th>'
+        +docThs
+        +'<th style="'+thS+'">Ghi chú</th>'
+      +'</tr></thead>'
+      +'<tbody style="background:var(--bg-primary)">'+rows+'</tbody>'
+    +'</table>'
+    +'</div>'
+    +'<div style="margin-top:8px;text-align:right;font-size:11px;color:var(--text-secondary)">'+lots.length+' lô hàng</div>';
+}
+
+/* ── PDF Export ─────────────────────────────────────────────────────────────── */
+function exportBanGiaoPDF(){
+  var st=window._bgState;
+  var lots=_bgGetLots();
+  if(!lots.length){toast('Không có lô hàng để xuất','error');return;}
+  var docs=st.docs.length?st.docs:['Bill of Lading','INV','PKL','Phyto','Fumi','C/O'];
+  var _nfc=function(s){try{return String(s==null?'':s).normalize('NFC');}catch(e){return s;}};
+  var today=fd(new Date().toISOString().slice(0,10));
+  var sp=cache.partners&&st.shipper?cache.partners[st.shipper]||{}:{};
+  var bbNo='BBGT-'+new Date().getFullYear().toString().slice(-2)+String(new Date().getMonth()+1).padStart(2,'0')+'-'+Math.floor(Math.random()*9000+1000);
+  var bd='1px solid #E5E7EB';
+  var thS='padding:8px 7px;color:#fff;font-size:9px;font-weight:700;letter-spacing:.2px;border:1px solid #0B4A8B;vertical-align:middle;text-align:center';
+  var tdS='padding:7px 8px;border:'+bd+';font-size:10.5px;vertical-align:middle';
+
+  // Build doc column headers — split long names
+  var docColW=Math.max(44, Math.floor(120/Math.max(docs.length,1)))+'px';
+
+  var theadCols='<th style="'+thS+';width:30px">STT</th>'
+    +'<th style="'+thS+';min-width:110px">Booking No</th>'
+    +'<th style="'+thS+';min-width:90px">MBL No</th>'
+    +'<th style="'+thS+';min-width:110px">Tên tàu / Voy</th>'
+    +'<th style="'+thS+';width:72px">ETD</th>'
+    +'<th style="'+thS+';min-width:90px">POL → POD</th>'
+    +'<th style="'+thS+';min-width:80px">Vol × Type Cont</th>'
+    +docs.map(function(d){return '<th style="'+thS+';width:'+docColW+';min-width:40px">'+d.replace(' ','<br>')+'</th>';}).join('')
+    +'<th style="'+thS+';min-width:80px">Ghi chú</th>';
+
+  var rows=lots.map(function(r,i){
+    var vol=r.vol||(r.vol===0?'0':'—');
+    var typeCont=r.typeCont||'';
+    var volType=vol+(typeCont?' × '+typeCont:'');
+    var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
+    var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
+    var bg=i%2===0?'#fff':'#F8FAFC';
+    var docCells=docs.map(function(){
+      return '<td style="'+tdS+';text-align:center;font-size:14px;color:#ddd">□</td>';
+    }).join('');
+    return '<tr style="background:'+bg+'">'
+      +'<td style="'+tdS+';text-align:center;color:#64748B;font-weight:700">'+(i+1)+'</td>'
+      +'<td style="'+tdS+';font-weight:600;color:#103A6F">'+_nfc(r.bookingNo||r.jobNo||'—')+'</td>'
+      +'<td style="'+tdS+'">'+_nfc(r.mblNo||r.hblNo||'—')+'</td>'
+      +'<td style="'+tdS+'"><span style="font-weight:600">'+_nfc(r.vessel||'—')+'</span>'+(r.voy?'<br><span style="font-size:9px;color:#64748B">V.'+r.voy+'</span>':'')+'</td>'
+      +'<td style="'+tdS+';text-align:center;white-space:nowrap">'+_nfc(r.etd?fd(r.etd):'—')+'</td>'
+      +'<td style="'+tdS+';font-size:9.5px">'+_nfc(polShow)+'→'+_nfc(podShow)+'</td>'
+      +'<td style="'+tdS+';text-align:center;font-weight:600">'+volType+'</td>'
+      +docCells
+      +'<td style="'+tdS+'"></td>'
+      +'</tr>';
+  }).join('');
+
+  var dateRange=(st.from?fd(st.from):'—')+' – '+(st.to?fd(st.to):'—');
+
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"/>'
+    +'<title>BBGT - '+_nfc(st.shipper||'All')+'</title>'
+    +'<style>*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    +'body{font-family:\'Segoe UI\',Roboto,Arial,Helvetica,sans-serif;font-size:12px;color:#1a2e2a;padding:20px;background:#fff;line-height:1.4}'
+    +'table{border-collapse:collapse;width:100%}'
+    +'@media print{body{padding:0}@page{margin:8mm;size:A4 landscape}}</style>'
+    +'</head><body>'
+
+    // ── HEADER ──
+    +'<div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;border-bottom:3px solid #103A6F;padding-bottom:10px;margin-bottom:14px;gap:12px">'
+      // Logo + company
+      +'<div style="display:flex;align-items:center;gap:9px">'
+        +(function(){try{var u=new URL('icons/icon-navy-192.png',location.href).href;return '<img src="'+u+'" style="width:36px;height:36px;border-radius:8px" onerror="this.style.display=\'none\'"/>';}catch(e){return '';}})()
+        +'<div>'
+          +'<div style="font-size:15px;font-weight:800;color:#103A6F;white-space:nowrap">COCOSEA CO., LTD</div>'
+          +'<div style="font-size:9.5px;color:#0F766E;margin-top:1px;white-space:nowrap">Keep Going . Keep Growing</div>'
+        +'</div>'
+      +'</div>'
+      // Title
+      +'<div style="text-align:center">'
+        +'<div style="font-size:17px;font-weight:900;color:#103A6F;letter-spacing:.8px;text-transform:uppercase">Biên Bản Bàn Giao Chứng Từ</div>'
+        +'<div style="font-size:9px;color:#0F766E;font-weight:600;letter-spacing:.3px;margin-top:3px">DOCUMENT HANDOVER RECORD</div>'
+        +'<div style="display:inline-block;margin-top:6px;padding:3px 14px;border-radius:14px;background:#103A6F;color:#fff;font-size:9.5px;font-weight:700;letter-spacing:.3px;white-space:nowrap">ETD: '+dateRange+'</div>'
+      +'</div>'
+      // Meta box
+      +'<div style="justify-self:end;font-size:9px;color:#667085;line-height:1.9;border:'+bd+';border-radius:8px;padding:7px 11px;min-width:155px">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px"><span>Số biên bản</span><strong style="color:#103A6F">'+bbNo+'</strong></div>'
+        +'<div style="display:flex;justify-content:space-between;gap:8px"><span>Ngày lập</span><strong style="color:#1a2e2a">'+today+'</strong></div>'
+        +'<div style="display:flex;justify-content:space-between;gap:8px"><span>Tổng lô hàng</span><strong style="color:#1a2e2a">'+lots.length+'</strong></div>'
+      +'</div>'
+    +'</div>'
+
+    // ── INFO CARDS: Bên giao / Bên nhận / Nội dung bàn giao ──
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:10px;margin-bottom:12px">'
+      +'<div style="border:'+bd+';border-radius:9px;padding:10px 14px;background:#fff">'
+        +'<div style="font-size:8.5px;color:#98A2B3;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Bên giao</div>'
+        +'<div style="font-weight:700;font-size:13px;color:#103A6F">COCOSEA CO., LTD</div>'
+        +'<div style="font-size:9.5px;color:#667085;margin-top:2px">Người giao: ................................</div>'
+        +'<div style="font-size:9.5px;color:#667085;margin-top:1px">Chức vụ: ..................................</div>'
+      +'</div>'
+      +'<div style="border:'+bd+';border-radius:9px;padding:10px 14px;background:#fff">'
+        +'<div style="font-size:8.5px;color:#98A2B3;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Bên nhận</div>'
+        +'<div style="font-weight:700;font-size:13px;color:#103A6F">'+_nfc(sp.fullname||st.shipper||'..................................................')+'</div>'
+        +'<div style="font-size:9.5px;color:#667085;margin-top:2px">Người nhận: ................................</div>'
+        +'<div style="font-size:9.5px;color:#667085;margin-top:1px">Chức vụ: ..................................</div>'
+      +'</div>'
+      +'<div style="border:'+bd+';border-radius:9px;padding:10px 14px;background:#EFF6FF">'
+        +'<div style="font-size:8.5px;color:#1D4ED8;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Nội dung chứng từ bàn giao</div>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:5px">'
+          +docs.map(function(d,i){return '<span style="background:#103A6F;color:#fff;padding:2px 8px;border-radius:99px;font-size:9px;font-weight:700">'+(i+1)+'. '+d+'</span>';}).join('')
+        +'</div>'
+        +'<div style="font-size:9px;color:#667085;margin-top:6px">Thời gian bàn giao: ....../....../.........</div>'
+      +'</div>'
+    +'</div>'
+
+    // ── TABLE ──
+    +'<div style="margin-bottom:4px;font-size:11px;font-weight:800;color:#103A6F;border-left:4px solid #103A6F;padding-left:8px;letter-spacing:.2px">DANH SÁCH LÔ HÀNG BÀN GIAO</div>'
+    +'<div style="margin-top:8px;overflow:auto">'
+      +'<table style="min-width:700px">'
+        +'<thead><tr style="background:#0C2F5A">'+theadCols+'</tr></thead>'
+        +'<tbody>'+rows+'</tbody>'
+      +'</table>'
+    +'</div>'
+
+    // ── TOTAL ──
+    +'<div style="margin-top:8px;text-align:right;font-size:9.5px;color:#667085">Tổng cộng: <strong style="color:#103A6F">'+lots.length+' lô hàng</strong></div>'
+
+    // ── NOTES ──
+    +'<div style="margin-top:10px;padding:8px 12px;border-radius:7px;background:#FFFBEB;border:1px solid #F59E0B44;font-size:9.5px;color:#7C5A00">'
+      +'<strong>Ghi chú / Remarks:</strong> ...........................................................................................................................'
+    +'</div>'
+
+    // ── SIGNATURE BLOCK ──
+    +'<div style="margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:9.5px;color:#667085;text-align:center">'
+      +'<div style="border:'+bd+';border-radius:9px;padding:14px 16px">'
+        +'<div style="font-weight:700;font-size:11px;color:#103A6F;margin-bottom:4px">BÊN GIAO</div>'
+        +'<div style="font-size:9px;margin-bottom:4px;font-style:italic">(Ký, ghi rõ họ tên)</div>'
+        +'<div style="height:52px;border-bottom:1px dashed #CBD5E1;margin:0 30px"></div>'
+        +'<div style="margin-top:5px;font-size:9px">Họ tên: .................................</div>'
+      +'</div>'
+      +'<div style="border:'+bd+';border-radius:9px;padding:14px 16px">'
+        +'<div style="font-weight:700;font-size:11px;color:#103A6F;margin-bottom:4px">BÊN NHẬN</div>'
+        +'<div style="font-size:9px;margin-bottom:4px;font-style:italic">(Ký, ghi rõ họ tên)</div>'
+        +'<div style="height:52px;border-bottom:1px dashed #CBD5E1;margin:0 30px"></div>'
+        +'<div style="margin-top:5px;font-size:9px">Họ tên: .................................</div>'
+      +'</div>'
+    +'</div>'
+
+    // ── FOOTER ──
+    +'<div style="margin-top:12px;text-align:center;font-size:8.5px;color:#98A2B3;border-top:'+bd+';padding-top:8px">COCOSEA CO., LTD &nbsp;•&nbsp; Keep Going • Keep Growing &nbsp;•&nbsp; '+bbNo+'</div>'
+    +'</body></html>';
+
+  var pw=window.open('','_blank','width=1100,height=750');
+  if(!pw){toast('Vui lòng cho phép mở popup','error');return;}
+  pw.document.write(html);
+  pw.document.close();
+  setTimeout(function(){pw.focus();pw.print();},600);
+}
+window.exportBanGiaoPDF=exportBanGiaoPDF;
+
+/* ── Excel Export ───────────────────────────────────────────────────────────── */
+async function exportBanGiaoExcel(){
+  var ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  var st=window._bgState;
+  var lots=_bgGetLots();
+  if(!lots.length){toast('Không có lô hàng để xuất','error');return;}
+  var docs=st.docs.length?st.docs:['Bill of Lading','INV','PKL','Phyto','Fumi','C/O'];
+  var _nfc=function(s){try{return String(s==null?'':s).normalize('NFC');}catch(e){return s;}};
+  var today=new Date().toISOString().slice(0,10);
+  var bbNo='BBGT-'+today.slice(2,4)+today.slice(5,7)+'-'+Math.floor(Math.random()*9000+1000);
+
+  var wb=new ExcelJS.Workbook();
+  wb.creator='COCOSEA ERP';
+  wb.created=new Date();
+  var ws=wb.addWorksheet('Bàn Giao CT',{pageSetup:{paperSize:9,orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:0.4,right:0.3,top:0.4,bottom:0.4,header:0.2,footer:0.2}}});
+
+  var NAVY={argb:'FF103A6F'}, TEAL={argb:'FF0F766E'}, WHITE={argb:'FFFFFFFF'}, GOLD={argb:'FFF59E0B'};
+  var BORDER_THIN={style:'thin',color:{argb:'FFE5E7EB'}};
+  var allBorder={top:BORDER_THIN,bottom:BORDER_THIN,left:BORDER_THIN,right:BORDER_THIN};
+
+  // Helper
+  function setCell(r,c,v,opts){
+    var cell=ws.getCell(r,c);
+    cell.value=v;
+    if(opts){
+      if(opts.bold)cell.font=Object.assign({},cell.font,{bold:true});
+      if(opts.color)cell.font=Object.assign({},cell.font,{color:opts.color});
+      if(opts.size)cell.font=Object.assign({},cell.size||{},{size:opts.size});
+      if(opts.fill)cell.fill={type:'pattern',pattern:'solid',fgColor:opts.fill};
+      if(opts.align)cell.alignment=opts.align;
+      if(opts.border)cell.border=opts.border;
+      if(opts.font)cell.font=Object.assign({},cell.font,opts.font);
+    }
+  }
+
+  var totalCols=7+docs.length+1; // STT+Booking+MBL+Vessel+ETD+Route+Vol + docs + Ghinhu
+
+  // Row 1: Title
+  ws.mergeCells(1,1,1,totalCols);
+  setCell(1,1,'BIÊN BẢN BÀN GIAO CHỨNG TỪ - DOCUMENT HANDOVER RECORD',{font:{bold:true,size:14,color:NAVY},align:{horizontal:'center',vertical:'middle'}});
+  ws.getRow(1).height=26;
+
+  // Row 2: Company + No
+  ws.mergeCells(2,1,2,Math.floor(totalCols/2));
+  setCell(2,1,'COCOSEA CO., LTD – Keep Going . Keep Growing',{font:{bold:true,size:10,color:TEAL},align:{horizontal:'left',vertical:'middle'}});
+  ws.mergeCells(2,Math.floor(totalCols/2)+1,2,totalCols);
+  setCell(2,Math.floor(totalCols/2)+1,'Số BB: '+bbNo+'    Ngày: '+fd(today),{font:{size:10},align:{horizontal:'right',vertical:'middle'}});
+  ws.getRow(2).height=18;
+
+  // Row 3: Shipper & date range
+  ws.mergeCells(3,1,3,totalCols);
+  var rangeStr=(st.from?fd(st.from):'—')+' → '+(st.to?fd(st.to):'—');
+  setCell(3,1,'Bên nhận: '+_nfc(st.shipper||'(Tất cả)')+'    |    ETD: '+rangeStr+'    |    Tổng lô: '+lots.length,{font:{size:9,italic:true},align:{horizontal:'center',vertical:'middle'}});
+  ws.getRow(3).height=16;
+
+  // Row 4: blank separator
+  ws.getRow(4).height=6;
+
+  // Row 5: Header
+  var headers=['STT','Booking No','MBL No','Tên tàu / Voy','ETD','POL → POD','Vol × Type Cont'];
+  docs.forEach(function(d){headers.push(d);});
+  headers.push('Ghi chú');
+  ws.getRow(5).height=32;
+  headers.forEach(function(h,ci){
+    var cell=ws.getCell(5,ci+1);
+    cell.value=h;
+    cell.font={bold:true,color:WHITE,size:9};
+    cell.fill={type:'pattern',pattern:'solid',fgColor:NAVY};
+    cell.alignment={horizontal:'center',vertical:'middle',wrapText:true};
+    cell.border=allBorder;
+  });
+
+  // Data rows
+  lots.forEach(function(r,i){
+    var rowIdx=6+i;
+    var row=ws.getRow(rowIdx);
+    row.height=20;
+    var vol=r.vol||(r.vol===0?'0':'—');
+    var typeCont=r.typeCont||'';
+    var volType=vol+(typeCont?' × '+typeCont:'');
+    var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
+    var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
+    var bg=i%2===0?{argb:'FFFFFFFF'}:{argb:'FFF8FAFC'};
+    var vals=[i+1,_nfc(r.bookingNo||r.jobNo||''),_nfc(r.mblNo||r.hblNo||''),_nfc((r.vessel||'')+(r.voy?' / V.'+r.voy:'')),''+_nfc(r.etd?fd(r.etd):'—'),_nfc(polShow+'→'+podShow),volType];
+    docs.forEach(function(){vals.push('□');});
+    vals.push('');
+    vals.forEach(function(v,ci){
+      var cell=ws.getCell(rowIdx,ci+1);
+      cell.value=v;
+      cell.fill={type:'pattern',pattern:'solid',fgColor:bg};
+      cell.alignment={vertical:'middle',horizontal:ci===0||ci>=7&&ci<7+docs.length?'center':'left'};
+      cell.border=allBorder;
+      cell.font={size:10};
+      if(ci===0)cell.font=Object.assign({},cell.font,{bold:true,color:{argb:'FF94A3B8'}});
+      if(ci===1)cell.font=Object.assign({},cell.font,{bold:true,color:NAVY});
+      if(ci>=7&&ci<7+docs.length)cell.font=Object.assign({},cell.font,{size:13,color:{argb:'FFCCCCCC'}});
+    });
+  });
+
+  // Signature rows
+  var sigRow=6+lots.length+2;
+  ws.getRow(sigRow-1).height=10;
+  ws.mergeCells(sigRow,1,sigRow,Math.floor(totalCols/2));
+  setCell(sigRow,1,'BÊN GIAO\n(Ký, ghi rõ họ tên)',{font:{bold:true,size:10,color:NAVY},align:{horizontal:'center',vertical:'middle',wrapText:true},border:allBorder});
+  ws.mergeCells(sigRow,Math.floor(totalCols/2)+1,sigRow,totalCols);
+  setCell(sigRow,Math.floor(totalCols/2)+1,'BÊN NHẬN\n(Ký, ghi rõ họ tên)',{font:{bold:true,size:10,color:NAVY},align:{horizontal:'center',vertical:'middle',wrapText:true},border:allBorder});
+  ws.getRow(sigRow).height=60;
+
+  // Column widths
+  ws.getColumn(1).width=6;
+  ws.getColumn(2).width=16;
+  ws.getColumn(3).width=14;
+  ws.getColumn(4).width=18;
+  ws.getColumn(5).width=11;
+  ws.getColumn(6).width=14;
+  ws.getColumn(7).width=13;
+  docs.forEach(function(d,i){ws.getColumn(8+i).width=Math.max(8,d.length+1);});
+  ws.getColumn(7+docs.length+1).width=16;
+
+  // Export
+  var buf=await wb.xlsx.writeBuffer();
+  var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='BienBanBanGiaoCT-'+(st.shipper||'All')+'-'+today+'.xlsx';
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(a.href);},1000);
+  toast('Đã xuất Excel bàn giao chứng từ','success');
+}
+window.exportBanGiaoExcel=exportBanGiaoExcel;
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  MODULE LỊCH (Calendar) — COCO NOTES → tab Lịch. Dùng chung cho cả team,
