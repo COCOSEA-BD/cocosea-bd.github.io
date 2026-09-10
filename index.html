@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.35';
+window.APP_BUILD='v4.36';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -20197,8 +20197,11 @@ window.renderNotesPage=renderNotesPage;
 ═══════════════════════════════════════════════════════════════════════════ */
 window._bgState=window._bgState||{
   shipper:'',from:'',to:'',
-  docs:['Bill of Lading','INV','PKL','Phyto','Fumi','C/O']
+  docs:['Bill of Lading','INV','PKL','Phyto','Fumi','C/O'],
+  customDocs:[],rowDocs:{}
 };
+if(!window._bgState.customDocs)window._bgState.customDocs=[];
+if(!window._bgState.rowDocs)window._bgState.rowDocs={};
 var BG_DOC_LIST=['Bill of Lading','INV','PKL','Phyto','Fumi','C/O','Health Cert','EUR.1'];
 
 function renderBanGiaoTab(){
@@ -20217,11 +20220,13 @@ function renderBanGiaoTab(){
   var shOpts='<option value="">— Tất cả Shipper —</option>'
     +shipperList.map(function(s){return '<option value="'+s+'"'+(s===st.shipper?' selected':'')+'>'+s+'</option>';}).join('');
 
-  var docCheckboxes=BG_DOC_LIST.map(function(d){
+  var _allDocList=BG_DOC_LIST.concat(st.customDocs||[]);
+  var docCheckboxes=_allDocList.map(function(d){
     var chk=st.docs.indexOf(d)>=0?' checked':'';
     return '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer;white-space:nowrap">'
       +'<input type="checkbox" value="'+d+'"'+chk+' onchange="_bgToggleDoc(this)"> '+d+'</label>';
   }).join('');
+  docCheckboxes+='<button onclick="_bgAddCustomDoc()" title="Thêm loại chứng từ" style="padding:3px 10px;border-radius:8px;border:1.5px dashed #103A6F66;background:transparent;cursor:pointer;font-size:11px;color:#103A6F;display:flex;align-items:center;gap:3px"><i class="ti ti-plus" style="font-size:13px"></i> Thêm</button>';
 
   body.innerHTML=
     '<div style="padding:4px 0 16px">'
@@ -20264,6 +20269,27 @@ function _bgToggleDoc(el){
   // Không re-render toàn bộ tab để tránh mất focus
 }
 
+function _bgAddCustomDoc(){
+  var name=prompt('Tên chứng từ muốn thêm:','');
+  if(!name||!name.trim())return;
+  var nm=name.trim();
+  var allExist=BG_DOC_LIST.concat(window._bgState.customDocs||[]);
+  if(allExist.indexOf(nm)>=0){toast('Chứng từ này đã có trong danh sách','error');return;}
+  window._bgState.customDocs=window._bgState.customDocs||[];
+  window._bgState.customDocs.push(nm);
+  window._bgState.docs.push(nm);
+  renderBanGiaoTab();
+}
+window._bgAddCustomDoc=_bgAddCustomDoc;
+
+function _bgRowDocCheck(el){
+  var key=el.getAttribute('data-key');
+  if(!key)return;
+  window._bgState.rowDocs=window._bgState.rowDocs||{};
+  window._bgState.rowDocs[key]=el.checked;
+}
+window._bgRowDocCheck=_bgRowDocCheck;
+
 function _bgGetLots(){
   var st=window._bgState;
   var all=[];
@@ -20292,7 +20318,7 @@ function _bgRenderTable(){
   var thS='padding:9px 10px;font-size:10.5px;font-weight:700;letter-spacing:.2px;white-space:nowrap;color:#fff';
   var tdS='padding:8px 10px;border-bottom:1px solid var(--border-light);font-size:11.5px;vertical-align:middle';
   var docThs=docs.map(function(d){
-    return '<th style="'+thS+';text-align:center;min-width:60px">'+d+'</th>';
+    return '<th style="'+thS+';text-align:center;min-width:62px">'+d+'</th>';
   }).join('');
   var rows=lots.map(function(r,i){
     var vol=r.vol||(r.vol===0?'0':'—');
@@ -20300,23 +20326,32 @@ function _bgRenderTable(){
     var volType=vol+(typeCont?' × '+typeCont:'');
     var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
     var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
-    var docCells=docs.map(function(){
-      return '<td style="'+tdS+';text-align:center;font-size:16px;color:#16a34a">□</td>';
+    var tenHang=r.commodity||r.description||r.goods||r.goodsDesc||'';
+    var rowDocs=window._bgState.rowDocs||{};
+    var rowKey=(r._id||('row'+i)).toString().replace(/[|'"\\]/g,'_');
+    var docCells=docs.map(function(d){
+      var safeDoc=d.replace(/[|'"\\]/g,'_');
+      var key=rowKey+'||'+safeDoc;
+      var chk=rowDocs[key]?' checked':'';
+      return '<td style="'+tdS+';text-align:center;padding:6px 4px">'
+        +'<input type="checkbox"'+chk+' data-key="'+key+'" onchange="_bgRowDocCheck(this)" style="width:16px;height:16px;cursor:pointer;accent-color:#103A6F">'
+        +'</td>';
     }).join('');
-    return '<tr style="cursor:default">'
+    var bg=i%2===0?'':'background:#F8FAFC';
+    return '<tr style="cursor:default;'+bg+'">'
       +'<td style="'+tdS+';text-align:center;color:#94A3B8;font-weight:700">'+(i+1)+'</td>'
       +'<td style="'+tdS+'"><div style="font-weight:700;font-size:11.5px;color:var(--text-primary)">'+(r.bookingNo||r.jobNo||'—')+'</div><div style="font-size:10px;color:var(--text-secondary)">'+(r.mblNo||r.hblNo||'')+'</div></td>'
       +'<td style="'+tdS+'"><div style="font-weight:600">'+(r.vessel||'—')+'</div><div style="font-size:10px;color:var(--text-secondary)">V.'+(r.voy||'—')+'</div></td>'
       +'<td style="'+tdS+';white-space:nowrap">'+(r.etd?fd(r.etd):'—')+'</td>'
       +'<td style="'+tdS+';font-size:11px">'+(polShow)+'→'+(podShow)+'</td>'
       +'<td style="'+tdS+';font-weight:600">'+volType+'</td>'
+      +'<td style="'+tdS+';font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+tenHang+'</td>'
       +docCells
       +'<td style="'+tdS+'"></td>'
       +'</tr>';
   }).join('');
-  var docTdEmpty=docs.map(function(){return '<td></td>';}).join('');
   return '<div style="overflow-x:auto;border-radius:11px;border:1px solid var(--border-light);box-shadow:0 1px 4px rgba(0,0,0,.06)">'
-    +'<table style="width:100%;border-collapse:collapse;min-width:700px">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:780px">'
       +'<thead><tr style="background:#0C2F5A">'
         +'<th style="'+thS+';text-align:center;width:40px">STT</th>'
         +'<th style="'+thS+'">Booking No / MBL</th>'
@@ -20324,6 +20359,7 @@ function _bgRenderTable(){
         +'<th style="'+thS+'">ETD</th>'
         +'<th style="'+thS+'">POL → POD</th>'
         +'<th style="'+thS+'">Vol × Type</th>'
+        +'<th style="'+thS+';min-width:120px">Tên hàng</th>'
         +docThs
         +'<th style="'+thS+'">Ghi chú</th>'
       +'</tr></thead>'
@@ -20357,6 +20393,7 @@ function exportBanGiaoPDF(){
     +'<th style="'+thS+';width:72px">ETD</th>'
     +'<th style="'+thS+';min-width:90px">POL → POD</th>'
     +'<th style="'+thS+';min-width:80px">Vol × Type Cont</th>'
+    +'<th style="'+thS+';min-width:95px">Tên hàng</th>'
     +docs.map(function(d){return '<th style="'+thS+';width:'+docColW+';min-width:40px">'+d.replace(' ','<br>')+'</th>';}).join('')
     +'<th style="'+thS+';min-width:80px">Ghi chú</th>';
 
@@ -20367,9 +20404,13 @@ function exportBanGiaoPDF(){
     var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
     var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
     var bg=i%2===0?'#fff':'#F8FAFC';
-    var docCells=docs.map(function(){
-      return '<td style="'+tdS+';text-align:center;font-size:14px;color:#ddd">□</td>';
+    var rowDocs=window._bgState.rowDocs||{};
+    var rowKey=(r._id||('row'+i)).toString().replace(/[|'"\\]/g,'_');
+    var docCells=docs.map(function(d){
+      var key=rowKey+'||'+d.replace(/[|'"\\]/g,'_');
+      return '<td style="'+tdS+';text-align:center;font-size:13px;color:'+(rowDocs[key]?'#103A6F':'#CBD5E1')+';font-weight:700">'+(rowDocs[key]?'✓':'□')+'</td>';
     }).join('');
+    var tenHang=_nfc(r.commodity||r.description||r.goods||r.goodsDesc||'');
     return '<tr style="background:'+bg+'">'
       +'<td style="'+tdS+';text-align:center;color:#64748B;font-weight:700">'+(i+1)+'</td>'
       +'<td style="'+tdS+';font-weight:600;color:#103A6F">'+_nfc(r.bookingNo||r.jobNo||'—')+'</td>'
@@ -20378,6 +20419,7 @@ function exportBanGiaoPDF(){
       +'<td style="'+tdS+';text-align:center;white-space:nowrap">'+_nfc(r.etd?fd(r.etd):'—')+'</td>'
       +'<td style="'+tdS+';font-size:9.5px">'+_nfc(polShow)+'→'+_nfc(podShow)+'</td>'
       +'<td style="'+tdS+';text-align:center;font-weight:600">'+volType+'</td>'
+      +'<td style="'+tdS+';font-size:9.5px">'+tenHang+'</td>'
       +docCells
       +'<td style="'+tdS+'"></td>'
       +'</tr>';
@@ -20496,14 +20538,23 @@ async function exportBanGiaoExcel(){
   var _nfc=function(s){try{return String(s==null?'':s).normalize('NFC');}catch(e){return s;}};
   var today=new Date().toISOString().slice(0,10);
   var bbNo='BBGT-'+today.slice(2,4)+today.slice(5,7)+'-'+Math.floor(Math.random()*9000+1000);
+  var rangeStr=(st.from?fd(st.from):'—')+' → '+(st.to?fd(st.to):'—');
+
+  // Fetch logo Cocosea as base64
+  var logoBase64=null;
+  try{
+    var _lr=await fetch(new URL('icons/icon-navy-192.png',location.href).href);
+    if(_lr.ok){var _lb=await _lr.arrayBuffer();var _lu8=new Uint8Array(_lb);var _lbi='';_lu8.forEach(function(b){_lbi+=String.fromCharCode(b);});logoBase64=btoa(_lbi);}
+  }catch(e){}
 
   var wb=new ExcelJS.Workbook();
   wb.creator='COCOSEA ERP';
   wb.created=new Date();
   var ws=wb.addWorksheet('Bàn Giao CT',{pageSetup:{paperSize:9,orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:0.4,right:0.3,top:0.4,bottom:0.4,header:0.2,footer:0.2}}});
 
-  var NAVY={argb:'FF103A6F'}, TEAL={argb:'FF0F766E'}, WHITE={argb:'FFFFFFFF'}, GOLD={argb:'FFF59E0B'};
+  var NAVY={argb:'FF103A6F'}, TEAL={argb:'FF0F766E'}, WHITE={argb:'FFFFFFFF'};
   var BORDER_THIN={style:'thin',color:{argb:'FFE5E7EB'}};
+  var BORDER_NAVY={style:'thin',color:{argb:'FF103A6F'}};
   var allBorder={top:BORDER_THIN,bottom:BORDER_THIN,left:BORDER_THIN,right:BORDER_THIN};
 
   // Helper
@@ -20511,9 +20562,6 @@ async function exportBanGiaoExcel(){
     var cell=ws.getCell(r,c);
     cell.value=v;
     if(opts){
-      if(opts.bold)cell.font=Object.assign({},cell.font,{bold:true});
-      if(opts.color)cell.font=Object.assign({},cell.font,{color:opts.color});
-      if(opts.size)cell.font=Object.assign({},cell.size||{},{size:opts.size});
       if(opts.fill)cell.fill={type:'pattern',pattern:'solid',fgColor:opts.fill};
       if(opts.align)cell.alignment=opts.align;
       if(opts.border)cell.border=opts.border;
@@ -20521,78 +20569,130 @@ async function exportBanGiaoExcel(){
     }
   }
 
-  var totalCols=7+docs.length+1; // STT+Booking+MBL+Vessel+ETD+Route+Vol + docs + Ghinhu
+  // totalCols: STT Booking MBL Vessel ETD Route Vol TênHàng ...docs GhiChú
+  var totalCols=9+docs.length; // 8 fixed + docs + 1 ghi chú
+  var midCol=Math.floor(totalCols/2);
 
-  // Row 1: Title
-  ws.mergeCells(1,1,1,totalCols);
-  setCell(1,1,'BIÊN BẢN BÀN GIAO CHỨNG TỪ - DOCUMENT HANDOVER RECORD',{font:{bold:true,size:14,color:NAVY},align:{horizontal:'center',vertical:'middle'}});
-  ws.getRow(1).height=26;
+  // Logo overlay (cols A-B = 0-1, rows 1-3 = 0-2)
+  if(logoBase64){
+    try{
+      var _imgId=wb.addImage({base64:logoBase64,extension:'png'});
+      ws.addImage(_imgId,{tl:{col:0,row:0},br:{col:2,row:3},editAs:'oneCell'});
+    }catch(e){}
+  }
 
-  // Row 2: Company + No
-  ws.mergeCells(2,1,2,Math.floor(totalCols/2));
-  setCell(2,1,'COCOSEA CO., LTD – Keep Going . Keep Growing',{font:{bold:true,size:10,color:TEAL},align:{horizontal:'left',vertical:'middle'}});
-  ws.mergeCells(2,Math.floor(totalCols/2)+1,2,totalCols);
-  setCell(2,Math.floor(totalCols/2)+1,'Số BB: '+bbNo+'    Ngày: '+fd(today),{font:{size:10},align:{horizontal:'right',vertical:'middle'}});
-  ws.getRow(2).height=18;
+  // Row 1: Logo area (cols 1-2 free for image) | Title (cols 3-totalCols)
+  ws.getRow(1).height=28;
+  ws.mergeCells(1,3,1,totalCols);
+  setCell(1,3,'BIÊN BẢN BÀN GIAO CHỨNG TỪ',{font:{bold:true,size:16,color:NAVY,name:'Calibri'},align:{horizontal:'center',vertical:'middle'}});
 
-  // Row 3: Shipper & date range
-  ws.mergeCells(3,1,3,totalCols);
-  var rangeStr=(st.from?fd(st.from):'—')+' → '+(st.to?fd(st.to):'—');
-  setCell(3,1,'Bên nhận: '+_nfc(st.shipper||'(Tất cả)')+'    |    ETD: '+rangeStr+'    |    Tổng lô: '+lots.length,{font:{size:9,italic:true},align:{horizontal:'center',vertical:'middle'}});
+  // Row 2: Logo area | Subtitle + BB No
+  ws.getRow(2).height=20;
+  ws.mergeCells(2,3,2,midCol);
+  setCell(2,3,'DOCUMENT HANDOVER RECORD',{font:{size:10,color:TEAL,italic:true,name:'Calibri'},align:{horizontal:'left',vertical:'middle'}});
+  ws.mergeCells(2,midCol+1,2,totalCols);
+  setCell(2,midCol+1,'Số BB: '+bbNo+'   |   Ngày: '+fd(today),{font:{bold:true,size:10,color:NAVY,name:'Calibri'},align:{horizontal:'right',vertical:'middle'}});
+
+  // Row 3: Logo area | Shipper + ETD
   ws.getRow(3).height=16;
+  ws.mergeCells(3,3,3,totalCols);
+  setCell(3,3,'Bên nhận: '+_nfc(st.shipper||'(Tất cả)')+'     ETD: '+rangeStr+'     Tổng lô hàng: '+lots.length,{font:{size:9,color:{argb:'FF334155'},name:'Calibri'},align:{horizontal:'center',vertical:'middle'}});
 
-  // Row 4: blank separator
-  ws.getRow(4).height=6;
+  // Divider row 4
+  ws.getRow(4).height=4;
+  ws.mergeCells(4,1,4,totalCols);
+  var divCell=ws.getCell(4,1);
+  divCell.fill={type:'pattern',pattern:'solid',fgColor:NAVY};
 
-  // Row 5: Header
-  var headers=['STT','Booking No','MBL No','Tên tàu / Voy','ETD','POL → POD','Vol × Type Cont'];
+  // Row 5: blank breathing room
+  ws.getRow(5).height=6;
+
+  // Row 6: Info cards — Bên giao | Bên nhận | Nội dung chứng từ
+  ws.getRow(6).height=14;
+  var infoCol1=Math.floor(totalCols/3), infoCol2=Math.floor(totalCols*2/3);
+  ws.mergeCells(6,1,6,infoCol1);
+  setCell(6,1,'BÊN GIAO: COCOSEA CO., LTD   |   Người giao: ...............................',{font:{size:8,color:{argb:'FF334155'},bold:false},align:{horizontal:'left',vertical:'middle'}});
+  ws.mergeCells(6,infoCol1+1,6,infoCol2);
+  setCell(6,infoCol1+1,'BÊN NHẬN: '+_nfc(st.shipper||'...............................')+'   |   Người nhận: ...............................',{font:{size:8,color:{argb:'FF334155'}},align:{horizontal:'left',vertical:'middle'}});
+  ws.mergeCells(6,infoCol2+1,6,totalCols);
+  setCell(6,infoCol2+1,'Thời gian bàn giao: ....../....../.........',{font:{size:8,color:{argb:'FF334155'}},align:{horizontal:'right',vertical:'middle'}});
+
+  // Row 7: blank separator
+  ws.getRow(7).height=5;
+
+  // Row 8: Headers (navy)
+  var HEADER_ROW=8;
+  var headers=['STT','Booking No','MBL No','Tên tàu / Voy','ETD','POL → POD','Vol × Type Cont','Tên hàng'];
   docs.forEach(function(d){headers.push(d);});
   headers.push('Ghi chú');
-  ws.getRow(5).height=32;
+  ws.getRow(HEADER_ROW).height=34;
   headers.forEach(function(h,ci){
-    var cell=ws.getCell(5,ci+1);
+    var cell=ws.getCell(HEADER_ROW,ci+1);
     cell.value=h;
-    cell.font={bold:true,color:WHITE,size:9};
+    cell.font={bold:true,color:WHITE,size:9,name:'Calibri'};
     cell.fill={type:'pattern',pattern:'solid',fgColor:NAVY};
     cell.alignment={horizontal:'center',vertical:'middle',wrapText:true};
-    cell.border=allBorder;
+    cell.border={top:BORDER_NAVY,bottom:BORDER_NAVY,left:BORDER_NAVY,right:BORDER_NAVY};
   });
 
-  // Data rows
+  // Data rows starting at row 9
+  var DATA_START=HEADER_ROW+1;
   lots.forEach(function(r,i){
-    var rowIdx=6+i;
-    var row=ws.getRow(rowIdx);
-    row.height=20;
+    var rowIdx=DATA_START+i;
+    ws.getRow(rowIdx).height=20;
     var vol=r.vol||(r.vol===0?'0':'—');
     var typeCont=r.typeCont||'';
     var volType=vol+(typeCont?' × '+typeCont:'');
     var podShow=(r._tt==='xuat'?r.pod:r.pol)||'—';
     var polShow=(r._tt==='xuat'?r.pol:r.pod)||'—';
-    var bg=i%2===0?{argb:'FFFFFFFF'}:{argb:'FFF8FAFC'};
-    var vals=[i+1,_nfc(r.bookingNo||r.jobNo||''),_nfc(r.mblNo||r.hblNo||''),_nfc((r.vessel||'')+(r.voy?' / V.'+r.voy:'')),''+_nfc(r.etd?fd(r.etd):'—'),_nfc(polShow+'→'+podShow),volType];
-    docs.forEach(function(){vals.push('□');});
+    var tenHang=_nfc(r.commodity||r.description||r.goods||r.goodsDesc||'');
+    var bg=i%2===0?{argb:'FFFFFFFF'}:{argb:'FFF0F4FA'};
+    var rowDocs=window._bgState.rowDocs||{};
+    var rowKey=(r._id||('row'+i)).toString().replace(/[|'"\\]/g,'_');
+    var vals=[i+1,_nfc(r.bookingNo||r.jobNo||''),_nfc(r.mblNo||r.hblNo||''),_nfc((r.vessel||'')+(r.voy?' / V.'+r.voy:'')),_nfc(r.etd?fd(r.etd):'—'),_nfc(polShow+'→'+podShow),volType,tenHang];
+    docs.forEach(function(d){
+      var key=rowKey+'||'+d.replace(/[|'"\\]/g,'_');
+      vals.push(rowDocs[key]?'✓':'□');
+    });
     vals.push('');
     vals.forEach(function(v,ci){
       var cell=ws.getCell(rowIdx,ci+1);
       cell.value=v;
       cell.fill={type:'pattern',pattern:'solid',fgColor:bg};
-      cell.alignment={vertical:'middle',horizontal:ci===0||ci>=7&&ci<7+docs.length?'center':'left'};
+      var isDocCol=ci>=8&&ci<8+docs.length;
+      cell.alignment={vertical:'middle',horizontal:(ci===0||isDocCol)?'center':'left',wrapText:false};
       cell.border=allBorder;
-      cell.font={size:10};
+      cell.font={size:10,name:'Calibri'};
       if(ci===0)cell.font=Object.assign({},cell.font,{bold:true,color:{argb:'FF94A3B8'}});
       if(ci===1)cell.font=Object.assign({},cell.font,{bold:true,color:NAVY});
-      if(ci>=7&&ci<7+docs.length)cell.font=Object.assign({},cell.font,{size:13,color:{argb:'FFCCCCCC'}});
+      if(ci===4)cell.alignment=Object.assign({},cell.alignment,{horizontal:'center'});
+      if(ci===6)cell.alignment=Object.assign({},cell.alignment,{horizontal:'center'});
+      if(isDocCol){
+        var isChecked=(v==='✓');
+        cell.font=Object.assign({},cell.font,{size:isChecked?12:11,color:{argb:isChecked?'FF103A6F':'FFCBD5E1'},bold:isChecked});
+      }
     });
   });
 
+  // Divider before signature
+  var divRow=DATA_START+lots.length+1;
+  ws.getRow(divRow).height=3;
+  ws.mergeCells(divRow,1,divRow,totalCols);
+  ws.getCell(divRow,1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFE2E8F0'}};
+
   // Signature rows
-  var sigRow=6+lots.length+2;
-  ws.getRow(sigRow-1).height=10;
+  var sigRow=divRow+1;
+  ws.getRow(sigRow).height=68;
   ws.mergeCells(sigRow,1,sigRow,Math.floor(totalCols/2));
-  setCell(sigRow,1,'BÊN GIAO\n(Ký, ghi rõ họ tên)',{font:{bold:true,size:10,color:NAVY},align:{horizontal:'center',vertical:'middle',wrapText:true},border:allBorder});
+  setCell(sigRow,1,'BÊN GIAO\n(Ký, ghi rõ họ tên)\n\n\n\nHọ tên: .................................',{font:{bold:true,size:10,color:NAVY,name:'Calibri'},align:{horizontal:'center',vertical:'top',wrapText:true},border:allBorder});
   ws.mergeCells(sigRow,Math.floor(totalCols/2)+1,sigRow,totalCols);
-  setCell(sigRow,Math.floor(totalCols/2)+1,'BÊN NHẬN\n(Ký, ghi rõ họ tên)',{font:{bold:true,size:10,color:NAVY},align:{horizontal:'center',vertical:'middle',wrapText:true},border:allBorder});
-  ws.getRow(sigRow).height=60;
+  setCell(sigRow,Math.floor(totalCols/2)+1,'BÊN NHẬN\n(Ký, ghi rõ họ tên)\n\n\n\nHọ tên: .................................',{font:{bold:true,size:10,color:NAVY,name:'Calibri'},align:{horizontal:'center',vertical:'top',wrapText:true},border:allBorder});
+
+  // Footer row
+  var footRow=sigRow+1;
+  ws.getRow(footRow).height=14;
+  ws.mergeCells(footRow,1,footRow,totalCols);
+  setCell(footRow,1,'COCOSEA CO., LTD  •  Keep Going • Keep Growing  •  '+bbNo,{font:{size:8,color:{argb:'FF94A3B8'},italic:true},align:{horizontal:'center',vertical:'middle'}});
 
   // Column widths
   ws.getColumn(1).width=6;
@@ -20602,8 +20702,9 @@ async function exportBanGiaoExcel(){
   ws.getColumn(5).width=11;
   ws.getColumn(6).width=14;
   ws.getColumn(7).width=13;
-  docs.forEach(function(d,i){ws.getColumn(8+i).width=Math.max(8,d.length+1);});
-  ws.getColumn(7+docs.length+1).width=16;
+  ws.getColumn(8).width=20;
+  docs.forEach(function(d,i){ws.getColumn(9+i).width=Math.max(8,d.length+1);});
+  ws.getColumn(9+docs.length).width=16;
 
   // Export
   var buf=await wb.xlsx.writeBuffer();
