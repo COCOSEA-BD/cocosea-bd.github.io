@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.47';
+window.APP_BUILD='v4.48';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7490,6 +7490,8 @@ function rebuildInvoicePreview(){
 
   const area=g('invPreviewArea');
   if(area) area.innerHTML=html;
+  // Cache DN background data-URL so quotations can reuse it without duplicating data
+  if(!window._dnBgDataUrl){try{const _st=area&&area.querySelector('style');if(_st){const _m=_st.textContent.match(/background-image:url\('(data:[^']+)'\)/);if(_m)window._dnBgDataUrl=_m[1];}}catch(e){}}
   }catch(err){
     console.error('rebuildInvoicePreview error:',err);
     toast('Lỗi tạo Debit Note: '+err.message,'error');
@@ -26793,101 +26795,191 @@ async function quoteSave(returnToList){
 
 function quoteBuildHTML(q){
   const sp=cache.partners[q.customer]||{};
+  const co=_coInfo();
   const types=QUOTE_CONT_TYPES.filter(function(t){return q.types[t];});
   const cur=q.curOcean||'USD';
   const nType=types.length||1;
-  // Độ rộng cột theo % — tính động theo số cột loại cont để bảng luôn cân đối dù 1-4 loại cont.
+  const NAVY='#0C2C52', TEAL='#0F6E56', BORDER='#D9E4EC', STRIPE='#F4F8FC';
+
+  // ── Cột động theo số loại cont ──
   const oceanTypeW=Math.round(46/nType);
   const localTypeW=Math.round(38/nType);
-  const svcTypeW=Math.round(36/nType);
+  const svcTypeW  =Math.round(36/nType);
 
-  // Ocean: grouped by POD
-  let oceanHTML='';
+  // ── Lấy background DN nếu có (được cache bởi rebuildInvoicePreview) ──
+  var bgStyle='background:#EBF4FF';
+  if(window._dnBgDataUrl){
+    bgStyle="background-image:url('"+window._dnBgDataUrl+"');background-size:cover;background-position:center top;background-attachment:fixed";
+  } else {
+    try{
+      var _st=document.querySelector('#dnPrintArea style');
+      if(_st){var _m=_st.textContent.match(/background-image:url\('(data:[^']+)'\)/);if(_m){window._dnBgDataUrl=_m[1];bgStyle="background-image:url('"+_m[1]+"');background-size:cover;background-position:center top;background-attachment:fixed";}}
+    }catch(e){}
+  }
+
+  // ── Ocean Freight ──
+  var oceanHTML='';
   (q.pods||[]).forEach(function(grp){
-    const validRows=(grp.rows||[]).filter(function(row){
+    var validRows=(grp.rows||[]).filter(function(row){
       return types.some(function(t){return parseFloat((row.prices&&row.prices[t])||0)>0;})||row.carrier;
     });
     if(!grp.pod&&!validRows.length)return;
-    const typeHeads=types.map(function(t){return '<th style="text-align:right;width:'+oceanTypeW+'%">'+t+' ('+cur+')</th>';}).join('');
-    const rowsHtml=validRows.map(function(row,ri){
-      const priceCells=types.map(function(t){var p=(row.prices&&row.prices[t]);return '<td style="text-align:right">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');
-      return '<tr'+(ri%2?' class="z"':'')+'>'+priceCells+'<td>'+(row.carrier||'-')+'</td><td>'+(row.valid||'')+'</td><td class="rmk">'+(row.remark||'')+'</td></tr>';
+    var typeHeads=types.map(function(t){return '<th style="text-align:right;width:'+oceanTypeW+'%">'+t+' ('+cur+')</th>';}).join('');
+    var rowsHtml=validRows.map(function(row,ri){
+      var priceCells=types.map(function(t){var p=(row.prices&&row.prices[t]);return '<td style="text-align:right;font-weight:700;color:'+NAVY+'">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');
+      return '<tr'+(ri%2?' class="z"':'')+'>'
+        +priceCells
+        +'<td style="font-weight:600">'+(row.carrier||'-')+'</td>'
+        +'<td style="color:#0F6E56;font-weight:600">'+(row.valid||'')+'</td>'
+        +'<td class="rmk">'+(row.remark||'')+'</td>'
+      +'</tr>';
     }).join('');
-    oceanHTML+='<div style="margin-bottom:12px">'
-      +'<div style="font-size:11.5px;font-weight:700;color:#185FA5;margin-bottom:4px">'+(q.pol||'')+' → '+(grp.pod||'(POD?)')+(grp.transit?' &nbsp;•&nbsp; Transit: '+grp.transit:'')+'</div>'
-      +'<table><colgroup>'+types.map(function(){return '<col style="width:'+oceanTypeW+'%">';}).join('')+'<col style="width:16%"><col style="width:14%"><col></colgroup>'
-      +'<thead><tr>'+typeHeads+'<th style="width:16%">Carrier</th><th style="width:14%">Valid</th><th>Remark</th></tr></thead><tbody>'+(rowsHtml||'<tr><td colspan="'+(types.length+3)+'" style="text-align:center;color:#999">Chưa có giá</td></tr>')+'</tbody></table>'
-    +'</div>';
+    oceanHTML+='<div class="pod-wrap">'
+      +'<div class="pod-hdr">&#9658;&nbsp;'+(q.pol||'')+' &nbsp;→&nbsp; '+(grp.pod||'POD')+(grp.transit?'&nbsp;&nbsp;•&nbsp;&nbsp;Transit: '+grp.transit:'')+'</div>'
+      +'<table><colgroup>'+types.map(function(){return '<col style="width:'+oceanTypeW+'%">';}).join('')
+        +'<col style="width:16%"><col style="width:14%"><col></colgroup>'
+      +'<thead><tr>'+typeHeads+'<th style="width:16%">Carrier</th><th style="width:14%">Valid</th><th>Remark</th></tr></thead>'
+      +'<tbody>'+(rowsHtml||'<tr><td colspan="'+(types.length+3)+'" style="text-align:center;color:#999;padding:10px">Chưa có giá</td></tr>')+'</tbody>'
+      +'</table></div>';
   });
 
-  // Local Charge — thêm cột Unit (Cont/Shipment/Bill), đúng khớp cấu trúc form đã sửa
-  const localTypeHeads=types.map(function(t){return '<th style="text-align:right;width:'+localTypeW+'%">'+t+'</th>';}).join('');
-  const localHead=types.length?localTypeHeads:'<th style="text-align:right;width:38%">Amount</th>';
-  const localColgroup='<col style="width:22%"><col style="width:9%"><col style="width:10%">'+(types.length?types.map(function(){return '<col style="width:'+localTypeW+'%">';}).join(''):'<col style="width:38%">')+'<col>';
-  const localArr=_qRowsToArray(q.local,QUOTE_LOCAL_CHARGES);
-  const localRowsArr=localArr.map(function(l){
-    const n=l.name||'';
-    if(!n)return null;
+  // ── Local Charge ──
+  var localTypeHeads=types.map(function(t){return '<th style="text-align:right;width:'+localTypeW+'%">'+t+'</th>';}).join('');
+  var localHead=types.length?localTypeHeads:'<th style="text-align:right;width:38%">Amount</th>';
+  var localColgroup='<col style="width:22%"><col style="width:9%"><col style="width:10%">'
+    +(types.length?types.map(function(){return '<col style="width:'+localTypeW+'%">';}).join(''):'<col style="width:38%">')+'<col>';
+  var localArr=_qRowsToArray(q.local,QUOTE_LOCAL_CHARGES);
+  var localRowsArr=localArr.map(function(l){
+    var n=l.name||''; if(!n)return null;
     var has=types.length?(l.prices&&types.some(function(t){return parseFloat(l.prices[t])>0;})):parseFloat(l.amount)>0;
     if(!has)return null;
-    var cells;
-    if(types.length){cells=types.map(function(t){var p=(l.prices&&l.prices[t]);return '<td style="text-align:right">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');}
-    else cells='<td style="text-align:right">'+(l.amount?parseFloat(l.amount).toLocaleString():'-')+'</td>';
+    var cells=types.length
+      ?types.map(function(t){var p=(l.prices&&l.prices[t]);return '<td style="text-align:right;font-weight:700;color:'+NAVY+'">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('')
+      :'<td style="text-align:right;font-weight:700;color:'+NAVY+'">'+(l.amount?parseFloat(l.amount).toLocaleString():'-')+'</td>';
     return '<td>'+n+'</td><td>'+(l.cur||'USD')+'</td><td>'+(l.unit||'Cont')+'</td>'+cells+'<td class="rmk">'+(l.remark||'')+'</td>';
   }).filter(Boolean);
-  const localRows=localRowsArr.map(function(inner,i){return '<tr'+(i%2?' class="z"':'')+'>'+inner+'</tr>';}).join('');
+  var localRows=localRowsArr.map(function(inner,i){return '<tr'+(i%2?' class="z"':'')+'>'+inner+'</tr>';}).join('');
 
-  // Service: per-cont-type columns — thêm cột Unit
-  const svcTypeHeads=types.map(function(t){return '<th style="text-align:right;width:'+svcTypeW+'%">'+t+'</th>';}).join('');
-  const svcColgroup='<col style="width:24%"><col style="width:10%">'+(types.length?types.map(function(){return '<col style="width:'+svcTypeW+'%">';}).join(''):'<col style="width:36%">')+'<col style="width:9%"><col>';
-  const svcArr=_qRowsToArray(q.service,QUOTE_SERVICES);
-  const svcRowsArr=svcArr.map(function(s){
-    const n=s.name||'';
-    if(!n||!s.on)return null;
-    let cells;
-    if(types.length){cells=types.map(function(t){var p=(s.prices&&s.prices[t]);return '<td style="text-align:right">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('');}
-    else cells='<td style="text-align:right">'+(s.amount?parseFloat(s.amount).toLocaleString():'-')+'</td>';
+  // ── Local Service ──
+  var svcTypeHeads=types.map(function(t){return '<th style="text-align:right;width:'+svcTypeW+'%">'+t+'</th>';}).join('');
+  var svcColgroup='<col style="width:24%"><col style="width:10%">'
+    +(types.length?types.map(function(){return '<col style="width:'+svcTypeW+'%">';}).join(''):'<col style="width:36%">')+'<col style="width:9%"><col>';
+  var svcArr=_qRowsToArray(q.service,QUOTE_SERVICES);
+  var svcRowsArr=svcArr.map(function(s){
+    var n=s.name||''; if(!n||!s.on)return null;
+    var cells=types.length
+      ?types.map(function(t){var p=(s.prices&&s.prices[t]);return '<td style="text-align:right;font-weight:700;color:'+NAVY+'">'+(p?parseFloat(p).toLocaleString():'-')+'</td>';}).join('')
+      :'<td style="text-align:right;font-weight:700;color:'+NAVY+'">'+(s.amount?parseFloat(s.amount).toLocaleString():'-')+'</td>';
     return '<td>'+n+'</td><td>'+(s.unit||'Shipment')+'</td>'+cells+'<td>'+(s.cur||'VND')+'</td><td class="rmk">'+(s.remark||'')+'</td>';
   }).filter(Boolean);
-  const svcRows=svcRowsArr.map(function(inner,i){return '<tr'+(i%2?' class="z"':'')+'>'+inner+'</tr>';}).join('');
-  const svcHead=types.length?svcTypeHeads:'<th style="text-align:right;width:36%">Amount</th>';
+  var svcRows=svcRowsArr.map(function(inner,i){return '<tr'+(i%2?' class="z"':'')+'>'+inner+'</tr>';}).join('');
+  var svcHead=types.length?svcTypeHeads:'<th style="text-align:right;width:36%">Amount</th>';
 
-  const css='<style>'
-    +'body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a18;padding:24px 30px;margin:0}'
-    +'.hd{background:linear-gradient(135deg,#0C2C52,#185FA5);color:#fff;padding:18px 22px;border-radius:10px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}'
-    +'.hd h1{font-size:20px;margin:0;letter-spacing:.5px}.hd .sub{font-size:11px;opacity:.85;margin-top:2px}'
+  // ── Notes ──
+  var hasNotes=q.payment||q.freetime||q.routing||q.note;
+  var notesHTML=hasNotes?('<div class="sec">'
+    +'<div class="sec-hdr">&#128203; Notes</div>'
+    +'<div class="card" style="padding:10px 14px">'
+    +(q.payment?'<div class="note-row"><span class="note-lbl">Payment Term</span><span>'+q.payment+'</span></div>':'')
+    +(q.freetime?'<div class="note-row"><span class="note-lbl">Free Time</span><span>'+q.freetime+'</span></div>':'')
+    +(q.routing?'<div class="note-row"><span class="note-lbl">Routing</span><span>'+q.routing+'</span></div>':'')
+    +(q.note?'<div class="note-row" style="grid-column:1/-1"><span class="note-lbl">Special Note</span><span style="white-space:pre-wrap">'+q.note+'</span></div>':'')
+    +'</div></div>'):'';
+
+  // ── CSS ──
+  var css='<style>'
+    +'*{box-sizing:border-box}'
+    +'body{font-family:"Helvetica Neue",Arial,sans-serif;font-size:12px;color:#1a1a18;margin:0;padding:0;'+bgStyle+'}'
+    +'.page{min-height:100vh;display:flex;flex-direction:column}'
+    // Header
+    +'.hdr{background:linear-gradient(135deg,rgba(12,44,82,.95) 0%,rgba(24,95,165,.88) 100%);color:#fff;padding:22px 28px 18px;display:flex;justify-content:space-between;align-items:flex-end}'
+    +'.hdr-l .doc-type{font-size:9px;letter-spacing:3px;text-transform:uppercase;opacity:.7;margin-bottom:4px}'
+    +'.hdr-l .doc-title{font-size:30px;font-weight:800;letter-spacing:2px;line-height:1}'
+    +'.hdr-l .doc-no{margin-top:8px;background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.3);border-radius:20px;padding:3px 14px;font-size:11px;font-weight:700;display:inline-block}'
+    +'.hdr-r{text-align:right}'
+    +'.hdr-r .co-name{font-size:14px;font-weight:800;letter-spacing:.3px;margin-bottom:3px}'
+    +'.hdr-r .co-slogan{font-size:9.5px;opacity:.65;font-style:italic}'
+    +'.hdr-r .co-date{margin-top:8px;font-size:10.5px;opacity:.8}'
+    // Main content
+    +'.content{padding:18px 28px;flex:1}'
+    // Info card
+    +'.info-card{background:rgba(255,255,255,.97);border:1px solid rgba(0,0,0,.09);border-radius:10px;padding:14px 18px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:3px 24px}'
+    +'.info-row{padding:5px 0;border-bottom:1px solid '+BORDER+';font-size:11.5px;display:flex;align-items:baseline;gap:8px}'
+    +'.info-row:last-child{border-bottom:none}'
+    +'.info-lbl{width:110px;flex-shrink:0;font-size:10px;font-weight:700;color:#667085;text-transform:uppercase;letter-spacing:.3px}'
+    +'.info-val{font-weight:600;color:'+NAVY+'}'
+    // Sections
     +'.sec{margin-bottom:14px}'
-    +'.sec-t{font-size:11.5px;font-weight:700;color:#0C2C52;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #E6F1FB;padding-bottom:4px;margin-bottom:8px}'
-    +'table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:4px;table-layout:fixed;border:1px solid #E2E6EA;border-radius:6px;overflow:hidden}'
-    +'th{background:#0C2C52;color:#fff;padding:6px 9px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.3px;font-weight:700}'
-    +'td{padding:5.5px 9px;border-bottom:1px solid #EDEFF2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}'
+    +'.sec-hdr{font-size:10px;font-weight:800;color:'+NAVY+';text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;padding:7px 14px;background:rgba(255,255,255,.9);border-radius:7px 7px 0 0;border-bottom:2px solid '+NAVY+'}'
+    +'.card{background:rgba(255,255,255,.97);border:1px solid rgba(0,0,0,.09);border-radius:0 0 10px 10px;overflow:hidden}'
+    // POD header
+    +'.pod-wrap{margin-bottom:12px}'
+    +'.pod-hdr{background:linear-gradient(90deg,'+TEAL+','+TEAL+'cc);color:#fff;padding:7px 14px;font-size:11.5px;font-weight:700;border-radius:7px 7px 0 0}'
+    // Tables
+    +'table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}'
+    +'th{background:'+NAVY+';color:#fff;padding:7px 10px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.3px;font-weight:700}'
+    +'th:last-child{border-right:none}'
+    +'td{padding:6px 10px;border-bottom:1px solid '+BORDER+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}'
     +'td.rmk{white-space:normal;color:#666;font-size:10.5px}'
-    +'tr.z td{background:#F7F9FB}'
+    +'tr.z td{background:'+STRIPE+'}'
     +'tbody tr:last-child td{border-bottom:none}'
-    +'.info{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}'
-    +'.info div{padding:3px 0;border-bottom:1px solid #f0efe9}.info b{display:inline-block;width:120px;color:#6b6b65;font-weight:600}'
-    +'@media print{body{padding:14px}@page{margin:10mm;size:A4}}'
+    // Notes
+    +'.note-row{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:5px 0;border-bottom:1px solid '+BORDER+';font-size:11.5px}'
+    +'.note-row:last-child{border-bottom:none}'
+    +'.note-lbl{font-size:10px;font-weight:700;color:#667085;text-transform:uppercase;letter-spacing:.3px;padding-top:2px}'
+    // Footer
+    +'.ftr{background:linear-gradient(135deg,rgba(12,44,82,.94) 0%,rgba(12,44,82,.85) 100%);color:#fff;padding:16px 28px;display:flex;justify-content:space-between;align-items:center;margin-top:auto}'
+    +'.ftr-co{font-size:13px;font-weight:800;letter-spacing:.3px;margin-bottom:5px}'
+    +'.ftr-info{font-size:10.5px;opacity:.85;line-height:1.7}'
+    +'.ftr-note{font-size:9.5px;opacity:.6;font-style:italic;text-align:right;max-width:200px;line-height:1.5}'
+    +'@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}@page{margin:0;size:A4}}'
   +'</style>';
+
+  // ── HTML ──
   return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+css+'<title>Quotation '+q.no+'</title></head><body>'
-    +'<div class="hd"><div><h1>QUOTATION</h1><div class="sub">'+q.no+' • '+q.date+'</div></div><div style="text-align:right;font-size:13px;font-weight:700">COCOSEA CO., LTD</div></div>'
-    +'<div class="sec"><div class="info">'
-      +'<div><b>Customer</b>'+(sp.fullname||q.customer)+'</div>'
-      +'<div><b>Sales Person</b>'+q.sales+'</div>'
-      +'<div><b>POL</b>'+q.pol+'</div>'
-      +'<div><b>Commodity</b>'+q.commodity+'</div>'
-    +'</div></div>'
-    +(oceanHTML?'<div class="sec"><div class="sec-t">Ocean Freight</div>'+oceanHTML+'</div>':'')
-    +(localRows?'<div class="sec"><div class="sec-t">Local Charge</div><table><colgroup>'+localColgroup+'</colgroup><thead><tr><th>Charge</th><th>Currency</th><th>Unit</th>'+localHead+'<th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div>':'')
-    +(svcRows?'<div class="sec"><div class="sec-t">Local Service</div><table><colgroup>'+svcColgroup+'</colgroup><thead><tr><th>Service</th><th>Unit</th>'+svcHead+'<th>Currency</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div>':'')
-    +((q.payment||q.freetime||q.routing||q.note)?('<div class="sec"><div class="sec-t">Notes</div>'
-      +'<div class="info">'
-      +(q.payment?'<div><b>Payment Term</b>'+q.payment+'</div>':'')
-      +(q.freetime?'<div><b>Free Time</b>'+q.freetime+'</div>':'')
-      +(q.routing?'<div style="grid-column:1/-1"><b>Routing</b>'+q.routing+'</div>':'')
-      +(q.note?'<div style="grid-column:1/-1"><b>Special Note</b>'+q.note+'</div>':'')
-      +'</div></div>'):'')
-    +_bookingEmailSignature()
-    +'</body></html>';
+  +'<div class="page">'
+  // HEADER
+  +'<div class="hdr">'
+    +'<div class="hdr-l">'
+      +'<div class="doc-type">Logistics</div>'
+      +'<div class="doc-title">QUOTATION</div>'
+      +'<div class="doc-no">'+q.no+'</div>'
+    +'</div>'
+    +'<div class="hdr-r">'
+      +'<div class="co-name">'+(co.name||'COCO SEA CO., LTD')+'</div>'
+      +'<div class="co-slogan">Keep Going . Keep Growing</div>'
+      +'<div class="co-date">Date: '+q.date+'</div>'
+    +'</div>'
+  +'</div>'
+  // CONTENT
+  +'<div class="content">'
+    // Info grid
+    +'<div class="info-card">'
+      +'<div class="info-row"><span class="info-lbl">Customer</span><span class="info-val">'+(sp.fullname||q.customer||'—')+'</span></div>'
+      +'<div class="info-row"><span class="info-lbl">Sales Person</span><span class="info-val">'+(q.sales||'—')+'</span></div>'
+      +'<div class="info-row"><span class="info-lbl">POL</span><span class="info-val">'+(q.pol||'—')+'</span></div>'
+      +'<div class="info-row"><span class="info-lbl">Commodity</span><span class="info-val">'+(q.commodity||'—')+'</span></div>'
+    +'</div>'
+    // Ocean Freight
+    +(oceanHTML?'<div class="sec"><div class="sec-hdr">&#9875; Ocean Freight</div><div class="card" style="padding:14px;border-radius:0 0 10px 10px">'+oceanHTML+'</div></div>':'')
+    // Local Charge
+    +(localRows?'<div class="sec"><div class="sec-hdr">&#128230; Local Charge</div><div class="card"><table><colgroup>'+localColgroup+'</colgroup><thead><tr><th>Charge</th><th>Cur</th><th>Unit</th>'+localHead+'<th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div></div>':'')
+    // Local Service
+    +(svcRows?'<div class="sec"><div class="sec-hdr">&#128188; Local Service</div><div class="card"><table><colgroup>'+svcColgroup+'</colgroup><thead><tr><th>Service</th><th>Unit</th>'+svcHead+'<th>Currency</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div></div>':'')
+    // Notes
+    +notesHTML
+  +'</div>'
+  // FOOTER
+  +'<div class="ftr">'
+    +'<div>'
+      +'<div class="ftr-co">'+(co.name||'COCO SEA CO., LTD')+'</div>'
+      +'<div class="ftr-info">&#128222; '+(co.phone||'0909 641 011')+'&nbsp;&nbsp;|&nbsp;&nbsp;&#9993; '+(co.invEmail||'Cocosea.bd@gmail.com')+'</div>'
+      +'<div class="ftr-info">'+(co.addr||'991B Tân Kỳ Tân Quý, P. Bình Hưng Hòa, TP. Hồ Chí Minh, Việt Nam')+'</div>'
+    +'</div>'
+    +'<div class="ftr-note">This quotation is confidential<br>and intended solely for the<br>addressee. Valid as stated.</div>'
+  +'</div>'
+  +'</div>'
+  +'</body></html>';
 }
 
 function quoteExportPDF(){
