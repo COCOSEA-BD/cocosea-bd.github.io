@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.50';
+window.APP_BUILD='v4.51';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7213,7 +7213,10 @@ function rebuildInvoicePreview(){
   const svcsYes=allActiveSvcs.filter(s=>svcs[s.key]?.on&&(svcs[s.key]?.invoice||'Yes')==='Yes'&&svcMatchParty(s));
   const svcsNo=allActiveSvcs.filter(s=>svcs[s.key]?.on&&svcs[s.key]?.invoice==='No'&&svcMatchParty(s));
   const activeSvcs=[...svcsYes,...svcsNo];
-  const roe=parseFloat(g('roeInput')?.value)||26390;
+  // Ưu tiên lấy tỷ giá từ ô invRoeInput (tab Invoice), fallback về roeInput ẩn
+  const roe=parseFloat(g('invRoeInput')?.value)||parseFloat(g('roeInput')?.value)||26390;
+  // Đồng bộ lại roeInput để các hàm khác (printDN, exportDnExcel...) dùng đúng giá trị
+  try{const _ri=g('roeInput');if(_ri)_ri.value=roe;}catch(e){}
 
   const byCur={};
   const vatGroups={'0%':0,'8%':0,'10%':0};
@@ -7452,7 +7455,7 @@ function rebuildInvoicePreview(){
     </table>
     <div class="charge-bottom">
       <div class="charge-left">
-        ${allVND?'':'<div class="exch-box"><svg width="12" height="12" viewBox="0 0 24 24" fill="#D97706"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>Tỷ giá:&nbsp;<strong>1 USD = ${roe.toLocaleString()} VND</strong></div>'}
+        ${allVND?'':`<div class="exch-box"><svg width="12" height="12" viewBox="0 0 24 24" fill="#D97706"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>Tỷ giá:&nbsp;<strong>1 USD = ${roe.toLocaleString()} VND</strong></div>`}
         <div class="inline-note">
           <div class="inline-note-hdr"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>NOTE</div>
           <ul class="note-list">
@@ -19714,8 +19717,24 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
 function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb){
   var _area=document.getElementById('invPreviewArea');
   var _dnEl=_area&&_area.querySelector('#dnPrintArea .dn');
+  var _offWrap=null; // wrapper tạm khi overlay đang ẩn
+
+  // Nếu element tồn tại nhưng đang ẩn (overlay đóng), clone ra vùng off-screen có layout
+  if(_dnEl&&!_dnEl.offsetHeight){
+    try{
+      var _printArea=_area&&_area.querySelector('#dnPrintArea');
+      if(_printArea&&_printArea.innerHTML&&_printArea.innerHTML.length>200){
+        _offWrap=document.createElement('div');
+        _offWrap.style.cssText='position:fixed;left:-9999px;top:0;width:794px;z-index:-1;pointer-events:none;visibility:hidden';
+        _offWrap.innerHTML=_printArea.innerHTML;
+        document.body.appendChild(_offWrap);
+        _dnEl=_offWrap.querySelector('.dn');
+      }
+    }catch(e){}
+  }
 
   if(!_dnEl||!_dnEl.offsetHeight){
+    if(_offWrap)try{document.body.removeChild(_offWrap);}catch(e){}
     _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb);
     return;
   }
@@ -19754,6 +19773,7 @@ function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debit
 
       function _cleanup(){
         try{ if(_wrap.parentNode) _wrap.parentNode.removeChild(_wrap); }catch(e){}
+        try{ if(_offWrap&&_offWrap.parentNode) _offWrap.parentNode.removeChild(_offWrap); _offWrap=null; }catch(e){}
       }
 
       function _doCapture(){
@@ -24610,8 +24630,17 @@ async function _dnDirectSendEmail(party){
   const ci=cache[detailTt].findIndex(x=>x._id===detailId);
   if(ci>=0)cache[detailTt][ci].dnByParty=dnByParty;
   const partyKey=party==='(Không party)'?'':party;
-  window._dnData={allParties:[partyKey],currentPartyIdx:0};
-  sendEmailDN(detailId,detailTt);
+  // Mở popup DN để render đúng form (html2canvas cần DOM đã render)
+  window._dnFilterParty=partyKey;
+  openDebitNotePopup();
+  // Đợi overlay render xong rồi mới tạo PDF + gửi email
+  setTimeout(function(){
+    if(window._dnData){
+      window._dnData.allParties=[partyKey];
+      window._dnData.currentPartyIdx=0;
+    }
+    sendEmailDN(detailId,detailTt);
+  },600);
 }
 window._dnDirectSendEmail=_dnDirectSendEmail;
 
