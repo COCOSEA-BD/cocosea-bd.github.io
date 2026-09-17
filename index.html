@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.51';
+window.APP_BUILD='v4.52';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -19711,144 +19711,9 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
   }catch(e){ window._dnLogoUrl=null; _build(null); }
 }
 
-// ── _buildDnPdfBlob: chụp HTML preview (.dn element) bằng html2canvas → jsPDF ──
-// v4.42: off-screen A4 clone, scale:3 cho ảnh sắc nét, footer luôn cuối trang,
-//         background tràn toàn bộ A4, không khoảng trắng khi nội dung ít.
+// ── _buildDnPdfBlob: v4.52 — chuyển sang text-based PDF (jsPDF) để có thể select/copy ký tự ──
 function _buildDnPdfBlob(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb){
-  var _area=document.getElementById('invPreviewArea');
-  var _dnEl=_area&&_area.querySelector('#dnPrintArea .dn');
-  var _offWrap=null; // wrapper tạm khi overlay đang ẩn
-
-  // Nếu element tồn tại nhưng đang ẩn (overlay đóng), clone ra vùng off-screen có layout
-  if(_dnEl&&!_dnEl.offsetHeight){
-    try{
-      var _printArea=_area&&_area.querySelector('#dnPrintArea');
-      if(_printArea&&_printArea.innerHTML&&_printArea.innerHTML.length>200){
-        _offWrap=document.createElement('div');
-        _offWrap.style.cssText='position:fixed;left:-9999px;top:0;width:794px;z-index:-1;pointer-events:none;visibility:hidden';
-        _offWrap.innerHTML=_printArea.innerHTML;
-        document.body.appendChild(_offWrap);
-        _dnEl=_offWrap.querySelector('.dn');
-      }
-    }catch(e){}
-  }
-
-  if(!_dnEl||!_dnEl.offsetHeight){
-    if(_offWrap)try{document.body.removeChild(_offWrap);}catch(e){}
-    _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb);
-    return;
-  }
-
-  function _capture(){
-    _loadJsPdf(function(){
-      if(!window.jspdf||!window.jspdf.jsPDF){ cb(null,'jsPDF chưa sẵn sàng'); return; }
-
-      // A4 at 96 dpi = 794 × 1123 px
-      var A4W=794, A4H=1123, SCALE=3;
-
-      // Off-screen wrapper — visible to browser layout engine but off-screen
-      var _wrap=document.createElement('div');
-      _wrap.style.cssText='position:absolute;left:-9999px;top:0;width:'+A4W+'px;z-index:-9999;pointer-events:none';
-
-      // Deep clone of .dn element
-      var _clone=_dnEl.cloneNode(true);
-      // Remove any inline overrides from previous operations, then apply print layout
-      _clone.removeAttribute('style');
-      _clone.style.width=A4W+'px';
-      _clone.style.maxWidth=A4W+'px';
-      _clone.style.minHeight=A4H+'px';  // Ensure at least A4 height
-      _clone.style.display='flex';
-      _clone.style.flexDirection='column'; // flex column so body can grow
-      _clone.style.overflow='hidden';
-      _clone.style.borderRadius='0';
-      _clone.style.margin='0';
-      _clone.style.boxSizing='border-box';
-
-      // .dn-body fills remaining height → footer stays at bottom
-      var _body=_clone.querySelector('.dn-body');
-      if(_body) _body.style.flex='1 1 auto';
-
-      _wrap.appendChild(_clone);
-      document.body.appendChild(_wrap);
-
-      function _cleanup(){
-        try{ if(_wrap.parentNode) _wrap.parentNode.removeChild(_wrap); }catch(e){}
-        try{ if(_offWrap&&_offWrap.parentNode) _offWrap.parentNode.removeChild(_offWrap); _offWrap=null; }catch(e){}
-      }
-
-      function _doCapture(){
-        // Actual rendered height (≥ A4H due to min-height)
-        var cloneH=_clone.offsetHeight;
-        if(!cloneH||cloneH<A4H) cloneH=A4H;
-
-        window.html2canvas(_clone,{
-          scale:SCALE,
-          useCORS:true,
-          allowTaint:true,
-          logging:false,
-          backgroundColor:'#EBF4FF',
-          width:A4W,
-          height:cloneH,
-          windowWidth:A4W,
-          imageTimeout:30000,
-          foreignObjectRendering:false
-        }).then(function(canvas){
-          _cleanup();
-          try{
-            if(!canvas||canvas.width<10){
-              _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb);
-              return;
-            }
-            var imgData=canvas.toDataURL('image/jpeg',0.95);
-            var doc=new window.jspdf.jsPDF({unit:'mm',format:'a4',orientation:'portrait',compress:true});
-            // Mở PDF ở tỷ lệ 100%
-            try{doc.internal.events.subscribe('putCatalog',function(){var _pi=doc.internal.getPageInfo(1);if(_pi&&_pi.objId)doc.internal.write('/OpenAction ['+_pi.objId+' 0 R /XYZ null null 1]');});}catch(e){}
-            var PW=210, PH=297;
-            // Convert canvas pixel-height to mm at A4 width
-            var imgH=Math.round(canvas.height/canvas.width*PW*10)/10;
-
-            if(imgH<=PH+1){
-              // Content fits one page — stretch to fill FULL A4 (no blank bottom)
-              doc.addImage(imgData,'JPEG',0,0,PW,PH,undefined,'FAST');
-            }else{
-              // Long content — split across pages
-              var pos=0;
-              while(pos<imgH){
-                if(pos>0) doc.addPage();
-                doc.addImage(imgData,'JPEG',0,-pos,PW,imgH,undefined,'FAST');
-                pos+=PH;
-              }
-            }
-            cb(doc.output('blob'),null);
-          }catch(e){
-            _cleanup();
-            _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb);
-          }
-        }).catch(function(){
-          _cleanup();
-          _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb);
-        });
-      }
-
-      // Wait for fonts and layout to settle before capturing
-      if(document.fonts&&document.fonts.ready){
-        document.fonts.ready
-          .then(function(){ setTimeout(_doCapture,300); })
-          .catch(function(){ setTimeout(_doCapture,300); });
-      }else{
-        setTimeout(_doCapture,700);
-      }
-    });
-  }
-
-  if(window.html2canvas){ _capture(); }
-  else{
-    var _s=document.createElement('script');
-    _s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-    _s.onload=_capture;
-    _s.onerror=function(){ _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb); };
-    document.head.appendChild(_s);
-  }
+  _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey,debitDate,cb);
 }
 window._buildDnPdfBlob=_buildDnPdfBlob;
 
@@ -26959,15 +26824,15 @@ function quoteBuildHTML(q){
     // Main content
     +'.content{padding:18px 28px;flex:1}'
     // Info card — 90% trong suốt để thấy background phía sau
-    +'.info-card{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.35);border-radius:10px;padding:14px 18px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:3px 24px}'
-    +'.info-row{padding:5px 0;border-bottom:1px solid rgba(255,255,255,.2);font-size:11.5px;display:flex;align-items:baseline;gap:8px}'
+    +'.info-card{background:rgba(255,255,255,.92);border:1px solid rgba(12,44,82,.2);border-radius:10px;padding:14px 18px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:3px 24px}'
+    +'.info-row{padding:5px 0;border-bottom:1px solid rgba(12,44,82,.12);font-size:11.5px;display:flex;align-items:baseline;gap:8px}'
     +'.info-row:last-child{border-bottom:none}'
-    +'.info-lbl{width:110px;flex-shrink:0;font-size:10px;font-weight:700;color:rgba(255,255,255,.7);text-transform:uppercase;letter-spacing:.3px}'
-    +'.info-val{font-weight:700;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.4)}'
+    +'.info-lbl{width:110px;flex-shrink:0;font-size:10px;font-weight:700;color:rgba(12,44,82,.65);text-transform:uppercase;letter-spacing:.3px}'
+    +'.info-val{font-weight:700;color:#0C2C52}'
     // Sections
     +'.sec{margin-bottom:14px}'
     +'.sec-hdr{font-size:10px;font-weight:800;color:#fff;text-transform:uppercase;letter-spacing:.8px;margin-bottom:0;padding:7px 14px;background:rgba(12,44,82,.75);border-radius:7px 7px 0 0;border-bottom:2px solid '+TEAL+'}'
-    +'.card{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.25);border-radius:0 0 10px 10px;overflow:hidden}'
+    +'.card{background:rgba(255,255,255,.92);border:1px solid rgba(12,44,82,.2);border-radius:0 0 10px 10px;overflow:hidden}'
     // POD header
     +'.pod-wrap{margin-bottom:12px}'
     +'.pod-hdr{background:linear-gradient(90deg,rgba(15,110,86,.88),rgba(15,110,86,.70));color:#fff;padding:7px 14px;font-size:11.5px;font-weight:700;border-radius:7px 7px 0 0}'
@@ -26975,14 +26840,14 @@ function quoteBuildHTML(q){
     +'table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}'
     +'th{background:rgba(12,44,82,.80);color:#fff;padding:7px 10px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.3px;font-weight:700}'
     +'th:last-child{border-right:none}'
-    +'td{padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.12);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.3)}'
-    +'td.rmk{white-space:normal;color:rgba(255,255,255,.7);font-size:10.5px}'
-    +'tr.z td{background:rgba(255,255,255,.06)}'
+    +'td{padding:6px 10px;border-bottom:1px solid rgba(12,44,82,.1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;color:#0C2C52}'
+    +'td.rmk{white-space:normal;color:rgba(12,44,82,.65);font-size:10.5px}'
+    +'tr.z td{background:rgba(12,44,82,.04)}'
     +'tbody tr:last-child td{border-bottom:none}'
     // Notes
-    +'.note-row{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.15);font-size:11.5px;color:#fff}'
+    +'.note-row{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:5px 0;border-bottom:1px solid rgba(12,44,82,.1);font-size:11.5px;color:#0C2C52}'
     +'.note-row:last-child{border-bottom:none}'
-    +'.note-lbl{font-size:10px;font-weight:700;color:rgba(255,255,255,.65);text-transform:uppercase;letter-spacing:.3px;padding-top:2px}'
+    +'.note-lbl{font-size:10px;font-weight:700;color:rgba(12,44,82,.6);text-transform:uppercase;letter-spacing:.3px;padding-top:2px}'
     // Footer
     +'.ftr{background:linear-gradient(135deg,rgba(12,44,82,.94) 0%,rgba(12,44,82,.85) 100%);color:#fff;padding:16px 28px;display:flex;justify-content:space-between;align-items:center;margin-top:auto}'
     +'.ftr-co{font-size:13px;font-weight:800;letter-spacing:.3px;margin-bottom:5px}'
