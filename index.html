@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.55';
+window.APP_BUILD='v4.56';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9736,7 +9736,11 @@ function runDebtReport(){
       }
       const invSvcs=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice!=='Waived'&&e[1].invoice!=='No'&&partyOk(e[1]);});
       const invSvcsNo=Object.entries(svcs).filter(function(e){return e[1].on&&e[1].invoice==='No'&&partyOk(e[1]);});
-      let rowTotalVND=0; invSvcs.forEach(function(e){const sv=e[1];const base=_amtVND(sv,r);const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;rowTotalVND+=Math.round(base*(1+vr/100));});
+      let rowTotalVND=0; invSvcs.forEach(function(e){const _k=e[0],sv=e[1];const base=_amtVND(sv,r);
+        // v4.55: smart VAT default — non-freight + Yes + vat=0% → 8% (giống tab Invoice)
+        var _isFr=(_svcKeyBase(_k)==='ocf'||_svcKeyBase(_k)==='freight');
+        var _vv=sv.vat||(_isFr?'0%':'8%'); if(!_isFr&&_vv==='0%')_vv='8%';
+        const vr=parseFloat(_vv.replace('%',''))||0;rowTotalVND+=Math.round(base*(1+vr/100));});
       let rowTotalNoVND=0; invSvcsNo.forEach(function(e){rowTotalNoVND+=_amtVND(e[1],r);});
       const rowTotalAllVND=rowTotalVND+rowTotalNoVND;
       // Tìm party keys của shipper này trong dnPayments để lọc đúng trạng thái TT
@@ -11410,12 +11414,17 @@ function _debtV3ComputeAR(){
     const svcs=r.svcs||{};
     const sp2=cache.partners[sh]||{};
     let rowTotalVND=0, rowTotalNoVND=0;
-    Object.values(svcs).forEach(function(sv){
+    Object.entries(svcs).forEach(function(kv){
+      var svcKey=kv[0], sv=kv[1];
       if(!sv.on||sv.invoice==='Waived')return;
       if(filterShipper&&!_partyMatchesShipper(sv.party,sh,sp2))return;
       const base=_amtVND(sv,r);
       if(sv.invoice==='No'){ rowTotalNoVND+=base; return; }
-      const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;
+      // v4.55: áp dụng smart VAT default giống tab invoice (non-freight + Yes + sv.vat=0% → 8%)
+      var _isFreightAR=(_svcKeyBase(svcKey)==='ocf'||_svcKeyBase(svcKey)==='freight');
+      var _vatValAR=sv.vat||(_isFreightAR?'0%':'8%');
+      if(!_isFreightAR&&_vatValAR==='0%')_vatValAR='8%';
+      const vr=parseFloat(_vatValAR.replace('%',''))||0;
       rowTotalVND+=Math.round(base*(1+vr/100));
     });
     const rowAll=rowTotalVND+rowTotalNoVND;
@@ -37378,11 +37387,20 @@ async function exportExcelDebt(){
             if(!_partyMatchesShipper(sv.party, sh, sp))return;
           }
           var amt=sv.amount||(sv.price||0)*(sv.qty||1);
-          var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
-          var vatPct=parseFloat((sv.vat||'0%').replace('%',''))||0;
+          // v4.55: dùng r.roe của từng lô (giống tab invoice) thay vì hardcode 26390
+          var _lotRoe=parseFloat(r.roe)||26390;
+          var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*_lotRoe);
+          // v4.55: áp dụng smart VAT default giống tab invoice
+          // (non-freight + invoice=Yes + sv.vat='0%' → tự nâng lên 8%)
+          var _isFreightSvc=(_svcKeyBase(s.key)==='ocf'||_svcKeyBase(s.key)==='freight');
+          var _invTypeSvc=sv.invoice||'Yes';
+          var _smartVatSvc=_isFreightSvc?'0%':(_invTypeSvc==='No'?'0%':'8%');
+          var _vatValSvc=sv.vat||_smartVatSvc;
+          if(!_isFreightSvc&&_invTypeSvc==='Yes'&&_vatValSvc==='0%')_vatValSvc='8%';
+          var vatPct=parseFloat(_vatValSvc.replace('%',''))||0;
           var vatAmt=Math.round(amtVND*vatPct/100);
-          if((sv.invoice||'Yes')==='Yes'){preYes+=amtVND;vatYes+=vatAmt;}
-          else if(sv.invoice==='No'){preNo+=amtVND;vatNo+=vatAmt;}
+          if(_invTypeSvc==='Yes'){preYes+=amtVND;vatYes+=vatAmt;}
+          else if(_invTypeSvc==='No'){preNo+=amtVND;vatNo+=vatAmt;}
         });
         var totalYesVND=preYes+vatYes, totalNoVND=preNo+vatNo;
         // Pick DN number: prefer party-specific DN that matches the current filter shipper
