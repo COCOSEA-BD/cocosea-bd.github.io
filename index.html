@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.52';
+window.APP_BUILD='v4.53';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3976,7 +3976,8 @@ function renderDetailPanel(r,tt){
         const cur=sv.cur||'VND';
         const revQty=sv.qty||sv.svcQty||parseInt(r.vol)||1;
         const revUnit=sv.unit||sv.svcUnit||'Cont';
-        const amt=(sv.price||0)*revQty;
+        // v4.54: ưu tiên sv.amount (giống tab invoice) để tổng khớp nhau
+        const amt=sv.amount||(sv.price||0)*(sv.qty||1);
         const vatRate=parseFloat((sv.vat||'0%').replace('%',''))||0;
         const vatAmt=Math.round(amt*vatRate/100);
         revenueRows.push({svKey:svcKey,name:name,price:sv.price||0,qty:revQty,unit:revUnit,cur,amt,vatAmt,amtWithVat:amt+vatAmt,vat:sv.vat||'0%'});
@@ -3984,7 +3985,8 @@ function renderDetailPanel(r,tt){
         revByCur[cur]+=amt; // pre-VAT cho profit
       });
       // ROE + per-column revenue totals (costingROE phải khai báo TRƯỚC khi dùng)
-      const costingROE=(window._dnData&&parseFloat(g('roeInput')?.value))||26390;
+      // v4.54: ưu tiên invRoeInput (tab Invoice) → roeInput → r.roe → 26390
+      const costingROE=parseFloat(g('invRoeInput')?.value)||parseFloat(g('roeInput')?.value)||r.roe||26390;
       let totalRevAmtVND=0, totalRevVatAmtVND=0, totalRevTotalVND=0;
       revenueRows.forEach(function(row){
         const rv=row.cur==='VND'?1:costingROE;
@@ -6066,7 +6068,7 @@ function _lotFieldHtml(c, r, ctx){
   }
   if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
   if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
-  if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;let onch=(c.k==='shipper'||c.k==='supplier')?' onchange="refreshCneeOptions()"':'';if(c.k==='carrier')onch=' onchange="onCarrierChangeVessel()"';return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"${onch}><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
+  if(c.partner){const opts=c.k==='carrier'?pC:c.k==='fwd'?pF:c.k==='supplier'?pAll:pS;let onch=(c.k==='shipper'||c.k==='supplier')?' onchange="refreshCneeOptions()"':'';if(c.k==='carrier')onch=' onchange="onCarrierChangeVessel()"';if(c.k==='bookingParty')onch=' onchange="onBookingPartyChange()"';return`<div class="fi${full}"><label class="lbl">${c.l}</label><select id="f_${c.k}"${onch}><option value="">— Chọn —</option>${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;}
   const SPECIAL_COMPACT=['cnee','cargoType','typeCont','port','icd','cutoffField','date','select','bookingBlock'];
   if(c.compact && !SPECIAL_COMPACT.includes(c.type) && c.k!=='tenHang' && c.k!=='consignee'){
     return`<div style="display:inline-flex;flex-direction:column;gap:2px;flex:1;min-width:80px;max-width:150px"><label class="lbl" style="font-size:9.5px">${c.l}</label><input type="${c.type||'text'}" id="f_${c.k}" value="${(val+'').replace(/"/g,'&quot;')}" style="font-size:12px;padding:4px 6px"/></div>`;
@@ -6078,20 +6080,19 @@ function _lotFieldHtml(c, r, ctx){
     const _vesTsPorts=(_vesForTs&&_vesForTs.transships||[]).filter(function(p){return p.port;});
     window._lotVesselTsPorts=_vesTsPorts; // dùng lại ở lotTsAddRow / lotTsCountryChange
     const _buildTsPortOpts=function(selPort,country){
-      // optgroup "Theo tàu" — luôn hiển thị nếu tàu có cảng
-      const vesGrp=_vesTsPorts.length
-        ?('<optgroup label="🚢 Theo tàu">'+_vesTsPorts.map(function(vp){
+      // v4.53: Nếu tàu có cảng chuyển tải → chỉ hiện cảng đó (không hiện toàn bộ danh sách)
+      if(_vesTsPorts.length){
+        return '<option value="">— Chọn cảng chuyển tải —</option>'
+          +_vesTsPorts.map(function(vp){
             return '<option'+(vp.port===selPort?' selected':'')
               +' data-ts-eta="'+(vp.eta||'')+'" data-ts-tt="'+(vp.tt!=null?vp.tt:'')+'" data-ts-country="'+(vp.country||'')+'">'+vp.port+'</option>';
-          }).join('')+'</optgroup>')
-        :'';
-      // optgroup "Theo quốc gia" — lọc theo country nếu đã chọn
+          }).join('');
+      }
+      // Tàu direct / chưa chọn → hiện toàn bộ danh sách cảng theo quốc gia
       const cPorts=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:PORTS;
-      const alreadyInVes=_vesTsPorts.some(function(vp){return vp.port===selPort;});
-      const stdGrp='<optgroup label="Theo quốc gia"><option value="">— Chọn cảng —</option>'
-        +cPorts.map(function(pt){return '<option'+(pt===selPort&&!alreadyInVes?' selected':'')+'>'+pt+'</option>';}).join('')
+      return '<optgroup label="Theo quốc gia"><option value="">— Chọn cảng —</option>'
+        +cPorts.map(function(pt){return '<option'+(pt===selPort?' selected':'')+'>'+pt+'</option>';}).join('')
         +'</optgroup>';
-      return vesGrp+stdGrp;
     };
     const tsRowHtml=function(p,i){
       const tsCountry=p.country||'';
@@ -6629,18 +6630,19 @@ document.addEventListener('keydown',function(e){
 // v4.08: helper build port options kèm optgroup "Theo tàu" (dùng chung)
 function _buildLotTsPortOpts(selPort,country){
   const _vtp=window._lotVesselTsPorts||[];
-  const vesGrp=_vtp.length
-    ?('<optgroup label="🚢 Theo tàu">'+_vtp.map(function(vp){
+  // v4.53: Nếu tàu đã có danh sách cảng chuyển tải → chỉ hiện cảng của tàu đó
+  if(_vtp.length){
+    return '<option value="">— Chọn cảng chuyển tải —</option>'
+      +_vtp.map(function(vp){
         return '<option'+(vp.port===selPort?' selected':'')
           +' data-ts-eta="'+(vp.eta||'')+'" data-ts-tt="'+(vp.tt!=null?vp.tt:'')+'" data-ts-country="'+(vp.country||'')+'">'+vp.port+'</option>';
-      }).join('')+'</optgroup>')
-    :'';
+      }).join('');
+  }
+  // Tàu chưa có / direct → hiện toàn bộ danh sách cảng theo quốc gia
   const cPorts=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:PORTS;
-  const alreadyInVes=_vtp.some(function(vp){return vp.port===selPort;});
-  const stdGrp='<optgroup label="Theo quốc gia"><option value="">— Chọn cảng —</option>'
-    +cPorts.map(function(pt){return '<option'+(pt===selPort&&!alreadyInVes?' selected':'')+'>'+pt+'</option>';}).join('')
+  return '<optgroup label="Theo quốc gia"><option value="">— Chọn cảng —</option>'
+    +cPorts.map(function(pt){return '<option'+(pt===selPort?' selected':'')+'>'+pt+'</option>';}).join('')
     +'</optgroup>';
-  return vesGrp+stdGrp;
 }
 window._buildLotTsPortOpts=_buildLotTsPortOpts;
 
@@ -6665,6 +6667,16 @@ window.lotTsAddRow=lotTsAddRow;
 function lotTsCountryChange(sel){
   const country=sel.value;
   const portSel=sel.parentNode.querySelector('[data-ts-lot-k="port"]');
+  // v4.53: Nếu tàu đã có danh sách cảng riêng thì filter theo country trong cảng đó
+  const _vtp=window._lotVesselTsPorts||[];
+  if(_vtp.length&&portSel){
+    const filtered=country?_vtp.filter(function(vp){return (vp.country||'')===(country);}) : _vtp;
+    portSel.innerHTML='<option value="">— Chọn cảng chuyển tải —</option>'
+      +filtered.map(function(vp){
+        return '<option data-ts-eta="'+(vp.eta||'')+'" data-ts-tt="'+(vp.tt!=null?vp.tt:'')+'" data-ts-country="'+(vp.country||'')+'">'+vp.port+'</option>';
+      }).join('');
+    return;
+  }
   if(portSel)portSel.innerHTML=_buildLotTsPortOpts('',country);
 }
 window.lotTsCountryChange=lotTsCountryChange;
@@ -34273,6 +34285,19 @@ function onCarrierChangeVessel(){
 }
 window.onCarrierChangeVessel=onCarrierChangeVessel;
 
+// v4.53: Khi chọn Booking Party → tự điền Shipper (hoặc Nhà cung cấp) cùng giá trị
+// Người dùng vẫn có thể đổi Shipper sau khi auto-fill
+function onBookingPartyChange(){
+  const bp=(g('f_bookingParty')||{}).value||'';
+  const shEl=g('f_shipper')||g('f_supplier');
+  if(shEl&&bp){
+    shEl.value=bp;
+    // Trigger cập nhật Cnee options theo Shipper mới
+    if(typeof refreshCneeOptions==='function')refreshCneeOptions();
+  }
+}
+window.onBookingPartyChange=onBookingPartyChange;
+
 function _findCountryForPort(port){
   // Reverse-lookup: which country does this port belong to?
   if(!port||typeof PORTS_BY_COUNTRY==='undefined')return '';
@@ -34324,8 +34349,49 @@ function onVesselPick(){
     if(g('f_eta')&&pods[0].eta)g('f_eta').value=pods[0].eta;
     if(pods.length>1)toast('Tàu có nhiều POD — đã điền POD đầu, chỉnh lại nếu cần','success');
   }
+  // v4.53: Cập nhật danh sách cảng chuyển tải theo tàu vừa chọn
+  const newTsPorts=(v.transships||[]).filter(function(p){return p.port;});
+  window._lotVesselTsPorts=newTsPorts;
+  _refreshTransshipList(newTsPorts);
 }
 window.onVesselPick=onVesselPick;
+
+// v4.53: Rebuild transship UI khi đổi tàu
+function _refreshTransshipList(tsPorts){
+  const list=g('lotTransshipList'); if(!list)return;
+  list.innerHTML='';
+  if(!tsPorts||!tsPorts.length){
+    const p=document.createElement('div');
+    p.textContent='Tàu direct (không chuyển tải)';
+    p.style.cssText='font-size:12px;color:var(--text-tertiary);padding:4px 0';
+    list.appendChild(p);
+    return;
+  }
+  // Tự động thêm 1 row cho mỗi cảng chuyển tải của tàu
+  tsPorts.forEach(function(vp,i){
+    const div=document.createElement('div');
+    div.setAttribute('data-ts-lot-row','');
+    div.style.cssText='display:flex;gap:5px;margin-bottom:5px;align-items:center';
+    const portOpts='<option value="">— Chọn cảng chuyển tải —</option>'
+      +tsPorts.map(function(p2){
+        return '<option'+(p2.port===vp.port?' selected':'')
+          +' data-ts-eta="'+(p2.eta||'')+'" data-ts-tt="'+(p2.tt!=null?p2.tt:'')+'" data-ts-country="'+(p2.country||'')+'">'+p2.port+'</option>';
+      }).join('');
+    const cOptsRow='<option value="">— Quốc gia —</option>'+PORT_COUNTRIES.map(function(cn){return '<option'+(cn===(vp.country||'')?' selected':'')+'>'+cn+'</option>';}).join('');
+    div.innerHTML='<select data-ts-lot-i="'+i+'" data-ts-lot-k="country" onchange="lotTsCountryChange(this)" style="flex:1;font-size:12px">'+cOptsRow+'</select>'
+      +'<select data-ts-lot-i="'+i+'" data-ts-lot-k="port" onchange="lotTsPortChange(this)" style="flex:1.5;font-size:12px">'+portOpts+'</select>'
+      +'<input type="number" data-ts-lot-i="'+i+'" data-ts-lot-k="tt" value="'+(vp.tt!=null?vp.tt:'')+'" min="0" placeholder="T/T" title="Transit time ngày" style="width:50px;font-size:12px;text-align:center"/>'
+      +'<input type="date" data-ts-lot-i="'+i+'" data-ts-lot-k="eta" value="'+(vp.eta||'')+'" style="width:130px;font-size:12px"/>'
+      +'<button class="rac red" onclick="lotTsDelRow('+i+')" title="Xóa" style="font-size:13px"><i class="ti ti-x"></i></button>';
+    list.appendChild(div);
+  });
+  // Cập nhật header nếu cần
+  const hdEl=list.previousElementSibling;
+  if(hdEl&&!hdEl.querySelector('[data-ts-lot-row]')&&tsPorts.length&&hdEl.style&&!hdEl.textContent.includes('Quốc gia')){
+    // header đã có từ render ban đầu nếu r.transships có dữ liệu — không cần làm gì thêm
+  }
+}
+window._refreshTransshipList=_refreshTransshipList;
 
 
 /* ── Quét tên tàu từ dữ liệu lô hàng hiện có & tổng hợp ── */
