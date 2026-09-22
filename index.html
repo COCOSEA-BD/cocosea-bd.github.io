@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.56';
+window.APP_BUILD='v4.57';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -13803,6 +13803,147 @@ function _tcDailySeries(from,to){
   return Object.values(byBucket).sort(function(a,b){return a.date<b.date?-1:1;}).map(function(x){return Object.assign({},x,{profit:x.thu-x.chi});});
 }
 
+// v4.57 — Bảng số liệu Doanh thu / Chi phí / Lợi nhuận phân kỳ theo bộ lọc thời gian.
+// month → từng tuần trong tháng (Tuần 1…4)
+// quarter → từng tháng trong quý (Tháng M/Y × 3)
+// year → từng tháng trong năm (Tháng 1…12)
+// custom → tự động gộp: ≤45 ngày → theo tuần, >45 ngày → theo tháng
+function _tcPeriodDataTable(from, to){
+  const p=window._tcRptPeriod;
+  const roe=26390;
+  const txInPeriod=(cache.cashTx||[]).filter(function(t){return t.date&&t.date>=from&&t.date<=to;});
+
+  // --- Xác định buckets dựa trên mode ---
+  let buckets=[]; // [{key, label, from, to}]
+
+  if(p.mode==='month'){
+    // Chia tháng thành các tuần (Thứ Hai → Chủ Nhật), gán nhãn Tuần 1/2/3/4(+)
+    const y=p.year, m=p.month;
+    const firstDay=new Date(y,m-1,1);
+    const lastDay=new Date(y,m,0);
+    let cur=new Date(firstDay);
+    // lùi về thứ 2 đầu tuần chứa ngày 1
+    const dow=cur.getDay()||7; cur.setDate(cur.getDate()-dow+1);
+    let wk=1;
+    while(cur<=lastDay){
+      const wkFrom=new Date(cur);
+      const wkTo=new Date(cur); wkTo.setDate(wkTo.getDate()+6);
+      const actualFrom=wkFrom<firstDay?firstDay:wkFrom;
+      const actualTo=wkTo>lastDay?lastDay:wkTo;
+      const fStr=actualFrom.toISOString().slice(0,10);
+      const tStr=actualTo.toISOString().slice(0,10);
+      buckets.push({key:'W'+wk,label:'Tuần '+wk,from:fStr,to:tStr});
+      cur.setDate(cur.getDate()+7); wk++;
+    }
+  } else if(p.mode==='quarter'){
+    // 3 tháng của quý
+    const y=p.year, q=p.quarter;
+    const startM=(q-1)*3+1;
+    const MONTHS_VI=['','Tháng 1','Tháng 2','Tháng 3','Tháng 4','Tháng 5','Tháng 6','Tháng 7','Tháng 8','Tháng 9','Tháng 10','Tháng 11','Tháng 12'];
+    for(var mi=0;mi<3;mi++){
+      const m=startM+mi;
+      const fStr=y+'-'+String(m).padStart(2,'0')+'-01';
+      const last=new Date(y,m,0).getDate();
+      const tStr=y+'-'+String(m).padStart(2,'0')+'-'+String(last).padStart(2,'0');
+      buckets.push({key:'M'+m,label:MONTHS_VI[m]+'/'+y,from:fStr,to:tStr});
+    }
+  } else if(p.mode==='year'){
+    // mỗi tháng trong năm (từ tháng bắt đầu thực tế)
+    const y=p.year;
+    const startM=(y===2026)?5:1;
+    const MONTHS_VI=['','T1','T2','T3','T4','T5','T6','T7','T8','T9','T10','T11','T12'];
+    for(var mi2=startM;mi2<=12;mi2++){
+      const fStr=y+'-'+String(mi2).padStart(2,'0')+'-01';
+      const last=new Date(y,mi2,0).getDate();
+      const tStr=y+'-'+String(mi2).padStart(2,'0')+'-'+String(last).padStart(2,'0');
+      buckets.push({key:'M'+mi2,label:MONTHS_VI[mi2]+'/'+y,from:fStr,to:tStr});
+    }
+  } else {
+    // custom: gộp theo tuần nếu ≤45 ngày, theo tháng nếu >45 ngày
+    const fromD=new Date(from+'T00:00:00'), toD=new Date(to+'T00:00:00');
+    const days=Math.round((toD-fromD)/86400000)+1;
+    if(days<=45){
+      // theo tuần
+      let cur=new Date(fromD);
+      const dow=cur.getDay()||7; cur.setDate(cur.getDate()-dow+1);
+      let wk=1;
+      while(cur<=toD){
+        const wkTo=new Date(cur); wkTo.setDate(wkTo.getDate()+6);
+        const aFrom=cur<fromD?fromD:cur;
+        const aTo=wkTo>toD?toD:wkTo;
+        buckets.push({key:'W'+wk,label:'T'+wk,from:aFrom.toISOString().slice(0,10),to:aTo.toISOString().slice(0,10)});
+        cur.setDate(cur.getDate()+7); wk++;
+      }
+    } else {
+      // theo tháng
+      const MONTHS_VI=['','T1','T2','T3','T4','T5','T6','T7','T8','T9','T10','T11','T12'];
+      let cur=new Date(fromD.getFullYear(),fromD.getMonth(),1);
+      while(cur<=toD){
+        const y2=cur.getFullYear(), m2=cur.getMonth()+1;
+        const fStr=y2+'-'+String(m2).padStart(2,'0')+'-01';
+        const last=new Date(y2,m2,0).getDate();
+        const tStr=y2+'-'+String(m2).padStart(2,'0')+'-'+String(last).padStart(2,'0');
+        const aFrom=fStr<from?from:fStr;
+        const aTo=tStr>to?to:tStr;
+        buckets.push({key:fStr,label:MONTHS_VI[m2]+'/'+String(y2).slice(2),from:aFrom,to:aTo});
+        cur.setMonth(cur.getMonth()+1);
+      }
+    }
+  }
+
+  // --- Tổng hợp thu/chi theo bucket ---
+  const fmt=function(n){return (n||0).toLocaleString('vi-VN');};
+  const fmtS=function(v){const a=Math.abs(v||0);if(a>=1e9)return (v/1e9).toFixed(2)+'B';if(a>=1e6)return Math.round(v/1e6)+'M';if(a>=1e3)return Math.round(v/1e3)+'K';return String(Math.round(v||0));};
+
+  let grandThu=0, grandChi=0;
+  const rows=buckets.map(function(b){
+    const txs=txInPeriod.filter(function(t){return t.date>=b.from&&t.date<=b.to;});
+    let thu=0,chi=0;
+    txs.forEach(function(t){
+      const a=(t.currency||'VND')==='VND'?(t.amount||0):Math.round((t.amount||0)*roe);
+      if(t.type==='thu')thu+=a; else chi+=a;
+    });
+    const profit=thu-chi;
+    grandThu+=thu; grandChi+=chi;
+    const pColor=profit>=0?'#16A34A':'#EF4444';
+    const pSign=profit>=0?'+':'';
+    return '<tr>'
+      +'<td style="font-weight:600;white-space:nowrap;color:var(--text-primary)">'+b.label+'</td>'
+      +'<td style="text-align:right;color:#16A34A;font-weight:700">'+fmt(thu)+'</td>'
+      +'<td style="text-align:right;color:#EF4444;font-weight:700">'+fmt(chi)+'</td>'
+      +'<td style="text-align:right;color:'+pColor+';font-weight:800">'+pSign+fmt(profit)+'</td>'
+      +'<td style="text-align:right;color:var(--text-secondary);font-size:11px">'+(thu>0?Math.round((thu-chi)/thu*100)+'%':'—')+'</td>'
+    +'</tr>';
+  });
+
+  const grandProfit=grandThu-grandChi;
+  const grandPColor=grandProfit>=0?'#16A34A':'#EF4444';
+  const grandMargin=grandThu>0?Math.round(grandProfit/grandThu*100)+'%':'—';
+
+  const thS='padding:6px 10px;font-size:11px;font-weight:700;color:var(--text-secondary);white-space:nowrap;border-bottom:2px solid var(--border-light)';
+  const tfS='padding:7px 10px;font-size:12.5px;font-weight:800;border-top:2px solid var(--border-light)';
+
+  return '<div style="margin-top:1rem;overflow-x:auto">'
+    +'<table style="width:100%;border-collapse:collapse;font-size:12.5px">'
+    +'<thead><tr>'
+    +'<th style="'+thS+';text-align:left">Kỳ</th>'
+    +'<th style="'+thS+';text-align:right"><span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:#16A34A;border-radius:2px;display:inline-block"></span>Doanh thu</span></th>'
+    +'<th style="'+thS+';text-align:right"><span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:#EF4444;border-radius:2px;display:inline-block"></span>Chi phí</span></th>'
+    +'<th style="'+thS+';text-align:right"><span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:#0F4C81;border-radius:2px;display:inline-block"></span>Lợi nhuận</span></th>'
+    +'<th style="'+thS+';text-align:right">Margin</th>'
+    +'</tr></thead>'
+    +'<tbody>'+rows.join('')+'</tbody>'
+    +'<tfoot><tr style="background:var(--bg-secondary)">'
+    +'<td style="'+tfS+'">TỔNG CỘNG</td>'
+    +'<td style="'+tfS+';text-align:right;color:#16A34A">'+fmt(grandThu)+'</td>'
+    +'<td style="'+tfS+';text-align:right;color:#EF4444">'+fmt(grandChi)+'</td>'
+    +'<td style="'+tfS+';text-align:right;color:'+grandPColor+'">'+(grandProfit>=0?'+':'')+fmt(grandProfit)+'</td>'
+    +'<td style="'+tfS+';text-align:right;color:var(--text-secondary)">'+grandMargin+'</td>'
+    +'</tr></tfoot>'
+    +'</table>'
+    +'</div>';
+}
+
 // Vẽ mini sparkline SVG (dùng cho KPI card) — chỉ minh họa xu hướng, không có trục/label.
 function _tcSparkline(values,color){
   if(!values||values.length<2)return '<svg viewBox="0 0 100 30" style="width:100%;height:30px"></svg>';
@@ -14810,6 +14951,7 @@ function renderTcBaoCao(){
         </span>
       </div>
       ${_tcComboChart(dailySeries)}
+      ${_tcPeriodDataTable(from,to)}
     </div>
     <div class="tcbc-card">
       <div class="tcbc-card-hd"><span><i class="ti ti-chart-donut"></i> Cơ cấu chi phí</span></div>
