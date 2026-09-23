@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.60';
+window.APP_BUILD='v4.61';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -10036,6 +10036,13 @@ window._prState=window._prState||{
   emp:'' // lọc theo 1 nhân viên (uid/docId), '' = tất cả
 };
 window._prCache=window._prCache||{}; // {docId 'YYYY-MM': dataObj}
+window._prRptState=window._prRptState||{
+  mode:'quarterly',
+  qYear:(new Date().getFullYear()),
+  qQuarter:Math.max(1,Math.ceil((new Date().getMonth()+1)/3)),
+  yYear:(new Date().getFullYear()),
+  emp:''
+};
 
 function _prDocId(y,m){ return String(y)+'-'+String(m).padStart(2,'0'); }
 function _prFmt(n){ return (parseFloat(n)||0).toLocaleString('vi-VN'); }
@@ -10069,11 +10076,12 @@ async function _prLoad(y,m){
 
 function renderTcPayroll(){
   window._prActiveTab=window._prActiveTab||'list';
+  // Reset active tab nếu đang ở tab cũ không còn tồn tại
+  if(window._prActiveTab==='quarterly'||window._prActiveTab==='yearly')window._prActiveTab='report';
   const activeTab=window._prActiveTab;
   const tabs=[
     {k:'list',icon:'ti-list-details',label:'Danh sách lương'},
-    {k:'quarterly',icon:'ti-chart-bar',label:'Báo cáo quý'},
-    {k:'yearly',icon:'ti-chart-line',label:'Báo cáo năm'}
+    {k:'report',icon:'ti-chart-bar',label:'Báo cáo'}
   ];
   const tabNav=tabs.map(function(t){
     return '<button class="pr-tab-btn'+(activeTab===t.k?' active':'')+'" onclick="_prSwitchTab(\''+t.k+'\')" style="border:none;background:'+(activeTab===t.k?'#fff':'rgba(255,255,255,.08)')+';color:'+(activeTab===t.k?'#0D2137':'#94A3B8')+';padding:8px 16px;border-radius:8px 8px 0 0;cursor:pointer;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap"><i class="ti '+t.icon+'"></i>'+t.label+'</button>';
@@ -10144,13 +10152,16 @@ async function _tcPayrollAfterRender(){
 window._prLoadTabContent=async function(tab){
   const el=g('prTabContent'); if(!el)return;
   if(tab==='list'){
+    // Luôn reload dữ liệu từ Firebase theo tháng/năm đang chọn
+    el.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải dữ liệu...</div></div>';
+    const st=window._prState;
+    const data=await _prLoad(st.year,st.month);
+    window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
     el.innerHTML=_prListTabHTML();
     _prRenderKpis();
     _prRenderTable();
-  } else if(tab==='quarterly'){
-    await _prRenderQuarterly();
-  } else if(tab==='yearly'){
-    await _prRenderYearly();
+  } else if(tab==='report'){
+    await _prRenderReport();
   }
 };
 window._prSwitchTab=function(tab){
@@ -10229,159 +10240,183 @@ function _prFmtShort(n){
   if(v>=1000)return (v/1000).toFixed(0)+'K';
   return v.toLocaleString('vi-VN');
 }
-async function _prRenderQuarterly(){
-  const el=g('prTabContent'); if(!el)return;
-  const st=window._prState;
-  const curY=new Date().getFullYear();
-  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-2+i;return '<option value="'+yy+'"'+(yy===st.qYear?' selected':'')+'>'+yy+'</option>';}).join('');
-  const quys=[{q:1,months:[1,2,3],label:'Quý 1'},{q:2,months:[4,5,6],label:'Quý 2'},{q:3,months:[7,8,9],label:'Quý 3'},{q:4,months:[10,11,12],label:'Quý 4'}];
-  const activeQ=st.qQuarter||1;
-  const qBtns=quys.map(function(qq){
-    return '<button onclick="window._prState.qQuarter='+qq.q+';_prRenderQuarterly()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border-light);cursor:pointer;font-size:12px;font-weight:600;background:'+(activeQ===qq.q?'#0D2137':'var(--bg-primary)')+';color:'+(activeQ===qq.q?'#C99A3C':'var(--text-secondary)')+'">'+qq.label+'</button>';
-  }).join('');
-  window._prState.qYear=window._prState.qYear||curY;
-  el.innerHTML='<div class="pr-chart-section"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.65rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
-    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary)">Năm:</label>'
-    +'<select onchange="window._prState.qYear=parseInt(this.value);_prRenderQuarterly()" style="width:90px;font-size:12px">'+yearOpts+'</select>'
-    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-left:8px">Chọn quý:</label>'
-    +'<div style="display:flex;gap:5px">'+qBtns+'</div>'
-    +'</div>'
-    +'<div id="prQContent" style="display:flex;flex-direction:column;gap:.75rem"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải dữ liệu quý...</div></div></div></div>';
-  const qDef=quys.find(function(q){return q.q===activeQ;})||quys[0];
-  const monthData=await Promise.all(qDef.months.map(function(m){return _prLoad(window._prState.qYear,m);}));
-  const mResults=qDef.months.map(function(m,i){
-    const rows=monthData[i].rows||[];
-    let nhan=0;let real=0;let tong=0;let tru=0;
-    rows.forEach(function(r){
-      const base=parseFloat(r.luongCoBan)||0;
-      const days=parseFloat(r.ngayCong)||0;
-      const stdDays=parseFloat(r.ngayCongChuan)||26;
-      const realAuto=days&&stdDays?Math.round(base/stdDays*days):base;
-      const rv=(r.realManual!=null&&r.realManual!=='')?parseFloat(r.realManual):realAuto;
-      const at=parseFloat(r.phuCapAnTrua)||0;
-      const dt=parseFloat(r.phuCapDienThoai)||0;
-      const tn=parseFloat(r.phuCapTrachNhiem)||0;
-      const tongLuong=rv+at+dt+tn;
-      const hasBH=r.hasInsurance!==false;
-      const bhxh=hasBH?((r.bhxhManual!=null&&r.bhxhManual!=='')?parseFloat(r.bhxhManual):0):0;
-      const bhyt=hasBH?((r.bhytManual!=null&&r.bhytManual!=='')?parseFloat(r.bhytManual):0):0;
-      const truAmt=bhxh+bhyt;
-      real+=rv;tong+=tongLuong;tru+=truAmt;nhan+=tongLuong-truAmt;
-    });
-    return {m:m,label:'Tháng '+m,nhanVien:rows.length,nhan:nhan,tong:tong,tru:tru,real:real};
-  });
-  const totalNhan=mResults.reduce(function(s,d){return s+d.nhan;},0);
-  const totalTong=mResults.reduce(function(s,d){return s+d.tong;},0);
-  const maxNhan=Math.max.apply(null,mResults.map(function(d){return d.nhan;}));
-  const barSvg=_prBarChartSvg(mResults.map(function(d){return {label:d.label,value:d.nhan};}),maxNhan,'#14B8A6');
-  const sumRows=mResults.map(function(d,i){
-    return '<tr class="'+(i%2===0?'':'')+'"><td style="padding:6px 10px;text-align:left;font-weight:600">'+d.label+'</td>'
-      +'<td>'+d.nhanVien+' NV</td>'
-      +'<td>'+_prFmt(d.tong)+'</td>'
-      +'<td style="color:#EF4444">'+_prFmt(d.tru)+'</td>'
-      +'<td style="font-weight:700;color:#14B8A6">'+_prFmt(d.nhan)+'</td></tr>';
-  }).join('');
-  const qc=g('prQContent');
-  if(!qc)return;
-  qc.innerHTML='<div class="pr-chart-card">'
-    +'<div class="pr-chart-ttl"><i class="ti ti-chart-bar" style="color:#14B8A6"></i>Tổng thực nhận theo tháng ('+qDef.label+' / '+window._prState.qYear+')</div>'
-    +barSvg
-    +'</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">'
-    +'<div class="pr-chart-card">'
-    +'<div class="pr-chart-ttl"><i class="ti ti-coin" style="color:#C99A3C"></i>Tổng chi lương quý</div>'
-    +'<div style="font-size:28px;font-weight:900;color:#C99A3C;font-variant-numeric:tabular-nums">'+_prFmt(totalNhan)+'<span style="font-size:13px;font-weight:500;color:var(--text-secondary)"> đ</span></div>'
-    +'<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Tổng lương trước trừ: '+_prFmt(totalTong)+' đ</div>'
-    +'</div>'
-    +'<div class="pr-chart-card">'
-    +'<div class="pr-chart-ttl"><i class="ti ti-calendar-stats" style="color:#3B82F6"></i>Chi tiết theo tháng</div>'
-    +'<table class="pr-sum-table"><thead><tr><th style="text-align:left">Tháng</th><th>NV</th><th>Tổng lương</th><th>Khấu trừ</th><th>Thực nhận</th></tr></thead>'
-    +'<tbody>'+sumRows+'</tbody></table>'
-    +'</div></div>';
+// Helper: lấy chữ viết tắt tên nhân viên
+function _prInitials(name){
+  if(!name)return '?';
+  const parts=name.trim().split(/\s+/);
+  if(parts.length===1)return parts[0].substring(0,2).toUpperCase();
+  return (parts[0][0]+(parts[parts.length-1][0]||'')).toUpperCase();
 }
-async function _prRenderYearly(){
-  const el=g('prTabContent'); if(!el)return;
-  const curY=new Date().getFullYear();
-  window._prState.yYear=window._prState.yYear||curY;
-  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-3+i;return '<option value="'+yy+'"'+(yy===window._prState.yYear?' selected':'')+'>'+yy+'</option>';}).join('');
-  el.innerHTML='<div class="pr-chart-section"><div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;padding:.65rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
-    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary)">Năm:</label>'
-    +'<select onchange="window._prState.yYear=parseInt(this.value);_prRenderYearly()" style="width:90px;font-size:12px">'+yearOpts+'</select>'
-    +'</div>'
-    +'<div id="prYContent"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải dữ liệu năm...</div></div></div></div>';
-  const yData=await Promise.all(Array.from({length:12},function(_,i){return _prLoad(window._prState.yYear,i+1);}));
-  const mResults=yData.map(function(data,i){
-    const rows=data.rows||[];
-    let nhan=0;let tong=0;let tru=0;
-    rows.forEach(function(r){
-      const base=parseFloat(r.luongCoBan)||0;
-      const days=parseFloat(r.ngayCong)||0;
-      const stdDays=parseFloat(r.ngayCongChuan)||26;
-      const realAuto=days&&stdDays?Math.round(base/stdDays*days):base;
-      const rv=(r.realManual!=null&&r.realManual!=='')?parseFloat(r.realManual):realAuto;
-      const at=parseFloat(r.phuCapAnTrua)||0;
-      const dt=parseFloat(r.phuCapDienThoai)||0;
-      const tn=parseFloat(r.phuCapTrachNhiem)||0;
-      const tongLuong=rv+at+dt+tn;
-      const hasBH=r.hasInsurance!==false;
-      const bhxh=hasBH?((r.bhxhManual!=null&&r.bhxhManual!=='')?parseFloat(r.bhxhManual):0):0;
-      const bhyt=hasBH?((r.bhytManual!=null&&r.bhytManual!=='')?parseFloat(r.bhytManual):0):0;
-      tong+=tongLuong;tru+=bhxh+bhyt;nhan+=tongLuong-(bhxh+bhyt);
-    });
-    return {m:i+1,label:'T'+String(i+1).padStart(2,'0'),nhanVien:rows.length,nhan:nhan,tong:tong,tru:tru};
-  });
-  const totalNhan=mResults.reduce(function(s,d){return s+d.nhan;},0);
-  const totalTong=mResults.reduce(function(s,d){return s+d.tong;},0);
-  const avgNhan=mResults.filter(function(d){return d.nhan>0;}).length;
-  const maxNhan=Math.max.apply(null,mResults.map(function(d){return d.nhan;}));
-  const barSvg=_prBarChartSvg(mResults.map(function(d){return {label:d.label,value:d.nhan,nv:d.nhanVien};}),maxNhan,'#3B82F6');
-  const sumRows=mResults.map(function(d,i){
-    return '<tr style="'+(i%2===0?'':'background:var(--bg-secondary)')+'"><td style="padding:5px 10px;font-weight:600;text-align:left">Tháng '+d.m+'</td>'
-      +'<td>'+d.nhanVien+'</td>'
-      +'<td>'+_prFmt(d.tong)+'</td>'
-      +'<td style="color:#EF4444">'+_prFmt(d.tru)+'</td>'
-      +'<td style="font-weight:700;color:#14B8A6">'+_prFmt(d.nhan)+'</td></tr>';
-  }).join('');
-  const yc=g('prYContent');
-  if(!yc)return;
-  yc.innerHTML='<div class="pr-chart-card">'
-    +'<div class="pr-chart-ttl"><i class="ti ti-chart-line" style="color:#3B82F6"></i>Tổng thực nhận 12 tháng — Năm '+window._prState.yYear+'</div>'
-    +barSvg
-    +'</div>'
-    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;margin-bottom:.75rem">'
-    +'<div class="pr-chart-card"><div class="pr-kpi-lbl">Tổng chi lương cả năm</div><div style="font-size:22px;font-weight:900;color:#C99A3C;margin-top:4px">'+_prFmt(totalNhan)+'<span style="font-size:12px;font-weight:400;color:var(--text-secondary)"> đ</span></div></div>'
-    +'<div class="pr-chart-card"><div class="pr-kpi-lbl">Tổng lương trước trừ</div><div style="font-size:22px;font-weight:900;color:var(--text-primary);margin-top:4px">'+_prFmt(totalTong)+'<span style="font-size:12px;font-weight:400;color:var(--text-secondary)"> đ</span></div></div>'
-    +'<div class="pr-chart-card"><div class="pr-kpi-lbl">Số tháng có dữ liệu</div><div style="font-size:22px;font-weight:900;color:#3B82F6;margin-top:4px">'+avgNhan+' tháng</div></div>'
-    +'</div>'
-    +'<div class="pr-chart-card"><div class="pr-chart-ttl"><i class="ti ti-table" style="color:#14B8A6"></i>Tổng hợp theo tháng</div>'
-    +'<table class="pr-sum-table"><thead><tr><th style="text-align:left">Tháng</th><th>NV</th><th>Tổng lương</th><th>Khấu trừ</th><th>Thực nhận</th></tr></thead>'
-    +'<tbody>'+sumRows+'</tbody>'
-    +'<tfoot><tr><td style="padding:6px 10px;text-align:left;font-weight:800;background:#0D2137;color:#C99A3C">TỔNG NĂM</td>'
-    +'<td style="background:#0D2137;color:#94A3B8">—</td>'
-    +'<td style="background:#0D2137;color:#C99A3C;font-weight:800">'+_prFmt(totalTong)+'</td>'
-    +'<td style="background:#0D2137;color:#EF4444;font-weight:800">'+_prFmt(mResults.reduce(function(s,d){return s+d.tru;},0))+'</td>'
-    +'<td style="background:#0D2137;color:#14B8A6;font-weight:800">'+_prFmt(totalNhan)+'</td></tr></tfoot>'
-    +'</table></div>';
+
+// Helper tính lương cho 1 row
+function _prCalcRow(r){
+  const base=parseFloat(r.luongCoBan)||0;
+  const days=parseFloat(r.ngayCong)||0;
+  const stdDays=parseFloat(r.ngayCongChuan)||26;
+  const realAuto=days&&stdDays?Math.round(base/stdDays*days):base;
+  const rv=(r.realManual!=null&&r.realManual!=='')?parseFloat(r.realManual):realAuto;
+  const at=parseFloat(r.phuCapAnTrua)||0;
+  const dt=parseFloat(r.phuCapDienThoai)||0;
+  const tn=parseFloat(r.phuCapTrachNhiem)||0;
+  const tong=rv+at+dt+tn;
+  const hasBH=r.hasInsurance!==false;
+  const bhxh=hasBH?((r.bhxhManual!=null&&r.bhxhManual!=='')?parseFloat(r.bhxhManual):0):0;
+  const bhyt=hasBH?((r.bhytManual!=null&&r.bhytManual!=='')?parseFloat(r.bhytManual):0):0;
+  return {real:rv,tong:tong,tru:bhxh+bhyt,nhan:tong-(bhxh+bhyt),pc:at+dt+tn};
 }
-function _prBarChartSvg(data,maxVal,color){
-  const W=600,H=180;
-  const padL=10,padR=10,padT=28,padB=28;
-  const n=data.length;
+
+// Biểu đồ cột SVG cải tiến
+function _prBarChartSvg(mResults,maxVal,accentColor){
+  const W=620,H=210,padL=44,padR=12,padT=28,padB=36;
+  const n=mResults.length;
   if(!n||!maxVal)return '<div style="height:180px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px"><i class="ti ti-chart-bar" style="margin-right:6px"></i>Chưa có dữ liệu</div>';
-  const bW=(W-padL-padR)/n;
-  const bMax=H-padT-padB;
-  const bars=data.map(function(d,i){
-    const bH=maxVal>0?Math.round((d.value/maxVal)*bMax):0;
-    const x=padL+i*bW+bW*.12;
-    const y=padT+bMax-bH;
-    const bwR=bW*.76;
-    const isTop=d.value===maxVal&&maxVal>0;
-    const valLabel=d.value>0?_prFmtShort(d.value):'';
-    return '<rect x="'+x+'" y="'+y+'" width="'+bwR+'" height="'+bH+'" rx="3" fill="'+(isTop?color:'#1A3E6B')+'" opacity="'+(isTop?'1':'.75')+'"/>'
-      +(valLabel?'<text x="'+(x+bwR/2)+'" y="'+(y-4)+'" text-anchor="middle" font-size="9" fill="'+(isTop?color:'#64748B')+'">'+valLabel+'</text>':'')
-      +'<text x="'+(x+bwR/2)+'" y="'+(H-padB/2+5)+'" text-anchor="middle" font-size="9.5" fill="#64748B">'+d.label+'</text>';
+  const chartW=W-padL-padR;
+  const chartH=H-padT-padB;
+  const bW=chartW/n;
+  // Grid lines
+  const gridPcts=[0.25,0.5,0.75,1.0];
+  const gridLines=gridPcts.map(function(p){
+    const y=padT+chartH-(chartH*p);
+    return '<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="rgba(100,116,139,.2)" stroke-width="1" stroke-dasharray="4,3"/>'
+      +'<text x="'+(padL-5)+'" y="'+(y+3.5)+'" text-anchor="end" font-size="9" fill="#64748B">'+_prFmtShort(maxVal*p)+'</text>';
   }).join('');
-  return '<svg width="100%" height="'+H+'" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" style="display:block;overflow:visible"><rect width="'+W+'" height="'+H+'" fill="none"/><line x1="'+padL+'" y1="'+padT+'" x2="'+padL+'" y2="'+(H-padB)+'" stroke="#1A3E6B" stroke-width="1"/><line x1="'+padL+'" y1="'+(H-padB)+'" x2="'+(W-padR)+'" y2="'+(H-padB)+'" stroke="#1A3E6B" stroke-width="1"/>'+bars+'</svg>';
+  const bars=mResults.map(function(d,i){
+    const val=d.nhan!==undefined?d.nhan:(d.value||0);
+    const bH=maxVal>0?Math.max(2,Math.round((val/maxVal)*chartH)):0;
+    const x=padL+i*bW+bW*.1;
+    const bwR=bW*.8;
+    const y=padT+chartH-bH;
+    const isTop=val===maxVal&&maxVal>0;
+    const valLabel=val>0?_prFmtShort(val):'';
+    return '<rect x="'+x+'" y="'+y+'" width="'+bwR+'" height="'+bH+'" rx="3" fill="'+(isTop?accentColor:'#1A3E6B')+'" opacity="'+(isTop?'1':'.8')+'"/>'
+      +(valLabel?'<text x="'+(x+bwR/2)+'" y="'+(y-5)+'" text-anchor="middle" font-size="9" font-weight="700" fill="'+(isTop?accentColor:'#94A3B8')+'">'+valLabel+'</text>':'')
+      +'<text x="'+(x+bwR/2)+'" y="'+(H-padB+12)+'" text-anchor="middle" font-size="9.5" fill="#94A3B8">'+(d.label||('T'+String(i+1).padStart(2,'0')))+'</text>'
+      +(d.nhanVien?'<text x="'+(x+bwR/2)+'" y="'+(H-padB+22)+'" text-anchor="middle" font-size="8" fill="#475569">'+d.nhanVien+'nv</text>':'');
+  }).join('');
+  return '<svg width="100%" height="'+H+'" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" style="display:block;overflow:visible">'
+    +'<line x1="'+padL+'" y1="'+padT+'" x2="'+padL+'" y2="'+(padT+chartH)+'" stroke="#334155" stroke-width="1.5"/>'
+    +'<line x1="'+padL+'" y1="'+(padT+chartH)+'" x2="'+(W-padR)+'" y2="'+(padT+chartH)+'" stroke="#334155" stroke-width="1.5"/>'
+    +gridLines+bars+'</svg>';
+}
+
+// Tab Báo cáo tổng hợp (gộp quý + năm)
+async function _prRenderReport(){
+  const el=g('prTabContent'); if(!el)return;
+  const rst=window._prRptState;
+  const curY=new Date().getFullYear();
+  rst.qYear=rst.qYear||curY; rst.yYear=rst.yYear||curY;
+  rst.qQuarter=rst.qQuarter||1;
+  const emps=_prEmployees();
+  const empOpts='<option value="">Tất cả nhân viên</option>'+emps.map(function(e){return '<option value="'+e.uid+'"'+(e.uid===rst.emp?' selected':'')+'>'+e.name+'</option>';}).join('');
+  const isQ=rst.mode==='quarterly';
+  const quys=[{q:1,months:[1,2,3],label:'Quý 1'},{q:2,months:[4,5,6],label:'Quý 2'},{q:3,months:[7,8,9],label:'Quý 3'},{q:4,months:[10,11,12],label:'Quý 4'}];
+  const qDef=quys.find(function(qq){return qq.q===rst.qQuarter;})||quys[0];
+  const months=isQ?qDef.months:Array.from({length:12},function(_,i){return i+1;});
+  const year=isQ?rst.qYear:rst.yYear;
+  const makeYearOpts=function(sel){return Array.from({length:6},function(_,i){var yy=curY-3+i;return '<option value="'+yy+'"'+(yy===sel?' selected':'')+'>'+yy+'</option>';}).join('');};
+  const modeToggle='<div style="display:flex;background:var(--bg-primary);border:1.5px solid var(--border-light);border-radius:8px;overflow:hidden">'
+    +'<button onclick="window._prRptState.mode=\'quarterly\';_prRenderReport()" style="border:none;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;background:'+(isQ?'#0D2137':'transparent')+';color:'+(isQ?'#C99A3C':'var(--text-secondary)')+';transition:all .15s"><i class="ti ti-calendar-week" style="margin-right:4px"></i>Theo quý</button>'
+    +'<button onclick="window._prRptState.mode=\'yearly\';_prRenderReport()" style="border:none;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;background:'+(!isQ?'#0D2137':'transparent')+';color:'+(!isQ?'#C99A3C':'var(--text-secondary)')+';transition:all .15s"><i class="ti ti-calendar-stats" style="margin-right:4px"></i>Theo năm</button>'
+    +'</div>';
+  const qBtns=isQ?'<div style="display:flex;gap:5px">'+quys.map(function(qq){return '<button onclick="window._prRptState.qQuarter='+qq.q+';_prRenderReport()" style="padding:5px 12px;border-radius:6px;border:1.5px solid '+(rst.qQuarter===qq.q?'#14B8A6':'var(--border-light)')+';cursor:pointer;font-size:12px;font-weight:700;background:'+(rst.qQuarter===qq.q?'#14B8A6':'transparent')+';color:'+(rst.qQuarter===qq.q?'#fff':'var(--text-secondary)')+'">'+qq.label+'</button>';}).join('')+'</div>':'';
+  const yearSel=isQ?'<select onchange="window._prRptState.qYear=parseInt(this.value);_prRenderReport()" style="width:86px;font-size:12px">'+makeYearOpts(rst.qYear)+'</select>'
+                   :'<select onchange="window._prRptState.yYear=parseInt(this.value);_prRenderReport()" style="width:86px;font-size:12px">'+makeYearOpts(rst.yYear)+'</select>';
+  el.innerHTML='<div class="pr-chart-section">'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.65rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+    +modeToggle
+    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary)">Năm:</label>'+yearSel
+    +qBtns
+    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-left:4px">Nhân viên:</label>'
+    +'<select onchange="window._prRptState.emp=this.value;_prRenderReport()" style="width:190px;font-size:12px">'+empOpts+'</select>'
+    +'</div>'
+    +'<div id="prRptContent"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải dữ liệu...</div></div></div>'
+    +'</div>';
+  // Load dữ liệu song song
+  const allData=await Promise.all(months.map(function(m){return _prLoad(year,m);}));
+  const empFilter=rst.emp;
+  // Tổng hợp theo tháng
+  const mResults=months.map(function(m,i){
+    const allRows=allData[i].rows||[];
+    const rows=empFilter?allRows.filter(function(r){return r.uid===empFilter;}):allRows;
+    let nhan=0,tong=0,tru=0,real=0;
+    rows.forEach(function(r){const c=_prCalcRow(r);real+=c.real;tong+=c.tong;tru+=c.tru;nhan+=c.nhan;});
+    return {m:m,label:isQ?'Tháng '+m:'T'+String(m).padStart(2,'0'),nhanVien:rows.length,nhan:nhan,tong:tong,tru:tru,real:real};
+  });
+  const totalNhan=mResults.reduce(function(s,d){return s+d.nhan;},0);
+  const totalTong=mResults.reduce(function(s,d){return s+d.tong;},0);
+  const totalTru=mResults.reduce(function(s,d){return s+d.tru;},0);
+  const totalReal=mResults.reduce(function(s,d){return s+d.real;},0);
+  const maxNhan=Math.max.apply(null,mResults.map(function(d){return d.nhan;}));
+  const accentColor=isQ?'#14B8A6':'#3B82F6';
+  // Xây dựng dữ liệu per-employee cross-table
+  const empMap={};
+  months.forEach(function(m,i){
+    const allRows=allData[i].rows||[];
+    const rows=empFilter?allRows.filter(function(r){return r.uid===empFilter;}):allRows;
+    rows.forEach(function(r){
+      const uid=r.uid||('_'+r.name);
+      if(!empMap[uid])empMap[uid]={name:r.name||'—',months:{}};
+      const c=_prCalcRow(r);
+      empMap[uid].months[m]=c;
+    });
+  });
+  const empRows=Object.values(empMap);
+  // Chart
+  const chartSvg=_prBarChartSvg(mResults,maxNhan,accentColor);
+  // Summary cards
+  const sumCards='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin-bottom:.9rem">'
+    +'<div class="pr-chart-card" style="padding:.7rem 1rem;border-top:2px solid #3B82F6"><div class="pr-kpi-lbl">Lương thực tế</div><div style="font-size:18px;font-weight:800;color:var(--text-primary);margin-top:3px">'+_prFmt(totalReal)+'<span style="font-size:10px;color:var(--text-secondary)"> đ</span></div></div>'
+    +'<div class="pr-chart-card" style="padding:.7rem 1rem;border-top:2px solid #C99A3C"><div class="pr-kpi-lbl">Lương + phụ cấp</div><div style="font-size:18px;font-weight:800;color:#C99A3C;margin-top:3px">'+_prFmt(totalTong)+'<span style="font-size:10px;color:var(--text-secondary)"> đ</span></div></div>'
+    +'<div class="pr-chart-card" style="padding:.7rem 1rem;border-top:2px solid #EF4444"><div class="pr-kpi-lbl">Tổng khấu trừ</div><div style="font-size:18px;font-weight:800;color:#EF4444;margin-top:3px">'+_prFmt(totalTru)+'<span style="font-size:10px;color:var(--text-secondary)"> đ</span></div></div>'
+    +'<div class="pr-chart-card" style="padding:.7rem 1rem;border-top:2px solid #14B8A6"><div class="pr-kpi-lbl">Tổng thực nhận</div><div style="font-size:18px;font-weight:800;color:#14B8A6;margin-top:3px">'+_prFmt(totalNhan)+'<span style="font-size:10px;color:var(--text-secondary)"> đ</span></div></div>'
+    +'</div>';
+  // Bảng chi tiết theo nhân viên x tháng
+  const mCols=months.map(function(m,i){return '<th class="pr-th" style="text-align:right;white-space:nowrap;min-width:80px">'+mResults[i].label+'</th>';}).join('');
+  const empTableRows=empRows.map(function(emp,idx){
+    let total=0,totalTru2=0,totalTong2=0;
+    const cells=months.map(function(m){
+      const md=emp.months[m];
+      if(!md)return '<td class="pr-td pr-td-r" style="color:var(--text-secondary);font-size:11px">—</td>';
+      total+=md.nhan;totalTru2+=md.tru;totalTong2+=md.tong;
+      return '<td class="pr-td pr-td-r" style="color:'+(md.nhan>0?'#14B8A6':'var(--text-secondary)')+'">'+_prFmt(md.nhan)+'</td>';
+    }).join('');
+    return '<tr class="pr-tr">'
+      +'<td class="pr-td" style="text-align:center;font-size:11px;color:var(--text-secondary)">'+(idx+1)+'</td>'
+      +'<td class="pr-td" style="min-width:150px"><div style="display:flex;align-items:center;gap:8px"><div class="pr-avatar">'+_prInitials(emp.name)+'</div><span style="font-weight:700;font-size:12.5px">'+emp.name+'</span></div></td>'
+      +cells
+      +'<td class="pr-td pr-td-r" style="font-weight:800;color:#C99A3C;background:rgba(201,154,60,.07);min-width:90px">'+_prFmt(total)+'</td>'
+      +'</tr>';
+  }).join('');
+  const footCells=months.map(function(m,i){return '<td style="padding:6px 8px;text-align:right;font-size:12px;font-weight:700;background:#0D2137;color:#14B8A6;font-variant-numeric:tabular-nums">'+_prFmt(mResults[i].nhan)+'</td>';}).join('');
+  const empTable=empRows.length
+    ?'<div class="pr-chart-card" style="overflow-x:auto;padding:0">'
+      +'<div style="padding:.75rem 1rem .5rem" class="pr-chart-ttl"><i class="ti ti-table" style="color:#C99A3C"></i>Chi tiết thực nhận từng nhân viên</div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:500px">'
+      +'<thead><tr>'
+      +'<th class="pr-th" style="width:36px">#</th>'
+      +'<th class="pr-th" style="text-align:left;min-width:160px">Nhân viên</th>'
+      +mCols
+      +'<th class="pr-th-grp" style="text-align:right;min-width:90px">Tổng kỳ</th>'
+      +'</tr></thead>'
+      +'<tbody>'+empTableRows+'</tbody>'
+      +'<tfoot><tr>'
+      +'<td colspan="2" class="pr-tfoot-tr" style="padding:6px 10px;font-size:12px;font-weight:800;color:#C99A3C;text-align:left">TỔNG CỘNG</td>'
+      +footCells
+      +'<td style="padding:6px 8px;text-align:right;font-size:12px;font-weight:800;background:#0B1B2B;color:#C99A3C;font-variant-numeric:tabular-nums">'+_prFmt(totalNhan)+'</td>'
+      +'</tr></tfoot>'
+      +'</table></div>'
+    :'<div class="pr-chart-card" style="text-align:center;padding:2rem;color:var(--text-secondary)"><i class="ti ti-mood-empty" style="font-size:32px"></i><div style="margin-top:8px;font-size:13px">Chưa có dữ liệu lương cho kỳ này</div></div>';
+  const rpt=g('prRptContent');
+  if(!rpt)return;
+  rpt.innerHTML='<div class="pr-chart-card">'
+    +'<div class="pr-chart-ttl"><i class="ti ti-chart-bar" style="color:'+accentColor+'"></i>'
+    +(isQ?('Thực nhận theo tháng — '+qDef.label+' '+year):('Thực nhận 12 tháng — Năm '+year))
+    +(empFilter?' <span style="font-size:11px;font-weight:500;color:var(--text-secondary);margin-left:4px">· '+(empMap[empFilter]||emps.find(function(e){return e.uid===empFilter;})||{name:''}).name+'</span>':'')
+    +'</div>'
+    +chartSvg
+    +'</div>'
+    +sumCards
+    +empTable;
 }
 
 function _prRenderTable(){
@@ -10393,12 +10428,7 @@ function _prRenderTable(){
   // Tính tổng cột
   let sum={base:0,days:0,real:0,anTrua:0,dienThoai:0,trachNhiem:0,tongLuong:0,bhxh:0,bhyt:0,tru:0,nhan:0};
 
-  function initials(name){
-    if(!name)return '?';
-    const parts=name.trim().split(/\s+/);
-    if(parts.length===1)return parts[0].substring(0,2).toUpperCase();
-    return (parts[0][0]+(parts[parts.length-1][0]||'')).toUpperCase();
-  }
+
 
   const bodyRows=rows.map(function(r,idx){
     // idx thực trong window._prRows (do có thể đang lọc)
@@ -10428,7 +10458,7 @@ function _prRenderTable(){
     const inpSty='font-size:11.5px;border:none;background:transparent;width:100%;box-sizing:border-box';
     return '<tr class="pr-tr">'
       +'<td class="pr-td" style="text-align:center;font-size:11px;color:var(--text-secondary)">'+(idx+1)+'</td>'
-      +'<td class="pr-td" style="min-width:160px"><div style="display:flex;align-items:center;gap:8px"><div class="pr-avatar">'+initials(r.name)+'</div><span style="font-weight:700;font-size:12.5px">'+(r.name||'—')+'</span></div></td>'
+      +'<td class="pr-td" style="min-width:160px"><div style="display:flex;align-items:center;gap:8px"><div class="pr-avatar">'+_prInitials(r.name)+'</div><span style="font-weight:700;font-size:12.5px">'+(r.name||'—')+'</span></div></td>'
       +'<td class="pr-td" style="min-width:110px"><input type="text" value="'+(r.position||'').replace(/"/g,'&quot;')+'" onchange="_prEdit('+realIdx+',\'position\',this.value)" style="'+inpSty+'" placeholder="Chức vụ"/></td>'
       +'<td class="pr-td-r"><input type="number" value="'+base+'" onchange="_prEdit('+realIdx+',\'luongCoBan\',this.value)" style="'+inpSty+';width:100px;text-align:right"/></td>'
       +'<td class="pr-td-r"><input type="number" value="'+days+'" onchange="_prEdit('+realIdx+',\'ngayCong\',this.value)" style="'+inpSty+';width:48px;text-align:right"/></td>'
