@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.58';
+window.APP_BUILD='v4.59';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2746,12 +2746,21 @@ function computeShipmentKpis(tt){
   // Lô cần gửi chứng từ = đã bật theo dõi, có danh sách, và còn ít nhất 1 chứng từ chưa gửi
   const docPending=rows.filter(r=>r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length);
   const docNeed=docPending.length;
+  // Lô IM chưa thông quan (có ETA đã qua 5 ngày — cần xử lý gấp)
+  const now=Date.now();
+  const tqNeed=rows.filter(function(r){
+    if(r.loaiHang!=='IM - Nhập khẩu'||r.thongQuan)return false;
+    if(!r.eta)return false;
+    const etaTime=new Date(r.eta+'T00:00:00').getTime();
+    return !isNaN(etaTime)&&(now-etaTime)>=5*86400000;
+  }).length;
   const elTotal=g('kpiTotal_'+tt), elPending=g('kpiPending_'+tt), elVst=g('kpiVst_'+tt);
   if(elTotal){elTotal.textContent=rows.length;elTotal.style.color='var(--text-primary)';}
   if(elPending){elPending.textContent=pendingCount;elPending.style.color='var(--gold-dark)';}
   if(elVst){
     elVst.innerHTML='<div>'+vstNeed+' <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần VST</span></div>'
-      +'<div style="margin-top:2px">'+docNeed+' <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần gửi Ctừ</span></div>';
+      +'<div style="margin-top:2px">'+docNeed+' <span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">lô cần gửi Ctừ</span></div>'
+      +(tqNeed?'<div style="margin-top:2px;color:#EA580C">'+tqNeed+' <span style="font-size:11px;font-weight:500">lô chưa thông quan</span></div>':'');
     elVst.style.color='var(--text-primary)';
   }
 }
@@ -3216,9 +3225,17 @@ function renderLotTable(tt){
           +`</td>`;
         }
         if(c.k==='vstStatus'){
-          const vstCell=!r.vstEnabled
-            ?`<button class="btn sm" onclick="openVstPopup('${r._id}','${tt}')" style="font-size:11px;opacity:.6">+VST</button>`
-            :`<button class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" onclick="openVstPopup('${r._id}','${tt}')" style="cursor:pointer;font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</button>`;
+          const _isIM=r.loaiHang==='IM - Nhập khẩu';
+          let vstCell;
+          if(_isIM){
+            // TT Thông quan cho lô IM — không dùng VST
+            const _tqWarn=!r.thongQuan&&r.eta&&(Date.now()-new Date(r.eta+'T00:00:00').getTime()>=5*86400000);
+            vstCell=`<button class="bdg ${r.thongQuan?'bdg-g':'bdg-r'}" onclick="openThongQuanPopup('${r._id}','${tt}')" style="cursor:pointer;font-weight:700;white-space:nowrap">${r.thongQuan?'Đã TQ':(_tqWarn?'⚠ Chưa TQ':'Chưa TQ')}</button>`;
+          } else {
+            vstCell=!r.vstEnabled
+              ?`<button class="btn sm" onclick="openVstPopup('${r._id}','${tt}')" style="font-size:11px;opacity:.6">+VST</button>`
+              :`<button class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" onclick="openVstPopup('${r._id}','${tt}')" style="cursor:pointer;font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</button>`;
+          }
           // Hàng dưới: trạng thái gửi chứng từ — 0 chứng từ tick = "Chưa gửi Ctừ"; 1 phần = hiện code các chứng từ CÒN THIẾU (chưa tick); tất cả = "Đã gửi Ctu"
           let docCell;
           if(!r.docTrackEnabled||!(r.docTrackKeys&&r.docTrackKeys.length)){
@@ -3645,11 +3662,18 @@ function renderDetailPanel(r,tt){
     <div class="detail-actionbar">
       <button class="btn" onclick="openLot('${r._id}','${tt}')" ${can('editLot')&&!r.locked?'':'disabled'}><i class="ti ti-edit"></i> Sửa lô hàng</button>
       ${currentProfile?.role==='admin'?`<button class="btn ${r.locked?'pri':'red'}" onclick="toggleLotLock('${r._id}','${tt}')"><i class="ti ${r.locked?'ti-lock-open':'ti-lock'}"></i> ${r.locked?'Mở khóa':'Khóa lô hàng'}</button>`:''}
-      <label class="detail-vst-toggle">
-        <input type="checkbox" id="vstEnabledChk" data-id="${r._id}" data-tt="${tt}" ${r.vstEnabled?'checked':''} onchange="toggleVstEnabled(this.dataset.id,this.dataset.tt,this.checked)"/>
-        <span>Xác nhận VST</span>
-        ${r.vstEnabled?`<span class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" style="font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</span>`:''}
-      </label>
+      ${r.loaiHang==='IM - Nhập khẩu'
+        ?`<div class="detail-vst-toggle" style="cursor:pointer" onclick="openThongQuanPopup('${r._id}','${tt}')">
+          <i class="ti ti-shield-check" style="font-size:15px;color:${r.thongQuan?'var(--green-dark)':'var(--text-secondary)'}"></i>
+          <span>TT Thông quan</span>
+          <span class="bdg ${r.thongQuan?'bdg-g':'bdg-r'}" style="font-weight:700">${r.thongQuan?'Đã thông quan':'Chưa thông quan'}</span>
+        </div>`
+        :`<label class="detail-vst-toggle">
+          <input type="checkbox" id="vstEnabledChk" data-id="${r._id}" data-tt="${tt}" ${r.vstEnabled?'checked':''} onchange="toggleVstEnabled(this.dataset.id,this.dataset.tt,this.checked)"/>
+          <span>Xác nhận VST</span>
+          ${r.vstEnabled?'<span class="bdg '+(r.vstConfirmed?'bdg-g':'bdg-r')+'" style="font-weight:700">'+(r.vstConfirmed?'Đã VST':'Chưa VST')+'</span>':''}
+        </label>`
+      }
       <div class="detail-vst-toggle" style="cursor:pointer" onclick="openDocTrackPopup('${r._id}','${tt}')">
         <i class="ti ti-file-check" style="font-size:15px;color:var(--text-secondary)"></i>
         <span>Theo dõi chứng từ</span>
@@ -6283,7 +6307,7 @@ function _bulkRenderForm(){
     '<div class="lot-section-card" style="margin-bottom:14px">'
       +'<div class="lot-section-hdr" style="color:#2E90FA"><i class="ti ti-file-info"></i>1. Thông tin chung</div>'
       +'<div class="fg">'
-        +'<div class="fi"><label class="lbl">Type Shipment</label><select id="bulk_loaiHang"><option>'+(isXuat?'XK - Xuất khẩu':'IM - Nhập khẩu')+'</option><option>LS - Local Service</option></select></div>'
+        +'<div class="fi"><label class="lbl">Type Shipment</label><select id="bulk_loaiHang"><option'+(isXuat?' selected':'')+'>XK - Xuất khẩu</option><option'+(!isXuat?' selected':'')+'>IM - Nhập khẩu</option><option>LS - Local Service</option></select></div>'
         +'<div class="fi"><label class="lbl">Loại hàng</label><select id="bulk_cargoType">'+cargoOpts.map(function(o){return '<option>'+o+'</option>';}).join('')+'</select></div>'
         +'<div class="fi"><label class="lbl">Booking Party</label><select id="bulk_bookingParty">'+_bulkSelOpts(opts.pAll)+'</select></div>'
         +'<div class="fi"><label class="lbl">'+shipperLbl+'</label><select id="bulk_shipper">'+_bulkSelOpts(opts.pS.length?opts.pS:opts.pAll)+'</select></div>'
@@ -18955,6 +18979,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 
 <!-- VST CONFIRM MODAL -->
 <div class="ov" id="vstOv" style="padding:.75rem"></div>
+<div class="ov" id="thongQuanOv" style="padding:.75rem"></div>
 
 <!-- DETAIL PANEL -->
 <div id="detailBackdrop" class="detail-backdrop"></div>
@@ -24085,6 +24110,58 @@ function openVstPopup(id, tt){
 }
 window.openVstPopup=openVstPopup;
 
+// ── TT Thông quan — cho lô hàng type IM Nhập khẩu ──
+// Field trên Firestore: r.thongQuan (boolean). Mặc định = false/undefined = Chưa thông quan.
+// Cảnh báo tự động: ETA + 5 ngày mà chưa thông quan.
+function openThongQuanPopup(id, tt){
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;}); if(!r)return;
+  const now=Date.now();
+  const etaTime=r.eta?new Date(r.eta+'T00:00:00').getTime():null;
+  const daysSince=etaTime?Math.floor((now-etaTime)/86400000):null;
+  const isLate=etaTime&&(now-etaTime>=5*86400000);
+  let ov=g('thongQuanOv');
+  if(!ov){ov=document.createElement('div');ov.id='thongQuanOv';ov.className='ov';document.body.appendChild(ov);}
+  ov.innerHTML='<div class="modal" style="max-width:400px">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-shield-check" style="margin-right:6px;color:#16A34A"></i>TT Thông quan — '+(r.jobNo||r.bookingNo||'')+'</div>'
+    +'<div class="msub">'+(r.bookingNo||'—')+(r.pol?' · '+(r.pol):'')+(r.pod?' → '+(r.pod):'')+'</div></div>'
+    +'<div class="mhdr-btns"><button class="rac" onclick="closeOv(\'thongQuanOv\')"><i class="ti ti-x"></i></button></div></div>'
+    +'<div class="mbody" style="padding:16px 20px">'
+    +(isLate&&!r.thongQuan?'<div style="padding:.5rem .85rem;background:rgba(220,53,69,.09);border:1px solid rgba(220,53,69,.35);border-radius:8px;font-size:12px;color:#A32D2D;display:flex;align-items:center;gap:8px;margin-bottom:12px"><i class="ti ti-alert-triangle" style="font-size:14px;flex-shrink:0"></i><span>Đã qua ETA <b>+'+daysSince+' ngày</b> — chưa thông quan!</span></div>':'')
+    +'<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1.5px solid '+(r.thongQuan?'var(--green-dark, #15803D)':'var(--border-light)')+'">'
+      +'<input type="checkbox" id="thongQuanChk" '+(r.thongQuan?'checked':'')+' style="width:18px;height:18px;cursor:pointer" onchange="_saveThongQuan(\''+id+'\',\''+tt+'\',this.checked)"/>'
+      +'<div><div style="font-weight:700;font-size:13px;color:var(--green-dark,#15803D)">Đã thông quan</div><div style="font-size:11px;color:var(--text-secondary)">Lô hàng đã hoàn tất thủ tục hải quan</div></div>'
+    +'</label>'
+    +(r.eta?'<div style="margin-top:10px;font-size:11.5px;color:var(--text-secondary);padding:0 2px"><i class="ti ti-calendar" style="font-size:12px;margin-right:3px"></i>ETA: <b>'+(typeof _fmtDMY==='function'?_fmtDMY(r.eta):r.eta)+'</b></div>':'')
+    +'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border-light)">'
+      +'<button class="btn" onclick="closeOv(\'thongQuanOv\')">Đóng</button>'
+    +'</div></div>';
+  openOv('thongQuanOv');
+}
+window.openThongQuanPopup=openThongQuanPopup;
+
+async function _saveThongQuan(id, tt, checked){
+  if(!can('editLot')){toast('Không có quyền','error');return;}
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(tt),id,{thongQuan:!!checked,updatedAt:Date.now()});
+    const idx=(cache[tt]||[]).findIndex(function(x){return x._id===id;});
+    if(idx>=0)cache[tt][idx].thongQuan=!!checked;
+    toast(checked?'Đã đánh dấu thông quan':'Đã bỏ đánh dấu thông quan');
+    renderVstWarning(tt);
+    computeShipmentKpis(tt);
+    closeOv('thongQuanOv');
+    if(detailId===id&&detailTt===tt){
+      const r2=(cache[tt]||[]).find(function(x){return x._id===id;})||{};
+      renderDetailPanel(r2,tt);
+    }
+    // Cập nhật lại ô trong bảng nếu đang hiển thị
+    renderLotTable(tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._saveThongQuan=_saveThongQuan;
+
 // Bật/tắt theo dõi VST ngay trong popup — lưu ngay lập tức (giống toggle ở tab Chi tiết),
 // đồng thời hiện/ẩn khối "Đã VST" tương ứng mà không cần đóng popup.
 async function _vstPopupToggleEnabled(chk){
@@ -24415,6 +24492,14 @@ function renderVstWarning(tt){
     const daysSince=Math.floor((now-etdTime)/86400000);
     return daysSince>=4;
   }).sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');});
+  // Thông quan chậm: lô IM, chưa thông quan, đã qua ETA + 5 ngày
+  const tqUrgent=(cache[tt]||[]).filter(function(r){
+    if(r.loaiHang!=='IM - Nhập khẩu'||r.thongQuan)return false;
+    if(!r.eta)return false;
+    const etaTime=new Date(r.eta+'T00:00:00').getTime();
+    if(isNaN(etaTime))return false;
+    return (now-etaTime)>=5*86400000;
+  }).sort(function(a,b){return (a.eta||'').localeCompare(b.eta||'');});
 
   let html='';
   if(urgent.length){
@@ -24436,6 +24521,18 @@ function renderVstWarning(tt){
           const daysSince=Math.floor((now-new Date(r.etd+'T00:00:00').getTime())/86400000);
           return '<button data-id="'+r._id+'" data-tt="'+tt+'" onclick="openDetail(this.dataset.id,this.dataset.tt)" style="background:none;border:none;padding:0;margin:0 2px;color:inherit;font-weight:700;text-decoration:underline;cursor:pointer">'+(r.bookingNo||r.jobNo||'—')+'</button>'
             +'<span style="color:#a3762a">(ETD +'+daysSince+'ng)</span>';
+        }).join(', ')
+      +'</div></div>';
+  }
+  if(tqUrgent.length){
+    const mt=(urgent.length||docUrgent.length)?'6px':'0';
+    html+='<div style="padding:.5rem .85rem;background:rgba(234,88,12,.08);border:1px solid rgba(234,88,12,.35);border-radius:8px;font-size:11.5px;color:#7C2D12;display:flex;align-items:flex-start;gap:8px;box-sizing:border-box;margin-top:'+mt+'">'
+      +'<i class="ti ti-package-import" style="font-size:15px;flex-shrink:0;margin-top:1px"></i>'
+      +'<div><strong>Cảnh báo thông quan (đã qua ETA+5 ngày, chưa thông quan):</strong> '
+        +tqUrgent.map(function(r){
+          const daysSince=Math.floor((now-new Date(r.eta+'T00:00:00').getTime())/86400000);
+          return '<button data-id="'+r._id+'" data-tt="'+tt+'" onclick="openThongQuanPopup(this.dataset.id,this.dataset.tt)" style="background:none;border:none;padding:0;margin:0 2px;color:inherit;font-weight:700;text-decoration:underline;cursor:pointer">'+(r.bookingNo||r.jobNo||'—')+'</button>'
+            +'<span style="color:#9A3412">(ETA+'+daysSince+'ng)</span>';
         }).join(', ')
       +'</div></div>';
   }
