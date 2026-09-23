@@ -1129,7 +1129,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.59';
+window.APP_BUILD='v4.60';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2954,9 +2954,11 @@ function renderLot(tt){
     <div style="width:1px;align-self:stretch;background:var(--border-light);flex-shrink:0;margin:0 2px"></div>
     <select id="fst_${tt}" style="width:150px;flex-shrink:0" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả</option>
-      <option value="booking_request">Booking request</option>
-      <option value="locked">Đã khóa</option>
-      <option value="unlocked">Chưa khóa</option>
+      <option value="confirm">Confirm</option>
+      <option value="standby">Stand by</option>
+      <option value="xuat">Xuất khẩu</option>
+      <option value="nhap">Nhập khẩu</option>
+      <option value="ls">LS</option>
       <option value="vst_yes">Đã VST</option>
       <option value="vst_no">Chưa VST</option>
       <option value="doc_pending">Chưa gửi Ctừ</option>
@@ -3100,9 +3102,11 @@ function renderLotTable(tt){
   // ── Filter tối ưu: short-circuit sớm, không dùng Object.values() cho search
   const sortDir=(sortState[tt]||{dir:1}).dir;
   const rows=(cache[tt]||[]).filter(r=>{
-    if(fs==='booking_request'&&r.status!=='Booking request')return false;
-    if(fs==='locked'&&!r.locked)return false;
-    if(fs==='unlocked'&&r.locked)return false;
+    if(fs==='confirm'&&r.status!=='Confirm')return false;
+    if(fs==='standby'&&r.status!=='Standby')return false;
+    if(fs==='xuat'&&r.loaiHang!=='XK - Xuất khẩu')return false;
+    if(fs==='nhap'&&r.loaiHang!=='IM - Nhập khẩu')return false;
+    if(fs==='ls'&&r.loaiHang!=='LS - Local Service')return false;
     if(fs==='vst_yes'&&!(r.vstEnabled&&r.vstConfirmed))return false;
     if(fs==='vst_no'&&!(r.vstEnabled&&!r.vstConfirmed))return false;
     if(fs==='doc_pending'&&!(r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length))return false;
@@ -10064,34 +10068,320 @@ async function _prLoad(y,m){
 }
 
 function renderTcPayroll(){
-  const st=window._prState;
-  const emps=_prEmployees();
-  // Dropdown tháng/năm
-  const monthOpts=Array.from({length:12},function(_,i){var mm=i+1;return '<option value="'+mm+'"'+(mm===st.month?' selected':'')+'>Tháng '+mm+'</option>';}).join('');
-  const curY=new Date().getFullYear();
-  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-3+i;return '<option value="'+yy+'"'+(yy===st.year?' selected':'')+'>'+yy+'</option>';}).join('');
-  const empOpts='<option value="">Tất cả nhân viên</option>'+emps.map(function(e){return '<option value="'+e.uid+'"'+(e.uid===st.emp?' selected':'')+'>'+e.name+'</option>';}).join('');
-
-  return `
-  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">
-    <label style="font-size:12px;font-weight:600;color:var(--text-secondary)">Tháng:</label>
-    <select id="prMonth" onchange="window._prState.month=parseInt(this.value);renderTcBody()" style="width:110px;flex:0 0 110px;font-size:12px">${monthOpts}</select>
-    <select id="prYear" onchange="window._prState.year=parseInt(this.value);renderTcBody()" style="width:100px;flex:0 0 100px;font-size:12px">${yearOpts}</select>
-    <label style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-left:8px">Nhân viên:</label>
-    <select id="prEmp" onchange="window._prState.emp=this.value;renderTcBody()" style="width:220px;flex:0 0 220px;font-size:12px">${empOpts}</select>
-    <div style="flex:1"></div>
-    <button class="btn" onclick="_prAddRow()"><i class="ti ti-user-plus"></i> Thêm dòng</button>
-    <button class="btn pri" onclick="_prSave()"><i class="ti ti-device-floppy"></i> Lưu bảng lương</button>
-    <button class="btn" onclick="_prExportExcel()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
+  window._prActiveTab=window._prActiveTab||'list';
+  const activeTab=window._prActiveTab;
+  const tabs=[
+    {k:'list',icon:'ti-list-details',label:'Danh sách lương'},
+    {k:'quarterly',icon:'ti-chart-bar',label:'Báo cáo quý'},
+    {k:'yearly',icon:'ti-chart-line',label:'Báo cáo năm'}
+  ];
+  const tabNav=tabs.map(function(t){
+    return '<button class="pr-tab-btn'+(activeTab===t.k?' active':'')+'" onclick="_prSwitchTab(\''+t.k+'\')" style="border:none;background:'+(activeTab===t.k?'#fff':'rgba(255,255,255,.08)')+';color:'+(activeTab===t.k?'#0D2137':'#94A3B8')+';padding:8px 16px;border-radius:8px 8px 0 0;cursor:pointer;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap"><i class="ti '+t.icon+'"></i>'+t.label+'</button>';
+  }).join('');
+  return `<style>
+.pr-module{display:flex;flex-direction:column}
+.pr-hdr{background:linear-gradient(135deg,#0B1B2B 0%,#0D2137 55%,#1A3E6B 100%);border-radius:12px 12px 0 0;padding:1rem 1.25rem .6rem;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:.75rem}
+.pr-body{background:var(--bg-primary);border:1px solid var(--border-light);border-top:none;border-radius:0 0 10px 10px;overflow:hidden}
+.pr-filter-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:.65rem 1rem;background:var(--bg-secondary);border-bottom:1px solid var(--border-light)}
+.pr-kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;padding:.8rem 1rem;border-bottom:1px solid var(--border-light)}
+@media(max-width:900px){.pr-kpi-row{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:560px){.pr-kpi-row{grid-template-columns:repeat(2,1fr)}}
+.pr-kpi{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:9px;padding:.6rem .75rem;position:relative;overflow:hidden}
+.pr-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.pr-kpi.k-blue::before{background:#3B82F6}
+.pr-kpi.k-teal::before{background:#14B8A6}
+.pr-kpi.k-gold::before{background:#C99A3C}
+.pr-kpi.k-red::before{background:#EF4444}
+.pr-kpi.k-navy::before{background:#1A3E6B}
+.pr-kpi.k-green::before{background:#22C55E}
+.pr-kpi-lbl{font-size:9.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+.pr-kpi-val{font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--text-primary)}
+.pr-kpi-val.c-teal{color:#14B8A6}
+.pr-kpi-val.c-gold{color:#C99A3C}
+.pr-kpi-val.c-red{color:#EF4444}
+.pr-kpi-val.c-blue{color:#3B82F6}
+.pr-kpi-val.c-green{color:#22C55E}
+.pr-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#0D2137,#1A3E6B);color:#C99A3C;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;vertical-align:middle;border:2px solid rgba(201,154,60,.25);letter-spacing:0}
+.pr-th{padding:6px 8px;background:#0D2137;color:#94A3B8;font-size:9px;font-weight:700;border:1px solid rgba(255,255,255,.06);text-align:center;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.pr-th-grp{padding:5px 8px;background:#0B1B2B;color:#C99A3C;font-size:8.5px;font-weight:700;border:1px solid rgba(255,255,255,.06);text-align:center;text-transform:uppercase;letter-spacing:.5px}
+.pr-td{padding:5px 7px;border:1px solid var(--border-light);font-size:12px;vertical-align:middle}
+.pr-td-r{padding:5px 7px;border:1px solid var(--border-light);font-size:12px;text-align:right;vertical-align:middle;font-variant-numeric:tabular-nums}
+.pr-tr:hover td{background:rgba(20,184,166,.04)!important}
+.pr-tfoot-tr td{background:linear-gradient(90deg,#0D2137,#0F2D4C)!important;color:#C99A3C!important;font-weight:800!important;font-variant-numeric:tabular-nums}
+.pr-chart-section{padding:1.1rem}
+.pr-chart-card{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;padding:1rem;margin-bottom:1rem}
+.pr-chart-ttl{font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:.75rem;display:flex;align-items:center;gap:7px}
+.pr-sum-table{width:100%;border-collapse:collapse;font-size:12px}
+.pr-sum-table th{padding:7px 10px;background:#0D2137;color:#94A3B8;font-size:10px;text-align:center;font-weight:700;text-transform:uppercase}
+.pr-sum-table td{padding:6px 10px;border-bottom:1px solid var(--border-light);font-variant-numeric:tabular-nums;text-align:right}
+.pr-sum-table tr:hover td{background:rgba(20,184,166,.04)}
+</style>
+<div class="pr-module">
+  <div class="pr-hdr">
+    <div style="display:flex;align-items:center;gap:.75rem">
+      <div style="width:42px;height:42px;background:rgba(201,154,60,.15);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#C99A3C;font-size:22px;border:1px solid rgba(201,154,60,.25)"><i class="ti ti-users-group"></i></div>
+      <div>
+        <div style="font-size:16px;font-weight:800;color:#fff;letter-spacing:-.2px">Bảng lương nhân viên</div>
+        <div style="font-size:11px;color:#64748B;margin-top:1px">COCOSEA · Finance & Payroll</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:3px;align-items:flex-end">${tabNav}</div>
   </div>
-  <div id="prTableWrap"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải bảng lương...</div></div></div>`;
+  <div class="pr-body">
+    <div id="prTabContent" style="min-height:180px">
+      <div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải...</div></div>
+    </div>
+  </div>
+</div>`;
 }
 
 async function _tcPayrollAfterRender(){
   const st=window._prState;
   const data=await _prLoad(st.year,st.month);
   window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
-  _prRenderTable();
+  await _prLoadTabContent(window._prActiveTab||'list');
+}
+window._prLoadTabContent=async function(tab){
+  const el=g('prTabContent'); if(!el)return;
+  if(tab==='list'){
+    el.innerHTML=_prListTabHTML();
+    _prRenderKpis();
+    _prRenderTable();
+  } else if(tab==='quarterly'){
+    await _prRenderQuarterly();
+  } else if(tab==='yearly'){
+    await _prRenderYearly();
+  }
+};
+window._prSwitchTab=function(tab){
+  window._prActiveTab=tab;
+  document.querySelectorAll('.pr-tab-btn').forEach(function(btn){
+    const m=btn.getAttribute('onclick').match(/'(\w+)'/);
+    const k=m?m[1]:'';
+    const isActive=(k===tab);
+    btn.style.background=isActive?'#fff':'rgba(255,255,255,.08)';
+    btn.style.color=isActive?'#0D2137':'#94A3B8';
+  });
+  window._prLoadTabContent(tab);
+};
+function _prListTabHTML(){
+  const st=window._prState;
+  const emps=_prEmployees();
+  const monthOpts=Array.from({length:12},function(_,i){var mm=i+1;return '<option value="'+mm+'"'+(mm===st.month?' selected':'')+'>Tháng '+mm+'</option>';}).join('');
+  const curY=new Date().getFullYear();
+  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-3+i;return '<option value="'+yy+'"'+(yy===st.year?' selected':'')+'>'+yy+'</option>';}).join('');
+  const empOpts='<option value="">Tất cả nhân viên</option>'+emps.map(function(e){return '<option value="'+e.uid+'"'+(e.uid===st.emp?' selected':'')+'>'+e.name+'</option>';}).join('');
+  return '<div class="pr-filter-bar">'
+    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary)">Tháng:</label>'
+    +'<select id="prMonth" onchange="window._prState.month=parseInt(this.value);window._prLoadTabContent(\'list\')" style="width:100px;font-size:12px">'+monthOpts+'</select>'
+    +'<select id="prYear" onchange="window._prState.year=parseInt(this.value);window._prLoadTabContent(\'list\')" style="width:90px;font-size:12px">'+yearOpts+'</select>'
+    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-left:6px">Nhân viên:</label>'
+    +'<select id="prEmp" onchange="window._prState.emp=this.value;_prRenderTable()" style="width:200px;font-size:12px">'+empOpts+'</select>'
+    +'<div style="flex:1"></div>'
+    +'<button class="btn sm" onclick="_prAddRow()"><i class="ti ti-user-plus"></i> Thêm</button>'
+    +'<button class="btn sm pri" onclick="_prSave()"><i class="ti ti-device-floppy"></i> Lưu</button>'
+    +'<button class="btn sm" onclick="_prExportExcel()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+    +'</div>'
+    +'<div class="pr-kpi-row">'
+    +'<div class="pr-kpi k-blue"><div class="pr-kpi-lbl">Nhân viên</div><div class="pr-kpi-val c-blue" id="kpiEmpCount">—</div></div>'
+    +'<div class="pr-kpi k-navy"><div class="pr-kpi-lbl">Lương cơ bản</div><div class="pr-kpi-val" id="kpiBase">—</div></div>'
+    +'<div class="pr-kpi k-green"><div class="pr-kpi-lbl">Lương thực tế</div><div class="pr-kpi-val c-green" id="kpiReal">—</div></div>'
+    +'<div class="pr-kpi k-gold"><div class="pr-kpi-lbl">Tổng phụ cấp</div><div class="pr-kpi-val c-gold" id="kpiAllowance">—</div></div>'
+    +'<div class="pr-kpi k-red"><div class="pr-kpi-lbl">Tổng khấu trừ</div><div class="pr-kpi-val c-red" id="kpiDeduct">—</div></div>'
+    +'<div class="pr-kpi k-teal"><div class="pr-kpi-lbl">Tổng thực nhận</div><div class="pr-kpi-val c-teal" id="kpiNhan">—</div></div>'
+    +'</div>'
+    +'<div id="prTableWrap"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i></div></div>'
+    +'<div style="font-size:11px;color:var(--text-secondary);padding:.55rem 1rem;border-top:1px solid var(--border-light)"><i class="ti ti-info-circle"></i> Lương thực tế = Lương cơ bản ÷ ngày công chuẩn (26) × ngày công. BHXH/BHYT tự nhập số tiền thực tế, không tự tính %.</div>';
+}
+function _prRenderKpis(){
+  const st=window._prState;
+  let rows=window._prRows||[];
+  if(st.emp) rows=rows.filter(function(r){return r.uid===st.emp;});
+  let sumBase=0,sumReal=0,sumAllowance=0,sumDeduct=0,sumNhan=0;
+  rows.forEach(function(r){
+    const base=parseFloat(r.luongCoBan)||0;
+    const days=parseFloat(r.ngayCong)||0;
+    const stdDays=parseFloat(r.ngayCongChuan)||26;
+    const realAuto=days&&stdDays?Math.round(base/stdDays*days):base;
+    const real=(r.realManual!=null&&r.realManual!=='')?parseFloat(r.realManual):realAuto;
+    const at=parseFloat(r.phuCapAnTrua)||0;
+    const dt=parseFloat(r.phuCapDienThoai)||0;
+    const tn=parseFloat(r.phuCapTrachNhiem)||0;
+    const tong=real+at+dt+tn;
+    const hasBH=r.hasInsurance!==false;
+    const bhxh=hasBH?((r.bhxhManual!=null&&r.bhxhManual!=='')?parseFloat(r.bhxhManual):0):0;
+    const bhyt=hasBH?((r.bhytManual!=null&&r.bhytManual!=='')?parseFloat(r.bhytManual):0):0;
+    const tru=bhxh+bhyt;
+    sumBase+=base;sumReal+=real;sumAllowance+=at+dt+tn;sumDeduct+=tru;sumNhan+=tong-tru;
+  });
+  function upd(id,val){const el=g(id);if(el)el.textContent=val;}
+  upd('kpiEmpCount',String(rows.length)+' NV');
+  upd('kpiBase',_prFmtShort(sumBase));
+  upd('kpiReal',_prFmtShort(sumReal));
+  upd('kpiAllowance',_prFmtShort(sumAllowance));
+  upd('kpiDeduct',_prFmtShort(sumDeduct));
+  upd('kpiNhan',_prFmtShort(sumNhan));
+}
+function _prFmtShort(n){
+  const v=parseFloat(n)||0;
+  if(v>=1000000000)return (v/1000000000).toFixed(1)+'B';
+  if(v>=1000000)return (v/1000000).toFixed(1)+'M';
+  if(v>=1000)return (v/1000).toFixed(0)+'K';
+  return v.toLocaleString('vi-VN');
+}
+async function _prRenderQuarterly(){
+  const el=g('prTabContent'); if(!el)return;
+  const st=window._prState;
+  const curY=new Date().getFullYear();
+  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-2+i;return '<option value="'+yy+'"'+(yy===st.qYear?' selected':'')+'>'+yy+'</option>';}).join('');
+  const quys=[{q:1,months:[1,2,3],label:'Quý 1'},{q:2,months:[4,5,6],label:'Quý 2'},{q:3,months:[7,8,9],label:'Quý 3'},{q:4,months:[10,11,12],label:'Quý 4'}];
+  const activeQ=st.qQuarter||1;
+  const qBtns=quys.map(function(qq){
+    return '<button onclick="window._prState.qQuarter='+qq.q+';_prRenderQuarterly()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border-light);cursor:pointer;font-size:12px;font-weight:600;background:'+(activeQ===qq.q?'#0D2137':'var(--bg-primary)')+';color:'+(activeQ===qq.q?'#C99A3C':'var(--text-secondary)')+'">'+qq.label+'</button>';
+  }).join('');
+  window._prState.qYear=window._prState.qYear||curY;
+  el.innerHTML='<div class="pr-chart-section"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem;padding:.65rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary)">Năm:</label>'
+    +'<select onchange="window._prState.qYear=parseInt(this.value);_prRenderQuarterly()" style="width:90px;font-size:12px">'+yearOpts+'</select>'
+    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary);margin-left:8px">Chọn quý:</label>'
+    +'<div style="display:flex;gap:5px">'+qBtns+'</div>'
+    +'</div>'
+    +'<div id="prQContent" style="display:flex;flex-direction:column;gap:.75rem"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải dữ liệu quý...</div></div></div></div>';
+  const qDef=quys.find(function(q){return q.q===activeQ;})||quys[0];
+  const monthData=await Promise.all(qDef.months.map(function(m){return _prLoad(window._prState.qYear,m);}));
+  const mResults=qDef.months.map(function(m,i){
+    const rows=monthData[i].rows||[];
+    let nhan=0;let real=0;let tong=0;let tru=0;
+    rows.forEach(function(r){
+      const base=parseFloat(r.luongCoBan)||0;
+      const days=parseFloat(r.ngayCong)||0;
+      const stdDays=parseFloat(r.ngayCongChuan)||26;
+      const realAuto=days&&stdDays?Math.round(base/stdDays*days):base;
+      const rv=(r.realManual!=null&&r.realManual!=='')?parseFloat(r.realManual):realAuto;
+      const at=parseFloat(r.phuCapAnTrua)||0;
+      const dt=parseFloat(r.phuCapDienThoai)||0;
+      const tn=parseFloat(r.phuCapTrachNhiem)||0;
+      const tongLuong=rv+at+dt+tn;
+      const hasBH=r.hasInsurance!==false;
+      const bhxh=hasBH?((r.bhxhManual!=null&&r.bhxhManual!=='')?parseFloat(r.bhxhManual):0):0;
+      const bhyt=hasBH?((r.bhytManual!=null&&r.bhytManual!=='')?parseFloat(r.bhytManual):0):0;
+      const truAmt=bhxh+bhyt;
+      real+=rv;tong+=tongLuong;tru+=truAmt;nhan+=tongLuong-truAmt;
+    });
+    return {m:m,label:'Tháng '+m,nhanVien:rows.length,nhan:nhan,tong:tong,tru:tru,real:real};
+  });
+  const totalNhan=mResults.reduce(function(s,d){return s+d.nhan;},0);
+  const totalTong=mResults.reduce(function(s,d){return s+d.tong;},0);
+  const maxNhan=Math.max.apply(null,mResults.map(function(d){return d.nhan;}));
+  const barSvg=_prBarChartSvg(mResults.map(function(d){return {label:d.label,value:d.nhan};}),maxNhan,'#14B8A6');
+  const sumRows=mResults.map(function(d,i){
+    return '<tr class="'+(i%2===0?'':'')+'"><td style="padding:6px 10px;text-align:left;font-weight:600">'+d.label+'</td>'
+      +'<td>'+d.nhanVien+' NV</td>'
+      +'<td>'+_prFmt(d.tong)+'</td>'
+      +'<td style="color:#EF4444">'+_prFmt(d.tru)+'</td>'
+      +'<td style="font-weight:700;color:#14B8A6">'+_prFmt(d.nhan)+'</td></tr>';
+  }).join('');
+  const qc=g('prQContent');
+  if(!qc)return;
+  qc.innerHTML='<div class="pr-chart-card">'
+    +'<div class="pr-chart-ttl"><i class="ti ti-chart-bar" style="color:#14B8A6"></i>Tổng thực nhận theo tháng ('+qDef.label+' / '+window._prState.qYear+')</div>'
+    +barSvg
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">'
+    +'<div class="pr-chart-card">'
+    +'<div class="pr-chart-ttl"><i class="ti ti-coin" style="color:#C99A3C"></i>Tổng chi lương quý</div>'
+    +'<div style="font-size:28px;font-weight:900;color:#C99A3C;font-variant-numeric:tabular-nums">'+_prFmt(totalNhan)+'<span style="font-size:13px;font-weight:500;color:var(--text-secondary)"> đ</span></div>'
+    +'<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Tổng lương trước trừ: '+_prFmt(totalTong)+' đ</div>'
+    +'</div>'
+    +'<div class="pr-chart-card">'
+    +'<div class="pr-chart-ttl"><i class="ti ti-calendar-stats" style="color:#3B82F6"></i>Chi tiết theo tháng</div>'
+    +'<table class="pr-sum-table"><thead><tr><th style="text-align:left">Tháng</th><th>NV</th><th>Tổng lương</th><th>Khấu trừ</th><th>Thực nhận</th></tr></thead>'
+    +'<tbody>'+sumRows+'</tbody></table>'
+    +'</div></div>';
+}
+async function _prRenderYearly(){
+  const el=g('prTabContent'); if(!el)return;
+  const curY=new Date().getFullYear();
+  window._prState.yYear=window._prState.yYear||curY;
+  const yearOpts=Array.from({length:6},function(_,i){var yy=curY-3+i;return '<option value="'+yy+'"'+(yy===window._prState.yYear?' selected':'')+'>'+yy+'</option>';}).join('');
+  el.innerHTML='<div class="pr-chart-section"><div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;padding:.65rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
+    +'<label style="font-size:11.5px;font-weight:600;color:var(--text-secondary)">Năm:</label>'
+    +'<select onchange="window._prState.yYear=parseInt(this.value);_prRenderYearly()" style="width:90px;font-size:12px">'+yearOpts+'</select>'
+    +'</div>'
+    +'<div id="prYContent"><div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải dữ liệu năm...</div></div></div></div>';
+  const yData=await Promise.all(Array.from({length:12},function(_,i){return _prLoad(window._prState.yYear,i+1);}));
+  const mResults=yData.map(function(data,i){
+    const rows=data.rows||[];
+    let nhan=0;let tong=0;let tru=0;
+    rows.forEach(function(r){
+      const base=parseFloat(r.luongCoBan)||0;
+      const days=parseFloat(r.ngayCong)||0;
+      const stdDays=parseFloat(r.ngayCongChuan)||26;
+      const realAuto=days&&stdDays?Math.round(base/stdDays*days):base;
+      const rv=(r.realManual!=null&&r.realManual!=='')?parseFloat(r.realManual):realAuto;
+      const at=parseFloat(r.phuCapAnTrua)||0;
+      const dt=parseFloat(r.phuCapDienThoai)||0;
+      const tn=parseFloat(r.phuCapTrachNhiem)||0;
+      const tongLuong=rv+at+dt+tn;
+      const hasBH=r.hasInsurance!==false;
+      const bhxh=hasBH?((r.bhxhManual!=null&&r.bhxhManual!=='')?parseFloat(r.bhxhManual):0):0;
+      const bhyt=hasBH?((r.bhytManual!=null&&r.bhytManual!=='')?parseFloat(r.bhytManual):0):0;
+      tong+=tongLuong;tru+=bhxh+bhyt;nhan+=tongLuong-(bhxh+bhyt);
+    });
+    return {m:i+1,label:'T'+String(i+1).padStart(2,'0'),nhanVien:rows.length,nhan:nhan,tong:tong,tru:tru};
+  });
+  const totalNhan=mResults.reduce(function(s,d){return s+d.nhan;},0);
+  const totalTong=mResults.reduce(function(s,d){return s+d.tong;},0);
+  const avgNhan=mResults.filter(function(d){return d.nhan>0;}).length;
+  const maxNhan=Math.max.apply(null,mResults.map(function(d){return d.nhan;}));
+  const barSvg=_prBarChartSvg(mResults.map(function(d){return {label:d.label,value:d.nhan,nv:d.nhanVien};}),maxNhan,'#3B82F6');
+  const sumRows=mResults.map(function(d,i){
+    return '<tr style="'+(i%2===0?'':'background:var(--bg-secondary)')+'"><td style="padding:5px 10px;font-weight:600;text-align:left">Tháng '+d.m+'</td>'
+      +'<td>'+d.nhanVien+'</td>'
+      +'<td>'+_prFmt(d.tong)+'</td>'
+      +'<td style="color:#EF4444">'+_prFmt(d.tru)+'</td>'
+      +'<td style="font-weight:700;color:#14B8A6">'+_prFmt(d.nhan)+'</td></tr>';
+  }).join('');
+  const yc=g('prYContent');
+  if(!yc)return;
+  yc.innerHTML='<div class="pr-chart-card">'
+    +'<div class="pr-chart-ttl"><i class="ti ti-chart-line" style="color:#3B82F6"></i>Tổng thực nhận 12 tháng — Năm '+window._prState.yYear+'</div>'
+    +barSvg
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;margin-bottom:.75rem">'
+    +'<div class="pr-chart-card"><div class="pr-kpi-lbl">Tổng chi lương cả năm</div><div style="font-size:22px;font-weight:900;color:#C99A3C;margin-top:4px">'+_prFmt(totalNhan)+'<span style="font-size:12px;font-weight:400;color:var(--text-secondary)"> đ</span></div></div>'
+    +'<div class="pr-chart-card"><div class="pr-kpi-lbl">Tổng lương trước trừ</div><div style="font-size:22px;font-weight:900;color:var(--text-primary);margin-top:4px">'+_prFmt(totalTong)+'<span style="font-size:12px;font-weight:400;color:var(--text-secondary)"> đ</span></div></div>'
+    +'<div class="pr-chart-card"><div class="pr-kpi-lbl">Số tháng có dữ liệu</div><div style="font-size:22px;font-weight:900;color:#3B82F6;margin-top:4px">'+avgNhan+' tháng</div></div>'
+    +'</div>'
+    +'<div class="pr-chart-card"><div class="pr-chart-ttl"><i class="ti ti-table" style="color:#14B8A6"></i>Tổng hợp theo tháng</div>'
+    +'<table class="pr-sum-table"><thead><tr><th style="text-align:left">Tháng</th><th>NV</th><th>Tổng lương</th><th>Khấu trừ</th><th>Thực nhận</th></tr></thead>'
+    +'<tbody>'+sumRows+'</tbody>'
+    +'<tfoot><tr><td style="padding:6px 10px;text-align:left;font-weight:800;background:#0D2137;color:#C99A3C">TỔNG NĂM</td>'
+    +'<td style="background:#0D2137;color:#94A3B8">—</td>'
+    +'<td style="background:#0D2137;color:#C99A3C;font-weight:800">'+_prFmt(totalTong)+'</td>'
+    +'<td style="background:#0D2137;color:#EF4444;font-weight:800">'+_prFmt(mResults.reduce(function(s,d){return s+d.tru;},0))+'</td>'
+    +'<td style="background:#0D2137;color:#14B8A6;font-weight:800">'+_prFmt(totalNhan)+'</td></tr></tfoot>'
+    +'</table></div>';
+}
+function _prBarChartSvg(data,maxVal,color){
+  const W=600,H=180;
+  const padL=10,padR=10,padT=28,padB=28;
+  const n=data.length;
+  if(!n||!maxVal)return '<div style="height:180px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px"><i class="ti ti-chart-bar" style="margin-right:6px"></i>Chưa có dữ liệu</div>';
+  const bW=(W-padL-padR)/n;
+  const bMax=H-padT-padB;
+  const bars=data.map(function(d,i){
+    const bH=maxVal>0?Math.round((d.value/maxVal)*bMax):0;
+    const x=padL+i*bW+bW*.12;
+    const y=padT+bMax-bH;
+    const bwR=bW*.76;
+    const isTop=d.value===maxVal&&maxVal>0;
+    const valLabel=d.value>0?_prFmtShort(d.value):'';
+    return '<rect x="'+x+'" y="'+y+'" width="'+bwR+'" height="'+bH+'" rx="3" fill="'+(isTop?color:'#1A3E6B')+'" opacity="'+(isTop?'1':'.75')+'"/>'
+      +(valLabel?'<text x="'+(x+bwR/2)+'" y="'+(y-4)+'" text-anchor="middle" font-size="9" fill="'+(isTop?color:'#64748B')+'">'+valLabel+'</text>':'')
+      +'<text x="'+(x+bwR/2)+'" y="'+(H-padB/2+5)+'" text-anchor="middle" font-size="9.5" fill="#64748B">'+d.label+'</text>';
+  }).join('');
+  return '<svg width="100%" height="'+H+'" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" style="display:block;overflow:visible"><rect width="'+W+'" height="'+H+'" fill="none"/><line x1="'+padL+'" y1="'+padT+'" x2="'+padL+'" y2="'+(H-padB)+'" stroke="#1A3E6B" stroke-width="1"/><line x1="'+padL+'" y1="'+(H-padB)+'" x2="'+(W-padR)+'" y2="'+(H-padB)+'" stroke="#1A3E6B" stroke-width="1"/>'+bars+'</svg>';
 }
 
 function _prRenderTable(){
@@ -10100,12 +10390,15 @@ function _prRenderTable(){
   let rows=window._prRows||[];
   if(st.emp) rows=rows.filter(function(r){return r.uid===st.emp;});
 
-  const th='padding:7px 8px;background:#f5c518;color:#3a2f00;font-size:10px;font-weight:700;border:1px solid #e0b000;text-align:center;text-transform:uppercase;letter-spacing:.2px;white-space:nowrap';
-  const td='padding:5px 7px;border:1px solid var(--border-light);font-size:12px;vertical-align:middle';
-  const tdR='padding:5px 7px;border:1px solid var(--border-light);font-size:12px;text-align:right;vertical-align:middle';
-
   // Tính tổng cột
   let sum={base:0,days:0,real:0,anTrua:0,dienThoai:0,trachNhiem:0,tongLuong:0,bhxh:0,bhyt:0,tru:0,nhan:0};
+
+  function initials(name){
+    if(!name)return '?';
+    const parts=name.trim().split(/\s+/);
+    if(parts.length===1)return parts[0].substring(0,2).toUpperCase();
+    return (parts[0][0]+(parts[parts.length-1][0]||'')).toUpperCase();
+  }
 
   const bodyRows=rows.map(function(r,idx){
     // idx thực trong window._prRows (do có thể đang lọc)
@@ -10132,73 +10425,78 @@ function _prRenderTable(){
     sum.bhxh+=bhxh;sum.bhyt+=bhyt;
     sum.tru+=tongTru;sum.nhan+=nhan;
 
-    return '<tr>'
-      +'<td style="'+td+';text-align:center">'+(idx+1)+'</td>'
-      +'<td style="'+td+';min-width:150px;font-weight:600">'+(r.name||'—')+'</td>'
-      +'<td style="'+td+';min-width:110px"><input type="text" value="'+(r.position||'').replace(/"/g,'&quot;')+'" onchange="_prEdit('+realIdx+',\'position\',this.value)" style="font-size:11.5px;width:100%;border:none;background:transparent;box-sizing:border-box" placeholder="Chức vụ"/></td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+base+'" onchange="_prEdit('+realIdx+',\'luongCoBan\',this.value)" style="font-size:11.5px;width:100px;text-align:right;border:none;background:transparent"/></td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+days+'" onchange="_prEdit('+realIdx+',\'ngayCong\',this.value)" style="font-size:11.5px;width:50px;text-align:right;border:none;background:transparent"/></td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+real+'" onchange="_prEdit('+realIdx+',\'realManual\',this.value)" style="font-size:11.5px;width:95px;text-align:right;border:none;background:transparent;color:var(--blue);font-weight:600" title="Lương thực tế (sửa được)"/></td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+anTrua+'" onchange="_prEdit('+realIdx+',\'phuCapAnTrua\',this.value)" style="font-size:11.5px;width:80px;text-align:right;border:none;background:transparent"/></td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+dienThoai+'" onchange="_prEdit('+realIdx+',\'phuCapDienThoai\',this.value)" style="font-size:11.5px;width:80px;text-align:right;border:none;background:transparent"/></td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+trachNhiem+'" onchange="_prEdit('+realIdx+',\'phuCapTrachNhiem\',this.value)" style="font-size:11.5px;width:80px;text-align:right;border:none;background:transparent"/></td>'
-      +'<td style="'+tdR+';font-weight:700">'+_prFmt(tongLuong)+'</td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+(bhxh||'')+'" placeholder="0" '+(hasBH?'':'disabled')+' onchange="_prEdit('+realIdx+',\'bhxhManual\',this.value)" style="font-size:11.5px;width:85px;text-align:right;border:none;background:transparent;color:var(--red)" title="BHXH — tự nhập số tiền"/></td>'
-      +'<td style="'+tdR+'"><input type="number" value="'+(bhyt||'')+'" placeholder="0" '+(hasBH?'':'disabled')+' onchange="_prEdit('+realIdx+',\'bhytManual\',this.value)" style="font-size:11.5px;width:80px;text-align:right;border:none;background:transparent;color:var(--red)" title="BHYT — tự nhập số tiền"/></td>'
-      +'<td style="'+tdR+';color:var(--red);font-weight:600">'+_prFmt(tongTru)+'</td>'
-      +'<td style="'+tdR+';font-weight:800;color:var(--green)">'+_prFmt(nhan)+'</td>'
-      +'<td style="'+td+';text-align:center">'
-        +'<label style="font-size:9px;display:block;color:var(--text-secondary)"><input type="checkbox" '+(hasBH?'checked':'')+' onchange="_prEdit('+realIdx+',\'hasInsurance\',this.checked)" style="cursor:pointer"/> BH</label>'
-        +'<button class="rac red" onclick="_prDelRow('+realIdx+')" title="Xóa" style="font-size:12px;margin-top:2px"><i class="ti ti-trash"></i></button>'
+    const inpSty='font-size:11.5px;border:none;background:transparent;width:100%;box-sizing:border-box';
+    return '<tr class="pr-tr">'
+      +'<td class="pr-td" style="text-align:center;font-size:11px;color:var(--text-secondary)">'+(idx+1)+'</td>'
+      +'<td class="pr-td" style="min-width:160px"><div style="display:flex;align-items:center;gap:8px"><div class="pr-avatar">'+initials(r.name)+'</div><span style="font-weight:700;font-size:12.5px">'+(r.name||'—')+'</span></div></td>'
+      +'<td class="pr-td" style="min-width:110px"><input type="text" value="'+(r.position||'').replace(/"/g,'&quot;')+'" onchange="_prEdit('+realIdx+',\'position\',this.value)" style="'+inpSty+'" placeholder="Chức vụ"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+base+'" onchange="_prEdit('+realIdx+',\'luongCoBan\',this.value)" style="'+inpSty+';width:100px;text-align:right"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+days+'" onchange="_prEdit('+realIdx+',\'ngayCong\',this.value)" style="'+inpSty+';width:48px;text-align:right"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+real+'" onchange="_prEdit('+realIdx+',\'realManual\',this.value)" style="'+inpSty+';width:90px;text-align:right;color:#3B82F6;font-weight:700" title="Lương thực tế (sửa được)"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+anTrua+'" onchange="_prEdit('+realIdx+',\'phuCapAnTrua\',this.value)" style="'+inpSty+';width:76px;text-align:right"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+dienThoai+'" onchange="_prEdit('+realIdx+',\'phuCapDienThoai\',this.value)" style="'+inpSty+';width:76px;text-align:right"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+trachNhiem+'" onchange="_prEdit('+realIdx+',\'phuCapTrachNhiem\',this.value)" style="'+inpSty+';width:76px;text-align:right"/></td>'
+      +'<td class="pr-td-r" style="font-weight:700;color:var(--text-primary)">'+_prFmt(tongLuong)+'</td>'
+      +'<td class="pr-td-r"><input type="number" value="'+(bhxh||'')+'" placeholder="0" '+(hasBH?'':'disabled')+' onchange="_prEdit('+realIdx+',\'bhxhManual\',this.value)" style="'+inpSty+';width:82px;text-align:right;color:#EF4444" title="BHXH — tự nhập số tiền"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+(bhyt||'')+'" placeholder="0" '+(hasBH?'':'disabled')+' onchange="_prEdit('+realIdx+',\'bhytManual\',this.value)" style="'+inpSty+';width:78px;text-align:right;color:#EF4444" title="BHYT — tự nhập số tiền"/></td>'
+      +'<td class="pr-td-r" style="color:#EF4444;font-weight:600">'+_prFmt(tongTru)+'</td>'
+      +'<td class="pr-td-r" style="font-weight:800;color:#14B8A6;font-size:13px">'+_prFmt(nhan)+'</td>'
+      +'<td class="pr-td" style="text-align:center;padding:4px 6px">'
+        +'<label style="font-size:9px;display:block;color:var(--text-secondary);white-space:nowrap"><input type="checkbox" '+(hasBH?'checked':'')+' onchange="_prEdit('+realIdx+',\'hasInsurance\',this.checked)" style="cursor:pointer"/> BH</label>'
+        +'<button class="rac red" onclick="_prDelRow('+realIdx+')" title="Xóa" style="font-size:12px;margin-top:1px"><i class="ti ti-trash"></i></button>'
       +'</td>'
     +'</tr>';
   }).join('');
 
-  wrap.innerHTML=`
-  <div style="overflow-x:auto;border:1px solid var(--border-light);border-radius:8px">
-    <table style="width:100%;border-collapse:collapse;min-width:1200px">
-      <thead>
-        <tr>
-          <th style="${th}" rowspan="2">STT</th>
-          <th style="${th}" rowspan="2">Họ và tên</th>
-          <th style="${th}" rowspan="2">Chức vụ</th>
-          <th style="${th}" rowspan="2">Lương cơ bản</th>
-          <th style="${th}" rowspan="2">Ngày công</th>
-          <th style="${th}" rowspan="2">Lương thực tế</th>
-          <th style="${th}" colspan="3">Phụ cấp</th>
-          <th style="${th}" rowspan="2">Tổng lương</th>
-          <th style="${th}" colspan="3">Các khoản trừ</th>
-          <th style="${th}" rowspan="2">Thực nhận</th>
-          <th style="${th}" rowspan="2"></th>
-        </tr>
-        <tr>
-          <th style="${th}">Ăn trưa</th>
-          <th style="${th}">Điện thoại</th>
-          <th style="${th}">Trách nhiệm</th>
-          <th style="${th}">BHXH</th>
-          <th style="${th}">BHYT</th>
-          <th style="${th}">Tổng trừ</th>
-        </tr>
-      </thead>
-      <tbody>${bodyRows||'<tr><td colspan="15" style="text-align:center;padding:2rem;color:var(--text-secondary)">Chưa có dòng lương nào. Bấm "Thêm dòng" để chọn nhân viên.</td></tr>'}</tbody>
-      ${rows.length?`<tfoot><tr style="background:#fef3c7;font-weight:800">
-        <td style="${td};text-align:center" colspan="3">TỔNG</td>
-        <td style="${tdR}">${_prFmt(sum.base)}</td>
-        <td style="${tdR}">${sum.days}</td>
-        <td style="${tdR}">${_prFmt(sum.real)}</td>
-        <td style="${tdR}">${_prFmt(sum.anTrua)}</td>
-        <td style="${tdR}">${_prFmt(sum.dienThoai)}</td>
-        <td style="${tdR}">${_prFmt(sum.trachNhiem)}</td>
-        <td style="${tdR}">${_prFmt(sum.tongLuong)}</td>
-        <td style="${tdR}">${_prFmt(sum.bhxh)}</td>
-        <td style="${tdR}">${_prFmt(sum.bhyt)}</td>
-        <td style="${tdR}">${_prFmt(sum.tru)}</td>
-        <td style="${tdR};color:var(--green)">${_prFmt(sum.nhan)}</td>
-        <td style="${td}"></td>
-      </tr></tfoot>`:''}
-    </table>
-  </div>
-  <div style="font-size:11px;color:var(--text-secondary);margin-top:8px"><i class="ti ti-info-circle"></i> Lương thực tế = Lương cơ bản ÷ ngày công chuẩn (26) × ngày công thực tế. BHXH/BHYT do bạn tự nhập số tiền thực tế, không tự động tính theo %. Bỏ tick "BH" nếu nhân viên không đóng bảo hiểm.</div>`;
+  const emptyRow='<tr><td colspan="15" class="pr-td" style="text-align:center;padding:3rem;color:var(--text-secondary)"><i class="ti ti-users" style="font-size:32px;display:block;margin-bottom:.5rem;opacity:.4"></i>Chưa có dòng lương nào — Bấm <strong style="color:var(--text-primary)">Thêm</strong> để chọn nhân viên.</td></tr>';
+  const tfootRow=rows.length?'<tfoot><tr class="pr-tfoot-tr">'
+    +'<td class="pr-td" style="text-align:center" colspan="3">TỔNG</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.base)+'</td>'
+    +'<td class="pr-td-r">'+sum.days+'</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.real)+'</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.anTrua)+'</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.dienThoai)+'</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.trachNhiem)+'</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.tongLuong)+'</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.bhxh)+'</td>'
+    +'<td class="pr-td-r">'+_prFmt(sum.bhyt)+'</td>'
+    +'<td class="pr-td-r" style="color:#EF4444">'+_prFmt(sum.tru)+'</td>'
+    +'<td class="pr-td-r" style="color:#14B8A6;font-size:13px">'+_prFmt(sum.nhan)+'</td>'
+    +'<td class="pr-td"></td>'
+    +'</tr></tfoot>':'';
+
+  wrap.innerHTML='<div class="pr-table-wrap">'
+    +'<table class="pr-table" style="width:100%;border-collapse:collapse;min-width:1150px">'
+    +'<thead>'
+    +'<tr>'
+    +'<th class="pr-th" rowspan="2">STT</th>'
+    +'<th class="pr-th" rowspan="2" style="text-align:left;min-width:170px">Họ và tên</th>'
+    +'<th class="pr-th" rowspan="2" style="min-width:110px">Chức vụ</th>'
+    +'<th class="pr-th" rowspan="2">Lương CB</th>'
+    +'<th class="pr-th" rowspan="2">Ngày công</th>'
+    +'<th class="pr-th" rowspan="2">Lương TT</th>'
+    +'<th class="pr-th-grp" colspan="3">PHỤ CẤP</th>'
+    +'<th class="pr-th" rowspan="2">Tổng lương</th>'
+    +'<th class="pr-th-grp" colspan="3" style="color:#EF4444;background:#1A1A2E">CÁC KHOẢN TRỪ</th>'
+    +'<th class="pr-th" rowspan="2" style="color:#14B8A6">Thực nhận</th>'
+    +'<th class="pr-th" rowspan="2"></th>'
+    +'</tr>'
+    +'<tr>'
+    +'<th class="pr-th" style="font-size:8.5px">Ăn trưa</th>'
+    +'<th class="pr-th" style="font-size:8.5px">ĐT</th>'
+    +'<th class="pr-th" style="font-size:8.5px">TN</th>'
+    +'<th class="pr-th" style="font-size:8.5px;color:#EF4444">BHXH</th>'
+    +'<th class="pr-th" style="font-size:8.5px;color:#EF4444">BHYT</th>'
+    +'<th class="pr-th" style="font-size:8.5px;color:#EF4444">Tổng trừ</th>'
+    +'</tr>'
+    +'</thead>'
+    +'<tbody>'+(bodyRows||emptyRow)+'</tbody>'
+    +tfootRow
+    +'</table>'
+    +'</div>';
+
+  // Cập nhật KPI cards sau khi render
+  _prRenderKpis();
 }
 
 function _prEdit(idx,field,val){
