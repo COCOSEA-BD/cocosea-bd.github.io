@@ -875,6 +875,79 @@ function _applySvcOrder(list,orderArr){
 }
 window._applySvcOrder=_applySvcOrder;
 
+// ── Nhóm dịch vụ "Shipping cost" (OCF, THC, Bill, Seal, TLX) — LUÔN xếp kề nhau, đứng TRÊN nhóm
+// "Local Service" (các dịch vụ còn lại). Áp dụng thứ tự này đồng bộ ở tab Dịch vụ, Fill giá, Invoice
+// và Costing. Khớp theo CẢ code (chính xác, không phân biệt hoa/thường) LẪN tên (chứa từ khóa) để
+// vẫn nhận đúng nhóm dù dịch vụ được tạo tay với mã/tên hơi khác (VD tự đặt tên "Telex" thay vì "TLX").
+const SHIPPING_COST_GROUP=[
+  {code:'OCF',kw:['ocf']},
+  {code:'THC',kw:['thc']},
+  {code:'BIL',kw:['bill']},
+  {code:'SEA',kw:['seal']},
+  {code:'TLX',kw:['tlx','telex']}
+];
+function _svcShippingCostRank(s){
+  const code=((s&&s.code)||'').toUpperCase();
+  const name=((s&&s.name)||'').toLowerCase();
+  for(let i=0;i<SHIPPING_COST_GROUP.length;i++){
+    const grp=SHIPPING_COST_GROUP[i];
+    if(code===grp.code || grp.kw.some(function(k){return name.indexOf(k)>=0;})) return i;
+  }
+  return -1; // không thuộc nhóm Shipping cost → Local Service
+}
+window._svcShippingCostRank=_svcShippingCostRank;
+// Sắp xếp 1 danh sách dịch vụ (mỗi phần tử có .code/.name — SVCS hoặc revenueRows của Costing đều
+// khớp shape này): nhóm Shipping cost lên đầu đúng thứ tự OCF→THC→Bill→Seal→TLX, phần Local Service
+// còn lại giữ nguyên thứ tự tương đối gốc, xếp sau (sort ổn định — không đổi thứ tự trong cùng nhóm).
+function _svcGroupSort(list){
+  return list.map(function(s,i){return {s:s,i:i};}).sort(function(a,b){
+    const ra=_svcShippingCostRank(a.s), rb=_svcShippingCostRank(b.s);
+    const wa=ra<0?9999:ra, wb=rb<0?9999:rb;
+    if(wa!==wb)return wa-wb;
+    return a.i-b.i;
+  }).map(function(x){return x.s;});
+}
+window._svcGroupSort=_svcGroupSort;
+
+// ── Ràng buộc: lô có "lệnh SCY" (tab SCY đã chọn Sà lan cho ít nhất 1 dòng) HOẶC có dịch vụ
+// Trucking mã TRA/TRC đang BẬT ở tab Dịch vụ → bắt buộc phải có dịch vụ tương ứng + NCC đầy đủ.
+// Trả về chuỗi lỗi (để chặn lưu) nếu thiếu, hoặc null nếu hợp lệ. Dùng chung cho saveDetailSvc() và
+// saveScyItems() để CHẶN lưu cho tới khi bổ sung đủ, theo đúng yêu cầu.
+function _scySvcRequirementError(r,svcs){
+  r=r||{}; svcs=svcs||r.svcs||{};
+  // 1) Dịch vụ Trucking mã TRA/TRC đang bật nhưng thiếu NCC
+  const missingTraTrc=[];
+  Object.keys(svcs).forEach(function(k){
+    const sv=svcs[k]; if(!sv||!sv.on)return;
+    const svcMeta=SVCS.find(function(s){return s.key===k;})||{};
+    const codeBase=((sv._code||svcMeta.code||'')+'').toUpperCase().replace(/\d+$/,'');
+    if((codeBase==='TRA'||codeBase==='TRC') && !(sv.svcSupplier||'').trim()){
+      missingTraTrc.push(sv._name||svcMeta.name||k);
+    }
+  });
+  if(missingTraTrc.length){
+    return 'Dịch vụ Trucking ('+missingTraTrc.join(', ')+') đang bật nhưng CHƯA có NCC — vui lòng chọn NCC ở tab Dịch vụ trước khi lưu.';
+  }
+  // 2) Lô có lệnh SCY (đã chọn Sà lan ở tab SCY) nhưng chưa bật dịch vụ "Đóng hàng tại bãi" kèm NCC
+  const hasScyLenh=(r.scyItems||[]).some(function(row){return row&&row.saLan;});
+  if(hasScyLenh){
+    const stuKey=Object.keys(svcs).find(function(k){
+      const svcMeta=SVCS.find(function(s){return s.key===k;})||{};
+      const codeBase=((svcs[k]._code||svcMeta.code||'')+'').toUpperCase().replace(/\d+$/,'');
+      return _svcKeyBase(k)==='stuffing'||codeBase==='STU';
+    });
+    const stuSv=stuKey?svcs[stuKey]:null;
+    if(!stuSv||!stuSv.on){
+      return 'Lô hàng có lệnh SCY (đóng hàng tại bãi) — vui lòng bật dịch vụ "Đóng hàng tại bãi" và chọn NCC ở tab Dịch vụ trước khi lưu.';
+    }
+    if(!(stuSv.svcSupplier||'').trim()){
+      return 'Dịch vụ "Đóng hàng tại bãi" (SCY) đang bật nhưng CHƯA có NCC — vui lòng chọn NCC ở tab Dịch vụ trước khi lưu.';
+    }
+  }
+  return null;
+}
+window._scySvcRequirementError=_scySvcRequirementError;
+
 // Di chuyển 1 dòng dịch vụ lên (-1) / xuống (+1) trong tab Invoice, lưu vào r.svcOrder rồi lưu Firestore.
 async function _invMoveSvc(svcKey,dir){
   const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
@@ -1129,7 +1202,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.65';
+window.APP_BUILD='v4.66';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4091,7 +4164,7 @@ function renderDetailPanel(r,tt){
     const svcs=r.svcs||{};
     _ensureSvcInCatalog(svcs);
     bodyHtml=`${ (can('fillPrice')||can('viewCost')) ? '<div style="display:grid;grid-template-columns:22px 58px 200px 90px 60px 70px 85px 90px 90px 70px 120px 82px 140px 40px 52px;gap:6px;padding:4px 8px;margin-bottom:4px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div style="text-align:center">Code</div><div style="text-align:center">Dịch vụ</div><div style="text-align:center">Đơn giá</div><div style="text-align:center">SL</div><div style="text-align:center">ĐV</div><div style="text-align:center">Thành tiền</div><div style="text-align:center;color:#e07000">VAT Amt</div><div style="text-align:center;color:var(--red)">Total (VAT)</div><div style="text-align:center">Curr</div><div style="text-align:center">NCC</div><div style="text-align:center">TT TT</div><div style="text-align:center">Remark</div><div style="text-align:center">Fin</div><div></div></div>' : '<div style="display:grid;grid-template-columns:22px 1fr 1fr 26px;gap:8px;padding:2px 8px;margin-bottom:3px;font-size:9.5px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px"><div></div><div>Dịch vụ</div><div>Mô tả</div><div></div></div>'}
-    <div id="detailSvcGrid">${SVCS.filter(s=>svcs[s.key]!==undefined).map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')||'<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ. Bấm "Thêm dịch vụ" để chọn từ danh mục.</div>'}</div>
+    <div id="detailSvcGrid">${_svcGroupSort(SVCS.filter(s=>svcs[s.key]!==undefined)).map(s=>svcRowHTML(s,svcs[s.key]||{on:false,desc:''})).join('')||'<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có dịch vụ. Bấm "Thêm dịch vụ" để chọn từ danh mục.</div>'}</div>
 
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
@@ -4106,7 +4179,7 @@ function renderDetailPanel(r,tt){
     if(!can('fillPrice')){bodyHtml='<div class="access-denied"><i class="ti ti-lock"></i><div>Không có quyền fill giá</div></div>';}
     else {
       const svcs=r.svcs||{};
-      const allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
+      const allOn=_svcGroupSort(SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on));
       const isLocked=!!r.priceLocked;
       const lockBar='<div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:8px;background:'+(isLocked?'rgba(220,53,69,.06)':'var(--bg-secondary)')+';border:1px solid '+(isLocked?'rgba(220,53,69,.25)':'var(--border-light)')+'">'
         +'<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:'+(isLocked?'var(--red)':'var(--text-secondary)')+';font-weight:600"><i class="ti ti-'+(isLocked?'lock':'lock-open')+'" style="font-size:15px"></i>'+(isLocked?'Fill giá đã KHÓA — không thể chỉnh sửa/thêm mới cho tới khi Unlock':'Fill giá đang mở, có thể chỉnh sửa bình thường')+'</div>'
@@ -4272,7 +4345,9 @@ function renderDetailPanel(r,tt){
       // Revenue table - lấy số liệu từ Invoice (giống cột invoice)
       const roe2=costingROE;
       function cvVND2(amt,cur){return cur==='VND'?Math.round(amt):Math.round(amt*roe2);}
-      const revRows=revenueRows.map(function(row,i){
+      // Chỉ đổi THỨ TỰ HIỂN THỊ (nhóm Shipping cost lên trên) — không đổi cách tính tiền, tổng vẫn
+      // dùng revenueRows gốc (revByCur/totalRevAmtVND... tính ở trên, không phụ thuộc thứ tự).
+      const revRows=_svcGroupSort(revenueRows).map(function(row,i){
         const sv=svcs[row.svKey]||{};
         const vatRate=parseFloat((sv.vat||row.vat||'0%').replace('%',''))||0;
         const amtVnd=cvVND2(row.amt,row.cur||'VND');
@@ -4327,7 +4402,7 @@ function renderDetailPanel(r,tt){
       // phần tử CÙNG key (VD: entry gốc + entry orphan/lotScoped bị trùng key do lỗi ở nơi khác) —
       // nếu không khử trùng, dịch vụ đó sẽ bị CỘNG 2 LẦN vào "Tổng chi phí" dù bảng chỉ hiện 1 dòng
       // (vì g('autoprice_'+key) luôn trả về đúng 1 input, nhưng vòng lặp forEach/filter chạy 2 lần).
-      const SVCS_DEDUP=Array.from(new Map(SVCS.map(function(s){return [s.key,s];})).values());
+      const SVCS_DEDUP=_svcGroupSort(Array.from(new Map(SVCS.map(function(s){return [s.key,s];})).values()));
       // Auto-costs from svc.cost
       // Auto-costs from svc.cost (now editable)
       const autoCostRows=SVCS_DEDUP.filter(function(s){const sv=svcs[s.key];return sv&&sv.on&&sv.cost;}).map(function(s){
@@ -4468,8 +4543,9 @@ function renderDetailPanel(r,tt){
     else {
       const svcs=r.svcs||{};
       _ensureSvcInCatalog(svcs);
-      let allOn=SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on);
-      // Áp dụng thứ tự sắp xếp thủ công (r.svcOrder) nếu có
+      let allOn=_svcGroupSort(SVCS.filter(s=>svcs[s.key]&&svcs[s.key].on));
+      // Áp dụng thứ tự sắp xếp thủ công (r.svcOrder) nếu có — ưu tiên cao hơn nhóm mặc định ở trên
+      // (lô nào đã tự kéo thả thứ tự riêng thì giữ nguyên đúng ý người dùng đã chọn)
       allOn=_applySvcOrder(allOn,r.svcOrder);
       if(!allOn.length){
         bodyHtml='<div class="empty-state"><i class="ti ti-clipboard-list"></i>Chưa có dịch vụ. Vào tab Dịch vụ để chọn trước.</div>';
@@ -5887,6 +5963,14 @@ async function saveDetailSvc(){
   // FIX: các dịch vụ ĐÃ XÓA (có trong dữ liệu cũ nhưng không còn trong grid) phải bị xóa hẳn,
   // không để merge:true của Firestore tự khôi phục. Dùng FieldValue.delete() cho từng key đã bỏ.
   const removedKeys=Object.keys(existing).filter(function(k){return !(k in svcs);});
+  // Ràng buộc SCY/TRA/TRC — chặn lưu nếu thiếu dịch vụ/NCC bắt buộc (xem _scySvcRequirementError).
+  // CHỈ áp dụng cho role thấy/sửa được NCC (fillPrice/viewCost — admin/operator/accountant): doc/cus
+  // không có ô NCC trong giao diện của họ (xem svcRowHTML !showPrice), chặn họ sẽ khiến không ai sửa
+  // được — đúng người có thể bổ sung NCC mới bị chặn lưu, tránh phá vỡ luồng lưu bình thường của doc/cus.
+  if(can('fillPrice')||can('viewCost')){
+    const _scyErr=_scySvcRequirementError(r,svcs);
+    if(_scyErr){ toast(_scyErr,'error'); return; }
+  }
   // Guard lớp 2: nếu Fill giá đang khóa, CHỈ chặn khi có KEY MỚI HOÀN TOÀN xuất hiện (dịch vụ chưa
   // từng tồn tại trong lô này trước đó) — vì đây là thao tác DUY NHẤT sinh ra dòng mới chưa có giá ở
   // Fill giá. Bật/tắt/sửa/xóa các dịch vụ ĐÃ CÓ SẴN (dù đang on hay off từ trước) vẫn hoạt động bình
@@ -8983,6 +9067,15 @@ window._scyDelRow=_scyDelRow;
 async function saveScyItems(){
   const rows=_readScyRows();
   if(!rows){toast('Tab SCY chưa mở','error');return;}
+  // Ràng buộc: nếu sắp lưu 1 lệnh SCY đã chọn Sà lan, bắt buộc tab Dịch vụ đã bật "Đóng hàng tại
+  // bãi" + có NCC — chặn lưu nếu thiếu (xem _scySvcRequirementError). Chỉ áp dụng cho role thấy/sửa
+  // được NCC (fillPrice/viewCost) — cùng lý do như saveDetailSvc(), tránh chặn nhầm doc/cus vốn
+  // không có ô NCC để tự bổ sung.
+  if(can('fillPrice')||can('viewCost')){
+    const _rScy=cache[detailTt].find(function(x){return x._id===detailId;})||{};
+    const _scyErr=_scySvcRequirementError(Object.assign({},_rScy,{scyItems:rows}));
+    if(_scyErr){ toast(_scyErr,'error'); return; }
+  }
   setLoading(true,'Đang lưu...');
   try{
     await fsSet(colName(detailTt),detailId,{scyItems:rows,updatedAt:Date.now(),updatedBy:currentUser.email});
@@ -30499,7 +30592,9 @@ async function generateSaLanDeclareExcel(dateStr){
       const sp=cache.partners[scy.saLan]||{};
       const r=(cache[scy._tt]||[]).find(function(x){return x._id===scy._lotId;})||{};
       const crew=(sp.crew&&sp.crew.length)?sp.crew:[{position:'',name:'',idCode:'',dob:''}];
-      const tuCang=(r.pol||'')+(scy.icd?(' tới '+scy.icd):'');
+      // Mặc định tuyến cố định của Sà lan theo yêu cầu — không còn tự ghép từ POL/ICD của lô nữa
+      // (thực tế luôn là 1 tuyến cố định: từ Vĩnh Long tới Tan Cang Hiep Phuoc).
+      const tuCang='từ Vĩnh Long tới Tan Cang Hiep Phuoc';
       const hangHoa=sp.hangHoaTeuTan||((r.tenHang||'')+(scy.vol?(' ('+scy.vol+'x'+(scy.typeCont||'')+')'):''));
       groups.push({
         vehicle:[sp.fullname||'', sp.tenPhuongTien||'', sp.soDangKy||'', sp.phanCap||'', sp.soThuyenVien||crew.length||'', sp.trongTai||'', tuCang, hangHoa, sp.phone||''],
