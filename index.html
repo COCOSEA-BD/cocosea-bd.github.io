@@ -1205,7 +1205,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.67';
+window.APP_BUILD='v4.68';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3345,6 +3345,26 @@ function _addDaysStr(dateStr,n){
   return d.toISOString().slice(0,10);
 }
 
+// ── Trường hợp đặc biệt LUÔN hiển thị ở trang Shipment List mặc định, dù ETD nằm ngoài khoảng
+// etdFrom/etdTo đang lọc — áp dụng từ các lô hàng có ETD từ tháng 9/2026 trở đi:
+//  (1) Hàng nhập khẩu (loaiHang='IM - Nhập khẩu') mà CHƯA thông quan (thongQuan=false/chưa có)
+//  (2) Hàng xuất khẩu (loaiHang='XK - Xuất khẩu') mà CHƯA VST VÀ CHƯA gửi đủ chứng từ — dùng ĐÚNG
+//      định nghĩa "Chưa VST"/"Chưa gửi Ctừ" đã có sẵn ở bộ lọc nhanh (vst_no/doc_pending) để nhất quán.
+// CHỈ bỏ qua ràng buộc khoảng ETD — các bộ lọc khác (trạng thái, tìm kiếm, shipper/carrier/pod,
+// khóa...) vẫn áp dụng bình thường như trước, không đổi.
+var ALWAYS_SHOW_ETD_CUTOFF='2026-09-01';
+function _isAlwaysShowSpecialLot(r){
+  if(!r||!r.etd||r.etd<ALWAYS_SHOW_ETD_CUTOFF)return false;
+  if(r.loaiHang==='IM - Nhập khẩu')return !r.thongQuan;
+  if(r.loaiHang==='XK - Xuất khẩu'){
+    const chuaVst=!!(r.vstEnabled&&!r.vstConfirmed);
+    const chuaGuiCtu=!!(r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length);
+    return chuaVst&&chuaGuiCtu;
+  }
+  return false;
+}
+window._isAlwaysShowSpecialLot=_isAlwaysShowSpecialLot;
+
 function renderLotTable(tt){
   const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
   // ── Đọc TẤT CẢ filter values TRƯỚC filter loop (không đọc DOM trong loop)
@@ -3371,8 +3391,12 @@ function renderLotTable(tt){
     if(fs==='vst_yes'&&!(r.vstEnabled&&r.vstConfirmed))return false;
     if(fs==='vst_no'&&!(r.vstEnabled&&!r.vstConfirmed))return false;
     if(fs==='doc_pending'&&!(r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length))return false;
-    if(etdFrom&&r.etd&&r.etd<etdFrom)return false;
-    if(etdTo&&r.etd&&r.etd>etdTo)return false;
+    // Trường hợp đặc biệt (xem _isAlwaysShowSpecialLot) — bỏ qua ràng buộc khoảng ETD, các bộ lọc
+    // khác ở trên/dưới vẫn áp dụng bình thường.
+    if(!_isAlwaysShowSpecialLot(r)){
+      if(etdFrom&&r.etd&&r.etd<etdFrom)return false;
+      if(etdTo&&r.etd&&r.etd>etdTo)return false;
+    }
     if(sfShipper&&!(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper))return false;
     if(sfCarrier&&!(r.carrier||'').toLowerCase().includes(sfCarrier))return false;
     if(sfPod&&!(r.pod||'').toLowerCase().includes(sfPod))return false;
@@ -3433,7 +3457,8 @@ function renderLotTable(tt){
   function buildRowHtml(r){
     const isUrgent=!!(r.etd&&r.etd>=todayStr&&r.etd<=urgDeadline);
     const noFill=r.status!=='Đã Fill giá';
-    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}${noFill?' tr-nofill':''}">`
+    const isPinnedRow=_isAlwaysShowSpecialLot(r)&&((etdFrom&&r.etd<etdFrom)||(etdTo&&r.etd>etdTo));
+    return`<tr class="${isUrgent?'tr-urgent':''}${r.locked?' tr-locked':''}${r.status==='Confirm'?' tr-confirm':''}${noFill?' tr-nofill':''}${isPinnedRow?' tr-pinned':''}">`
       +cols.map(c=>{
         if(c.k==='bookingNo'){
           const urgDot=isUrgent?'<span style="display:inline-block;width:6px;height:6px;background:#E24B4A;border-radius:50%;margin-left:4px;vertical-align:2px"></span>':'';
@@ -3526,10 +3551,14 @@ function renderLotTable(tt){
         if(c.k==='etd'){
           // Màu ETD: trước ETD = xám | ETD→ETD+3 = đỏ | sau ETD+3 = navy
           const etdColor=!r.etd?'var(--text-secondary)':(r.etd<todayStr?'#94a3b8':(r.etd<=todayPlus3?'#E24B4A':'#1a4b8c'));
+          // Ghim hiển thị: lô thuộc trường hợp đặc biệt (xem _isAlwaysShowSpecialLot) VÀ đang thực sự
+          // nằm ngoài khoảng ETD đang lọc — báo cho người dùng biết vì sao lô này vẫn xuất hiện.
+          const pinBadge=isPinnedRow?`<div style="margin-top:2px" title="Luôn hiển thị dù ngoài khoảng ETD lọc — do chưa hoàn tất TQ/VST/gửi chứng từ"><span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(124,58,237,.12);color:#7C3AED;white-space:nowrap"><i class="ti ti-pin" style="font-size:9px"></i> Ghim</span></div>`:'';
           return`<td style="white-space:nowrap;text-align:center">`
           +`<div style="font-weight:800;font-size:13px;color:${etdColor}">${fd(r.etd)}</div>`
           +(r.eta?`<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">ETA ${fd(r.eta)}</div>`:'')
           +(r.cutoffCY?`<div style="font-size:10.5px;color:#b45309;margin-top:2px">CY: ${r.cutoffCY}</div>`:'')
+          +pinBadge
           +`</td>`;
         }
         // ── Shipper/Nhà cung cấp: nếu Booking Party khác Shipper thì hiện cả 2 (badge Booking Party nhỏ ở trên),
@@ -4792,6 +4821,8 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
   }
   if(detailTab==='costing') setTimeout(updateCostingTotal, 100);
   if(detailTab==='cont') setTimeout(function(){document.querySelectorAll('[class*="cno_"]').forEach(function(inp){if(inp.value)validateContNo(inp);});if(typeof checkDupContSeal==='function')checkDupContSeal();}, 80);
+  // Trucking: áp dụng kiểm tra ISO 6346 cho các ô Số cont đã có sẵn dữ liệu ngay khi mở tab
+  if(detailTab==='trucking') setTimeout(function(){document.querySelectorAll('[id^="trk_cont_"]').forEach(function(inp){if(inp.value)validateContNo(inp);});}, 80);
   if(detailTab==='docmaker'){
     // Đánh dấu scope: đang xem Document Maker CỦA lô hàng này — chỉ hiện chứng từ của lô đó trong
     // danh sách "đã lưu" (giữ nguyên logic cũ của openDocMakerTab, chỉ đổi nơi render).
@@ -8778,7 +8809,7 @@ function _truckingTableRowHtml(row,i,bkList,polDefault){
     +'<td style="'+td+';min-width:160px"><input type="text" id="trk_route_'+i+'" value="'+(row.route||defRoute).replace(/"/g,'&quot;')+'" placeholder="'+defRoute+'" style="'+inp+'"/></td>'
     +'<td style="'+td+';min-width:120px"><select id="trk_ncc_'+i+'" style="'+sel+'">'+nccOpts+'</select></td>'
     +'<td style="'+td+'"><input type="date" id="trk_date_'+i+'" value="'+(row.date||'')+'" style="'+inp+'"/></td>'
-    +'<td style="'+td+'"><input type="text" id="trk_cont_'+i+'" value="'+(row.contNo||'').replace(/"/g,'&quot;')+'" placeholder="ABCU1234567" style="'+inp+'"/></td>'
+    +'<td style="'+td+'"><div style="display:flex;align-items:center;gap:3px"><input type="text" id="trk_cont_'+i+'" value="'+(row.contNo||'').replace(/"/g,'&quot;')+'" placeholder="ABCU1234567" oninput="validateContNo(this)" onblur="validateContNoBlur(this)" style="'+inp+';flex:1;min-width:0"/><span class="contChk" style="font-size:13px;flex-shrink:0;width:14px"></span></div></td>'
     +'<td style="'+td+'"><input type="text" id="trk_seal_'+i+'" value="'+(row.seal||'').replace(/"/g,'&quot;')+'" placeholder="Seal" style="'+inp+'"/></td>'
     +'<td style="'+td+'"><input type="number" id="trk_tare_'+i+'" value="'+(row.tare!=null&&row.tare!==''?row.tare:'')+'" placeholder="0" style="'+inp+';text-align:right"/></td>'
     +'<td style="'+td+'"><input type="text" id="trk_truck_'+i+'" value="'+(row.truckNo||'').replace(/"/g,'&quot;')+'" placeholder="51A-12345" style="'+inp+'"/></td>'
@@ -18441,6 +18472,7 @@ tr:hover td{background:var(--hover-bg)}
 .tr-locked td:first-child{border-left:3px solid var(--red)}
 .tr-confirm td:first-child{border-left:3px solid #dc3545}
 .tr-nofill td:first-child{border-left:3px solid var(--red)}
+.tr-pinned td:first-child{border-left:3px solid #7C3AED}
 /* Striped rows — xen kẽ trắng ngà / xanh dương nhạt, KHÔNG bị trạng thái phủ màu đè lên */
 .lot-table tbody tr:nth-child(odd) td{background:var(--bg-primary)}
 .lot-table tbody tr:nth-child(even) td{background:#F0F7FF}
