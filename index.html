@@ -1205,7 +1205,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.72';
+window.APP_BUILD='v4.73';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -19871,6 +19871,24 @@ function _registerRobotoFont(doc){
   }
 }
 
+// Lấy ảnh nền (hình nền logistics) mà form HTML "Tạo DN" đang dùng (CSS ".dn{background-image:...}" được
+// nhúng trong template HTML của rebuildInvoicePreview()), để vẽ lại y hệt trong PDF xuất/đính kèm.
+// Rule CSS này chỉ tồn tại trong DOM SAU KHI mở popup "Tạo DN" (vì nó nằm trong innerHTML được set động),
+// nên KHÔNG dùng getComputedStyle được khi chỉ xuất PDF/gửi email mà chưa mở popup — thay vào đó đọc trực
+// tiếp chuỗi data-URI từ chính SOURCE của hàm rebuildInvoicePreview (qua .toString()), tránh phải chép lại
+// chuỗi base64 khổng lồ thêm 1 lần nữa vào JS (chỉ tồn tại đúng 1 lần trong file, y như trước đây).
+function _dnBgDataUrl(){
+  if(window._dnBgUrlCache!==undefined) return window._dnBgUrlCache;
+  var url=null;
+  try{
+    var src=(typeof rebuildInvoicePreview==='function')?rebuildInvoicePreview.toString():'';
+    var m=src.match(/background-image:url\((['"])(data:image\/[^'")]+)\1\)/);
+    url=m?m[2]:null;
+  }catch(e){ url=null; }
+  window._dnBgUrlCache=url;
+  return url;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  JOB REPORT — Báo cáo lô hàng theo shipper + khoảng thời gian
 // ═══════════════════════════════════════════════════════════
@@ -20480,7 +20498,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     const doc=new jsPDFNS.jsPDF({unit:'mm',format:'a4'});
     _registerRobotoFont(doc);
     doc.setFont('Roboto','normal');
-    const PW=210, ML=14, MR=14, CW=PW-ML-MR;
+    const PW=210, PH=297, ML=14, MR=14, CW=PW-ML-MR;
     // Bảng màu COCO SEA — navy blue maritime design
     const NAVY=[13,71,161], GREY=[100,116,139], LIGHTBG=[239,246,255];
     const PRIMARY=[19,82,162], WARNING=[245,158,11], DANGER=[239,68,68], SUCCESS=[34,197,94];
@@ -20489,6 +20507,21 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
 
     function hr(yy){ doc.setDrawColor(NAVY[0],NAVY[1],NAVY[2]); doc.setLineWidth(0.7); doc.line(ML,yy,PW-MR,yy); }
     function rr(x,yy,w,h,color,style){ doc.setFillColor(color[0],color[1],color[2]); doc.roundedRect(x,yy,w,h,1.5,1.5,style||'F'); }
+
+    // HÌNH NỀN — vẽ y hệt background-image của form HTML "Tạo DN" (class .dn, background-size:cover;
+    // background-position:center top) lên mỗi trang, vẽ TRƯỚC tất cả nội dung khác để nội dung luôn nằm trên nền.
+    const _dnBg=_dnBgDataUrl();
+    function drawDnBg(){
+      if(!_dnBg) return;
+      try{
+        const imgW=1536, imgH=1024; // kích thước gốc của ảnh nền (khớp asset nhúng trong CSS .dn)
+        const scale=Math.max(PW/imgW, PH/imgH); // mô phỏng background-size:cover
+        const dw=imgW*scale, dh=imgH*scale;
+        const dx=(PW-dw)/2, dy=0; // background-position:center top
+        doc.addImage(_dnBg,'PNG',dx,dy,dw,dh,undefined,'FAST');
+      }catch(e){}
+    }
+    drawDnBg();
 
     // HEADER — logo dừa (nếu tải được) + tên cty (trái) / DEBIT NOTE + chip Debit No & Date (phải)
     // — khớp bố cục .hdr-meta chips của form HTML "Tạo DN" (rebuildInvoicePreview), thay cho card DEBIT NO/DATE rời rạc trước đây
@@ -20579,7 +20612,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     if(r.vol||r.typeCont) shipRows.push(['Volume',(r.vol||'')+(r.typeCont?' × '+r.typeCont:'')]);
     if(contStr) shipRows.push(['Container(s)',contStr]);
     var infoH=Math.max(_infoCardH(billRows,billW),_infoCardH(shipRows,shipW));
-    if(y+infoH>268){ doc.addPage(); y=20; }
+    if(y+infoH>268){ doc.addPage(); drawDnBg(); y=20; }
     _drawInfoCard(ML,billW,infoH,'Billing To',billRows);
     _drawInfoCard(ML+billW+infoGap,shipW,infoH,'Shipment Detail',shipRows);
     y+=infoH+8;
@@ -20625,11 +20658,16 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     const vatAmt=Math.round(sub8*0.08+sub10*0.10);
     const grandWithVAT=Math.round(grandVND+vatAmt);
 
+    // Nếu bảng Charge Detail tự động sang trang (nhiều dòng dịch vụ), vẽ lại hình nền cho các trang tiếp theo
+    // qua hook willDrawPage (chạy TRƯỚC khi autoTable in nội dung của trang đó) — bỏ qua lần gọi đầu vì trang
+    // hiện tại đã được vẽ nền thủ công từ đầu hàm rồi (drawDnBg() ở trên).
+    var _chargeFirstPage=true;
     doc.autoTable({startY:y,margin:{left:ML,right:MR},head:chargeHead,body:chargeBody,theme:'grid',
       headStyles:{font:'Roboto',fillColor:LIGHTBG,textColor:NAVY,fontStyle:'bold',fontSize:7.5},
       alternateRowStyles:{fillColor:LIGHTGRAY},
       styles:{font:'Roboto',fontSize:8,cellPadding:2.2,lineColor:BORDERC,lineWidth:0.1,overflow:'linebreak'},
-      columnStyles:{0:{cellWidth:9,halign:'center'},1:{cellWidth:60,fontStyle:'normal'},2:{cellWidth:12,halign:'center'},3:{cellWidth:16,halign:'center'},4:{cellWidth:22,halign:'right'},5:{cellWidth:14,halign:'center'},6:{cellWidth:14,halign:'center'},7:{halign:'right',fontStyle:'bold',textColor:PRIMARY}}});
+      columnStyles:{0:{cellWidth:9,halign:'center'},1:{cellWidth:60,fontStyle:'normal'},2:{cellWidth:12,halign:'center'},3:{cellWidth:16,halign:'center'},4:{cellWidth:22,halign:'right'},5:{cellWidth:14,halign:'center'},6:{cellWidth:14,halign:'center'},7:{halign:'right',fontStyle:'bold',textColor:PRIMARY}},
+      willDrawPage:function(){ if(_chargeFirstPage){ _chargeFirstPage=false; return; } drawDnBg(); }});
     y=doc.lastAutoTable.finalY+4;
 
     // FOOTER 2 CỘT: NOTE box (trái, hẹp lại) + SUM-BLOCK (phải: SUBTOTAL/VAT + GRAND TOTAL badge + Bằng chữ)
@@ -20646,7 +20684,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     var sumBlockH=sumLines.length*5+2+8.5+3+_bcLines.length*3.2+2;
     var noteH=17;
     var bottomH=Math.max(sumBlockH,noteH);
-    if(y+bottomH>270){ doc.addPage(); y=20; }
+    if(y+bottomH>270){ doc.addPage(); drawDnBg(); y=20; }
     var bottomY=y;
 
     // NOTE box (trái) — icon tròn xanh "i" theo mẫu, đã thu hẹp bề rộng để nhường chỗ cho sum-block bên phải
@@ -20695,7 +20733,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     var nCo=Math.max(coAccs.length,1), nPs=Math.max(persAccs.length,1);
     var bkCardH=7+Math.max(nCo,nPs)*accH+2;
     // Guard: toàn bộ section (header 8.5 + card + 6 + brand bar 10) phải nằm gọn trong trang
-    if(y+8.5+bkCardH+16>287){ doc.addPage(); y=20; }
+    if(y+8.5+bkCardH+16>287){ doc.addPage(); drawDnBg(); y=20; }
     sectionHdr('Bank Account');
     function _bankCard(x,title,hdrColor,accs){
       doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.15);
@@ -20732,7 +20770,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     y+=bkCardH+6;
 
     // FOOTER: brand bar (bỏ hàng contact theo yêu cầu)
-    if(y>276){ doc.addPage(); y=20; }
+    if(y>276){ doc.addPage(); drawDnBg(); y=20; }
     rr(ML,y,CW,10,NAVY,'F');
     doc.setFont('Roboto','bold'); doc.setFontSize(10); doc.setTextColor(255,255,255);
     doc.text('COCO SEA CO., LTD',ML+5,y+6.5);
