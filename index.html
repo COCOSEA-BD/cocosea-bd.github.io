@@ -1205,7 +1205,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.71';
+window.APP_BUILD='v4.72';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -20490,7 +20490,8 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     function hr(yy){ doc.setDrawColor(NAVY[0],NAVY[1],NAVY[2]); doc.setLineWidth(0.7); doc.line(ML,yy,PW-MR,yy); }
     function rr(x,yy,w,h,color,style){ doc.setFillColor(color[0],color[1],color[2]); doc.roundedRect(x,yy,w,h,1.5,1.5,style||'F'); }
 
-    // HEADER — logo dừa (nếu tải được) + tên cty, theo mẫu
+    // HEADER — logo dừa (nếu tải được) + tên cty (trái) / DEBIT NOTE + chip Debit No & Date (phải)
+    // — khớp bố cục .hdr-meta chips của form HTML "Tạo DN" (rebuildInvoicePreview), thay cho card DEBIT NO/DATE rời rạc trước đây
     var _tx=ML;
     if(_logoUrl){
       try{ doc.addImage(_logoUrl,'PNG',ML,y-5.5,13,13,undefined,'FAST'); _tx=ML+17; }catch(e){}
@@ -20503,22 +20504,24 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     doc.text('DEBIT NOTE',PW-MR,y,{align:'right'});
     doc.setFont('Roboto','normal'); doc.setFontSize(8); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
     doc.text('STATEMENT OF CHARGES  •  Currency: VND',PW-MR,y+5,{align:'right'});
-    y+=9; hr(y); y+=8;
-
-    // 1 CARD GỌN: DEBIT NO + DEBIT DATE trên cùng 1 dòng (đã bỏ card Booking No theo yêu cầu)
-    const cardH2=11;
-    rr(ML,y,CW,cardH2,LIGHTGRAY,'F');
-    doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2); doc.roundedRect(ML,y,CW,cardH2,1.5,1.5,'S');
-    doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.roundedRect(ML,y,1.6,cardH2,0.8,0.8,'F');
-    var midX=ML+CW*0.5;
-    doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2); doc.line(midX,y+2.5,midX,y+cardH2-2.5);
-    doc.setFont('Roboto','bold'); doc.setFontSize(7); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
-    doc.text('DEBIT NO',ML+5,y+4.3); doc.text('DEBIT DATE',midX+6,y+4.3);
-    doc.setFont('Roboto','bold'); doc.setFontSize(11); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
-    doc.text(String(dnNo||'-'),ML+5,y+9);
-    doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
-    doc.text(String(debitDate||'-'),midX+6,y+9);
-    y+=cardH2+8;
+    // Chip DEBIT NO / DEBIT DATE — 2 ô nhỏ cạnh nhau, bám mép phải header (thay cho card rời bên dưới)
+    var chipY=y+8, chipH=8.5, chipGap=3;
+    var chipNoVal=String(dnNo||'-'), chipDtVal=String(debitDate||'-');
+    doc.setFont('Roboto','bold'); doc.setFontSize(8.3);
+    var chipNoW=Math.max(doc.getTextWidth(chipNoVal),doc.getTextWidth('DEBIT NO'))+6;
+    var chipDtW=Math.max(doc.getTextWidth(chipDtVal),doc.getTextWidth('DEBIT DATE'))+6;
+    var chipDtX=PW-MR-chipDtW, chipNoX=chipDtX-chipGap-chipNoW;
+    function metaChip(cx,cw,label,val){
+      doc.setFillColor(LIGHTBG[0],LIGHTBG[1],LIGHTBG[2]); doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2);
+      doc.roundedRect(cx,chipY,cw,chipH,1.3,1.3,'FD');
+      doc.setFont('Roboto','normal'); doc.setFontSize(6.2); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
+      doc.text(label,cx+3,chipY+3.3);
+      doc.setFont('Roboto','bold'); doc.setFontSize(8.3); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+      doc.text(val,cx+3,chipY+7);
+    }
+    metaChip(chipNoX,chipNoW,'DEBIT NO',chipNoVal);
+    metaChip(chipDtX,chipDtW,'DEBIT DATE',chipDtVal);
+    y=chipY+chipH+4; hr(y); y+=8;
 
     function sectionHdr(label, rightText){
       rr(ML,y,CW,6.5,NAVY,'F');
@@ -20527,27 +20530,44 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
       if(rightText){ doc.text(rightText,ML+CW-3,y+4.6,{align:'right'}); }
       y+=6.5+2;
     }
-    function kvTable(rows){
-      doc.autoTable({startY:y,margin:{left:ML,right:MR},theme:'plain',
-        styles:{font:'Roboto',fontSize:9,textColor:[30,41,59],cellPadding:{top:1.8,bottom:1.8,left:3,right:3},lineColor:BORDERC,lineWidth:0.1},
-        columnStyles:{0:{cellWidth:36,fontStyle:'bold',textColor:GREY}},
-        body:rows});
-      y=doc.lastAutoTable.finalY+3;
-    }
 
-    // BILLING TO
-    sectionHdr('Billing To');
+    // BILLING TO + SHIPMENT DETAIL — 2 card cạnh nhau, khớp .row2{grid-template-columns:1.2fr 1.6fr} của form HTML
+    var infoGap=5, infoUnit=(CW-infoGap)/2.8, billW=infoUnit*1.2, shipW=CW-infoGap-billW;
+    var infoLabelW=24, infoRowGap=1.6;
+    function _infoCardH(rows,w){
+      var hh=6.5+4.2;
+      rows.forEach(function(rw){
+        var lines=doc.splitTextToSize(String(rw[1]||'-'),w-infoLabelW-4);
+        hh+=Math.max(lines.length,1)*4.2+infoRowGap;
+      });
+      return hh+2;
+    }
+    function _drawInfoCard(x,w,h,title,rows){
+      doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.15);
+      doc.setFillColor(255,255,255); doc.roundedRect(x,y,w,h,1.5,1.5,'FD');
+      doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]);
+      doc.roundedRect(x,y,w,6.5,1.5,1.5,'F'); doc.rect(x,y+3.2,w,3.3,'F');
+      doc.setFont('Roboto','bold'); doc.setFontSize(8); doc.setTextColor(255,255,255);
+      doc.text(title.toUpperCase(),x+3,y+4.5);
+      var yy=y+6.5+4.2;
+      rows.forEach(function(rw){
+        doc.setFont('Roboto','normal'); doc.setFontSize(7.3); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
+        doc.text(String(rw[0]),x+3,yy);
+        doc.setFont('Roboto','bold'); doc.setFontSize(7.6); doc.setTextColor(30,41,59);
+        var lines=doc.splitTextToSize(String(rw[1]||'-'),w-infoLabelW-4);
+        lines.forEach(function(ln,li){ doc.text(ln,x+infoLabelW,yy+li*4.2); });
+        yy+=Math.max(lines.length,1)*4.2+infoRowGap;
+      });
+    }
     const billingName=(currentParty&&currentParty!==shipperKey&&window.cache&&cache.partners[currentParty])?(cache.partners[currentParty].fullname||currentParty):(sp.fullname||shipperKey||'-');
-    kvTable([
+    const billRows=[
       ['Customer',billingName],
       ['Tax ID',sp.mst||'-'],
       ['Address',sp.addr||'-'],
-    ]);
-
+    ];
     // SHIPMENT DETAIL — khớp ĐÚNG danh sách field & thứ tự với form HTML "Tạo DN" (rebuildInvoicePreview)
-    sectionHdr('Shipment Detail');
     const contStr=(r.containers||[]).filter(function(ct){return ct&&ct.no;}).map(function(ct){return ct.no;}).join(', ');
-    const shipmentRows=[
+    const shipRows=[
       ['Shipper',sp.fullname||shipperKey||'-'],
       ['Consignee',cp.fullname||cneeKey||'-'],
       ['B/L No',r.mblNo||'-'],
@@ -20555,10 +20575,14 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
       ['Vessel/Voyage',(r.vessel||'-')+(r.voy?' V.'+r.voy:'')],
       ['POL → POD',(r.pol||'-')+' → '+(r.pod||'-')],
     ];
-    if(r.soTkhai) shipmentRows.push(['Số T.Khai',r.soTkhai]);
-    if(r.vol||r.typeCont) shipmentRows.push(['Volume',(r.vol||'')+(r.typeCont?' × '+r.typeCont:'')]);
-    if(contStr) shipmentRows.push(['Container(s)',contStr]);
-    kvTable(shipmentRows);
+    if(r.soTkhai) shipRows.push(['Số T.Khai',r.soTkhai]);
+    if(r.vol||r.typeCont) shipRows.push(['Volume',(r.vol||'')+(r.typeCont?' × '+r.typeCont:'')]);
+    if(contStr) shipRows.push(['Container(s)',contStr]);
+    var infoH=Math.max(_infoCardH(billRows,billW),_infoCardH(shipRows,shipW));
+    if(y+infoH>268){ doc.addPage(); y=20; }
+    _drawInfoCard(ML,billW,infoH,'Billing To',billRows);
+    _drawInfoCard(ML+billW+infoGap,shipW,infoH,'Shipment Detail',shipRows);
+    y+=infoH+8;
 
     // CHARGE DETAIL — cùng 8 cột & cùng khối tổng hợp VAT/Grand Total với form HTML
     const roe=parseFloat(g('roeInput')?.value)||26390;
@@ -20595,51 +20619,71 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     let idx=0;
     idx=pushGroup('A. Phí có hóa đơn (Invoice: YES)',svcsYes,idx);
     idx=pushGroup('B. Phí không hóa đơn (Invoice: NO)',svcsNo,idx);
-    // Khối tổng hợp SUBTOTAL theo % VAT + VAT + GRAND TOTAL — khớp sum-block bên form HTML
+    // Khối tổng hợp SUBTOTAL theo % VAT + VAT + GRAND TOTAL — tính giá trị nhưng KHÔNG đẩy vào bảng nữa,
+    // sẽ vẽ riêng thành sum-block cạnh NOTE box bên dưới, khớp .charge-bottom{display:flex} của form HTML
     const sub0=vatGroups['0%']||0, sub8=vatGroups['8%']||0, sub10=vatGroups['10%']||0;
     const vatAmt=Math.round(sub8*0.08+sub10*0.10);
     const grandWithVAT=Math.round(grandVND+vatAmt);
-    function sumLine(label,val,color){
-      chargeBody.push([{content:label,colSpan:6,styles:{halign:'right',fontSize:7.5,textColor:color||GREY}},{content:val.toLocaleString(),colSpan:2,styles:{halign:'right',fontSize:7.5,fontStyle:'bold',textColor:color||[30,41,59]}}]);
-    }
-    if(sub0) sumLine('SUBTOTAL (0%)',sub0);
-    if(sub8) sumLine('SUBTOTAL (8%)',sub8);
-    if(sub10) sumLine('SUBTOTAL (10%)',sub10);
-    if(vatAmt) sumLine('VAT',vatAmt,WARNING);
-    chargeBody.push([{content:'GRAND TOTAL (VND)',colSpan:6,styles:{halign:'left',fontStyle:'bold',fillColor:NAVY,textColor:255,fontSize:10}},{content:grandWithVAT.toLocaleString(),colSpan:2,styles:{halign:'right',fontStyle:'bold',fillColor:NAVY,textColor:255,fontSize:10}}]);
 
     doc.autoTable({startY:y,margin:{left:ML,right:MR},head:chargeHead,body:chargeBody,theme:'grid',
       headStyles:{font:'Roboto',fillColor:LIGHTBG,textColor:NAVY,fontStyle:'bold',fontSize:7.5},
       alternateRowStyles:{fillColor:LIGHTGRAY},
       styles:{font:'Roboto',fontSize:8,cellPadding:2.2,lineColor:BORDERC,lineWidth:0.1,overflow:'linebreak'},
       columnStyles:{0:{cellWidth:9,halign:'center'},1:{cellWidth:60,fontStyle:'normal'},2:{cellWidth:12,halign:'center'},3:{cellWidth:16,halign:'center'},4:{cellWidth:22,halign:'right'},5:{cellWidth:14,halign:'center'},6:{cellWidth:14,halign:'center'},7:{halign:'right',fontStyle:'bold',textColor:PRIMARY}}});
-    y=doc.lastAutoTable.finalY+3;
+    y=doc.lastAutoTable.finalY+4;
 
-    // Bằng chữ — căn phải dưới GRAND TOTAL, in nghiêng theo mẫu
-    doc.setFont('Roboto','bold'); doc.setFontSize(8.5); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+    // FOOTER 2 CỘT: NOTE box (trái, hẹp lại) + SUM-BLOCK (phải: SUBTOTAL/VAT + GRAND TOTAL badge + Bằng chữ)
+    // — khớp bố cục .charge-bottom{display:flex} của form HTML "Tạo DN" thay cho các dòng tổng rời rạc trước đây
+    var sumW=70, noteW=CW-sumW-6;
+    var sumLines=[];
+    if(sub0) sumLines.push(['SUBTOTAL (0%)',sub0,false]);
+    if(sub8) sumLines.push(['SUBTOTAL (8%)',sub8,false]);
+    if(sub10) sumLines.push(['SUBTOTAL (10%)',sub10,false]);
+    if(vatAmt) sumLines.push(['VAT',vatAmt,true]);
+    doc.setFont('Roboto','italic'); doc.setFontSize(6.6);
     var _bcWords=_numToWordsVN(grandWithVAT);
-    var _bcLabelW=doc.getTextWidth('Bằng chữ: ');
-    doc.setFont('Roboto','italic');
-    var _bcWordsW=doc.getTextWidth(_bcWords);
-    var _bcX=PW-MR-_bcWordsW-_bcLabelW;
-    doc.setFont('Roboto','bold');
-    doc.text('Bằng chữ: ',_bcX,y+4.2);
-    doc.setFont('Roboto','italic');
-    doc.text(_bcWords,_bcX+_bcLabelW,y+4.2);
-    y+=9;
+    var _bcLines=doc.splitTextToSize('Bằng chữ: '+_bcWords,sumW);
+    var sumBlockH=sumLines.length*5+2+8.5+3+_bcLines.length*3.2+2;
+    var noteH=17;
+    var bottomH=Math.max(sumBlockH,noteH);
+    if(y+bottomH>270){ doc.addPage(); y=20; }
+    var bottomY=y;
 
-    // NOTICE — icon tròn xanh "i" theo mẫu
+    // NOTE box (trái) — icon tròn xanh "i" theo mẫu, đã thu hẹp bề rộng để nhường chỗ cho sum-block bên phải
     doc.setFillColor(239,246,255); doc.setDrawColor(NAVY[0],NAVY[1],NAVY[2]); doc.setLineWidth(0.25);
-    doc.roundedRect(ML,y,CW,13,1.5,1.5,'FD');
-    doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.circle(ML+7,y+6.5,3.2,'F');
+    doc.roundedRect(ML,bottomY,noteW,noteH,1.5,1.5,'FD');
+    doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.circle(ML+7,bottomY+6.5,3.2,'F');
     doc.setFont('Roboto','bold'); doc.setFontSize(9); doc.setTextColor(255,255,255);
-    doc.text('i',ML+7,y+7.7,{align:'center'});
+    doc.text('i',ML+7,bottomY+7.7,{align:'center'});
     doc.setFontSize(8); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
-    doc.text('NOTE',ML+13,y+4.5);
+    doc.text('NOTE',ML+13,bottomY+4.5);
     doc.setFont('Roboto','normal'); doc.setFontSize(7.5); doc.setTextColor(71,85,105);
-    doc.text('• Payment deadline: 7 days after receiving this Debit Note.',ML+13,y+8.3);
-    doc.text('• Payment should be made according to the company bank account.',ML+13,y+11.6);
-    y+=17;
+    doc.text('• Payment deadline: 7 days after receiving this Debit Note.',ML+13,bottomY+8.3);
+    doc.text('• Payment should be made according to the company bank account.',ML+13,bottomY+11.6);
+
+    // SUM-BLOCK (phải) — SUBTOTAL theo % VAT + VAT + GRAND TOTAL badge + Bằng chữ, khớp .sum-block của form HTML
+    var sumX=PW-MR-sumW;
+    var sy=bottomY;
+    sumLines.forEach(function(sl){
+      var col=sl[2]?WARNING:GREY;
+      doc.setFont('Roboto','normal'); doc.setFontSize(7.3); doc.setTextColor(col[0],col[1],col[2]);
+      doc.text(sl[0],sumX,sy+3.5);
+      doc.setFont('Roboto','bold'); doc.setTextColor(sl[2]?WARNING[0]:30,sl[2]?WARNING[1]:41,sl[2]?WARNING[2]:59);
+      doc.text(sl[1].toLocaleString(),sumX+sumW,sy+3.5,{align:'right'});
+      sy+=5;
+    });
+    sy+=2;
+    doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.roundedRect(sumX,sy,sumW,8.5,1.3,1.3,'F');
+    doc.setFont('Roboto','bold'); doc.setFontSize(8); doc.setTextColor(255,255,255);
+    doc.text('GRAND TOTAL',sumX+3,sy+5.6);
+    doc.setFontSize(9.5);
+    doc.text(grandWithVAT.toLocaleString()+' VND',sumX+sumW-3,sy+5.6,{align:'right'});
+    sy+=8.5+3;
+    doc.setFont('Roboto','bold'); doc.setFontSize(6.6); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
+    doc.setFont('Roboto','italic');
+    _bcLines.forEach(function(ln,li){ doc.text(ln,sumX+sumW,sy+li*3.2,{align:'right'}); });
+
+    y=bottomY+bottomH+6;
 
     // BANK ACCOUNT — 2 card cạnh nhau theo mẫu (Chủ TK / Số TK / Ngân hàng), luôn nguyên khối 1 trang
     const banksData=window._bankAccounts||{company:[],personal:[]};
