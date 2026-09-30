@@ -1205,7 +1205,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.73';
+window.APP_BUILD='v4.75';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4101,6 +4101,7 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showCheckEport(this.dataset.bk)" style="color:#16A34A;border-color:#16A34A"><i class="ti ti-clipboard-check"></i> Check</button>';
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showFumiReport(this.dataset.bk)" style="color:#EA580C;border-color:#EA580C"><i class="ti ti-spray"></i> Báo Fumi</button>';
       sectionsHtml+='<label class="btn" style="cursor:pointer;color:#0D9488;border-color:#0D9488"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
+      sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="openOcrContScan(this.dataset.bk)" style="color:#C026D3;border-color:#C026D3"><i class="ti ti-photo"></i> Quét ảnh</button>';
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="exportContSealExcel(this.dataset.bk)" style="color:#4F46E5;border-color:#4F46E5"><i class="ti ti-table-export"></i> Xuất Excel</button>';
       sectionsHtml+='<button class="btn" style="color:#7C3AED;border-color:#7C3AED" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
       sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
@@ -5663,6 +5664,304 @@ function _smartParseContGrid(grid,XLSX){
   return {rows:rows,colMap:colMap};
 }
 window._smartParseContGrid=_smartParseContGrid;
+
+/* ═══════════════════════════════════════════════════════════
+   QUÉT ẢNH CONT/SEAL (OCR) — v4.74
+   Dùng Tesseract.js (chạy NGAY trong trình duyệt của người dùng — ảnh và dữ liệu lô hàng KHÔNG được
+   gửi tới bất kỳ server/API nào khác, kể cả server của Cocosea) để đọc dữ liệu thô từ ảnh chụp bảng
+   Cont/Seal, cho xem trước (preview) để chỉnh sửa, rồi ĐIỀN vào các ô input có sẵn của bảng Cont/Seal —
+   giống hệt cách importContFromExcelBk() đang làm. KHÔNG tự ý lưu Firestore ở đây: người dùng vẫn phải
+   bấm nút "Lưu" sẵn có (saveContSealAll) để lưu — không thêm đường ghi dữ liệu mới, không đổi cấu trúc.
+═══════════════════════════════════════════════════════════ */
+window._ocrContState=null;
+
+// Lazy-load Tesseract.js (chỉ tải khi bấm "Quét ảnh" lần đầu) — cùng cách lazy-load đã dùng cho jsPDF.
+function _loadTesseract(cb){
+  if(window.Tesseract){cb();return;}
+  if(window.__tessLoading){ window.__tessQueue=window.__tessQueue||[]; window.__tessQueue.push(cb); return; }
+  window.__tessLoading=true;
+  const s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';
+  s.onload=function(){
+    window.__tessLoading=false;
+    cb();
+    (window.__tessQueue||[]).forEach(function(f){f();});
+    window.__tessQueue=[];
+  };
+  s.onerror=function(){ window.__tessLoading=false; toast('Không tải được thư viện quét ảnh (kiểm tra kết nối mạng)','error'); };
+  document.head.appendChild(s);
+}
+
+function openOcrContScan(bkNo){
+  const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
+  window._ocrContState={bkNo:bkNo,bkKey:bkKey,imageDataUrl:null,rows:[]};
+  g('ocrContOv').innerHTML=_ocrContModalHtml();
+  openOv('ocrContOv');
+}
+window.openOcrContScan=openOcrContScan;
+
+function _ocrContModalHtml(){
+  const st=window._ocrContState;
+  return '<div class="modal" style="max-width:760px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18);max-height:92vh;display:flex;flex-direction:column">'
+    +'<div style="background:#C026D3;padding:12px 18px;display:flex;align-items:center;gap:10px;flex-shrink:0">'
+      +'<i class="ti ti-photo" style="font-size:18px;color:#fff"></i>'
+      +'<div style="flex:1"><div style="font-size:14px;font-weight:700;color:#fff">Quét ảnh Cont/Seal</div><div style="font-size:11px;color:rgba(255,255,255,.85)">Booking: '+st.bkNo+'</div></div>'
+      +'<button onclick="closeOv(\'ocrContOv\')" style="color:#fff;font-size:18px;background:rgba(255,255,255,.18);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>'
+    +'</div>'
+    +'<div id="ocrContBody" style="padding:16px 18px;background:var(--bg-secondary);overflow-y:auto;flex:1">'+_ocrContStep1Html()+'</div>'
+    +'</div>';
+}
+
+function _ocrContStep1Html(){
+  return '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px">Bước 1: Đưa ảnh bảng Cont/Seal vào (ảnh chỉ xử lý ngay trong trình duyệt, không gửi đi đâu cả) — chọn file hoặc dán từ Clipboard.</div>'
+    +'<div id="ocrPasteZone" tabindex="0" style="border:2px dashed var(--border-light);border-radius:10px;padding:22px;text-align:center;cursor:pointer;background:#fff;outline:none" onclick="g(\'ocrFileInput\').click()">'
+      +'<i class="ti ti-photo" style="font-size:28px;color:var(--text-tertiary)"></i>'
+      +'<div style="font-size:12.5px;color:var(--text-secondary);margin-top:6px">Bấm để chọn ảnh, hoặc click vào khung này rồi bấm <b>Ctrl+V</b> để dán ảnh từ Clipboard</div>'
+      +'<input type="file" id="ocrFileInput" accept="image/*" style="display:none" onchange="_ocrContFileChosen(this.files[0])"/>'
+    +'</div>'
+    +'<div id="ocrPreviewWrap" style="margin-top:12px;display:none">'
+      +'<img id="ocrImgPreview" style="max-width:100%;max-height:260px;border-radius:8px;border:1px solid var(--border-light);display:block;margin:0 auto"/>'
+      +'<div style="text-align:center;margin-top:12px"><button class="btn pri" onclick="_ocrContRunScan()"><i class="ti ti-wand"></i> Quét ảnh</button></div>'
+    +'</div>';
+}
+window._ocrContStep1Html=_ocrContStep1Html;
+
+function _ocrContFileChosen(file){
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(e){ _ocrContSetImage(e.target.result); };
+  reader.readAsDataURL(file);
+}
+window._ocrContFileChosen=_ocrContFileChosen;
+
+// Dán ảnh từ Clipboard — chỉ xử lý khi popup "ocrContOv" đang mở, không ảnh hưởng paste ở chỗ khác.
+document.addEventListener('paste',function(e){
+  const ov=g('ocrContOv');
+  if(!ov||!ov.classList.contains('open'))return;
+  const items=(e.clipboardData&&e.clipboardData.items)||[];
+  for(let i=0;i<items.length;i++){
+    if(items[i].type&&items[i].type.indexOf('image/')===0){
+      const blob=items[i].getAsFile();
+      const reader=new FileReader();
+      reader.onload=function(ev){ _ocrContSetImage(ev.target.result); };
+      reader.readAsDataURL(blob);
+      e.preventDefault();
+      break;
+    }
+  }
+});
+
+function _ocrContSetImage(dataUrl){
+  // Thu nhỏ ảnh nếu quá lớn để quét nhanh hơn (chữ trong bảng cont/seal luôn đủ lớn để vẫn đọc rõ sau
+  // khi thu nhỏ) — KHÔNG phóng to ảnh nhỏ hơn mốc này.
+  const img=new Image();
+  img.onload=function(){
+    const maxW=1800;
+    if(img.width<=maxW){ window._ocrContState.imageDataUrl=dataUrl; _ocrContShowPreview(dataUrl); return; }
+    const scale=maxW/img.width;
+    const cv=document.createElement('canvas');
+    cv.width=maxW; cv.height=Math.round(img.height*scale);
+    cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+    const resized=cv.toDataURL('image/png');
+    window._ocrContState.imageDataUrl=resized;
+    _ocrContShowPreview(resized);
+  };
+  img.src=dataUrl;
+}
+
+function _ocrContShowPreview(dataUrl){
+  const wrap=g('ocrPreviewWrap'); if(!wrap)return;
+  wrap.style.display='block';
+  g('ocrImgPreview').src=dataUrl;
+}
+
+function _ocrContRunScan(){
+  const st=window._ocrContState; if(!st||!st.imageDataUrl){toast('Chưa có ảnh','error');return;}
+  setLoading(true,'Đang tải công cụ quét ảnh...');
+  _loadTesseract(function(){
+    setLoading(true,'Đang quét ảnh... 0%');
+    Tesseract.recognize(st.imageDataUrl,'eng',{
+      logger:function(m){
+        if(m.status==='recognizing text'){ setLoading(true,'Đang quét ảnh... '+Math.round((m.progress||0)*100)+'%'); }
+      }
+    }).then(function(result){
+      setLoading(false);
+      st.rows=_ocrParseContRows(result.data);
+      if(!st.rows.length) st.rows=[{no:'',seal:'',pkg:'',nw:'',gw:'',tare:'',date:''}];
+      _ocrContRenderPreviewTable();
+    }).catch(function(err){
+      setLoading(false);
+      toast('Lỗi khi quét ảnh: '+(err&&err.message||err),'error');
+    });
+  });
+}
+window._ocrContRunScan=_ocrContRunScan;
+
+// Nhận diện dữ liệu Cont/Seal từ kết quả OCR thô: gom các từ (words, có tọa độ bbox) theo DÒNG dựa
+// vào vị trí Y, rồi trong mỗi dòng phân loại từng token theo mẫu (Cont No chuẩn ISO 6346, ngày dd/mm/yy,
+// số). Đây là suy đoán TỐT NHẤT CÓ THỂ (best-effort) — luôn hiển thị preview để người dùng kiểm tra/sửa
+// trước khi nhập vào bảng thật, KHÔNG tự động tin tuyệt đối kết quả OCR.
+function _ocrParseContRows(data){
+  const words=(data&&data.words)||[];
+  if(!words.length)return [];
+  const items=words.map(function(w){
+    const b=w.bbox||{};
+    return {text:(w.text||'').trim(),cy:((b.y0||0)+(b.y1||0))/2,h:(b.y1||0)-(b.y0||0)||14,x:b.x0||0};
+  }).filter(function(it){return it.text;});
+  items.sort(function(a,b){return a.cy-b.cy;});
+  const lines=[];
+  items.forEach(function(it){
+    let line=lines.find(function(l){return Math.abs(l.cy-it.cy)<(Math.max(it.h,l.h)*0.6);});
+    if(!line){ line={cy:it.cy,h:it.h,items:[]}; lines.push(line); }
+    line.items.push(it);
+    line.cy=(line.cy*(line.items.length-1)+it.cy)/line.items.length;
+  });
+  lines.forEach(function(l){ l.items.sort(function(a,b){return a.x-b.x;}); });
+
+  const contRe=/^[A-Z]{4}[0-9]{6,7}$/;
+  const dateRe=/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
+  const numRe=/^-?\d+(\.\d+)?$/;
+
+  const rows=[];
+  lines.forEach(function(l){
+    const toks=l.items.map(function(it){return it.text.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9.\/\-]+$/g,'');}).filter(Boolean);
+    let no='',seal='',date='',nums=[];
+    toks.forEach(function(tk){
+      const up=tk.toUpperCase();
+      if(!no && contRe.test(up)){ no=up; return; }
+      if(!date && dateRe.test(tk)){ date=_ocrNormalizeDate(tk); return; }
+      if(numRe.test(tk)){ nums.push(parseFloat(tk)); return; }
+      if(!seal && no && /^[A-Z0-9]{6,12}$/.test(up) && up!==no){ seal=up; return; }
+    });
+    if(!no)return; // dòng không có Cont No hợp lệ theo ISO 6346 -> bỏ qua (thường là dòng tiêu đề/ghi chú)
+    // Suy đoán: số nguyên đầu tiên -> số kiện (pkg); số có phần thập phân đầu tiên -> trọng lượng (N.W)
+    let pkg='',nw='';
+    nums.forEach(function(n){
+      if(Number.isInteger(n) && pkg==='')pkg=n;
+      else if(!Number.isInteger(n) && nw==='')nw=n;
+    });
+    rows.push({no:no,seal:seal,pkg:pkg,nw:nw,gw:'',tare:'',date:date});
+  });
+  return rows;
+}
+
+function _ocrNormalizeDate(s){
+  const m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if(!m)return '';
+  const y=m[3].length===2?'20'+m[3]:m[3];
+  return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+}
+
+function _ocrRowHtml(r,i){
+  r=r||{};
+  return '<tr>'
+    +'<td style="padding:3px;text-align:center;font-size:11px">'+(i+1)+'</td>'
+    +'<td style="padding:2px 4px"><input type="text" class="ocrNo" data-i="'+i+'" value="'+(r.no||'')+'" placeholder="Cont No" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px"><input type="text" class="ocrSeal" data-i="'+i+'" value="'+(r.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px"><input type="number" class="ocrPkg" data-i="'+i+'" value="'+(r.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px"><input type="number" class="ocrNw" data-i="'+i+'" value="'+(r.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px"><input type="number" class="ocrGw" data-i="'+i+'" value="'+(r.gw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px"><input type="number" class="ocrTare" data-i="'+i+'" value="'+(r.tare||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px"><input type="date" class="ocrDate" data-i="'+i+'" value="'+(r.date||'')+'" style="font-size:11px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px;text-align:center"><button type="button" class="rac red" onclick="_ocrContDelRow(this)" style="font-size:11px;padding:2px 4px"><i class="ti ti-trash"></i></button></td>'
+    +'</tr>';
+}
+
+function _ocrContRenderPreviewTable(){
+  const st=window._ocrContState;
+  const body=g('ocrContBody'); if(!body)return;
+  const rowsHtml=st.rows.map(function(r,i){ return _ocrRowHtml(r,i); }).join('');
+  body.innerHTML=
+    '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px">Bước 2: Kiểm tra & chỉnh sửa dữ liệu đọc được (kết quả OCR chỉ mang tính tham khảo, hãy đối chiếu lại với ảnh gốc trước khi nhập) — đọc được <b>'+st.rows.length+'</b> dòng.</div>'
+    +'<div style="max-height:320px;overflow:auto;border:1px solid var(--border-light);border-radius:8px">'
+    +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
+      +'<colgroup><col style="width:26px"/><col style="width:17%"/><col style="width:15%"/><col style="width:10%"/><col style="width:11%"/><col style="width:11%"/><col style="width:10%"/><col style="width:15%"/><col style="width:26px"/></colgroup>'
+      +'<thead><tr style="background:#F3F6FA">'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">#</th>'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Cont No</th>'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Seal</th>'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Pkg</th>'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">N.W</th>'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">G.W</th>'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Tare</th>'
+        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Ngày</th>'
+        +'<th></th>'
+      +'</tr></thead>'
+      +'<tbody id="ocrPreviewBody">'+rowsHtml+'</tbody>'
+    +'</table></div>'
+    +'<div style="margin-top:8px"><button class="btn sm" onclick="_ocrContAddRow()"><i class="ti ti-plus"></i> Thêm dòng</button></div>'
+    +'<div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">'
+      +'<button class="btn" onclick="closeOv(\'ocrContOv\')">Hủy</button>'
+      +'<button class="btn pri" onclick="_ocrContApply()"><i class="ti ti-check"></i> Nhập vào bảng Cont/Seal</button>'
+    +'</div>';
+}
+
+function _ocrContAddRow(){
+  const tbody=g('ocrPreviewBody'); if(!tbody)return;
+  const i=tbody.querySelectorAll('tr').length;
+  const div=document.createElement('tbody');
+  div.innerHTML=_ocrRowHtml({},i);
+  tbody.appendChild(div.firstElementChild);
+}
+window._ocrContAddRow=_ocrContAddRow;
+
+function _ocrContDelRow(btn){
+  const tr=btn.closest('tr'); if(!tr)return;
+  const tbody=tr.closest('tbody');
+  tr.remove();
+  if(tbody){tbody.querySelectorAll('tr').forEach(function(r,i){const first=r.querySelector('td');if(first)first.textContent=i+1;});}
+}
+window._ocrContDelRow=_ocrContDelRow;
+
+function _ocrContApply(){
+  const st=window._ocrContState; if(!st)return;
+  const tbody=g('ocrPreviewBody'); if(!tbody){toast('Không có dữ liệu để nhập','error');return;}
+  // Đọc dữ liệu hiện tại từ preview (đã qua chỉnh sửa của người dùng nếu có)
+  const rows=[];
+  tbody.querySelectorAll('tr').forEach(function(tr){
+    const gv=function(cls){const el=tr.querySelector('.'+cls);return el?el.value.trim():'';};
+    const no=gv('ocrNo');
+    if(!no)return; // bỏ dòng trống
+    rows.push({no:no.toUpperCase(),seal:gv('ocrSeal'),pkg:gv('ocrPkg'),nw:gv('ocrNw'),gw:gv('ocrGw'),tare:gv('ocrTare'),date:gv('ocrDate')});
+  });
+  if(!rows.length){toast('Không có dòng nào có Cont No để nhập','error');return;}
+
+  const panel=_getContPanel();
+  const bkKey=st.bkKey, bkNo=st.bkNo;
+  const realTbody=panel.querySelector('.contBody_'+bkKey);
+  if(!realTbody){toast('Không tìm thấy bảng Cont/Seal của booking này','error');return;}
+  // Lấy Vol của booking (giới hạn số dòng tối đa — giống hệt ràng buộc sẵn có của addBkContRow)
+  const addBtn=panel.querySelector('button[onclick="addBkContRow(this)"][data-bkkey="'+bkKey+'"]');
+  const bkVol=addBtn?(parseInt(addBtn.dataset.bkvol)||0):0;
+
+  let existingCount=realTbody.querySelectorAll('tr').length;
+  let skipped=0;
+  rows.forEach(function(rowData,i){
+    if(i>=existingCount){
+      if(bkVol>0 && i>=bkVol){ skipped++; return; }
+      const div=document.createElement('tbody');
+      div.innerHTML=bkContRowHtml({},i,bkNo);
+      realTbody.appendChild(div.firstElementChild);
+      existingCount++;
+    }
+    const setV=function(cls,val){
+      const els=panel.querySelectorAll('.'+cls+'_'+bkKey);
+      if(els[i]&&val!==''&&val!=null)els[i].value=val;
+    };
+    setV('cno',rowData.no);
+    if(rowData.seal)setV('cseal',rowData.seal);
+    if(rowData.pkg!=='')setV('cpkg',rowData.pkg);
+    if(rowData.nw!=='')setV('cnw',rowData.nw);
+    if(rowData.gw!=='')setV('cgw',rowData.gw);
+    if(rowData.tare!=='')setV('ctare',rowData.tare);
+    if(rowData.date)setV('cdate',rowData.date);
+  });
+  if(typeof checkDupContSeal==='function')checkDupContSeal();
+  closeOv('ocrContOv');
+  toast('Đã nhập '+(rows.length-skipped)+' cont vào booking '+bkNo+(skipped?' ('+skipped+' dòng vượt quá Vol booking, chưa nhập)':'')+' — nhớ bấm "Lưu" để lưu lại.');
+}
+window._ocrContApply=_ocrContApply;
+/* ═══ END QUÉT ẢNH CONT/SEAL (OCR) ═══ */
 
 function openDocMakerForBooking(bkNo){
   // Store the target booking key so dmPickLot can use it
@@ -19705,6 +20004,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 
 <!-- STUFFING INFO MODAL -->
 <div class="ov" id="stuffOv" style="padding:.75rem"></div>
+<div class="ov" id="ocrContOv" style="padding:.75rem"></div>
 
 <!-- TRUCKING INFO MODAL -->
 <div class="ov" id="truckOv" style="padding:.75rem"></div>
@@ -27249,7 +27549,8 @@ function renderQuoteForm(){
       <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Mỗi POD có thể có nhiều carrier với giá khác nhau</span>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-      <div class="qt-fld" style="flex:1;min-width:160px"><label>Default Currency</label><select id="q_curOcean">${['USD','VND','CNY','EUR'].map(cu=>`<option${cu==='USD'?' selected':''}>${cu}</option>`).join('')}</select></div>
+      <div class="qt-fld" style="flex:1;min-width:160px"><label>Default Currency</label><select id="q_curOcean" onchange="quoteRecalc()">${['USD','VND','CNY','EUR'].map(cu=>`<option${cu==='USD'?' selected':''}>${cu}</option>`).join('')}</select></div>
+      <div class="qt-fld" style="flex:1;min-width:200px"><label>Tỷ giá quy đổi (1 USD = ? VND)</label><input type="number" id="q_roe" value="26390" min="1" oninput="quoteRecalc()"/></div>
     </div>
     <div id="qOceanGroups"></div>
     <button class="qt-btn" onclick="quoteAddPodGroup()" style="margin-top:6px"><i class="ti ti-plus"></i> Thêm POD</button>
@@ -27281,7 +27582,15 @@ function renderQuoteForm(){
     <div style="font-size:11px;color:var(--text-secondary);margin-top:10px"><i class="ti ti-info-circle"></i> Tổng theo từng loại tiền tệ. Quy đổi tham khảo nếu cần.</div>
   </div>
 
-  <!-- 7. GHI CHÚ -->
+  <!-- 7. ALL-IN PRICE SUMMARY -->
+  <div class="qt-card">
+    <div class="qt-card-hd"><span class="qt-ic" style="background:linear-gradient(135deg,#F59E0B,#B45309)"><i class="ti ti-cash"></i></span>All-in Price Summary
+      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Cước + Local Charge + Local Service, theo từng cảng &amp; hãng tàu — tự động, có thể chỉnh tay</span>
+    </div>
+    <div id="qAllInWrap"></div>
+  </div>
+
+  <!-- 8. GHI CHÚ -->
   <div class="qt-card">
     <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-note"></i></span>Ghi chú</div>
     <div class="qt-fld"><textarea id="q_note" rows="6" placeholder="Ghi chú...&#10;Có thể ghi nhiều dòng"></textarea></div>
@@ -27304,7 +27613,7 @@ function renderQuoteForm(){
     const q=window._qLoaded;
     const setv=function(id,v){const el=g(id);if(el&&v!=null)el.value=v;};
     setv('q_no',q.no);setv('q_date',q.date);setv('q_sales',q.sales);setv('q_commodity',q.commodity);
-    setv('q_pol',q.pol);setv('q_curOcean',q.curOcean);
+    setv('q_pol',q.pol);setv('q_curOcean',q.curOcean);setv('q_roe',q.roe);
     setv('q_payment',q.payment);setv('q_freetime',q.freetime);setv('q_routing',q.routing);setv('q_note',q.note);
     window._qLoaded=null;
   }
@@ -27839,6 +28148,94 @@ function quoteFmtSums(sums){
   return keys.map(function(k){return Math.round(sums[k]).toLocaleString('en-US')+' '+k;}).join(' + ');
 }
 
+// ── ALL-IN PRICE SUMMARY (theo Port + Carrier) ──
+// Quy đổi 1 khoản tiền từ đơn vị tiền tệ này sang đơn vị khác, dùng chung 1 tỷ giá "roe" (mặc định
+// 26390, giống quy ước ROE ở tab Invoice/Debit Note: 1 USD = roe VND). CNY/EUR tạm quy đổi như USD
+// nếu người dùng chưa có tỷ giá riêng — đơn giản, đúng theo lựa chọn "tự quy đổi theo tỷ giá nhập tay".
+function _qConvertCur(amt,fromCur,toCur,roe){
+  amt=parseFloat(amt)||0; if(!amt)return 0;
+  fromCur=fromCur||'USD'; toCur=toCur||'USD'; roe=parseFloat(roe)||26390;
+  if(fromCur===toCur)return amt;
+  const vnd=fromCur==='VND'?amt:amt*roe;
+  return toCur==='VND'?vnd:vnd/roe;
+}
+window._qConvertCur=_qConvertCur;
+
+// Tính giá All-in TỰ ĐỘNG cho 1 (carrier row, loại cont) = cước biển + tổng Local Charge + tổng Local
+// Service (đang bật), tất cả quy đổi về đơn vị tiền tệ của Ocean Freight (curOcean).
+function _qAllInAutoCalc(freightPrice,localArr,svcArr,t,curOcean,roe){
+  let total=parseFloat(freightPrice)||0;
+  (localArr||[]).forEach(function(l){
+    const p=parseFloat((l.prices&&l.prices[t])||0)||0;
+    if(p)total+=_qConvertCur(p,l.cur||'USD',curOcean,roe);
+  });
+  (svcArr||[]).forEach(function(s){
+    if(!s.on)return;
+    const p=parseFloat((s.prices&&s.prices[t])||0)||0;
+    if(p)total+=_qConvertCur(p,s.cur||'VND',curOcean,roe);
+  });
+  return total;
+}
+window._qAllInAutoCalc=_qAllInAutoCalc;
+
+// Bản dùng trong form đang chỉnh sửa (đọc dữ liệu sống từ window._qPods/_qLocal/_qService + ô nhập ROE/Currency)
+function quoteAllInAuto(gi,ri,t){
+  const roe=parseFloat(g('q_roe')?.value)||26390;
+  const curOcean=g('q_curOcean')?.value||'USD';
+  const row=window._qPods&&window._qPods[gi]&&window._qPods[gi].rows[ri];
+  if(!row)return 0;
+  const freight=(row.prices&&row.prices[t])||0;
+  return _qAllInAutoCalc(freight,window._qLocal,window._qService,t,curOcean,roe);
+}
+window.quoteAllInAuto=quoteAllInAuto;
+
+function quoteRenderAllIn(){
+  const box=g('qAllInWrap'); if(!box)return;
+  const types=quoteActiveTypes();
+  window._qPods=window._qPods||[];
+  if(!types.length){
+    box.innerHTML='<div style="padding:14px;text-align:center;color:var(--text-tertiary);font-size:12px;border:1px dashed var(--border-light);border-radius:10px">⚠️ Chọn loại container ở phần "Loại hàng" và nhập giá cước để xem giá All-in</div>';
+    return;
+  }
+  const typeHeads=types.map(function(t){return '<th style="text-align:right">'+t+'</th>';}).join('');
+  let groupsHtml='';
+  window._qPods.forEach(function(grp,gi){
+    if(!grp.pod)return;
+    const rowsWithCarrier=(grp.rows||[]).filter(function(r){return r.carrier;});
+    if(!rowsWithCarrier.length)return;
+    const rowsHtml=rowsWithCarrier.map(function(row){
+      const ri=grp.rows.indexOf(row);
+      row.allInManual=row.allInManual||{};
+      const cells=types.map(function(t){
+        const auto=quoteAllInAuto(gi,ri,t);
+        const manual=row.allInManual[t];
+        const hasManual=manual!=null&&manual!=='';
+        const displayVal=hasManual?manual:(auto?Math.round(auto):'');
+        const clr=hasManual?'color:#B45309;background:#FFFBEB':'color:#0F6E56';
+        return '<td><input type="number" data-allin-pod="'+gi+'" data-allin-row="'+ri+'" data-allin-t="'+t+'" value="'+displayVal+'" placeholder="'+(auto?Math.round(auto):0)+'" oninput="quoteAllInInput(this)" style="text-align:right;font-weight:700;'+clr+'"/></td>';
+      }).join('');
+      return '<tr><td style="font-weight:600">'+row.carrier+'</td>'+cells+'</tr>';
+    }).join('');
+    groupsHtml+='<div style="margin-bottom:14px">'
+      +'<div style="font-weight:700;font-size:12.5px;color:#0C2C52;margin-bottom:6px"><i class="ti ti-map-pin"></i> All-in đi '+grp.pod+'</div>'
+      +'<table class="qt-table"><thead><tr><th>Carrier</th>'+typeHeads+'</tr></thead><tbody>'+rowsHtml+'</tbody></table>'
+    +'</div>';
+  });
+  box.innerHTML=(groupsHtml||'<div style="padding:14px;text-align:center;color:var(--text-tertiary);font-size:12px;border:1px dashed var(--border-light);border-radius:10px">Nhập tên POD + Carrier + giá cước ở phần Ocean Freight để xem giá All-in tự động</div>')
+    +'<div style="font-size:11px;color:var(--text-secondary);margin-top:8px"><i class="ti ti-info-circle"></i> Giá All-in = Cước biển + Local Charge + Local Service (đã quy đổi theo tỷ giá). Ô màu cam là đã chỉnh tay — xóa trắng ô để tính lại tự động.</div>';
+}
+window.quoteRenderAllIn=quoteRenderAllIn;
+
+function quoteAllInInput(el){
+  const gi=+el.dataset.allinPod, ri=+el.dataset.allinRow, t=el.dataset.allinT;
+  const row=window._qPods&&window._qPods[gi]&&window._qPods[gi].rows[ri];
+  if(!row)return;
+  row.allInManual=row.allInManual||{};
+  row.allInManual[t]=el.value;
+  quoteRenderAllIn();
+}
+window.quoteAllInInput=quoteAllInInput;
+
 function quoteRecalc(){
   // Ocean: sum all prices across POD groups / rows / cont types
   const cur=g('q_curOcean')?.value||'USD';
@@ -27880,6 +28277,7 @@ function quoteRecalc(){
   if(g('qSumLocal'))g('qSumLocal').textContent=quoteFmtSums(localSums);
   if(g('qSumService'))g('qSumService').textContent=quoteFmtSums(svcSums);
   if(g('qSumGrand'))g('qSumGrand').textContent=quoteFmtSums(grand);
+  quoteRenderAllIn();
 }
 
 function quoteNextNo(){
@@ -27893,7 +28291,7 @@ function quoteGather(){
   return {
     no:g('q_no')?.value||'',date:g('q_date')?.value||'',sales:g('q_sales')?.value||'',
     customer:g('q_customer')?.value||'',commodity:g('q_commodity')?.value||'',
-    pol:g('q_pol')?.value||'',curOcean:g('q_curOcean')?.value||'USD',
+    pol:g('q_pol')?.value||'',curOcean:g('q_curOcean')?.value||'USD',roe:parseFloat(g('q_roe')?.value)||26390,
     types:window._qTypes||{},pods:window._qPods||[],local:window._qLocal||[],service:window._qService||[],
     payment:g('q_payment')?.value||'',freetime:g('q_freetime')?.value||'',routing:g('q_routing')?.value||'',note:g('q_note')?.value||'',
     savedAt:Date.now()
@@ -28005,6 +28403,33 @@ function quoteBuildHTML(q){
   var svcRows=svcRowsArr.map(function(inner,i){return '<tr'+(i%2?' class="z"':'')+'>'+inner+'</tr>';}).join('');
   var svcHead=types.length?svcTypeHeads:'<th style="text-align:right;width:36%">Amount</th>';
 
+  // ── All-in Price Summary (theo Port + Carrier) — Cước biển + Local Charge + Local Service ──
+  var roe=parseFloat(q.roe)||26390;
+  var allInHTML='';
+  if(types.length){
+    var localArrForAllIn=_qRowsToArray(q.local,QUOTE_LOCAL_CHARGES);
+    var svcArrForAllIn=_qRowsToArray(q.service,QUOTE_SERVICES);
+    var allInTypeHeads=types.map(function(t){return '<th style="text-align:right;width:'+oceanTypeW+'%">'+t+' ('+cur+')</th>';}).join('');
+    (q.pods||[]).forEach(function(grp){
+      var rowsWithCarrier=(grp.rows||[]).filter(function(r){return r.carrier;});
+      if(!grp.pod||!rowsWithCarrier.length)return;
+      var rowsHtml=rowsWithCarrier.map(function(row,ri){
+        var cells=types.map(function(t){
+          var auto=_qAllInAutoCalc((row.prices&&row.prices[t])||0,localArrForAllIn,svcArrForAllIn,t,cur,roe);
+          var manual=row.allInManual&&row.allInManual[t];
+          var val=(manual!=null&&manual!=='')?parseFloat(manual):auto;
+          return '<td style="text-align:right;font-weight:800;color:#B45309">'+(val?Math.round(val).toLocaleString():'-')+'</td>';
+        }).join('');
+        return '<tr'+(ri%2?' class="z"':'')+'><td style="font-weight:700">'+row.carrier+'</td>'+cells+'</tr>';
+      }).join('');
+      allInHTML+='<div class="pod-wrap">'
+        +'<div class="pod-hdr" style="background:linear-gradient(90deg,rgba(180,83,9,.90),rgba(180,83,9,.72))">&#128176;&nbsp;All-in đi '+grp.pod+'</div>'
+        +'<table><colgroup><col style="width:16%">'+types.map(function(){return '<col style="width:'+oceanTypeW+'%">';}).join('')+'</colgroup>'
+        +'<thead><tr><th style="width:16%">Carrier</th>'+allInTypeHeads+'</tr></thead>'
+        +'<tbody>'+rowsHtml+'</tbody></table></div>';
+    });
+  }
+
   // ── Notes ──
   var hasNotes=q.payment||q.freetime||q.routing||q.note;
   var notesHTML=hasNotes?('<div class="sec">'
@@ -28062,7 +28487,7 @@ function quoteBuildHTML(q){
     +'.ftr-co{font-size:13px;font-weight:800;letter-spacing:.3px;margin-bottom:5px}'
     +'.ftr-info{font-size:10.5px;opacity:.85;line-height:1.7}'
     +'.ftr-note{font-size:9.5px;opacity:.6;font-style:italic;text-align:right;max-width:200px;line-height:1.5}'
-    +'@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}@page{margin:0;size:A4}}'
+    +'@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}@page{margin:0;size:A4}.pod-wrap,.card,.info-card{page-break-inside:avoid}}'
   +'</style>';
 
   // ── HTML ──
@@ -28099,6 +28524,8 @@ function quoteBuildHTML(q){
     +(localRows?'<div class="sec"><div class="sec-hdr">&#128230; Local Charge</div><div class="card"><table><colgroup>'+localColgroup+'</colgroup><thead><tr><th>Charge</th><th>Cur</th><th>Unit</th>'+localHead+'<th>Remark</th></tr></thead><tbody>'+localRows+'</tbody></table></div></div>':'')
     // Local Service
     +(svcRows?'<div class="sec"><div class="sec-hdr">&#128188; Local Service</div><div class="card"><table><colgroup>'+svcColgroup+'</colgroup><thead><tr><th>Service</th><th>Unit</th>'+svcHead+'<th>Currency</th><th>Remark</th></tr></thead><tbody>'+svcRows+'</tbody></table></div></div>':'')
+    // All-in Price Summary
+    +(allInHTML?'<div class="sec"><div class="sec-hdr" style="background:rgba(180,83,9,.85);border-bottom-color:#F59E0B">&#128176; All-in Price Summary (theo Cảng &amp; Hãng tàu)</div><div class="card" style="padding:14px;border-radius:0 0 10px 10px">'+allInHTML+'</div></div>':'')
     // Notes
     +notesHTML
   +'</div>'
@@ -28115,13 +28542,43 @@ function quoteBuildHTML(q){
   +'</body></html>';
 }
 
+// Mở cửa sổ in bằng Blob URL (thay vì document.write vào cửa sổ about:blank) — cách này ổn định hơn:
+// tránh trường hợp cửa sổ mới bị coi là "về (about:blank" và kế thừa nhầm chính sách bảo mật
+// (Content-Security-Policy) của trang cha, khiến thẻ <style> nội tuyến bị trình duyệt bỏ qua và
+// báo giá hiển thị ra chữ thô không có khung/màu (đúng như lỗi người dùng báo cáo). Có fallback về
+// cách cũ (document.write) nếu trình duyệt không hỗ trợ Blob URL.
+function _qOpenPrintWindow(html,title){
+  try{
+    const blob=new Blob([html],{type:'text/html'});
+    const url=URL.createObjectURL(blob);
+    const w=window.open(url,'_blank');
+    if(!w){toast('Trình duyệt đã chặn cửa sổ mới — vui lòng cho phép popup cho trang này','error');URL.revokeObjectURL(url);return;}
+    let printed=false;
+    const doPrint=function(){
+      if(printed)return; printed=true;
+      try{if(title)w.document.title=title;}catch(e){}
+      try{w.focus();}catch(e){}
+      try{w.print();}catch(e){}
+      setTimeout(function(){try{URL.revokeObjectURL(url);}catch(e){}},4000);
+    };
+    w.addEventListener('load',doPrint);
+    setTimeout(doPrint,1200); // dự phòng nếu sự kiện 'load' không kích hoạt kịp
+  }catch(e){
+    // Fallback cho trình duyệt cũ không hỗ trợ Blob URL
+    const w=window.open('','_blank','width=960,height=740,scrollbars=yes');
+    if(!w){toast('Trình duyệt đã chặn cửa sổ mới','error');return;}
+    w.document.open();w.document.write(html);w.document.close();
+    try{w.document.title=title;}catch(e2){}
+    setTimeout(function(){try{w.focus();w.print();}catch(e3){}},600);
+  }
+}
+window._qOpenPrintWindow=_qOpenPrintWindow;
+
 function quoteExportPDF(){
   const q=quoteGather();
   if(!q.customer){toast('Chọn khách hàng trước','error');return;}
   const html=quoteBuildHTML(q);
-  const w=window.open('','_blank','width=960,height=740,scrollbars=yes');
-  w.document.write(html);w.document.close();w.focus();w.document.title='Quotation_'+q.no;
-  setTimeout(function(){w.print();},600);
+  _qOpenPrintWindow(html,'Quotation_'+q.no);
   toast('Đã mở báo giá — Ctrl+P để lưu PDF');
 }
 
