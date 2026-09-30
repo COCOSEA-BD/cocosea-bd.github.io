@@ -1205,7 +1205,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.75';
+window.APP_BUILD='v4.76';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -20177,7 +20177,14 @@ function _registerRobotoFont(doc){
 // nên KHÔNG dùng getComputedStyle được khi chỉ xuất PDF/gửi email mà chưa mở popup — thay vào đó đọc trực
 // tiếp chuỗi data-URI từ chính SOURCE của hàm rebuildInvoicePreview (qua .toString()), tránh phải chép lại
 // chuỗi base64 khổng lồ thêm 1 lần nữa vào JS (chỉ tồn tại đúng 1 lần trong file, y như trước đây).
-function _dnBgDataUrl(){
+// LƯU Ý (fix v4.76): hàm này KHÔNG được đặt tên "_dnBgDataUrl" — trùng tên với biến toàn cục
+// window._dnBgDataUrl (chuỗi base64 do _cacheDNBgEarly cache sẵn, dùng cho trang Báo giá bên dưới).
+// Khai báo "function _dnBgDataUrl(){}" ở scope toàn cục sẽ tự gán window._dnBgDataUrl = <chính hàm này>
+// NGAY khi file được parse (trước cả khi DOMContentLoaded chạy), khiến _cacheDNBgEarly thấy biến đã có
+// giá trị (truthy) nên bỏ qua không cache chuỗi ảnh thật vào nữa — kết quả: trang Báo giá không bao giờ
+// lấy được hình nền thật (window._dnBgDataUrl mãi mãi là 1 function, không phải chuỗi base64). Đổi tên
+// thành _dnBgDataUrlFn để không còn đụng biến này.
+function _dnBgDataUrlFn(){
   if(window._dnBgUrlCache!==undefined) return window._dnBgUrlCache;
   var url=null;
   try{
@@ -20810,7 +20817,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
 
     // HÌNH NỀN — vẽ y hệt background-image của form HTML "Tạo DN" (class .dn, background-size:cover;
     // background-position:center top) lên mỗi trang, vẽ TRƯỚC tất cả nội dung khác để nội dung luôn nằm trên nền.
-    const _dnBg=_dnBgDataUrl();
+    const _dnBg=_dnBgDataUrlFn();
     function drawDnBg(){
       if(!_dnBg) return;
       try{
@@ -27497,7 +27504,15 @@ function renderQuoteForm(){
   .qt-btn:hover{transform:translateY(-1px);box-shadow:0 3px 8px rgba(12,44,82,.12)}
   .qt-btn.primary{background:linear-gradient(135deg,#185FA5,#0C2C52);color:#fff;border:none}
   .qt-btn.green{background:#0F6E56;color:#fff;border:none}
-  @media(max-width:880px){.qt-grid-3,.qt-grid-2{grid-template-columns:1fr}.qt-sum{grid-template-columns:1fr 1fr}.qt-tabs{flex-direction:column}}
+  /* v4.76: gộp Thông tin chung + Loại hàng thành 1 hàng 2 cột, và gộp Ocean/Local/Service/All-in vào
+     1 card dùng tab con — giúp trang đỡ phải cuộn dài như trước */
+  .qt-toprow{display:grid;grid-template-columns:1.25fr 1fr;gap:1.1rem;margin-bottom:1.1rem}
+  .qt-toprow .qt-card{margin-bottom:0}
+  .qt-subtabs{display:flex;gap:4px;margin:-.25rem -.2rem 1.1rem;flex-wrap:wrap;border-bottom:1px solid var(--border-light)}
+  .qt-subtab{padding:9px 14px;border:none;background:transparent;border-radius:9px 9px 0 0;font-size:12px;font-weight:700;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;gap:6px;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .qt-subtab:hover{background:var(--bg-secondary)}
+  .qt-subtab.active{color:#0C2C52;border-bottom-color:#185FA5;background:#E6F1FB}
+  @media(max-width:880px){.qt-grid-3,.qt-grid-2{grid-template-columns:1fr}.qt-sum{grid-template-columns:1fr 1fr}.qt-tabs{flex-direction:column}.qt-toprow{grid-template-columns:1fr}}
 </style>
 
 <div class="qt-wrap">
@@ -27514,63 +27529,73 @@ function renderQuoteForm(){
     </div>
   </div>
 
-  <!-- 1. THÔNG TIN CHUNG -->
-  <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-info-circle"></i></span>Thông tin chung</div>
-    <div class="qt-grid qt-grid-3">
-      <div class="qt-fld"><label>Quote No</label><input type="text" id="q_no" value="${quoteNextNo()}"/></div>
-      <div class="qt-fld"><label>Date</label><input type="date" id="q_date" value="${today}"/></div>
-      <div class="qt-fld"><label>Sales Person</label><input type="text" id="q_sales" value="${(currentProfile&&currentProfile.name)||''}" placeholder="Tên sales"/></div>
-      <div class="qt-fld"><label>Customer Name</label><select id="q_customer"><option value="">— Chọn khách hàng —</option>${shippers.map(s=>`<option${s===window._qPresetCustomer?' selected':''}>${s}</option>`).join('')}</select></div>
-      <div class="qt-fld"><label>Commodity</label><input type="text" id="q_commodity" placeholder="VD: Coconut fiber"/></div>
-      <div class="qt-fld"><label>POL (Port of Loading)</label><input type="text" id="q_pol" value="HO CHI MINH, VIETNAM"/></div>
-    </div>
-  </div>
-
-  <!-- 2. LOẠI HÀNG -->
-  <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-box"></i></span>Loại hàng</div>
-    <div class="qt-tabs">
-      <div class="qt-tab qt-tab-dc active" id="qtab_DC" onclick="quoteSwitchCargo('DC')">
-        <div class="qt-tab-ic"><i class="ti ti-box"></i></div>
-        <div><div class="qt-tab-ttl">Dry Container (DC)</div><div class="qt-tab-sub">20DC / 40HC</div></div>
-      </div>
-      <div class="qt-tab qt-tab-rf" id="qtab_RF" onclick="quoteSwitchCargo('RF')">
-        <div class="qt-tab-ic"><i class="ti ti-snowflake"></i></div>
-        <div><div class="qt-tab-ttl">Reefer Container (RF)</div><div class="qt-tab-sub">20RF / 40RF</div></div>
+  <!-- 1+2. THÔNG TIN CHUNG + LOẠI HÀNG — gộp 1 hàng 2 cột cho gọn, đỡ cuộn -->
+  <div class="qt-toprow">
+    <div class="qt-card">
+      <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-info-circle"></i></span>Thông tin chung</div>
+      <div class="qt-grid qt-grid-2">
+        <div class="qt-fld"><label>Quote No</label><input type="text" id="q_no" value="${quoteNextNo()}"/></div>
+        <div class="qt-fld"><label>Date</label><input type="date" id="q_date" value="${today}"/></div>
+        <div class="qt-fld"><label>Sales Person</label><input type="text" id="q_sales" value="${(currentProfile&&currentProfile.name)||''}" placeholder="Tên sales"/></div>
+        <div class="qt-fld"><label>Customer Name</label><select id="q_customer"><option value="">— Chọn khách hàng —</option>${shippers.map(s=>`<option${s===window._qPresetCustomer?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="qt-fld"><label>Commodity</label><input type="text" id="q_commodity" placeholder="VD: Coconut fiber"/></div>
+        <div class="qt-fld"><label>POL (Port of Loading)</label><input type="text" id="q_pol" value="HO CHI MINH, VIETNAM"/></div>
       </div>
     </div>
-    <div style="display:flex;gap:18px;flex-wrap:wrap" id="qtypeChecks"></div>
-  </div>
-
-  <!-- 3. OCEAN FREIGHT -->
-  <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-anchor"></i></span>Ocean Freight
-      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Mỗi POD có thể có nhiều carrier với giá khác nhau</span>
+    <div class="qt-card">
+      <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-box"></i></span>Loại hàng</div>
+      <div class="qt-tabs">
+        <div class="qt-tab qt-tab-dc active" id="qtab_DC" onclick="quoteSwitchCargo('DC')">
+          <div class="qt-tab-ic"><i class="ti ti-box"></i></div>
+          <div><div class="qt-tab-ttl">Dry Container (DC)</div><div class="qt-tab-sub">20DC / 40HC</div></div>
+        </div>
+        <div class="qt-tab qt-tab-rf" id="qtab_RF" onclick="quoteSwitchCargo('RF')">
+          <div class="qt-tab-ic"><i class="ti ti-snowflake"></i></div>
+          <div><div class="qt-tab-ttl">Reefer Container (RF)</div><div class="qt-tab-sub">20RF / 40RF</div></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap" id="qtypeChecks"></div>
     </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-      <div class="qt-fld" style="flex:1;min-width:160px"><label>Default Currency</label><select id="q_curOcean" onchange="quoteRecalc()">${['USD','VND','CNY','EUR'].map(cu=>`<option${cu==='USD'?' selected':''}>${cu}</option>`).join('')}</select></div>
-      <div class="qt-fld" style="flex:1;min-width:200px"><label>Tỷ giá quy đổi (1 USD = ? VND)</label><input type="number" id="q_roe" value="26390" min="1" oninput="quoteRecalc()"/></div>
-    </div>
-    <div id="qOceanGroups"></div>
-    <button class="qt-btn" onclick="quoteAddPodGroup()" style="margin-top:6px"><i class="ti ti-plus"></i> Thêm POD</button>
   </div>
 
-  <!-- 4. LOCAL CHARGE -->
+  <!-- 3. CHI TIẾT GIÁ — gộp Ocean/Local/Service/All-in vào 1 card, chuyển tab thay vì cuộn dài -->
   <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-receipt"></i></span>Local Charge
-      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Giá theo từng loại cont</span>
+    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-table"></i></span>Chi tiết giá
+      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Bấm tab để chuyển phần, không cần cuộn cả trang</span>
     </div>
-    <div id="qLocalWrap"></div>
+    <div class="qt-subtabs">
+      <button type="button" class="qt-subtab active" id="qFTab_ocean" onclick="quoteSwitchFormTab('ocean')"><i class="ti ti-anchor"></i> Ocean Freight</button>
+      <button type="button" class="qt-subtab" id="qFTab_local" onclick="quoteSwitchFormTab('local')"><i class="ti ti-receipt"></i> Local Charge</button>
+      <button type="button" class="qt-subtab" id="qFTab_service" onclick="quoteSwitchFormTab('service')"><i class="ti ti-list-check"></i> Local Service</button>
+      <button type="button" class="qt-subtab" id="qFTab_allin" onclick="quoteSwitchFormTab('allin')"><i class="ti ti-cash"></i> All-in Summary</button>
+    </div>
+
+    <div id="qFPane_ocean">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
+        <div class="qt-fld" style="flex:1;min-width:160px"><label>Default Currency</label><select id="q_curOcean" onchange="quoteRecalc()">${['USD','VND','CNY','EUR'].map(cu=>`<option${cu==='USD'?' selected':''}>${cu}</option>`).join('')}</select></div>
+        <div class="qt-fld" style="flex:1;min-width:200px"><label>Tỷ giá quy đổi (1 USD = ? VND)</label><input type="number" id="q_roe" value="26390" min="1" oninput="quoteRecalc()"/></div>
+      </div>
+      <div style="font-size:10.5px;color:var(--text-secondary);margin-bottom:8px">Mỗi POD có thể có nhiều carrier với giá khác nhau</div>
+      <div id="qOceanGroups"></div>
+      <button class="qt-btn" onclick="quoteAddPodGroup()" style="margin-top:6px"><i class="ti ti-plus"></i> Thêm POD</button>
+    </div>
+
+    <div id="qFPane_local" style="display:none">
+      <div style="font-size:10.5px;color:var(--text-secondary);margin-bottom:8px">Giá theo từng loại cont</div>
+      <div id="qLocalWrap"></div>
+    </div>
+
+    <div id="qFPane_service" style="display:none">
+      <div id="qServiceBody"></div>
+    </div>
+
+    <div id="qFPane_allin" style="display:none">
+      <div style="font-size:10.5px;color:var(--text-secondary);margin-bottom:8px">Cước + Local Charge + Local Service, theo từng cảng &amp; hãng tàu — tự động, có thể chỉnh tay</div>
+      <div id="qAllInWrap"></div>
+    </div>
   </div>
 
-  <!-- 5. LOCAL SERVICE -->
-  <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-list-check"></i></span>Local Service</div>
-    <div id="qServiceBody"></div>
-  </div>
-
-  <!-- 6. TOTAL SUMMARY -->
+  <!-- 4. TOTAL SUMMARY -->
   <div class="qt-card">
     <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-calculator"></i></span>Total Summary</div>
     <div class="qt-sum">
@@ -27582,15 +27607,7 @@ function renderQuoteForm(){
     <div style="font-size:11px;color:var(--text-secondary);margin-top:10px"><i class="ti ti-info-circle"></i> Tổng theo từng loại tiền tệ. Quy đổi tham khảo nếu cần.</div>
   </div>
 
-  <!-- 7. ALL-IN PRICE SUMMARY -->
-  <div class="qt-card">
-    <div class="qt-card-hd"><span class="qt-ic" style="background:linear-gradient(135deg,#F59E0B,#B45309)"><i class="ti ti-cash"></i></span>All-in Price Summary
-      <span style="margin-left:auto;font-size:10px;font-weight:500;color:var(--text-secondary);text-transform:none;letter-spacing:0">Cước + Local Charge + Local Service, theo từng cảng &amp; hãng tàu — tự động, có thể chỉnh tay</span>
-    </div>
-    <div id="qAllInWrap"></div>
-  </div>
-
-  <!-- 8. GHI CHÚ -->
+  <!-- 5. GHI CHÚ -->
   <div class="qt-card">
     <div class="qt-card-hd"><span class="qt-ic"><i class="ti ti-note"></i></span>Ghi chú</div>
     <div class="qt-fld"><textarea id="q_note" rows="6" placeholder="Ghi chú...&#10;Có thể ghi nhiều dòng"></textarea></div>
@@ -27891,6 +27908,18 @@ function quoteSwitchCargo(t){
   g('qtab_RF').classList.toggle('active',t==='RF');
   quoteRenderTypeChecks();
 }
+
+// v4.76: chuyển tab trong card "Chi tiết giá" (Ocean/Local/Service/All-in) — gộp 4 phần vào 1 card,
+// chỉ hiện 1 phần tại 1 thời điểm, giúp trang form Báo giá đỡ phải cuộn dài như trước.
+let _quoteFormTab='ocean';
+function quoteSwitchFormTab(t){
+  _quoteFormTab=t;
+  ['ocean','local','service','allin'].forEach(function(k){
+    const pane=g('qFPane_'+k); if(pane)pane.style.display=(k===t?'':'none');
+    const btn=g('qFTab_'+k); if(btn)btn.classList.toggle('active',k===t);
+  });
+}
+window.quoteSwitchFormTab=quoteSwitchFormTab;
 
 function quoteRenderTypeChecks(){
   const box=g('qtypeChecks'); if(!box)return;
