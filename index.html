@@ -1205,7 +1205,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.79';
+window.APP_BUILD='v4.80';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3206,6 +3206,7 @@ function renderLot(tt){
     <button class="btn sm" data-tt="${tt}" onclick="setStatusQuickFilter(this.dataset.tt,'doc_pending')" style="font-size:11px;padding:6px 10px;color:#B45309;border-color:#B4530955;flex-shrink:0;white-space:nowrap"><i class="ti ti-file-alert" style="font-size:11px"></i> Chưa gửi Ctừ</button>
     <div style="width:1px;align-self:stretch;background:var(--border-light);flex-shrink:0;margin:0 2px"></div>
     <button class="btn sm" data-tt="${tt}" onclick="exportLotListExcel(this.dataset.tt)" style="font-size:11px;padding:6px 10px;color:#0F6E56;border-color:#0F6E56;flex-shrink:0;white-space:nowrap" title="Xuất Excel danh sách đang hiển thị (theo đúng bộ lọc hiện tại)"><i class="ti ti-file-spreadsheet" style="font-size:11px"></i> Excel</button>
+    <button class="btn sm" id="lotFilterAddBtn_${tt}" data-tt="${tt}" onclick="_lotFilterMenu(this.dataset.tt,event)" style="font-size:11px;padding:6px 10px;flex-shrink:0;white-space:nowrap" title="Thêm bộ lọc nâng cao (Shipper/Carrier/POD/Cargo/Khóa-VST)"><i class="ti ti-filter-plus" style="font-size:12px"></i> Bộ lọc</button>
     <select id="fst_${tt}" style="width:150px;flex-shrink:0" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả</option>
       <option value="confirm">Confirm</option>
@@ -3285,10 +3286,11 @@ function _renderLotFilterBar(tt){
     +'</div>';
   }).join('');
   const avail=Object.keys(LOT_FILTER_DEFS).filter(function(k){return active.indexOf(k)<0;});
-  const addBtn=avail.length
-    ?('<button class="btn sm" data-tt="'+tt+'" onclick="_lotFilterMenu(this.dataset.tt,event)" style="font-size:11px;padding:6px 10px;flex-shrink:0;white-space:nowrap"><i class="ti ti-filter-plus" style="font-size:12px"></i> Bộ lọc</button>')
-    :'';
-  bar.innerHTML=(chips||addBtn)?('<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 2px">'+chips+addBtn+'</div>'):'';
+  // Nút "+ Bộ lọc" giờ nằm cố định trên toolbar (cạnh nút Excel) — chỉ ẩn/hiện theo còn trường khả dụng hay không,
+  // không còn render lại bên trong filterBar_ nữa (filterBar_ giờ chỉ chứa các chip bộ lọc đang bật).
+  const addBtnToolbar=g('lotFilterAddBtn_'+tt);
+  if(addBtnToolbar) addBtnToolbar.style.display=avail.length?'':'none';
+  bar.innerHTML=chips?('<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 2px">'+chips+'</div>'):'';
 }
 window._renderLotFilterBar=_renderLotFilterBar;
 
@@ -21219,7 +21221,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     doc.setFont('Roboto','italic'); doc.setFontSize(6.6);
     var _bcWords=_numToWordsVN(grandWithVAT);
     var _bcLines=doc.splitTextToSize('Bằng chữ: '+_bcWords,sumW);
-    var sumBlockH=sumLines.length*5+2+8.5+3+_bcLines.length*3.2+2;
+    var sumBlockH=sumLines.length*5+1+8.5+2+_bcLines.length*3.2+1;
     var noteH=17;
     var bottomH=Math.max(sumBlockH,noteH);
 
@@ -21233,7 +21235,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     const coAccs=(Array.isArray(banksData)?banksData:(banksData.company||[])).filter(b=>b.showOnDN);
     const persAccs=(Array.isArray(banksData)?[]:(banksData.personal||[])).filter(b=>b.showOnDN);
     var colGap=5, colW=(CW-colGap)/2;
-    var bankLineH=4.3, bankRowH=5.4;
+    var bankLineH=4.0, bankRowH=5.0;
     var accH=bankRowH*2+bankLineH*2+2; // Chủ TK + Số TK (1 dòng) + Ngân hàng (tối đa 2 dòng, đã gồm chi nhánh)
     var nCo=Math.max(coAccs.length,1), nPs=Math.max(persAccs.length,1);
     var bkCardH=7+Math.max(nCo,nPs)*accH+2;
@@ -21242,7 +21244,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
 
     // Kiểm tra ngắt trang MỘT LẦN cho CẢ 3 khối (NOTE/SUM + Bank Account + Footer) — nếu không đủ chỗ,
     // chuyển nguyên cả khối sang trang mới cùng lúc, không tách rời như trước.
-    var combinedBottomH=bottomH+6+bankSectionH+6+footerBarH;
+    var combinedBottomH=bottomH+4+bankSectionH+4+footerBarH;
     if(y+combinedBottomH>287){ doc.addPage(); drawDnBg(); y=20; }
     var bottomY=y;
 
@@ -21269,18 +21271,18 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
       doc.text(sl[1].toLocaleString(),sumX+sumW,sy+3.5,{align:'right'});
       sy+=5;
     });
-    sy+=2;
+    sy+=1;
     doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.roundedRect(sumX,sy,sumW,8.5,1.3,1.3,'F');
     doc.setFont('Roboto','bold'); doc.setFontSize(8); doc.setTextColor(255,255,255);
     doc.text('GRAND TOTAL',sumX+3,sy+5.6);
     doc.setFontSize(9.5);
     doc.text(grandWithVAT.toLocaleString()+' VND',sumX+sumW-3,sy+5.6,{align:'right'});
-    sy+=8.5+3;
+    sy+=8.5+2;
     doc.setFont('Roboto','bold'); doc.setFontSize(6.6); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
     doc.setFont('Roboto','italic');
     _bcLines.forEach(function(ln,li){ doc.text(ln,sumX+sumW,sy+li*3.2,{align:'right'}); });
 
-    y=bottomY+bottomH+6;
+    y=bottomY+bottomH+4;
 
     // BANK ACCOUNT — 2 card cạnh nhau theo mẫu (Chủ TK / Số TK / Ngân hàng). Kích thước đã tính sẵn ở
     // trên (bkCardH) và chỗ trống đã được đảm bảo bởi guard gộp phía trên, nên không cần kiểm tra ngắt
@@ -21318,7 +21320,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     }
     _bankCard(ML,'BANK ACCOUNT – PERSONAL',PRIMARY,persAccs);
     _bankCard(ML+colW+colGap,'BANK ACCOUNT – COMPANY',NAVY,coAccs);
-    y+=bkCardH+6;
+    y+=bkCardH+4;
 
     // FOOTER: brand bar (bỏ hàng contact theo yêu cầu)
     if(y>276){ doc.addPage(); drawDnBg(); y=20; }
