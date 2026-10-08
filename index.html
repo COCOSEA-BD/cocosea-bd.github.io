@@ -1205,7 +1205,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.76';
+window.APP_BUILD='v4.78';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3191,30 +3191,21 @@ window._wsRefreshSidebar=_wsRefreshSidebar;
 
 function renderLot(tt){
   const rows=cache[tt];
+  // Nạp bộ lọc nâng cao (Shipper/POD/Cargo/Carrier/Khóa) đã lưu theo user (1 lần, ngay khi có currentProfile)
+  if(typeof currentProfile!=='undefined'&&currentProfile&&currentProfile.shipmentFilters&&!window._lotFilterPrefsLoaded){
+    window._lotActiveFilters=Object.assign({xuat:[],nhap:[]},currentProfile.shipmentFilters);
+    window._lotFilterPrefsLoaded=true;
+  }
   const pg=g(tt==='xuat'&&g('xuat-list-view')?'xuat-list-view':'page-'+tt);
   pg.innerHTML=`
   <div class="ws-layout">
   <div style="min-width:0">
-  <div class="stats-grid" style="display:none">
-    <div style="display:flex;gap:8px;flex-wrap:nowrap;align-items:center;padding:.4rem 0;width:100%">
-      <div class="search-wrap" style="flex:2 1 0;min-width:160px"><i class="ti ti-user"></i><input type="text" id="sfShipper_${tt}" placeholder="Shipper..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
-      <div class="search-wrap" style="flex:2 1 0;min-width:160px"><i class="ti ti-ship"></i><input type="text" id="sfCarrier_${tt}" placeholder="Carrier..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
-      <div class="search-wrap" style="flex:2 1 0;min-width:150px"><i class="ti ti-map-pin"></i><input type="text" id="sfPod_${tt}" placeholder="POD..." oninput="renderLotTable('${tt}')" style="font-size:12px;width:100%;box-sizing:border-box"/></div>
-      <select id="sfLock_${tt}" onchange="renderLotTable('${tt}')" style="font-size:12px;flex:0 0 160px;width:160px">
-        <option value="">Tất cả</option>
-        <option value="locked">Đã khóa</option>
-        <option value="unlocked">Chưa khóa</option>
-        <option value="vst_yes">Đã VST</option>
-        <option value="vst_no">Chưa VST</option>
-      </select>
-      <span style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap;flex:0 0 auto">Tổng: <strong id="stat-total-${tt}">0</strong> lô</span>
-    </div>
-  </div>
   <div class="toolbar">
     <div class="search-wrap" style="flex:1;min-width:220px"><i class="ti ti-search"></i><input type="text" id="srch_${tt}" placeholder="Tìm Booking No, MBL, Carrier, Booking Party, Số tờ khai..." oninput="renderLotTable('${tt}')"/></div>
     <button class="btn sm" data-tt="${tt}" onclick="setStatusQuickFilter(this.dataset.tt,'vst_no')" style="font-size:11px;padding:6px 10px;color:#B91C1C;border-color:#B91C1C55;flex-shrink:0;white-space:nowrap"><i class="ti ti-alert-triangle" style="font-size:11px"></i> Chưa VST</button>
     <button class="btn sm" data-tt="${tt}" onclick="setStatusQuickFilter(this.dataset.tt,'doc_pending')" style="font-size:11px;padding:6px 10px;color:#B45309;border-color:#B4530955;flex-shrink:0;white-space:nowrap"><i class="ti ti-file-alert" style="font-size:11px"></i> Chưa gửi Ctừ</button>
     <div style="width:1px;align-self:stretch;background:var(--border-light);flex-shrink:0;margin:0 2px"></div>
+    <button class="btn sm" data-tt="${tt}" onclick="exportLotListExcel(this.dataset.tt)" style="font-size:11px;padding:6px 10px;color:#0F6E56;border-color:#0F6E56;flex-shrink:0;white-space:nowrap" title="Xuất Excel danh sách đang hiển thị (theo đúng bộ lọc hiện tại)"><i class="ti ti-file-spreadsheet" style="font-size:11px"></i> Excel</button>
     <select id="fst_${tt}" style="width:150px;flex-shrink:0" onchange="renderLotTable('${tt}')">
       <option value="">Tất cả</option>
       <option value="confirm">Confirm</option>
@@ -3238,6 +3229,7 @@ function renderLot(tt){
       <button class="btn sm" onclick="clearEtdFilter('${tt}')" title="Tất cả"><i class="ti ti-calendar-off"></i></button>
     </div>
   </div>
+  <div id="filterBar_${tt}"></div>
   <div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_${tt}"></thead><tbody id="tb_${tt}"></tbody></table></div></div>
   <div id="lotStatusBar_${tt}" style="position:sticky;bottom:0;margin-top:4px;padding:7px 14px;background:#0F1E2E;color:#cbd5e1;border-radius:8px;font-size:12.5px;display:flex;align-items:center;gap:16px;box-shadow:0 -2px 10px rgba(0,0,0,.1);z-index:5">
     <span style="display:flex;align-items:center;gap:6px"><i class="ti ti-package" style="font-size:14px;color:#14B8A6"></i> Đang hiển thị: <strong id="lotCountShown_${tt}" style="color:#fff">0</strong></span>
@@ -3247,12 +3239,104 @@ function renderLot(tt){
   </div>
   ${_wsSidebarHTML(tt)}
   </div>`;
+  _renderLotFilterBar(tt);
   renderLotTable(tt);
   renderVstWarning(tt);
   computeShipmentKpis(tt);
   _startVstWarnAutoRefresh(tt);
   _wsNotesEnsureLoaded(function(){ _wsRefreshSidebar(tt); });
 }
+
+// ═══ BỘ LỌC NÂNG CAO (Shipper/Carrier/POD/Cargo/Khóa-VST) — thêm/bớt theo ý user, lưu theo
+// TỪNG USER (Firestore users/{docId}.shipmentFilters) để dùng máy khác vẫn giữ nguyên lựa chọn.
+// Chỉ lưu DANH SÁCH TRƯỜNG đang bật, KHÔNG lưu giá trị đang gõ (giống hành vi search box hiện có).
+// Các input bên dưới dùng ĐÚNG id (sfShipper_/sfCarrier_/sfPod_/sfLock_) mà renderLotTable() đã đọc
+// sẵn từ trước — chỉ thêm sfCargo_ là field lọc mới. Không đổi logic lọc cũ, chỉ thêm điều kiện mới.
+var LOT_FILTER_DEFS={
+  shipper:{label:'Shipper',icon:'ti-user',type:'text',ph:'Nhập Shipper...',domId:'sfShipper_'},
+  carrier:{label:'Carrier',icon:'ti-ship',type:'text',ph:'Nhập Carrier...',domId:'sfCarrier_'},
+  pod:{label:'POD',icon:'ti-map-pin',type:'text',ph:'Nhập POD...',domId:'sfPod_'},
+  cargo:{label:'Cargo',icon:'ti-box',type:'select',domId:'sfCargo_',opts:[['','Tất cả'],['Hàng khô','Hàng khô'],['Hàng lạnh','Hàng lạnh'],['LCL','LCL']]},
+  lock:{label:'Khóa / VST',icon:'ti-lock',type:'select',domId:'sfLock_',opts:[['','Tất cả'],['locked','Đã khóa'],['unlocked','Chưa khóa'],['vst_yes','Đã VST'],['vst_no','Chưa VST']]}
+};
+window.LOT_FILTER_DEFS=LOT_FILTER_DEFS;
+window._lotActiveFilters=window._lotActiveFilters||{xuat:[],nhap:[]};
+
+function _lotActiveList(tt){
+  if(!window._lotActiveFilters)window._lotActiveFilters={xuat:[],nhap:[]};
+  if(!window._lotActiveFilters[tt])window._lotActiveFilters[tt]=[];
+  return window._lotActiveFilters[tt];
+}
+
+function _renderLotFilterBar(tt){
+  const bar=g('filterBar_'+tt); if(!bar)return;
+  const active=_lotActiveList(tt);
+  const chips=active.map(function(key){
+    const d=LOT_FILTER_DEFS[key]; if(!d)return '';
+    const id=d.domId+tt;
+    const field=d.type==='select'
+      ?('<select id="'+id+'" onchange="renderLotTable(\''+tt+'\')" style="font-size:11.5px;border:none;background:transparent;outline:none;max-width:120px;color:var(--text-primary)">'+d.opts.map(function(o){return '<option value="'+o[0]+'">'+o[1]+'</option>';}).join('')+'</select>')
+      :('<input type="text" id="'+id+'" placeholder="'+d.ph+'" oninput="renderLotTable(\''+tt+'\')" style="font-size:11.5px;border:none;background:transparent;outline:none;width:110px;color:var(--text-primary)"/>');
+    return '<div style="display:flex;align-items:center;gap:5px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;padding:4px 6px 4px 10px">'
+      +'<i class="ti '+d.icon+'" style="font-size:12px;color:var(--text-secondary)"></i>'
+      +'<span style="font-size:10.5px;font-weight:700;color:var(--text-secondary);white-space:nowrap">'+d.label+':</span>'
+      +field
+      +'<button onclick="_lotRemoveFilter(\''+tt+'\',\''+key+'\')" title="Bỏ bộ lọc '+d.label+'" style="border:none;background:none;cursor:pointer;color:var(--text-tertiary);padding:2px;display:flex;align-items:center"><i class="ti ti-x" style="font-size:12px"></i></button>'
+    +'</div>';
+  }).join('');
+  const avail=Object.keys(LOT_FILTER_DEFS).filter(function(k){return active.indexOf(k)<0;});
+  const addBtn=avail.length
+    ?('<button class="btn sm" data-tt="'+tt+'" onclick="_lotFilterMenu(this.dataset.tt,event)" style="font-size:11px;padding:6px 10px;flex-shrink:0;white-space:nowrap"><i class="ti ti-filter-plus" style="font-size:12px"></i> Bộ lọc</button>')
+    :'';
+  bar.innerHTML=(chips||addBtn)?('<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 2px">'+chips+addBtn+'</div>'):'';
+}
+window._renderLotFilterBar=_renderLotFilterBar;
+
+function _lotFilterMenu(tt,ev){
+  ev.stopPropagation();
+  const old=g('lotFilterMenu'); if(old)old.remove();
+  const avail=Object.keys(LOT_FILTER_DEFS).filter(function(k){return _lotActiveList(tt).indexOf(k)<0;});
+  if(!avail.length)return;
+  const m=document.createElement('div'); m.id='lotFilterMenu';
+  m.style.cssText='position:fixed;z-index:200;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;box-shadow:var(--shadow-lg);padding:6px;min-width:170px';
+  const rect=ev.currentTarget.getBoundingClientRect();
+  m.style.top=(rect.bottom+6)+'px'; m.style.left=rect.left+'px';
+  m.innerHTML=avail.map(function(k){
+    const d=LOT_FILTER_DEFS[k];
+    return '<div onclick="_lotAddFilter(\''+tt+'\',\''+k+'\');var mm=g(\'lotFilterMenu\');if(mm)mm.remove();" style="padding:8px 12px;cursor:pointer;border-radius:6px;font-size:12.5px;display:flex;align-items:center;gap:8px" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'"><i class="ti '+d.icon+'"></i> '+d.label+'</div>';
+  }).join('');
+  document.body.appendChild(m);
+  setTimeout(function(){document.addEventListener('click',function h(){m.remove();document.removeEventListener('click',h);});},0);
+}
+window._lotFilterMenu=_lotFilterMenu;
+
+function _lotAddFilter(tt,key){
+  const arr=_lotActiveList(tt);
+  if(arr.indexOf(key)<0)arr.push(key);
+  _renderLotFilterBar(tt);
+  renderLotTable(tt);
+  _lotSaveFilterPrefs();
+}
+window._lotAddFilter=_lotAddFilter;
+
+function _lotRemoveFilter(tt,key){
+  const arr=_lotActiveList(tt);
+  const idx=arr.indexOf(key);
+  if(idx>=0)arr.splice(idx,1);
+  _renderLotFilterBar(tt);
+  renderLotTable(tt);
+  _lotSaveFilterPrefs();
+}
+window._lotRemoveFilter=_lotRemoveFilter;
+
+// Lưu danh sách field đang bật theo user (merge — không đụng field khác của document users/{docId})
+function _lotSaveFilterPrefs(){
+  try{
+    if(typeof currentProfile==='undefined'||!currentProfile||!currentProfile._docId)return;
+    db.collection('users').doc(currentProfile._docId).set({shipmentFilters:window._lotActiveFilters},{merge:true}).catch(function(){});
+  }catch(e){}
+}
+window._lotSaveFilterPrefs=_lotSaveFilterPrefs;
 
 // Sort state per tab
 var sortState={xuat:{key:'etd',dir:1},nhap:{key:'etd',dir:1}};
@@ -3285,6 +3369,7 @@ function resetAllFilters(tt){
   const sc=g('sfCarrier_'+tt); if(sc) sc.value='';
   const sfl=g('sfLock_'+tt); if(sfl) sfl.value='';
   const spod=g('sfPod_'+tt); if(spod) spod.value='';
+  const scg=g('sfCargo_'+tt); if(scg) scg.value='';
   renderLotTable(tt);
   toast('Đã reset bộ lọc');
 }
@@ -3367,8 +3452,11 @@ function _isAlwaysShowSpecialLot(r){
 }
 window._isAlwaysShowSpecialLot=_isAlwaysShowSpecialLot;
 
-function renderLotTable(tt){
-  const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
+// ── Lọc + sắp xếp danh sách lô theo TOÀN BỘ filter đang áp dụng trên UI (search, trạng thái, ETD,
+// Shipper/Carrier/POD/Cargo/Khóa-VST nếu đang bật...). Tách riêng khỏi renderLotTable() để dùng
+// chung cho cả việc VẼ BẢNG và XUẤT EXCEL (đảm bảo Excel xuất ra ĐÚNG những gì đang hiển thị trên
+// màn hình — không đổi logic lọc cũ, chỉ thêm điều kiện lọc Cargo mới + tách hàm).
+function _filterLotRows(tt){
   // ── Đọc TẤT CẢ filter values TRƯỚC filter loop (không đọc DOM trong loop)
   const q=(g('srch_'+tt)?.value||'').toLowerCase();
   const fs=g('fst_'+tt)?.value||'';
@@ -3378,13 +3466,11 @@ function renderLotTable(tt){
   const sfCarrier=(g('sfCarrier_'+tt)?.value||'').toLowerCase().trim();
   const sfLock=g('sfLock_'+tt)?.value||'';
   const sfPod=(g('sfPod_'+tt)?.value||'').toLowerCase().trim();
-
-  const today=new Date();today.setHours(0,0,0,0);
-  const deadlineDays=parseInt(localStorage.getItem('deadlineDays')||'3');
+  const sfCargo=g('sfCargo_'+tt)?.value||'';
 
   // ── Filter tối ưu: short-circuit sớm, không dùng Object.values() cho search
   const sortDir=(sortState[tt]||{dir:1}).dir;
-  const rows=(cache[tt]||[]).filter(r=>{
+  return (cache[tt]||[]).filter(r=>{
     if(fs==='confirm'&&r.status!=='Confirm')return false;
     if(fs==='standby'&&r.status!=='Standby')return false;
     if(fs==='xuat'&&r.loaiHang!=='XK - Xuất khẩu')return false;
@@ -3402,6 +3488,7 @@ function renderLotTable(tt){
     if(sfShipper&&!(r.shipper||r.supplier||'').toLowerCase().includes(sfShipper))return false;
     if(sfCarrier&&!(r.carrier||'').toLowerCase().includes(sfCarrier))return false;
     if(sfPod&&!(r.pod||'').toLowerCase().includes(sfPod))return false;
+    if(sfCargo&&r.cargoType!==sfCargo)return false;
     if(sfLock==='locked'&&!r.locked)return false;
     if(sfLock==='unlocked'&&r.locked)return false;
     if(sfLock==='vst_yes'&&!(r.vstEnabled&&r.vstConfirmed))return false;
@@ -3424,6 +3511,14 @@ function renderLotTable(tt){
     const av=a.etd||''; const bv=b.etd||'';
     return sortDir*(av<bv?-1:av>bv?1:0);
   });
+}
+window._filterLotRows=_filterLotRows;
+
+function renderLotTable(tt){
+  const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
+  const today=new Date();today.setHours(0,0,0,0);
+  const deadlineDays=parseInt(localStorage.getItem('deadlineDays')||'3');
+  const rows=_filterLotRows(tt);
 
   const thEl=g('th_'+tt);
   const tbody=g('tb_'+tt);
@@ -3665,6 +3760,137 @@ function _loadMoreLots(tt){
   requestAnimationFrame(function(){tbody.insertAdjacentHTML('beforeend',html);});
 }
 window._loadMoreLots=_loadMoreLots;
+
+// ═══ XUẤT EXCEL — Shipment List: xuất ĐÚNG danh sách đang hiển thị trên trang (áp dụng toàn bộ
+// filter hiện tại — search, trạng thái, ETD, và các bộ lọc nâng cao Shipper/Carrier/POD/Cargo/
+// Khóa-VST nếu đang bật) bằng cách dùng lại _filterLotRows(), không phụ thuộc số dòng đã render
+// trên màn hình (bỏ qua giới hạn phân đoạn hiển thị progressive — xuất TOÀN BỘ kết quả đang lọc).
+// Không đổi logic lọc/dữ liệu — chỉ đọc để xuất báo cáo.
+async function exportLotListExcel(tt){
+  if(typeof ExcelJS==='undefined'){toast('ExcelJS chưa sẵn sàng, vui lòng thử lại sau giây lát','error');return;}
+  const rows=_filterLotRows(tt);
+  if(!rows.length){toast('Không có lô hàng nào để xuất (theo bộ lọc hiện tại)','error');return;}
+
+  const partnersRef=cache.partners||{};
+  const partnerName=function(v){ if(!v)return ''; const p=partnersRef[v]; return (p&&(p.shortname||p.name))||v; };
+  const LH_LABEL={'XK - Xuất khẩu':'Xuất khẩu','IM - Nhập khẩu':'Nhập khẩu','LS - Local Service':'Local Service'};
+  const FST_LABEL={confirm:'Confirm',standby:'Stand by',xuat:'Xuất khẩu',nhap:'Nhập khẩu',ls:'LS',vst_yes:'Đã VST',vst_no:'Chưa VST',doc_pending:'Chưa gửi Ctừ'};
+  const progressText=function(r){
+    const parts=[];
+    if(r.loaiHang==='IM - Nhập khẩu'){ parts.push(r.thongQuan?'Đã TQ':'Chưa TQ'); }
+    else if(r.vstEnabled){ parts.push(r.vstConfirmed?'Đã VST':'Chưa VST'); }
+    if(r.docTrackEnabled&&(r.docTrackKeys||[]).length){
+      const sent=_docTrackSentKeys(r).length, total=r.docTrackKeys.length;
+      parts.push('Ctừ: '+sent+'/'+total);
+    }
+    return parts.join(' | ')||'—';
+  };
+
+  const pageTitle=tt==='xuat'?'DANH SÁCH LÔ HÀNG — SHIPMENT LIST':'DANH SÁCH LÔ HÀNG — NHẬP KHẨU';
+  const todayIso=new Date().toISOString().slice(0,10);
+
+  const wb=new ExcelJS.Workbook();
+  wb.creator='COCOSEA';
+  wb.created=new Date();
+  const ws=wb.addWorksheet('Shipment List',{pageSetup:{orientation:'landscape',paperSize:9,fitToPage:true,fitToWidth:1}});
+
+  const hdrs=['STT','Job ID','Booking No / MBL','Loại hình','Shipper / NCC','Tên hàng','Cargo','Vol x Type','POL','POD','Vessel / Voyage','ETD','ETA','Carrier','Status','Tiến độ','Khóa'];
+  const colWidths=[6,12,22,14,22,20,12,12,10,10,20,13,13,18,12,24,10];
+  const nCols=hdrs.length;
+
+  // Title rows
+  ws.mergeCells(1,1,1,nCols);
+  const t1=ws.getCell(1,1);
+  t1.value=pageTitle;
+  t1.font={name:'Arial',bold:true,size:16,color:{argb:'FFFFFFFF'}};
+  t1.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF0C2F5A'}};
+  t1.alignment={horizontal:'center',vertical:'middle'};
+  ws.getRow(1).height=30;
+
+  ws.mergeCells(2,1,2,nCols);
+  const t2=ws.getCell(2,1);
+  const fFst=g('fst_'+tt)?.value||'';
+  const etdFromV=g('etdFrom_'+tt)?.value||'', etdToV=g('etdTo_'+tt)?.value||'';
+  const filterParts=[];
+  if(fFst)filterParts.push('Trạng thái: '+(FST_LABEL[fFst]||fFst));
+  if(etdFromV||etdToV)filterParts.push('ETD: '+(etdFromV?_fmtDMY(etdFromV):'...')+' – '+(etdToV?_fmtDMY(etdToV):'...'));
+  t2.value='COCOSEA – Logistics & Freight Forwarding'+(filterParts.length?('    |    '+filterParts.join('    |    ')):'')+'    |    '+new Date().toLocaleDateString('vi-VN');
+  t2.font={name:'Arial',size:10,color:{argb:'FFFFFFFF'},italic:true};
+  t2.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1A4070'}};
+  t2.alignment={horizontal:'center',vertical:'middle'};
+  ws.getRow(2).height=18;
+
+  // Header row
+  const hrw=ws.addRow(hdrs);
+  hrw.eachCell(function(cell){
+    cell.font={name:'Arial',bold:true,size:10,color:{argb:'FFFFFFFF'}};
+    cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF0C2F5A'}};
+    cell.alignment={horizontal:'center',vertical:'middle',wrapText:true};
+    cell.border={bottom:{style:'thin',color:{argb:'FF6B9FCC'}}};
+  });
+  ws.getRow(3).height=22;
+  colWidths.forEach(function(w,i){ws.getColumn(i+1).width=w;});
+
+  let stt=0;
+  rows.forEach(function(r,idx){
+    stt++;
+    const bkList=(r.bookings&&r.bookings.length)?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean):[r.bookingNo].filter(Boolean);
+    let bkStr=bkList.length?bkList.join(', '):'—';
+    if(r.mblNo)bkStr+=' / MBL '+r.mblNo;
+    const volType=(r.vol?(r.vol+' x '+(r.typeCont||'')):(r.typeCont||''))||'—';
+    const row=ws.addRow([
+      stt,
+      r.jobNo||'',
+      bkStr,
+      LH_LABEL[r.loaiHang]||r.loaiHang||'',
+      partnerName(r.shipper||r.supplier||''),
+      r.tenHang||'',
+      r.cargoType||'',
+      volType,
+      r.pol||'',
+      r.pod||'',
+      (r.vessel||'')+(r.voy?(' / V.'+r.voy):''),
+      _fmtDMY(r.etd),
+      _fmtDMY(r.eta),
+      partnerName(r.carrier||''),
+      r.status||'',
+      progressText(r),
+      r.locked?'Đã khóa':'Chưa khóa'
+    ]);
+    const even=idx%2===1;
+    const bgColor=even?'FFEFF5FF':'FFFFFFFF';
+    row.eachCell(function(cell){
+      cell.font={name:'Arial',size:9.5};
+      cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:bgColor}};
+      cell.alignment={vertical:'middle',wrapText:false};
+      cell.border={bottom:{style:'hair',color:{argb:'FFD4DFee'}}};
+    });
+    row.getCell(1).alignment={horizontal:'center',vertical:'middle'};
+    row.getCell(12).alignment={horizontal:'center',vertical:'middle'};
+    row.getCell(13).alignment={horizontal:'center',vertical:'middle'};
+    row.height=16;
+  });
+
+  // Total row
+  const totRow=ws.addRow(['','TỔNG CỘNG: '+stt+' lô hàng'].concat(new Array(nCols-2).fill('')));
+  ws.mergeCells(totRow.number,2,totRow.number,nCols);
+  totRow.eachCell(function(cell){
+    cell.font={name:'Arial',bold:true,size:10,color:{argb:'FF0C2F5A'}};
+    cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFE8EEF8'}};
+    cell.border={top:{style:'medium',color:{argb:'FF0C2F5A'}}};
+  });
+
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='ShipmentList_'+(tt==='xuat'?'XuatKhau':'NhapKhau')+'_'+todayIso+'.xlsx';
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},1000);
+  toast('Đã xuất Excel: '+stt+' lô hàng');
+}
+window.exportLotListExcel=exportLotListExcel;
 
 // Helper: click tên tàu trong danh sách lô → mở Vessel Tool editor
 function _openVesselFromLot(vesName,voy,cy,si,etd){
@@ -20991,7 +21217,28 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     var sumBlockH=sumLines.length*5+2+8.5+3+_bcLines.length*3.2+2;
     var noteH=17;
     var bottomH=Math.max(sumBlockH,noteH);
-    if(y+bottomH>270){ doc.addPage(); drawDnBg(); y=20; }
+
+    // BANK ACCOUNT — tính TRƯỚC kích thước khối Bank Account (2 card cạnh nhau) để gộp chung vào 1 lần
+    // kiểm tra ngắt trang DUY NHẤT bên dưới (fix v4.77). Trước đây khối NOTE/SUM và khối Bank Account
+    // mỗi khối tự kiểm tra ngắt trang RIÊNG — dẫn tới tình huống: khối NOTE/SUM vừa đủ nằm lại cuối
+    // trang hiện tại, còn khối Bank Account (xét sau, với chỗ trống còn lại ít hơn) bị đẩy riêng sang
+    // trang kế tiếp, để lại khoảng trống lớn phía dưới trang hiện tại — không khớp bố cục liền mạch của
+    // form HTML "Tạo DN" (nơi NOTE/SUM, Bank Account, Footer luôn đứng liền nhau, không bao giờ tách trang).
+    const banksData=window._bankAccounts||{company:[],personal:[]};
+    const coAccs=(Array.isArray(banksData)?banksData:(banksData.company||[])).filter(b=>b.showOnDN);
+    const persAccs=(Array.isArray(banksData)?[]:(banksData.personal||[])).filter(b=>b.showOnDN);
+    var colGap=5, colW=(CW-colGap)/2;
+    var bankLineH=4.3, bankRowH=5.4;
+    var accH=bankRowH*2+bankLineH*2+2; // Chủ TK + Số TK (1 dòng) + Ngân hàng (tối đa 2 dòng, đã gồm chi nhánh)
+    var nCo=Math.max(coAccs.length,1), nPs=Math.max(persAccs.length,1);
+    var bkCardH=7+Math.max(nCo,nPs)*accH+2;
+    var bankSectionH=8.5+bkCardH; // section header + card
+    var footerBarH=10;
+
+    // Kiểm tra ngắt trang MỘT LẦN cho CẢ 3 khối (NOTE/SUM + Bank Account + Footer) — nếu không đủ chỗ,
+    // chuyển nguyên cả khối sang trang mới cùng lúc, không tách rời như trước.
+    var combinedBottomH=bottomH+6+bankSectionH+6+footerBarH;
+    if(y+combinedBottomH>287){ doc.addPage(); drawDnBg(); y=20; }
     var bottomY=y;
 
     // NOTE box (trái) — icon tròn xanh "i" theo mẫu, đã thu hẹp bề rộng để nhường chỗ cho sum-block bên phải
@@ -21030,17 +21277,9 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
 
     y=bottomY+bottomH+6;
 
-    // BANK ACCOUNT — 2 card cạnh nhau theo mẫu (Chủ TK / Số TK / Ngân hàng), luôn nguyên khối 1 trang
-    const banksData=window._bankAccounts||{company:[],personal:[]};
-    const coAccs=(Array.isArray(banksData)?banksData:(banksData.company||[])).filter(b=>b.showOnDN);
-    const persAccs=(Array.isArray(banksData)?[]:(banksData.personal||[])).filter(b=>b.showOnDN);
-    var colGap=5, colW=(CW-colGap)/2;
-    var bankLineH=4.3, rowH=5.4;
-    var accH=rowH*2+bankLineH*2+2; // Chủ TK + Số TK (1 dòng) + Ngân hàng (tối đa 2 dòng, đã gồm chi nhánh)
-    var nCo=Math.max(coAccs.length,1), nPs=Math.max(persAccs.length,1);
-    var bkCardH=7+Math.max(nCo,nPs)*accH+2;
-    // Guard: toàn bộ section (header 8.5 + card + 6 + brand bar 10) phải nằm gọn trong trang
-    if(y+8.5+bkCardH+16>287){ doc.addPage(); drawDnBg(); y=20; }
+    // BANK ACCOUNT — 2 card cạnh nhau theo mẫu (Chủ TK / Số TK / Ngân hàng). Kích thước đã tính sẵn ở
+    // trên (bkCardH) và chỗ trống đã được đảm bảo bởi guard gộp phía trên, nên không cần kiểm tra ngắt
+    // trang lại ở đây nữa (tránh lặp lại đúng lỗi cũ: tách khối Bank Account ra khỏi NOTE/SUM).
     sectionHdr('Bank Account');
     function _bankCard(x,title,hdrColor,accs){
       doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.15);
@@ -21060,7 +21299,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
           doc.setFont('Roboto','bold'); doc.setFontSize(7.3); doc.setTextColor(NAVY[0],NAVY[1],NAVY[2]);
           var v=doc.splitTextToSize(String(rw[1]),colW-27);
           doc.text(v[0]||'—',x+25,yy);
-          yy+=rowH;
+          yy+=bankRowH;
         });
         // Ngân hàng: gộp chung chi nhánh trong cùng chuỗi gốc (vd "Ngân hàng TMCP Tiên Phong (TPBank)- CN HCM"), cho phép 2 dòng
         doc.setFont('Roboto','normal'); doc.setFontSize(7); doc.setTextColor(GREY[0],GREY[1],GREY[2]);
