@@ -875,15 +875,17 @@ function _applySvcOrder(list,orderArr){
 }
 window._applySvcOrder=_applySvcOrder;
 
-// ── Nhóm dịch vụ "Shipping cost" (OCF, THC, Bill, Seal, TLX) — LUÔN xếp kề nhau, đứng TRÊN nhóm
-// "Local Service" (các dịch vụ còn lại). Áp dụng thứ tự này đồng bộ ở tab Dịch vụ, Fill giá, Invoice
-// và Costing. Khớp theo CẢ code (chính xác, không phân biệt hoa/thường) LẪN tên (chứa từ khóa) để
-// vẫn nhận đúng nhóm dù dịch vụ được tạo tay với mã/tên hơi khác (VD tự đặt tên "Telex" thay vì "TLX").
+// ── Nhóm dịch vụ "Shipping cost" (OCF, THC, Bil, MNF, SEL, TLX) — LUÔN xếp kề nhau, đứng TRÊN nhóm
+// "Local Service" (các dịch vụ còn lại), ĐÚNG thứ tự OCF→THC→Bil→MNF→SEL→TLX. Áp dụng thứ tự này
+// đồng bộ ở tab Dịch vụ, Fill giá, Invoice và Costing. Khớp theo CẢ code (chính xác, không phân biệt
+// hoa/thường) LẪN tên (chứa từ khóa) để vẫn nhận đúng nhóm dù dịch vụ được tạo tay với mã/tên hơi
+// khác (VD tự đặt tên "Manifest" thay vì "MNF", hay "Seal fee" thay vì "SEL").
 const SHIPPING_COST_GROUP=[
   {code:'OCF',kw:['ocf']},
   {code:'THC',kw:['thc']},
   {code:'BIL',kw:['bill']},
-  {code:'SEA',kw:['seal']},
+  {code:'MNF',kw:['mnf','manifest']},
+  {code:'SEL',kw:['sel','seal']},
   {code:'TLX',kw:['tlx','telex']}
 ];
 function _svcShippingCostRank(s){
@@ -897,7 +899,7 @@ function _svcShippingCostRank(s){
 }
 window._svcShippingCostRank=_svcShippingCostRank;
 // Sắp xếp 1 danh sách dịch vụ (mỗi phần tử có .code/.name — SVCS hoặc revenueRows của Costing đều
-// khớp shape này): nhóm Shipping cost lên đầu đúng thứ tự OCF→THC→Bill→Seal→TLX, phần Local Service
+// khớp shape này): nhóm Shipping cost lên đầu đúng thứ tự OCF→THC→Bil→MNF→SEL→TLX, phần Local Service
 // còn lại giữ nguyên thứ tự tương đối gốc, xếp sau (sort ổn định — không đổi thứ tự trong cùng nhóm).
 function _svcGroupSort(list){
   return list.map(function(s,i){return {s:s,i:i};}).sort(function(a,b){
@@ -1205,7 +1207,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.80';
+window.APP_BUILD='v4.81';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4334,7 +4336,8 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showCheckEport(this.dataset.bk)" style="color:#16A34A;border-color:#16A34A"><i class="ti ti-clipboard-check"></i> Check</button>';
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="showFumiReport(this.dataset.bk)" style="color:#EA580C;border-color:#EA580C"><i class="ti ti-spray"></i> Báo Fumi</button>';
       sectionsHtml+='<label class="btn" style="cursor:pointer;color:#0D9488;border-color:#0D9488"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
-      sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="openOcrContScan(this.dataset.bk)" style="color:#C026D3;border-color:#C026D3"><i class="ti ti-photo"></i> Quét ảnh</button>';
+      // v4.80: Ẩn nút "Quét ảnh" (OCR) ở tab Cont/Seal theo yêu cầu — giữ nguyên hàm openOcrContScan()
+      // bên dưới (không xóa) để dễ khôi phục lại nếu cần dùng lại sau này, chỉ bỏ nút kích hoạt.
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="exportContSealExcel(this.dataset.bk)" style="color:#4F46E5;border-color:#4F46E5"><i class="ti ti-table-export"></i> Xuất Excel</button>';
       sectionsHtml+='<button class="btn" style="color:#7C3AED;border-color:#7C3AED" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
       sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
@@ -6929,10 +6932,22 @@ function _lotFieldHtml(c, r, ctx){
     const portKey=c.k;
     const countryKey=portKey+'Country';
     const savedCountry=r[countryKey]||'';
+    // v4.80: nếu lô này đã gắn với 1 tàu cụ thể (vessel+voy khớp với 1 tàu trong Vessel tool) → giới
+    // hạn POL/POD CHỈ hiện đúng (các) cảng của tàu đó, không hiện toàn bộ danh sách cảng theo quốc gia
+    // nữa (tránh chọn nhầm cảng tàu không ghé). Chưa gắn tàu (lô mới / tàu nhập tay) → giữ nguyên hành
+    // vi cũ (chọn theo quốc gia, danh sách đầy đủ).
+    if(portKey==='pol'||portKey==='pod'){
+      const _vesForPort=(cache.vessels||[]).find(function(v){return v.vessel===r.vessel&&v.voy===r.voy;});
+      if(portKey==='pol'){
+        window._lotVesselPolPorts=(_vesForPort&&_vesForPort.pol)?[{name:_vesForPort.pol,country:(typeof _findCountryForPort==='function'?_findCountryForPort(_vesForPort.pol):''),eta:_vesForPort.etd||''}]:[];
+      }else{
+        window._lotVesselPodPorts=((_vesForPort&&_vesForPort.pods)||[]).filter(function(p){return p.pod;}).map(function(p){return {name:p.pod,country:p.country||(typeof _findCountryForPort==='function'?_findCountryForPort(p.pod):''),eta:p.eta||''};});
+      }
+    }
     const portsForCountry=savedCountry&&PORTS_BY_COUNTRY[savedCountry]?PORTS_BY_COUNTRY[savedCountry]:PORTS;
     const countryOpts='<option value="">— Chọn quốc gia —</option>'+PORT_COUNTRIES.map(cn=>`<option${cn===savedCountry?' selected':''}>${cn}</option>`).join('');
-    const portOpts='<option value="">— Chọn cảng —</option>'+portsForCountry.map(p=>`<option${p===val?' selected':''}>${p}</option>`).join('');
-    return`<div class="fi${full}"><label class="lbl">${c.l}</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><select id="f_${countryKey}" onchange="updatePortOptions('${portKey}','${countryKey}')" style="font-size:12px">${countryOpts}</select><select id="f_${portKey}">${portOpts}</select></div></div>`;
+    const portOpts=(typeof _buildLotPortOpts==='function'&&(portKey==='pol'||portKey==='pod'))?_buildLotPortOpts(portKey,val,savedCountry):('<option value="">— Chọn cảng —</option>'+portsForCountry.map(p=>`<option${p===val?' selected':''}>${p}</option>`).join(''));
+    return`<div class="fi${full}"><label class="lbl">${c.l}</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><select id="f_${countryKey}" onchange="updatePortOptions('${portKey}','${countryKey}')" style="font-size:12px">${countryOpts}</select><select id="f_${portKey}" onchange="if(typeof onLotPortChange==='function')onLotPortChange('${portKey}')">${portOpts}</select></div></div>`;
   }
   if(c.type==='cargoType') return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_cargoType" onchange="updateContOpts()"><option${'Hàng khô'===initCargo?' selected':''}>Hàng khô</option><option${'Hàng lạnh'===initCargo?' selected':''}>Hàng lạnh</option><option${'LCL'===initCargo?' selected':''}>LCL</option></select></div>`;
   if(c.type==='typeCont'){const opts=CONT_TYPES[initCargo]||[];return`<div class="fi"><label class="lbl">${c.l}</label><select id="f_typeCont">${opts.map(o=>`<option${o===initCont?' selected':''}>${o}</option>`).join('')}</select></div>`;}
@@ -7514,6 +7529,44 @@ function _buildLotTsPortOpts(selPort,country){
 }
 window._buildLotTsPortOpts=_buildLotTsPortOpts;
 
+// v4.80: helper build port options cho POL/POD — nếu tàu đã chọn (window._lotVesselPolPorts /
+// window._lotVesselPodPorts, nạp sẵn ở _lotFieldHtml/onVesselPick) có danh sách cảng riêng → CHỈ hiện
+// đúng (các) cảng của tàu đó, không hiện toàn bộ danh sách cảng theo quốc gia (tránh chọn nhầm cảng
+// tàu không ghé). Tàu chưa chọn / không có dữ liệu cảng → giữ hành vi cũ (hiện theo quốc gia).
+function _buildLotPortOpts(portKey,selPort,country){
+  const vp=(portKey==='pol'?window._lotVesselPolPorts:window._lotVesselPodPorts)||[];
+  if(vp.length){
+    const filtered=country?vp.filter(function(p){return (p.country||'')===country;}):vp;
+    const list=filtered.length?filtered:vp; // lọc theo quốc gia ra rỗng (thiếu country trong dữ liệu tàu) → vẫn hiện đủ cảng của tàu
+    return '<option value="">— Chọn cảng —</option>'
+      +list.map(function(p){
+        return '<option'+(p.name===selPort?' selected':'')
+          +' data-port-eta="'+(p.eta||'')+'" data-port-country="'+(p.country||'')+'">'+p.name+'</option>';
+      }).join('');
+  }
+  const cPorts=(country&&PORTS_BY_COUNTRY[country])?PORTS_BY_COUNTRY[country]:PORTS;
+  return '<option value="">— Chọn cảng —</option>'+cPorts.map(function(p){return '<option'+(p===selPort?' selected':'')+'>'+p+'</option>';}).join('');
+}
+window._buildLotPortOpts=_buildLotPortOpts;
+
+// v4.80: khi người dùng tự chọn cảng trong danh sách đã giới hạn theo tàu (POD có nhiều lựa chọn) —
+// tự điền ETA/quốc gia tương ứng còn trống, giống hành vi lotTsPortChange() của cảng chuyển tải.
+function onLotPortChange(portKey){
+  const sel=g('f_'+portKey); if(!sel)return;
+  const opt=sel.options[sel.selectedIndex]; if(!opt)return;
+  const eta=opt.getAttribute('data-port-eta')||'';
+  const country=opt.getAttribute('data-port-country')||'';
+  if(country){
+    const ctryEl=g('f_'+portKey+'Country');
+    if(ctryEl&&!ctryEl.value)ctryEl.value=country;
+  }
+  if(portKey==='pod'&&eta){
+    const etaEl=g('f_eta');
+    if(etaEl&&!etaEl.value)etaEl.value=eta;
+  }
+}
+window.onLotPortChange=onLotPortChange;
+
 function lotTsAddRow(){
   const list=g('lotTransshipList'); if(!list)return;
   const existing=list.querySelectorAll('[data-ts-lot-row]').length;
@@ -7619,6 +7672,12 @@ function updatePortOptions(portKey, countryKey){
   const portEl=g('f_'+portKey);
   if(!countryEl||!portEl)return;
   const country=countryEl.value;
+  // v4.80: nếu tàu đã chọn có danh sách cảng riêng (POL/POD khai báo ở Vessel tool) → đổi quốc gia
+  // chỉ lọc trong đúng cảng của tàu đó, không hiện toàn bộ danh sách cảng thế giới theo quốc gia.
+  if((portKey==='pol'||portKey==='pod')&&typeof _buildLotPortOpts==='function'){
+    portEl.innerHTML=_buildLotPortOpts(portKey,'',country);
+    return;
+  }
   const ports=country&&PORTS_BY_COUNTRY[country]?PORTS_BY_COUNTRY[country]:PORTS;
   portEl.innerHTML='<option value="">— Chọn cảng —</option>'+ports.map(p=>`<option>${p}</option>`).join('');
 }
@@ -36283,14 +36342,35 @@ function onVesselPick(){
   if(g('f_vessel'))g('f_vessel').value=v.vessel||'';
   if(g('f_voy'))g('f_voy').value=v.voy||'';
   if(g('f_etd')&&v.etd){g('f_etd').value=v.etd; if(typeof updateEtdCutoffs==='function')updateEtdCutoffs();}
+  // v4.80: giới hạn danh sách POL/POD CHỈ hiện đúng (các) cảng của tàu vừa chọn (không hiện cảng khác
+  // ngoài tàu này) — rebuild lại <select> POL/POD từ danh sách giới hạn này thay vì chỉ điền giá trị
+  // rồi vẫn để dropdown mở ra toàn bộ danh sách cảng theo quốc gia như trước.
+  window._lotVesselPolPorts=v.pol?[{name:v.pol,country:(typeof _findCountryForPort==='function'?_findCountryForPort(v.pol):''),eta:v.etd||''}]:[];
+  window._lotVesselPodPorts=(v.pods||[]).filter(function(p){return p.pod;}).map(function(p){return {name:p.pod,country:p.country||(typeof _findCountryForPort==='function'?_findCountryForPort(p.pod):''),eta:p.eta||''};});
   // POL + country
-  if(v.pol)_setPortWithCountry('pol', v.pol);
-  // POD: if vessel has exactly 1 POD, fill it + its ETA + country. If multiple, fill first and notify.
-  const pods=v.pods||[];
-  if(pods.length){
-    if(g('f_pod')&&!g('f_pod').value)_setPortWithCountry('pod', pods[0].pod||'');
-    if(g('f_eta')&&pods[0].eta)g('f_eta').value=pods[0].eta;
-    if(pods.length>1)toast('Tàu có nhiều POD — đã điền POD đầu, chỉnh lại nếu cần','success');
+  if(window._lotVesselPolPorts.length){
+    const polInfo=window._lotVesselPolPorts[0];
+    const polSel=g('f_pol');
+    if(polSel){ polSel.innerHTML=_buildLotPortOpts('pol',polInfo.name,''); polSel.value=polInfo.name; }
+    const polCtryEl=g('f_polCountry'); if(polCtryEl&&polInfo.country)polCtryEl.value=polInfo.country;
+  }
+  // POD: nếu tàu có đúng 1 POD → điền luôn + ETA + quốc gia. Nếu nhiều POD → hiện ĐÚNG danh sách POD
+  // của tàu này để chọn (không hiện cảng khác ngoài tàu), giữ nguyên lựa chọn hiện tại nếu vẫn hợp lệ.
+  const podList=window._lotVesselPodPorts;
+  if(podList.length){
+    const podSel=g('f_pod');
+    if(podSel){
+      const keepCur=podSel.value&&podList.some(function(p){return p.name===podSel.value;});
+      const chosen=keepCur?podSel.value:podList[0].name;
+      podSel.innerHTML=_buildLotPortOpts('pod',chosen,'');
+      podSel.value=chosen;
+      const chosenInfo=podList.find(function(p){return p.name===chosen;});
+      if(chosenInfo){
+        const podCtryEl=g('f_podCountry'); if(podCtryEl&&chosenInfo.country)podCtryEl.value=chosenInfo.country;
+        if(g('f_eta')&&chosenInfo.eta&&!g('f_eta').value)g('f_eta').value=chosenInfo.eta;
+      }
+    }
+    if(podList.length>1)toast('Tàu có nhiều POD — đã giới hạn danh sách chọn theo đúng tàu này','success');
   }
   // v4.53: Cập nhật danh sách cảng chuyển tải theo tàu vừa chọn
   const newTsPorts=(v.transships||[]).filter(function(p){return p.port;});
