@@ -1137,6 +1137,15 @@ function _xuatEnsureLotLayout(lotV){
 }
 
 function xuatSwitchTab(id){
+  // v4.83: chặn chuyển lô/tab khi đang có thay đổi CHƯA LƯU ở lô đang mở, TRƯỚC khi đổi detailId/detailTab
+  // (xem giải thích chi tiết ở openDetail()). Đường này được gọi trực tiếp từ tab-bar (không qua openDetail).
+  if(window._tabDirty && _xuatCurTab!==id){
+    _checkTabDirtyThenRun(function(){ _xuatSwitchTabNow(id); });
+    return;
+  }
+  _xuatSwitchTabNow(id);
+}
+function _xuatSwitchTabNow(id){
   _xuatCurTab=id;
   _xuatRenderTabBar();
   const listV=g('xuat-list-view');
@@ -1207,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.81';
+window.APP_BUILD='v4.83';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1485,26 +1494,37 @@ auth.onAuthStateChanged(async (user) => {
       console.error('Profile load error:', e);
       currentProfile = {role:'admin',name:user.email,avatar:user.email.slice(0,2).toUpperCase(),email:user.email};
     }
-    // Tải cài đặt bảo mật TRƯỚC (cần biết deviceApproval bật/tắt trước khi quyết định có kiểm tra
-    // thiết bị hay không) — rồi mới quyết định vào thẳng app hay chặn lại chờ Admin duyệt.
-    await new Promise(function(resolve){ _loadSecuritySettings(resolve); });
-    await new Promise(function(resolve){ _loadUiCustomization(resolve); });
-    console.log('COCOFLOW [Device]: deviceApproval.enabled =',(_securitySettings.deviceApproval||{}).enabled,'| role =',currentProfile.role);
-    if(_securitySettings.deviceApproval&&_securitySettings.deviceApproval.enabled&&currentProfile.role!=='admin'){
-      const deviceName=_detectDeviceName();
-      const devResult=await _checkAndRegisterDevice(user.uid,user.email,deviceName);
-      console.log('COCOFLOW [Device]: trạng thái thiết bị =',devResult.status);
-      if(devResult.status!=='approved'){
-        setLoading(false);
-        showDevicePendingScreen(devResult.status,deviceName,devResult.customName);
-        return; // KHÔNG startListeners()/showApp() — thiết bị chưa được duyệt, không tải dữ liệu gì.
+    // v4.82: BỌC try/catch quanh toàn bộ phần bootstrap sau đăng nhập (trước đây KHÔNG có —
+    // nếu bất kỳ bước nào ở đây lỗi (deviceApproval, loadSecuritySettings, startListeners...) thì
+    // hàm throw ra ngoài, treo luôn overlay "Đang đăng nhập..." vĩnh viễn vì setLoading(false) không
+    // bao giờ được gọi tới — user nhìn thấy y hệt màn hình bị "không vào được app". Giờ nếu lỗi, vẫn
+    // tắt overlay + báo lỗi rõ ràng để user biết và có thể thử lại / báo cho admin, thay vì treo im lặng.
+    try{
+      // Tải cài đặt bảo mật TRƯỚC (cần biết deviceApproval bật/tắt trước khi quyết định có kiểm tra
+      // thiết bị hay không) — rồi mới quyết định vào thẳng app hay chặn lại chờ Admin duyệt.
+      await new Promise(function(resolve){ _loadSecuritySettings(resolve); });
+      await new Promise(function(resolve){ _loadUiCustomization(resolve); });
+      console.log('COCOFLOW [Device]: deviceApproval.enabled =',(_securitySettings.deviceApproval||{}).enabled,'| role =',currentProfile.role);
+      if(_securitySettings.deviceApproval&&_securitySettings.deviceApproval.enabled&&currentProfile.role!=='admin'){
+        const deviceName=_detectDeviceName();
+        const devResult=await _checkAndRegisterDevice(user.uid,user.email,deviceName);
+        console.log('COCOFLOW [Device]: trạng thái thiết bị =',devResult.status);
+        if(devResult.status!=='approved'){
+          setLoading(false);
+          showDevicePendingScreen(devResult.status,deviceName,devResult.customName);
+          return; // KHÔNG startListeners()/showApp() — thiết bị chưa được duyệt, không tải dữ liệu gì.
+        }
+      } else if(currentProfile.role==='admin'){
+        console.log('COCOFLOW [Device]: Admin — miễn kiểm tra thiết bị (theo đúng thiết kế).');
       }
-    } else if(currentProfile.role==='admin'){
-      console.log('COCOFLOW [Device]: Admin — miễn kiểm tra thiết bị (theo đúng thiết kế).');
+      startListeners();
+      showApp();
+      setLoading(false);
+    }catch(e2){
+      console.error('COCOFLOW: Lỗi khi tải dữ liệu sau đăng nhập:',e2);
+      setLoading(false);
+      alert('Đăng nhập thành công nhưng xảy ra lỗi khi tải dữ liệu ứng dụng:\n\n'+(e2&&e2.message?e2.message:e2)+'\n\nVui lòng tải lại trang (nhấn F5) để thử lại. Nếu lỗi vẫn lặp lại, chụp màn hình lỗi này gửi cho bộ phận kỹ thuật.');
     }
-    startListeners();
-    showApp();
-    setLoading(false);
   } else {
     currentUser = null; currentProfile = null;
     _stopInactivityTracker();
@@ -1528,6 +1548,19 @@ async function doLogin(){
       email=snap.data().email;
     }
     await auth.signInWithEmailAndPassword(email, pass);
+    // v4.82: "watchdog" — nếu Firebase đăng nhập THÀNH CÔNG nhưng bước tải dữ liệu/kiểm tra thiết bị
+    // sau đó (trong onAuthStateChanged) bị treo quá lâu (lỗi mạng, dữ liệu, v.v) khiến overlay "Đang
+    // đăng nhập..." không bao giờ tự tắt — tự động tắt overlay + báo lỗi rõ ràng sau 20s, thay vì để
+    // user kẹt ở màn hình đăng nhập vô thời hạn không rõ lý do (đây chính là triệu chứng "không vào
+    // được app" — màn hình đăng nhập hiện "Đang đăng nhập..." mãi không qua).
+    setTimeout(function(){
+      const el=document.getElementById('loadingOverlay');
+      const msgEl=document.getElementById('loadingMsg');
+      if(el&&el.style.display==='flex'&&msgEl&&msgEl.textContent==='Đang đăng nhập...'){
+        setLoading(false);
+        alert('Đăng nhập thành công nhưng tải dữ liệu ứng dụng quá lâu (có thể do lỗi kết nối mạng).\n\nVui lòng tải lại trang (nhấn F5) để thử lại. Nếu lỗi vẫn lặp lại, chụp màn hình gửi cho bộ phận kỹ thuật.');
+      }
+    },20000);
   } catch(e) {
     setLoading(false);
     toast('Tài khoản hoặc mật khẩu không đúng','error');
@@ -3922,6 +3955,20 @@ let _openTabs=[]; // {key, type:'lot'|'docmaker', id, tt, label, tab}
 let _activeTabKey=null;
 
 function openDetail(id, tt, startTab){
+  // v4.83: nếu đang có thay đổi CHƯA LƯU ở lô đang mở (detailId hiện tại) và người dùng bấm sang MỘT
+  // LÔ KHÁC — phải hỏi lưu/không lưu TRƯỚC khi đổi detailId/detailTt. Trước đây hàm này đổi detailId
+  // NGAY LẬP TỨC bất kể đang dở dang gì, rồi các nơi gọi openDetail() xong còn gọi thêm
+  // switchDetailTab() (VD: SCY Report CŨ: openDetail(id,tt);switchDetailTab('scy')) để hỏi lưu — lúc đó
+  // dialog "Lưu" lại dùng detailTab/detailId đã bị đổi sang lô MỚI trong khi dữ liệu đang hiển thị
+  // trên màn hình vẫn là của lô CŨ, dẫn tới lưu sai/mất dữ liệu (gốc rễ lỗi "sửa lô SCY bị ghi đè
+  // dữ liệu lô khác"). Chặn switch lô ngay từ đây để loại bỏ toàn bộ race-condition này. ĐỒNG THỜI đã
+  // sửa các nơi gọi (SCY Report, Trucking Report, lịch Trucking/SCY) để gọi openDetail(id,tt,'tab') MỘT
+  // LẦN DUY NHẤT (dùng tham số startTab có sẵn) thay vì gọi rời openDetail() rồi switchDetailTab() —
+  // tránh 2 lệnh gọi liên tiếp cùng mở 2 dialog "Chưa lưu" chồng nhau khi đang dirty.
+  if(window._tabDirty && typeof detailId!=='undefined' && detailId && (detailId!==id || detailTt!==tt)){
+    _checkTabDirtyThenRun(function(){ openDetail(id, tt, startTab); });
+    return;
+  }
   // Đang ở chế độ xem inline (Costing Report) mà lại gọi openDetail() bình thường từ nơi khác — reset
   // về panel trượt tiêu chuẩn, tránh render nhầm vào khung inline cũ đã không còn hiển thị.
   window._crInlineTarget=null;
@@ -3953,7 +4000,13 @@ function openDocMakerTab(id, tt, targetBk){
     // Đang xem đúng lô hàng này rồi — chỉ cần chuyển tab, giữ nguyên context xuat-lotmode/panel hiện tại.
     switchDetailTab('docmaker');
   } else {
-    // Gọi từ 1 lô KHÁC lô đang mở (hiếm) — mở đúng lô đó trước, thẳng vào tab Document Maker.
+    // v4.83: Gọi từ 1 lô KHÁC lô đang mở (hiếm) — trước đây đổi detailId NGAY LẬP TỨC bất kể đang có thay
+    // đổi chưa lưu ở lô cũ (cùng lỗi gốc đã sửa ở openDetail()). Chặn lại bằng dirty-check trước khi đổi.
+    if(window._tabDirty && typeof detailId!=='undefined' && detailId && (detailId!==pickId || detailTt!==pickTt)){
+      _checkTabDirtyThenRun(function(){ openDocMakerTab(id, tt, targetBk); });
+      return;
+    }
+    // Mở đúng lô đó trước, thẳng vào tab Document Maker.
     detailId=pickId; detailTt=pickTt; detailTab='docmaker';
     const r=cache[pickTt].find(function(x){return x._id===pickId;})||{};
     renderDetailPanel(r,pickTt);
@@ -3963,6 +4016,17 @@ function openDocMakerTab(id, tt, targetBk){
 }
 
 function switchToTab(key){
+  const t=_openTabs.find(x=>x.key===key);
+  if(!t)return;
+  // v4.83: chặn chuyển sang lô/tab khác khi đang có thay đổi CHƯA LƯU, TRƯỚC khi đổi detailId/detailTab
+  // (xem giải thích chi tiết ở openDetail()). Đường này là tab-bar riêng của detail panel.
+  if(window._tabDirty && t.type==='lot' && typeof detailId!=='undefined' && (detailId!==t.id || detailTt!==t.tt)){
+    _checkTabDirtyThenRun(function(){ _switchToTabNow(key); });
+    return;
+  }
+  _switchToTabNow(key);
+}
+function _switchToTabNow(key){
   const t=_openTabs.find(x=>x.key===key);
   if(!t)return;
   _activeTabKey=key;
@@ -22832,7 +22896,7 @@ function openCalTruckingScyPopup(dateStr, type){
     +'<div class="msub">Ngày '+dateStr.split('-').reverse().join('/')+' • '+rows.length+' lệnh</div></div><button class="rac" onclick="closeOv(\'calTrkScyOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div style="padding:1rem 1.25rem;max-height:60vh;overflow-y:auto">'
       +(rows.length?rows.map(function(r){
-        return '<div class="cal-list-item" onclick="closeOv(\'calTrkScyOv\');openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\''+(isTrk?'trucking':'scy')+'\')">'
+        return '<div class="cal-list-item" onclick="closeOv(\'calTrkScyOv\');openDetail(\''+r._lotId+'\',\''+r._tt+'\',\''+(isTrk?'trucking':'scy')+'\')">'
           +'<div style="display:flex;justify-content:space-between"><b>'+_calEsc(r.bookingNo||r._bookingNo)+'</b><span style="font-size:11px;color:var(--text-tertiary)">'+(r.vol||'1')+' × '+_calEsc(r.typeCont||'')+'</span></div>'
           +'<div style="font-size:11.5px;color:var(--text-secondary)">'+_calEsc(r._shipper)+'</div>'
           +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">'
@@ -29603,7 +29667,7 @@ function renderTruckingReport(){
     const dateDisp=r.date?fmtDMY(r.date):'—';
     const etdDisp=r._etd?fmtDMY(r._etd):'—';
     const bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
-    return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\'trucking\')">'
+    return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\',\'trucking\')">'
       +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
       +'<td style="'+tdS+'"><span style="color:#1a4b8c;font-weight:600">'+(r.bookingNo||r._bookingNo||'—')+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-size:11.5px">'+(r._shipper||'—')+'</span></td>'
@@ -30672,7 +30736,7 @@ function renderScyReport(){
     const etdDisp=r._etd?fmtDMY(r._etd):'—';
     const bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
     const saLanName=r.saLan&&cache.partners[r.saLan]?(cache.partners[r.saLan].shortname||r.saLan):'—';
-    return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\');switchDetailTab(\'scy\')">'
+    return '<tr style="'+bg+'cursor:pointer" onclick="openDetail(\''+r._lotId+'\',\''+r._tt+'\',\'scy\')">'
       +'<td style="'+tdS+';text-align:center;color:var(--text-tertiary);font-weight:700;font-size:11px">'+(i+1)+'</td>'
       +'<td style="'+tdS+'"><span style="color:#1a4b8c;font-weight:600">'+(r.bookingNo||r._bookingNo||'—')+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-size:11.5px">'+(r._shipper||'—')+'</span></td>'
