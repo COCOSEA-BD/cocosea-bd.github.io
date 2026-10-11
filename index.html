@@ -1216,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.83';
+window.APP_BUILD='v4.84';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4098,6 +4098,31 @@ const _DIRTY_SAVE_MAP={cont:'saveContSealAll',svc:'saveSvc',costing:'saveCosting
   });
 })();
 
+// v4.84: Thông báo lỗi CHẶN LƯU dưới dạng MODAL (không tự biến mất sau vài giây như toast) — dùng cho
+// các trường hợp saveScyItems()/saveDetailSvc() KHÔNG lưu được gì do thiếu điều kiện bắt buộc (VD:
+// lệnh SCY đã chọn Sà lan nhưng chưa bật dịch vụ "Đóng hàng tại bãi" + NCC ở tab Dịch vụ — xem
+// _scySvcRequirementError()). TRƯỚC ĐÂY chỉ hiện toast lỗi rồi tự ẩn sau 3s — rất dễ bị bỏ lỡ (VD:
+// người dùng đang nhìn vào ô vừa sửa, không để ý toast ở góc màn hình), khiến họ tưởng đã lưu/sửa
+// thành công, rồi refresh lại thấy "không có tác dụng" dù KHÔNG có gì ghi đè/mất dữ liệu — đơn giản là
+// Firestore ĐÃ KHÔNG ĐƯỢC GHI từ đầu. Đổi sang modal phải bấm "Đã hiểu" mới tắt được, không tự mất.
+function _showBlockingAlert(title,message){
+  const _old=document.getElementById('blockAlertOv'); if(_old)_old.remove();
+  const ov=document.createElement('div');
+  ov.id='blockAlertOv';
+  ov.style.cssText='position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center';
+  ov.innerHTML='<div style="background:var(--bg-card,#fff);border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,.3);max-width:430px;width:90%;overflow:hidden">'
+    +'<div style="padding:18px 20px 12px;border-bottom:1px solid var(--border-light,#e5e7eb);display:flex;align-items:center;gap:10px">'
+    +'<i class="ti ti-alert-triangle" style="font-size:22px;color:#DC2626"></i>'
+    +'<div style="font-weight:700;font-size:15px;color:var(--text-primary)">'+(title||'Chưa thể lưu')+'</div></div>'
+    +'<div style="padding:16px 20px;font-size:13.5px;color:var(--text-secondary);line-height:1.6"><strong style="color:#DC2626">CHƯA LƯU ĐƯỢC</strong> — '+message+'</div>'
+    +'<div style="padding:12px 20px 18px;display:flex;justify-content:flex-end">'
+    +'<button id="_baOk" class="btn pri" style="min-width:110px">Đã hiểu</button>'
+    +'</div></div>';
+  document.body.appendChild(ov);
+  document.getElementById('_baOk').onclick=function(){ov.remove();};
+}
+window._showBlockingAlert=_showBlockingAlert;
+
 // Hiện modal cảnh báo chưa lưu, rồi gọi fn() để tiếp tục
 function _checkTabDirtyThenRun(fn){
   if(!window._tabDirty){fn();return;}
@@ -6604,7 +6629,7 @@ async function saveDetailSvc(){
   // không ai sửa được — đúng người có thể bổ sung NCC mới bị chặn lưu, tránh phá vỡ luồng lưu của cus.
   if(can('fillPrice')||can('viewCost')||can('svcCost')){
     const _scyErr=_scySvcRequirementError(r,svcs);
-    if(_scyErr){ toast(_scyErr,'error'); return; }
+    if(_scyErr){ _showBlockingAlert('Chưa thể lưu',_scyErr); return; }
   }
   // Guard lớp 2: nếu Fill giá đang khóa, CHỈ chặn khi có KEY MỚI HOÀN TOÀN xuất hiện (dịch vụ chưa
   // từng tồn tại trong lô này trước đó) — vì đây là thao tác DUY NHẤT sinh ra dòng mới chưa có giá ở
@@ -9768,7 +9793,7 @@ async function saveScyItems(){
   if(can('fillPrice')||can('viewCost')||can('svcCost')){
     const _rScy=cache[detailTt].find(function(x){return x._id===detailId;})||{};
     const _scyErr=_scySvcRequirementError(Object.assign({},_rScy,{scyItems:rows}));
-    if(_scyErr){ toast(_scyErr,'error'); return; }
+    if(_scyErr){ _showBlockingAlert('Chưa thể lưu',_scyErr); return; }
   }
   setLoading(true,'Đang lưu...');
   try{
@@ -22670,6 +22695,21 @@ function _calScyForDate(dateStr){
   });
   return rows;
 }
+// v4.83: giống _calScyForDate() nhưng lấy theo KHOẢNG NGÀY [dateFrom, dateTo] (cả 2 đầu) — dùng cho
+// nút "Báo lịch đóng hàng" ở SCY Report, không đổi/đụng gì tới _calScyForDate() đang dùng ở nơi khác.
+function _calScyForDateRange(dateFrom,dateTo){
+  const rows=[];
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      (r.scyItems||[]).forEach(function(scy){
+        if(scy && scy.date && scy.date>=dateFrom && scy.date<=dateTo){
+          rows.push(Object.assign({},scy,{_lotId:r._id,_tt:tt,_bookingNo:r.bookingNo||r.jobNo||'—',_shipper:r.shipper||r.supplier||'—'}));
+        }
+      });
+    });
+  });
+  return rows;
+}
 
 function _calDashboardStats(){
   const all=cache.calTasks||[], today=_calToday();
@@ -30756,6 +30796,7 @@ function renderScyReport(){
       +'<h2 style="font-size:16px;font-weight:700;margin:0">SCY Report — Đóng hàng tại bãi</h2>'
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lệnh</span>'
       +'<div style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">'
+        +'<button class="btn sm" onclick="openStuffingSchedulePicker()" title="Xem/copy lịch đóng hàng theo khoảng ngày Từ-Đến"><i class="ti ti-calendar-event"></i> Báo lịch đóng hàng</button>'
         +'<button class="btn sm" onclick="openPackingListPicker()" title="Xem/copy danh sách Cont/Seal đóng hàng theo ngày"><i class="ti ti-clipboard-list"></i> Packing List</button>'
         +'<button class="btn sm" onclick="openSaLanDeclarePicker()" title="Xuất file Excel khai báo phương tiện sà lan ra/vào theo ngày đóng hàng"><i class="ti ti-anchor"></i> Khai báo sà lan</button>'
         +'<button class="btn sm" onclick="scyReportExportExcel()" title="Xuất Excel (theo ETD đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
@@ -31717,6 +31758,59 @@ async function generateSaLanDeclareExcel(dateStr){
 window.generateSaLanDeclareExcel=generateSaLanDeclareExcel;
 // kèm đầy đủ Cont/Seal (lấy từ tab Cont/Seal của đúng lô hàng tương ứng). Gọn hơn Khai Eport: chỉ 1
 // bước chọn ngày rồi ra kết quả luôn, không cần mở từng lô.
+// v4.83: Nút "Báo lịch đóng hàng" ở SCY Report — chọn khoảng ngày đóng hàng Từ-Đến, liệt kê các lệnh
+// đóng bãi (SCY) có ngày đóng hàng trong khoảng đó, hiện nội dung copy được: Số booking - Hãng tàu -
+// Vol - Tên hàng - Ngày đóng hàng (mỗi lệnh SCY 1 dòng). Theo đúng mẫu openPackingListPicker() nhưng
+// chọn KHOẢNG NGÀY thay vì 1 ngày.
+function openStuffingSchedulePicker(){
+  const today=(typeof _calToday==='function')?_calToday():new Date().toISOString().slice(0,10);
+  g('eportOv').innerHTML=`
+  <div class="modal" style="max-width:340px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+    <div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-calendar-event" style="font-size:18px;color:#e8f0fe"></i>
+      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">Báo lịch đóng hàng</div>
+      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:18px;background:var(--bg-secondary)">
+      <label class="lbl" style="display:block;margin-bottom:6px">Ngày đóng hàng — Từ</label>
+      <input type="date" id="stuffSchedFrom" value="${today}" style="width:100%;font-size:13px;margin-bottom:12px"/>
+      <label class="lbl" style="display:block;margin-bottom:6px">Đến</label>
+      <input type="date" id="stuffSchedTo" value="${today}" style="width:100%;font-size:13px;margin-bottom:14px"/>
+      <button class="btn pri" style="width:100%;background:#1a4b8c;border-color:#1a4b8c" onclick="generateStuffingSchedule(g('stuffSchedFrom').value,g('stuffSchedTo').value)"><i class="ti ti-search"></i> Xem lịch đóng hàng</button>
+    </div>
+  </div>`;
+  openOv('eportOv');
+}
+window.openStuffingSchedulePicker=openStuffingSchedulePicker;
+
+function generateStuffingSchedule(dateFrom,dateTo){
+  if(!dateFrom||!dateTo){toast('Chọn đủ khoảng ngày Từ-Đến','error');return;}
+  if(dateFrom>dateTo){ const t=dateFrom; dateFrom=dateTo; dateTo=t; } // tự đổi lại nếu chọn ngược
+  const scyRows=_calScyForDateRange(dateFrom,dateTo);
+  const title='Lịch đóng hàng — '+fd(dateFrom)+' → '+fd(dateTo);
+  if(!scyRows.length){
+    showEportModal(title, '(Không có lệnh đóng hàng nào trong khoảng '+fd(dateFrom)+' → '+fd(dateTo)+')');
+    return;
+  }
+  // Sắp theo ngày đóng hàng tăng dần (lịch làm việc), cùng ngày thì theo booking cho ổn định
+  scyRows.sort(function(a,b){
+    if(a.date!==b.date) return a.date<b.date?-1:1;
+    return (a.bookingNo||a._bookingNo||'').localeCompare(b.bookingNo||b._bookingNo||'');
+  });
+  const lines=scyRows.map(function(scy){
+    const r=(cache[scy._tt]||[]).find(function(x){return x._id===scy._lotId;})||{};
+    const bookingNo=scy.bookingNo||scy._bookingNo||'—';
+    const carrier=r.carrier||'—';
+    const vol=scy.vol||r.vol||'—';
+    const tenHang=r.tenHang||'—';
+    const dateDisp=fd(scy.date);
+    return bookingNo+' - '+carrier+' - '+vol+' - '+tenHang+' - '+dateDisp;
+  });
+  const text=title+'\n------------------\n'+lines.join('\n');
+  showEportModal(title+' ('+scyRows.length+' lệnh)', text);
+}
+window.generateStuffingSchedule=generateStuffingSchedule;
+
 function openPackingListPicker(){
   const today=(typeof _calToday==='function')?_calToday():new Date().toISOString().slice(0,10);
   g('eportOv').innerHTML=`
