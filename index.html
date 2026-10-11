@@ -1216,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.84';
+window.APP_BUILD='v4.85';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -31758,10 +31758,29 @@ async function generateSaLanDeclareExcel(dateStr){
 window.generateSaLanDeclareExcel=generateSaLanDeclareExcel;
 // kèm đầy đủ Cont/Seal (lấy từ tab Cont/Seal của đúng lô hàng tương ứng). Gọn hơn Khai Eport: chỉ 1
 // bước chọn ngày rồi ra kết quả luôn, không cần mở từng lô.
-// v4.83: Nút "Báo lịch đóng hàng" ở SCY Report — chọn khoảng ngày đóng hàng Từ-Đến, liệt kê các lệnh
-// đóng bãi (SCY) có ngày đóng hàng trong khoảng đó, hiện nội dung copy được: Số booking - Hãng tàu -
-// Vol - Tên hàng - Ngày đóng hàng (mỗi lệnh SCY 1 dòng). Theo đúng mẫu openPackingListPicker() nhưng
-// chọn KHOẢNG NGÀY thay vì 1 ngày.
+// v4.84: Nút "Báo lịch đóng hàng" ở SCY Report — chọn khoảng ngày đóng hàng Từ-Đến, liệt kê các lệnh
+// đóng bãi (SCY) có ngày đóng hàng trong khoảng đó, hiện nội dung copy được theo mẫu:
+//   Lịch đóng hàng | Công ty Coco Sea — dd-mm-yyyy → dd-mm-yyyy
+//   ------------------
+//   Thứ X, ngày dd-mm-yyyy: Số booking - Hãng tàu - VolxType - Tên hàng
+//   ------------------
+// (mỗi lệnh SCY 1 dòng, kèm Thứ trong tuần). Theo đúng mẫu openPackingListPicker() nhưng chọn KHOẢNG
+// NGÀY thay vì 1 ngày.
+const _VN_WEEKDAY=['Chủ nhật','Thứ 2','Thứ 3','Thứ 4','Thứ 5','Thứ 6','Thứ 7'];
+function _dmyNum(dateStr){
+  if(!dateStr)return '';
+  const d=new Date(dateStr+'T00:00:00');
+  if(isNaN(d))return dateStr;
+  const dd=String(d.getDate()).padStart(2,'0');
+  const mm=String(d.getMonth()+1).padStart(2,'0');
+  return dd+'-'+mm+'-'+d.getFullYear();
+}
+function _vnWeekdayDMY(dateStr){
+  if(!dateStr)return '';
+  const d=new Date(dateStr+'T00:00:00');
+  if(isNaN(d))return dateStr;
+  return (_VN_WEEKDAY[d.getDay()]||'')+', ngày '+_dmyNum(dateStr);
+}
 function openStuffingSchedulePicker(){
   const today=(typeof _calToday==='function')?_calToday():new Date().toISOString().slice(0,10);
   g('eportOv').innerHTML=`
@@ -31787,9 +31806,9 @@ function generateStuffingSchedule(dateFrom,dateTo){
   if(!dateFrom||!dateTo){toast('Chọn đủ khoảng ngày Từ-Đến','error');return;}
   if(dateFrom>dateTo){ const t=dateFrom; dateFrom=dateTo; dateTo=t; } // tự đổi lại nếu chọn ngược
   const scyRows=_calScyForDateRange(dateFrom,dateTo);
-  const title='Lịch đóng hàng — '+fd(dateFrom)+' → '+fd(dateTo);
+  const title='Lịch đóng hàng | Công ty Coco Sea — '+_dmyNum(dateFrom)+' → '+_dmyNum(dateTo);
   if(!scyRows.length){
-    showEportModal(title, '(Không có lệnh đóng hàng nào trong khoảng '+fd(dateFrom)+' → '+fd(dateTo)+')');
+    showEportModal(title, title+'\n------------------\n(Không có lệnh đóng hàng nào trong khoảng đã chọn)\n------------------');
     return;
   }
   // Sắp theo ngày đóng hàng tăng dần (lịch làm việc), cùng ngày thì theo booking cho ổn định
@@ -31802,11 +31821,12 @@ function generateStuffingSchedule(dateFrom,dateTo){
     const bookingNo=scy.bookingNo||scy._bookingNo||'—';
     const carrier=r.carrier||'—';
     const vol=scy.vol||r.vol||'—';
+    const typeCont=scy.typeCont||r.typeCont||'';
+    const volDisp=typeCont?(vol+'x'+typeCont):vol;
     const tenHang=r.tenHang||'—';
-    const dateDisp=fd(scy.date);
-    return bookingNo+' - '+carrier+' - '+vol+' - '+tenHang+' - '+dateDisp;
+    return _vnWeekdayDMY(scy.date)+': '+bookingNo+' - '+carrier+' - '+volDisp+' - '+tenHang;
   });
-  const text=title+'\n------------------\n'+lines.join('\n');
+  const text=title+'\n------------------\n'+lines.join('\n')+'\n------------------';
   showEportModal(title+' ('+scyRows.length+' lệnh)', text);
 }
 window.generateStuffingSchedule=generateStuffingSchedule;
