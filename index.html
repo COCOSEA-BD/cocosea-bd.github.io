@@ -1216,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.85';
+window.APP_BUILD='v4.86';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6643,6 +6643,9 @@ async function saveDetailSvc(){
     }
   }
   const updatePayload={svcs:svcs,updatedAt:Date.now(),updatedBy:currentUser.email};
+  // v4.86: tick/bỏ tick cột Finish ở tab Dịch vụ cũng có thể làm đủ/thiếu chứng từ theo dõi → cập nhật hoàn thành
+  const _svcDonePatch=_docTrackDonePatch(r,svcs,r.docTrackKeys,r.docTrackEnabled);
+  Object.assign(updatePayload,_svcDonePatch);
   // Xây dựng diff CHI TIẾT các thay đổi dịch vụ (bật/tắt, đổi giá, đổi NCC, xóa) để ghi rõ vào Lịch sử
   const svcDiffLines=[];
   Object.keys(svcs).forEach(function(k){
@@ -6674,7 +6677,7 @@ async function saveDetailSvc(){
     logLotEvent(_svcId,_svcTt,'svc','Cập nhật dịch vụ',svcDetailText);
     // Cập nhật cache NGAY (listener Firestore là async) để re-render không bị khôi phục dịch vụ đã xóa
     const ci=cache[_svcTt].findIndex(x=>x._id===_svcId);
-    if(ci>=0){ cache[_svcTt][ci].svcs=svcs; }
+    if(ci>=0){ cache[_svcTt][ci].svcs=svcs; Object.assign(cache[_svcTt][ci],_svcDonePatch); }
     // Chỉ render lại panel nếu người dùng VẪN đang xem đúng lô này — nếu đã chuyển sang lô khác
     // trong lúc lưu, không ghi đè lên những gì họ đang xem hiện tại.
     if(detailId===_svcId && detailTt===_svcTt){
@@ -11082,6 +11085,177 @@ async function _prLoad(y,m){
   }catch(e){ console.warn('payroll load',e); return {rows:[]}; }
 }
 
+/* ───────────────────────────────────────────────────────────────
+   v4.86: BẢNG PHỤ CẤP TRÁCH NHIỆM (đồng bộ cột TN) + THƯỞNG TIẾN ĐỘ CHỨNG TỪ
+   • Dòng đầu = "Thưởng tiến độ chứng từ": 50,000đ (admin chỉnh được, lưu theo từng tháng lương) × số lô ĐẠT.
+   • Lô ĐẠT = đã hoàn thành chứng từ (docDoneDate) có ngày hoàn thành <= ETD + 4 ngày. > ETD+4 = không đạt.
+   • Lô thuộc tháng lương theo tháng của ETD; tính cho nhân viên (email) là người hoàn thành (docDoneBy).
+   • Cột TN (phuCapTrachNhiem) = thưởng chứng từ + các khoản phụ cấp trách nhiệm khác (tnItems) — luôn được tính lại
+     từ bảng này nên mọi nơi đang đọc phuCapTrachNhiem (tổng lương, KPI, Excel, báo cáo) tự đồng bộ, không đổi công thức.
+─────────────────────────────────────────────────────────────── */
+const _PR_DOC_BONUS_DEFAULT=50000;
+const _PR_DOC_DAYS=4; // mốc ETD + 4 ngày
+window._prRate=(window._prRate==null)?_PR_DOC_BONUS_DEFAULT:window._prRate;
+function _prAddDaysStr(s,n){ const d=new Date(s+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
+function _prDmy(s){ return s?String(s).split('-').reverse().join('-'):'—'; }
+function _prDayDiff(a,b){ return Math.round((new Date(a+'T00:00:00Z')-new Date(b+'T00:00:00Z'))/86400000); }
+// Các lô có bật theo dõi chứng từ và ETD thuộc tháng y/m (cả xuất lẫn nhập)
+function _prDocLotsForMonth(y,m){
+  const ym=y+'-'+String(m).padStart(2,'0');
+  const out=[];
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      if(!r.docTrackEnabled||!(r.docTrackKeys||[]).length)return;
+      if(!r.etd||String(r.etd).slice(0,7)!==ym)return;
+      const limit=_prAddDaysStr(r.etd,_PR_DOC_DAYS);
+      const done=r.docDoneDate||'';
+      out.push({id:r._id,tt:tt,label:r.bookingNo||r.jobNo||'—',etd:r.etd,limit:limit,doneDate:done,
+        doneBy:(r.docDoneBy||'').toLowerCase(),ok:!!done&&done<=limit,late:!!done&&done>limit,pending:!done});
+    });
+  });
+  return out;
+}
+function _prEmpEmail(row){
+  const u=(cache.users||[]).find(function(x){return (x.uid||x._docId)===row.uid;});
+  return ((u&&u.email)||row.email||'').toLowerCase();
+}
+function _prDocBonusCalc(row,lots){
+  const em=_prEmpEmail(row);
+  const mine=em?lots.filter(function(l){return l.doneBy===em;}):[];
+  const ok=mine.filter(function(l){return l.ok;});
+  const late=mine.filter(function(l){return l.late;});
+  return {ok:ok,late:late,count:ok.length,amount:ok.length*(parseFloat(window._prRate)||0)};
+}
+// Tính lại TN cho mọi dòng: TN = thưởng chứng từ + tổng các khoản khác. Gọi trước mỗi lần vẽ bảng / lưu.
+function _prSyncAllTn(){
+  const st=window._prState;
+  const lots=_prDocLotsForMonth(st.year,st.month);
+  window._prLots=lots;
+  (window._prRows||[]).forEach(function(r){
+    if(!Array.isArray(r.tnItems)){
+      // Dữ liệu cũ: TN từng nhập tay 1 số → giữ lại thành 1 khoản "nhập trước đây", không làm mất tiền
+      const old=parseFloat(r.phuCapTrachNhiem)||0;
+      r.tnItems=old>0?[{label:'Phụ cấp trách nhiệm (nhập trước đây)',amount:old}]:[];
+    }
+    const d=_prDocBonusCalc(r,lots);
+    r.tnDocCount=d.count; r.tnDocAmount=d.amount;
+    const extra=r.tnItems.reduce(function(s,it){return s+(parseFloat(it.amount)||0);},0);
+    r.phuCapTrachNhiem=d.amount+extra;
+  });
+}
+function _prIsAdmin(){ return currentProfile&&currentProfile.role==='admin'; }
+function _prSetRate(v){
+  if(!_prIsAdmin()){toast('Chỉ admin được chỉnh mức thưởng','error');return;}
+  const n=parseFloat(v);
+  if(isNaN(n)||n<0){toast('Mức thưởng không hợp lệ','error');return;}
+  window._prRate=n;
+  _prRenderTable();
+  if(g('prTnOv')&&g('prTnOv').classList.contains('open'))_prTnDraw();
+  toast('Đã đổi mức thưởng — nhớ bấm Lưu để ghi vào bảng lương tháng này');
+}
+window._prSetRate=_prSetRate;
+// Bảng tóm tắt phụ cấp trách nhiệm theo nhân viên (dưới bảng lương)
+function _prTnSummaryHTML(rows){
+  const lots=window._prLots||[];
+  const pending=lots.filter(function(l){return l.pending;}).length;
+  const emails=(window._prRows||[]).map(_prEmpEmail);
+  const orphan=lots.filter(function(l){return l.doneBy&&emails.indexOf(l.doneBy)<0;}).length;
+  const rate=parseFloat(window._prRate)||0;
+  const rateCtl=_prIsAdmin()
+    ?'<input type="number" min="0" step="1000" value="'+rate+'" onchange="_prSetRate(this.value)" style="width:90px;font-size:12px;text-align:right" title="Chỉ admin chỉnh được"/>'
+    :'<b>'+_prFmt(rate)+'</b>';
+  const body=rows.map(function(r,i){
+    const realIdx=window._prRows.indexOf(r);
+    const extra=(r.tnItems||[]).reduce(function(s,it){return s+(parseFloat(it.amount)||0);},0);
+    return '<tr class="pr-tr">'
+      +'<td class="pr-td" style="text-align:center;font-size:11px;color:var(--text-secondary)">'+(i+1)+'</td>'
+      +'<td class="pr-td"><b style="font-size:12.5px">'+(r.name||'—')+'</b></td>'
+      +'<td class="pr-td-r">'+(r.tnDocCount||0)+' lô × '+_prFmt(rate)+' = <b>'+_prFmt(r.tnDocAmount||0)+'</b></td>'
+      +'<td class="pr-td-r">'+_prFmt(extra)+'</td>'
+      +'<td class="pr-td-r pr-col-allow" style="font-weight:800">'+_prFmt(r.phuCapTrachNhiem||0)+'</td>'
+      +'<td class="pr-td" style="text-align:center"><button class="btn sm" onclick="_prOpenTn('+realIdx+')"><i class="ti ti-list-details"></i> Chi tiết</button></td>'
+      +'</tr>';
+  }).join('');
+  return '<div style="margin-top:14px;border-top:1px solid var(--border-light)">'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:.7rem 1rem;background:var(--bg-secondary)">'
+      +'<i class="ti ti-award" style="color:#C99A3C;font-size:18px"></i>'
+      +'<b style="font-size:13px">Bảng phụ cấp trách nhiệm</b>'
+      +'<span style="font-size:11.5px;color:var(--text-secondary)">đồng bộ cột TN · mốc ETD +'+_PR_DOC_DAYS+' ngày</span>'
+      +'<div style="flex:1"></div>'
+      +'<span style="font-size:12px">Thưởng tiến độ chứng từ / lô đạt: '+rateCtl+' đ</span>'
+    +'</div>'
+    +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:640px"><thead><tr>'
+      +'<th class="pr-th" style="width:36px">#</th><th class="pr-th" style="text-align:left">Nhân viên</th>'
+      +'<th class="pr-th">1 · Thưởng tiến độ chứng từ</th><th class="pr-th">Khoản khác</th><th class="pr-th">Tổng TN</th><th class="pr-th"></th>'
+    +'</tr></thead><tbody>'+(body||'<tr><td colspan="6" class="pr-td" style="text-align:center;padding:1.2rem;color:var(--text-secondary)">Chưa có nhân viên</td></tr>')+'</tbody></table></div>'
+    +'<div style="font-size:11px;color:var(--text-secondary);padding:.5rem 1rem"><i class="ti ti-info-circle"></i> Lô đạt = hoàn thành chứng từ trong vòng ETD +'+_PR_DOC_DAYS+' ngày; tính theo tháng của ETD, cho người bấm tick hoàn thành. '
+      +'Tháng này có <b>'+pending+'</b> lô đang theo dõi chưa hoàn thành (chưa tính)'+(orphan?' · <b>'+orphan+'</b> lô do người chưa có trong bảng lương hoàn thành':'')+'.</div>'
+  +'</div>';
+}
+// Popup chi tiết phụ cấp trách nhiệm của 1 nhân viên
+function _prOpenTn(idx){
+  if(!window._prRows||!window._prRows[idx])return;
+  window._prTnIdx=idx;
+  let ov=g('prTnOv');
+  if(!ov){ov=document.createElement('div');ov.id='prTnOv';ov.className='ov';ov.style.padding='.75rem';document.body.appendChild(ov);}
+  _prTnDraw();
+  openOv('prTnOv');
+}
+window._prOpenTn=_prOpenTn;
+function _prTnLotTable(list,okFlag){
+  if(!list.length)return '<div style="padding:.6rem .8rem;font-size:12px;color:var(--text-secondary)">Không có lô nào.</div>';
+  return '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
+    +['Booking / Job','ETD','Hạn (ETD+'+_PR_DOC_DAYS+')','Hoàn thành','Chênh lệch'].map(function(h){return '<th class="pr-th" style="font-size:9px">'+h+'</th>';}).join('')
+    +'</tr></thead><tbody>'
+    +list.map(function(l){
+      const d=_prDayDiff(l.doneDate,l.limit);
+      const txt=d<=0?(d===0?'đúng hạn':'sớm '+(-d)+' ngày'):'trễ '+d+' ngày';
+      return '<tr><td class="pr-td">'+l.label+'</td><td class="pr-td" style="text-align:center">'+_prDmy(l.etd)+'</td><td class="pr-td" style="text-align:center">'+_prDmy(l.limit)+'</td>'
+        +'<td class="pr-td" style="text-align:center">'+_prDmy(l.doneDate)+'</td><td class="pr-td" style="text-align:center;font-weight:700;color:'+(okFlag?'#16A34A':'#DC2626')+'">'+txt+'</td></tr>';
+    }).join('')+'</tbody></table>';
+}
+function _prTnDraw(){
+  const r=(window._prRows||[])[window._prTnIdx]; const ov=g('prTnOv'); if(!r||!ov)return;
+  _prSyncAllTn();
+  const st=window._prState;
+  const d=_prDocBonusCalc(r,window._prLots||[]);
+  const rate=parseFloat(window._prRate)||0;
+  const items=(r.tnItems||[]).map(function(it,i){
+    return '<tr><td class="pr-td" style="text-align:center;color:var(--text-secondary)">'+(i+2)+'</td>'
+      +'<td class="pr-td"><input type="text" value="'+String(it.label||'').replace(/"/g,'&quot;')+'" placeholder="Tên khoản phụ cấp" oninput="_prTnEditLine('+i+',\'label\',this.value)" style="width:100%;font-size:12px;border:none;background:transparent"/></td>'
+      +'<td class="pr-td-r"><input type="number" value="'+(parseFloat(it.amount)||0)+'" oninput="_prTnEditLine('+i+',\'amount\',this.value)" style="width:110px;font-size:12px;text-align:right;border:none;background:transparent"/></td>'
+      +'<td class="pr-td" style="text-align:center"><button class="rac red" onclick="_prTnDel('+i+')"><i class="ti ti-trash"></i></button></td></tr>';
+  }).join('');
+  ov.innerHTML='<div class="modal" style="max-width:720px;max-height:92vh;overflow-y:auto">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-award" style="margin-right:6px;color:#C99A3C"></i>Phụ cấp trách nhiệm — '+(r.name||'')+'</div>'
+    +'<div class="msub">Bảng lương tháng '+st.month+'/'+st.year+' · đồng bộ cột TN</div></div>'
+    +'<div class="mhdr-btns"><button class="rac" onclick="_prTnClose()"><i class="ti ti-x"></i></button></div></div>'
+    +'<div style="padding:12px 16px">'
+      +'<table style="width:100%;border-collapse:collapse"><thead><tr><th class="pr-th" style="width:36px">#</th><th class="pr-th" style="text-align:left">Khoản phụ cấp</th><th class="pr-th">Số tiền (đ)</th><th class="pr-th" style="width:40px"></th></tr></thead><tbody>'
+      +'<tr style="background:rgba(201,154,60,.08)"><td class="pr-td" style="text-align:center;font-weight:700">1</td>'
+        +'<td class="pr-td"><b>Thưởng tiến độ chứng từ</b><div style="font-size:11px;color:var(--text-secondary)">'+d.count+' lô đạt (≤ ETD+'+_PR_DOC_DAYS+') × '+_prFmt(rate)+' đ — tự động, không sửa tay</div></td>'
+        +'<td class="pr-td-r" style="font-weight:800">'+_prFmt(d.amount)+'</td><td class="pr-td"></td></tr>'
+      +items
+      +'</tbody></table>'
+      +'<div style="display:flex;align-items:center;gap:8px;margin-top:8px"><button class="btn sm" onclick="_prTnAdd()"><i class="ti ti-plus"></i> Thêm khoản phụ cấp</button><div style="flex:1"></div>'
+        +'<span style="font-size:13px">Tổng TN: <b id="prTnTotal" style="color:#14B8A6;font-size:15px">'+_prFmt(r.phuCapTrachNhiem||0)+'</b> đ</span></div>'
+      +'<div style="margin-top:14px"><div style="font-weight:700;font-size:12.5px;color:#16A34A;margin:0 0 4px"><i class="ti ti-circle-check"></i> Lô đạt — hoàn thành ≤ ETD +'+_PR_DOC_DAYS+' ngày ('+d.ok.length+')</div>'+_prTnLotTable(d.ok,true)+'</div>'
+      +'<div style="margin-top:12px"><div style="font-weight:700;font-size:12.5px;color:#DC2626;margin:0 0 4px"><i class="ti ti-alert-circle"></i> Lô không đạt — hoàn thành > ETD +'+_PR_DOC_DAYS+' ngày ('+d.late.length+')</div>'+_prTnLotTable(d.late,false)+'</div>'
+    +'</div>'
+    +'<div class="mftr"><span style="margin-right:auto;font-size:11px;color:var(--text-secondary)">Bấm <b>Lưu</b> ở bảng lương để ghi lại.</span><button class="btn pri" onclick="_prTnClose()">Xong</button></div>'
+  +'</div>';
+}
+function _prTnEditLine(i,field,val){
+  const r=(window._prRows||[])[window._prTnIdx]; if(!r||!r.tnItems||!r.tnItems[i])return;
+  r.tnItems[i][field]=(field==='amount')?(parseFloat(val)||0):val;
+  _prSyncAllTn();
+  const t=g('prTnTotal'); if(t)t.textContent=_prFmt(r.phuCapTrachNhiem||0);
+}
+function _prTnAdd(){ const r=(window._prRows||[])[window._prTnIdx]; if(!r)return; (r.tnItems=r.tnItems||[]).push({label:'',amount:0}); _prTnDraw(); }
+function _prTnDel(i){ const r=(window._prRows||[])[window._prTnIdx]; if(!r||!r.tnItems)return; r.tnItems.splice(i,1); _prTnDraw(); }
+function _prTnClose(){ closeOv('prTnOv'); _prRenderTable(); }
+window._prTnEditLine=_prTnEditLine; window._prTnAdd=_prTnAdd; window._prTnDel=_prTnDel; window._prTnClose=_prTnClose;
+
 function renderTcPayroll(){
   window._prActiveTab=window._prActiveTab||'list';
   // Reset active tab nếu đang ở tab cũ không còn tồn tại
@@ -11166,6 +11340,7 @@ async function _tcPayrollAfterRender(){
   const st=window._prState;
   const data=await _prLoad(st.year,st.month);
   window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
+  window._prRate=(data.docBonusRate!=null)?data.docBonusRate:_PR_DOC_BONUS_DEFAULT;
   await _prLoadTabContent(window._prActiveTab||'list');
 }
 window._prLoadTabContent=async function(tab){
@@ -11176,6 +11351,7 @@ window._prLoadTabContent=async function(tab){
     const st=window._prState;
     const data=await _prLoad(st.year,st.month);
     window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
+    window._prRate=(data.docBonusRate!=null)?data.docBonusRate:_PR_DOC_BONUS_DEFAULT;
     el.innerHTML=_prListTabHTML();
     _prRenderKpis();
     _prRenderTable();
@@ -11448,6 +11624,7 @@ async function _prRenderReport(){
 
 function _prRenderTable(){
   const wrap=g('prTableWrap'); if(!wrap)return;
+  _prSyncAllTn(); // v4.86: TN = thưởng tiến độ chứng từ + phụ cấp trách nhiệm khác (xem bảng phụ cấp bên dưới)
   const st=window._prState;
   let rows=window._prRows||[];
   if(st.emp) rows=rows.filter(function(r){return r.uid===st.emp;});
@@ -11492,7 +11669,7 @@ function _prRenderTable(){
       +'<td class="pr-td-r"><input type="number" value="'+real+'" onchange="_prEdit('+realIdx+',\'realManual\',this.value)" style="'+inpSty+';width:90px;text-align:right;color:#3B82F6;font-weight:700" title="Lương thực tế (sửa được)"/></td>'
       +'<td class="pr-td-r pr-col-allow"><input type="number" value="'+anTrua+'" onchange="_prEdit('+realIdx+',\'phuCapAnTrua\',this.value)" style="'+inpSty+';width:68px;text-align:right"/></td>'
       +'<td class="pr-td-r pr-col-allow"><input type="number" value="'+dienThoai+'" onchange="_prEdit('+realIdx+',\'phuCapDienThoai\',this.value)" style="'+inpSty+';width:68px;text-align:right"/></td>'
-      +'<td class="pr-td-r pr-col-allow"><input type="number" value="'+trachNhiem+'" onchange="_prEdit('+realIdx+',\'phuCapTrachNhiem\',this.value)" style="'+inpSty+';width:68px;text-align:right"/></td>'
+      +'<td class="pr-td-r pr-col-allow"><button onclick="_prOpenTn('+realIdx+')" title="Xem/sửa chi tiết phụ cấp trách nhiệm (đồng bộ bảng phụ cấp)" style="border:none;background:transparent;cursor:pointer;width:100%;text-align:right;font-size:11.5px;font-weight:700;color:#0F766E;font-variant-numeric:tabular-nums;padding:0">'+_prFmt(trachNhiem)+' <i class="ti ti-list-details" style="font-size:11px;opacity:.6"></i></button></td>'
       +'<td class="pr-td-r pr-col-total" style="font-weight:700;color:var(--text-primary)">'+_prFmt(tongLuong)+'</td>'
       +'<td class="pr-td-r pr-col-deduct"><input type="number" value="'+(bhxh||'')+'" placeholder="0" '+(hasBH?'':'disabled')+' onchange="_prEdit('+realIdx+',\'bhxhManual\',this.value)" style="'+inpSty+';width:74px;text-align:right;color:#EF4444" title="BHXH — tự nhập số tiền"/></td>'
       +'<td class="pr-td-r pr-col-deduct"><input type="number" value="'+(bhyt||'')+'" placeholder="0" '+(hasBH?'':'disabled')+' onchange="_prEdit('+realIdx+',\'bhytManual\',this.value)" style="'+inpSty+';width:70px;text-align:right;color:#EF4444" title="BHYT — tự nhập số tiền"/></td>'
@@ -11550,7 +11727,8 @@ function _prRenderTable(){
     +'<tbody>'+(bodyRows||emptyRow)+'</tbody>'
     +tfootRow
     +'</table>'
-    +'</div>';
+    +'</div>'
+    +_prTnSummaryHTML(rows);
 
   // Cập nhật KPI cards sau khi render
   _prRenderKpis();
@@ -11619,7 +11797,8 @@ async function _prSave(){
   const id=_prDocId(st.year,st.month);
   setLoading(true,'Đang lưu bảng lương...');
   try{
-    const data={month:st.month,year:st.year,rows:window._prRows||[],updatedAt:Date.now()};
+    _prSyncAllTn();
+    const data={month:st.month,year:st.year,rows:window._prRows||[],docBonusRate:parseFloat(window._prRate)||0,updatedAt:Date.now()};
     await fsSet('payroll',id,data);
     window._prCache[id]=data;
     toast('Đã lưu bảng lương tháng '+st.month+'/'+st.year);
@@ -25791,6 +25970,24 @@ function _docTrackSentKeys(r){
 function _docTrackSvcInfo(key){
   return SVCS.find(function(s){return s.key===key;})||{key:key,name:key,code:(key||'').slice(0,3).toUpperCase()};
 }
+// v4.86: HOÀN THÀNH tiến độ chứng từ — khi TẤT CẢ chứng từ trong danh sách theo dõi đều được tick "đã gửi",
+// tự ghi docDoneDate (ngày hoàn thành, yyyy-mm-dd), docDoneAt (mốc thời gian) và docDoneBy (email user vừa tick
+// chứng từ cuối cùng). Bỏ tick / thêm chứng từ mới chưa tick / tắt theo dõi → xóa (về rỗng). Chỉ THÊM field mới
+// trên lô, không đổi field cũ. Trả về object patch ({} nếu không có gì đổi) để gộp vào payload fsSet sẵn có.
+// Dữ liệu này là nguồn cho "Thưởng tiến độ chứng từ" ở Finance/Payroll (xem _prDocLotsForMonth).
+function _docTrackDonePatch(r, svcs, keys, enabled){
+  const list=keys||[];
+  const sv=svcs||{};
+  const complete=!!enabled && list.length>0 && list.every(function(k){return sv[k]&&sv[k].finish;});
+  const wasDone=!!r.docDoneDate;
+  if(complete && !wasDone){
+    return {docDoneDate:_calFmtDate(new Date()), docDoneAt:Date.now(), docDoneBy:(currentUser&&currentUser.email)||''};
+  }
+  if(!complete && wasDone){
+    return {docDoneDate:'', docDoneAt:0, docDoneBy:''};
+  }
+  return {};
+}
 
 async function toggleDocTrackEnabled(id, tt, checked){
   if(!can('editLot')){toast('Không có quyền','error');return;}
@@ -25815,6 +26012,7 @@ async function toggleDocTrackEnabled(id, tt, checked){
       const svcs=r.svcs||{};
       payload.docTrackKeys=_docTrackDefaultKeys().filter(function(k){return svcs[k]&&svcs[k].on;});
     }
+    Object.assign(payload,_docTrackDonePatch(r,r.svcs,payload.docTrackKeys||r.docTrackKeys,checked));
     await fsSet(colName(tt),id,payload);
     const idx=cache[tt].findIndex(x=>x._id===id);
     if(idx>=0)Object.assign(cache[tt][idx],payload);
@@ -25857,6 +26055,9 @@ function openDocTrackPopup(id, tt){
         +'<div id="docTrackList" style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-bottom:8px">'
           +(rows||'<div style="padding:1rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có chứng từ nào trong danh sách theo dõi.</div>')
         +'</div>'
+        +(r.docDoneDate
+          ?'<div style="display:flex;align-items:center;gap:8px;padding:.55rem .8rem;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:8px;margin-bottom:8px;font-size:12px;color:#166534"><i class="ti ti-circle-check" style="font-size:16px"></i><span><b>Đã hoàn thành</b> ngày '+r.docDoneDate.split('-').reverse().join('-')+' — bởi '+(r.docDoneBy||'—')+(r.etd?' <span style="opacity:.8">(ETD '+r.etd.split('-').reverse().join('-')+')</span>':'')+'</span></div>'
+          :'')
         +'<button class="btn" data-id="'+id+'" data-tt="'+tt+'" onclick="openDocTrackAddPicker(this.dataset.id,this.dataset.tt)"><i class="ti ti-plus"></i> Thêm chứng từ khác</button>'
       +'</div>'
     +'</div>'
@@ -25882,9 +26083,11 @@ async function toggleDocSent(id, tt, key, checked){
     const prev=svcs[key]||{};
     // Khi đánh dấu đã gửi mà dịch vụ chưa "on" (chưa từng bật ở tab Dịch vụ) → tự bật luôn cho nhất quán
     svcs[key]=Object.assign({},prev,{on:checked?true:prev.on, finish:checked});
-    await fsSet(colName(tt),id,{svcs:svcs,updatedAt:Date.now()});
+    const _donePatch=_docTrackDonePatch(r,svcs,r.docTrackKeys,r.docTrackEnabled);
+    await fsSet(colName(tt),id,Object.assign({svcs:svcs,updatedAt:Date.now()},_donePatch));
     const idx=cache[tt].findIndex(x=>x._id===id);
-    if(idx>=0)cache[tt][idx].svcs=svcs;
+    if(idx>=0){cache[tt][idx].svcs=svcs;Object.assign(cache[tt][idx],_donePatch);}
+    if(_donePatch.docDoneDate)toast('Đã hoàn thành tiến độ chứng từ — ngày '+_donePatch.docDoneDate.split('-').reverse().join('-'));
     renderLotTable(tt);
     computeShipmentKpis(tt);
     if(g('docTrackOv')&&g('docTrackOv').classList.contains('open'))openDocTrackPopup(id,tt);
@@ -25899,9 +26102,10 @@ async function removeDocTrackItem(id, tt, key){
   try{
     const r=cache[tt].find(x=>x._id===id)||{};
     const newKeys=(r.docTrackKeys||[]).filter(function(k){return k!==key;});
-    await fsSet(colName(tt),id,{docTrackKeys:newKeys,updatedAt:Date.now()});
+    const _donePatch=_docTrackDonePatch(r,r.svcs,newKeys,r.docTrackEnabled);
+    await fsSet(colName(tt),id,Object.assign({docTrackKeys:newKeys,updatedAt:Date.now()},_donePatch));
     const idx=cache[tt].findIndex(x=>x._id===id);
-    if(idx>=0)cache[tt][idx].docTrackKeys=newKeys;
+    if(idx>=0){cache[tt][idx].docTrackKeys=newKeys;Object.assign(cache[tt][idx],_donePatch);}
     renderLotTable(tt);
     computeShipmentKpis(tt);
     if(g('docTrackOv')&&g('docTrackOv').classList.contains('open'))openDocTrackPopup(id,tt);
@@ -25978,9 +26182,10 @@ async function doAddDocTrackKey(id, tt, key){
     }
     const r=cache[tt].find(x=>x._id===id)||{};
     const newKeys=(r.docTrackKeys||[]).concat([realKey]);
-    await fsSet(colName(tt),id,{docTrackKeys:newKeys,updatedAt:Date.now()});
+    const _donePatch=_docTrackDonePatch(r,r.svcs,newKeys,r.docTrackEnabled);
+    await fsSet(colName(tt),id,Object.assign({docTrackKeys:newKeys,updatedAt:Date.now()},_donePatch));
     const idx=cache[tt].findIndex(x=>x._id===id);
-    if(idx>=0)cache[tt][idx].docTrackKeys=newKeys;
+    if(idx>=0){cache[tt][idx].docTrackKeys=newKeys;Object.assign(cache[tt][idx],_donePatch);}
     closeOv('docTrackAddOv');
     renderLotTable(tt);
     computeShipmentKpis(tt);
