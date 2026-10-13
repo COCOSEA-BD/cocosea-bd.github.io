@@ -1216,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.87';
+window.APP_BUILD='v4.89';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1479,6 +1479,7 @@ auth.onAuthStateChanged(async (user) => {
               role:currentProfile.role||'viewer',
               avatar:currentProfile.avatar||'',
               emailSignature:currentProfile.emailSignature||'',
+              companyEmail:currentProfile.companyEmail||'',
               active:currentProfile.active!==false,
               migratedAt:Date.now()
             };
@@ -2662,7 +2663,7 @@ function _homeStats(){
   const rows=cache.xuat||[];
   const total=rows.length;
   const pending=rows.filter(function(r){return !r.locked;}).length;
-  const vstNeed=rows.filter(function(r){return r.vstEnabled&&!r.vstConfirmed;}).length;
+  const vstNeed=rows.filter(function(r){return _vstOn(r)&&!r.vstConfirmed;}).length;
   // Phân bố theo trạng thái (r.status) để vẽ biểu đồ tròn — top 4 + gộp phần còn lại vào "Khác"
   const counts={};
   rows.forEach(function(r){ const s=r.status||'Chưa cập nhật'; counts[s]=(counts[s]||0)+1; });
@@ -3039,7 +3040,7 @@ function computeShipmentKpis(tt){
   const rows=cache[tt]||[];
   const pendingCount=rows.filter(r=>!r.locked).length;
   // "Trạng thái VST" = các lô đã bật theo dõi VST nhưng chưa xác nhận (mọi ETD)
-  const vstPending=rows.filter(r=>r.vstEnabled&&!r.vstConfirmed).sort((a,b)=>(a.etd||'').localeCompare(b.etd||''));
+  const vstPending=rows.filter(r=>_vstOn(r)&&!r.vstConfirmed).sort((a,b)=>(a.etd||'').localeCompare(b.etd||''));
   const vstNeed=vstPending.length;
   // Lô cần gửi chứng từ = đã bật theo dõi, có danh sách, và còn ít nhất 1 chứng từ chưa gửi
   const docPending=rows.filter(r=>r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length);
@@ -3481,7 +3482,7 @@ function _isAlwaysShowSpecialLot(r){
   if(!r||!r.etd||r.etd<ALWAYS_SHOW_ETD_CUTOFF)return false;
   if(r.loaiHang==='IM - Nhập khẩu')return !r.thongQuan;
   if(r.loaiHang==='XK - Xuất khẩu'){
-    const chuaVst=!!(r.vstEnabled&&!r.vstConfirmed);
+    const chuaVst=!!(_vstOn(r)&&!r.vstConfirmed);
     const chuaGuiCtu=!!(r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length);
     return chuaVst&&chuaGuiCtu;
   }
@@ -3513,8 +3514,8 @@ function _filterLotRows(tt){
     if(fs==='xuat'&&r.loaiHang!=='XK - Xuất khẩu')return false;
     if(fs==='nhap'&&r.loaiHang!=='IM - Nhập khẩu')return false;
     if(fs==='ls'&&r.loaiHang!=='LS - Local Service')return false;
-    if(fs==='vst_yes'&&!(r.vstEnabled&&r.vstConfirmed))return false;
-    if(fs==='vst_no'&&!(r.vstEnabled&&!r.vstConfirmed))return false;
+    if(fs==='vst_yes'&&!(_vstOn(r)&&r.vstConfirmed))return false;
+    if(fs==='vst_no'&&!(_vstOn(r)&&!r.vstConfirmed))return false;
     if(fs==='doc_pending'&&!(r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length))return false;
     // Trường hợp đặc biệt (xem _isAlwaysShowSpecialLot) — bỏ qua ràng buộc khoảng ETD, các bộ lọc
     // khác ở trên/dưới vẫn áp dụng bình thường.
@@ -3528,8 +3529,8 @@ function _filterLotRows(tt){
     if(sfCargo&&r.cargoType!==sfCargo)return false;
     if(sfLock==='locked'&&!r.locked)return false;
     if(sfLock==='unlocked'&&r.locked)return false;
-    if(sfLock==='vst_yes'&&!(r.vstEnabled&&r.vstConfirmed))return false;
-    if(sfLock==='vst_no'&&!(r.vstEnabled&&!r.vstConfirmed))return false;
+    if(sfLock==='vst_yes'&&!(_vstOn(r)&&r.vstConfirmed))return false;
+    if(sfLock==='vst_no'&&!(_vstOn(r)&&!r.vstConfirmed))return false;
     if(q){
       const allBkNos=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return(b.bookingNo||'').toLowerCase();}):[(r.bookingNo||'').toLowerCase()]);
       if(allBkNos.some(b=>b.includes(q)))return true;
@@ -3661,7 +3662,7 @@ function renderLotTable(tt){
             const _tqWarn=!r.thongQuan&&r.eta&&(Date.now()-new Date(r.eta+'T00:00:00').getTime()>=5*86400000);
             vstCell=`<button class="bdg ${r.thongQuan?'bdg-g':'bdg-r'}" onclick="openThongQuanPopup('${r._id}','${tt}')" style="cursor:pointer;font-weight:700;white-space:nowrap">${r.thongQuan?'Đã TQ':(_tqWarn?'⚠ Chưa TQ':'Chưa TQ')}</button>`;
           } else {
-            vstCell=!r.vstEnabled
+            vstCell=!_vstOn(r)
               ?`<button class="btn sm" onclick="openVstPopup('${r._id}','${tt}')" style="font-size:11px;opacity:.6">+VST</button>`
               :`<button class="bdg ${r.vstConfirmed?'bdg-g':'bdg-r'}" onclick="openVstPopup('${r._id}','${tt}')" style="cursor:pointer;font-weight:700">${r.vstConfirmed?'Đã VST':'Chưa VST'}</button>`;
           }
@@ -3820,7 +3821,7 @@ async function exportLotListExcel(tt){
   const progressText=function(r){
     const parts=[];
     if(r.loaiHang==='IM - Nhập khẩu'){ parts.push(r.thongQuan?'Đã TQ':'Chưa TQ'); }
-    else if(r.vstEnabled){ parts.push(r.vstConfirmed?'Đã VST':'Chưa VST'); }
+    else if(_vstOn(r)){ parts.push(r.vstConfirmed?'Đã VST':'Chưa VST'); }
     if(r.docTrackEnabled&&(r.docTrackKeys||[]).length){
       const sent=_docTrackSentKeys(r).length, total=r.docTrackKeys.length;
       parts.push('Ctừ: '+sent+'/'+total);
@@ -4289,9 +4290,9 @@ function renderDetailPanel(r,tt){
           <span class="bdg ${r.thongQuan?'bdg-g':'bdg-r'}" style="font-weight:700">${r.thongQuan?'Đã thông quan':'Chưa thông quan'}</span>
         </div>`
         :`<label class="detail-vst-toggle">
-          <input type="checkbox" id="vstEnabledChk" data-id="${r._id}" data-tt="${tt}" ${r.vstEnabled?'checked':''} onchange="toggleVstEnabled(this.dataset.id,this.dataset.tt,this.checked)"/>
+          <input type="checkbox" id="vstEnabledChk" data-id="${r._id}" data-tt="${tt}" ${_vstOn(r)?'checked':''} onchange="toggleVstEnabled(this.dataset.id,this.dataset.tt,this.checked)"/>
           <span>Xác nhận VST</span>
-          ${r.vstEnabled?'<span class="bdg '+(r.vstConfirmed?'bdg-g':'bdg-r')+'" style="font-weight:700">'+(r.vstConfirmed?'Đã VST':'Chưa VST')+'</span>':''}
+          ${_vstOn(r)?'<span class="bdg '+(r.vstConfirmed?'bdg-g':'bdg-r')+'" style="font-weight:700">'+(r.vstConfirmed?'Đã VST':'Chưa VST')+'</span>':''}
         </label>`
       }
       <div class="detail-vst-toggle" style="cursor:pointer" onclick="openDocTrackPopup('${r._id}','${tt}')">
@@ -8864,6 +8865,14 @@ function _emailContList(r){
 // Email chính thức của công ty (v4.87) — dùng cho: người gửi (.eml), CC cố định, chữ ký email,
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
+window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// v4.89: Email Cty của user (cột "Email Cty" trong Quản lý user) — dùng làm người gửi (From) trong file .eml.
+// Chưa khai báo / không hợp lệ thì dùng email chung COCO_MAIL.
+function _senderEmail(){
+  const e=((currentProfile&&currentProfile.companyEmail)||'').trim();
+  return /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(e)?e:window.COCO_MAIL;
+}
+window._senderEmail=_senderEmail;
 // Chuẩn hoá chuỗi email đã lưu cũ (Firestore) — thay các Gmail nội bộ cũ bằng COCO_MAIL, bỏ trùng.
 function _coMailNormalize(str){
   const out=[];
@@ -8950,12 +8959,7 @@ async function openBookingEmail(id,tt){
   }
 
   // CC cố định: Hans, TIENNTC, MAITHUY (tìm trong user list)
-  const ccList=[
-    _findUserEmail(['hans','han']),
-    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
-    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
-  ].filter(Boolean);
-  const ccEmail=[...new Set(ccList)].join(', ');
+  const ccEmail=window.COCO_MAIL; // v4.88: CC duy nhất email công ty (bỏ CC Gmail cá nhân)
 
   // Chuẩn bị dữ liệu hiển thị
   const bkNo=(r.bookings&&r.bookings.length?r.bookings.map(function(b){return b.bookingNo;}).filter(Boolean).join(', '):r.bookingNo)||'—';
@@ -9061,7 +9065,7 @@ function _bookingEmailSignature(){
       +'<td style="border:none;padding:14px 0 0 '+(logo?'16px':'0')+';vertical-align:middle">'
         +'<div style="font-size:15px;font-weight:800;color:#0f766e;letter-spacing:.3px">'+(co.name||'COCO SEA CO., LTD')+'</div>'
         +'<table style="border:none;border-collapse:collapse;margin-top:6px;font-size:12px;color:#333">'
-        +(co.phone?'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">📞</td><td style="border:none;padding:1px 0">Hotline: <strong>'+co.phone+'</strong></td></tr>':'')
+        +'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">📞</td><td style="border:none;padding:1px 0">Hotline: <strong>'+window.COCO_HOTLINE+'</strong></td></tr>'
         +(co.invEmail?'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">✉️</td><td style="border:none;padding:1px 0">'+co.invEmail+'</td></tr>':'')
         +(co.addr?'<tr><td style="border:none;padding:1px 8px 1px 0;vertical-align:top">🏢</td><td style="border:none;padding:1px 0">'+co.addr+'</td></tr>':'')
         +'</table>'
@@ -9318,7 +9322,7 @@ function _emailDownloadEml(){
   if(atts.length){
     // multipart/mixed: HTML body + 1..n file đính kèm (base64)
     eml='X-Unsent: 1\r\n'+
-      'From: COCOSEA <'+window.COCO_MAIL+'>\r\n'+
+      'From: COCOSEA <'+_senderEmail()+'>\r\n'+
       'To: '+to+'\r\n'+
       (cc?'Cc: '+cc+'\r\n':'')+
       'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
@@ -9349,7 +9353,7 @@ function _emailDownloadEml(){
     eml+='--'+boundary+'--';
   } else {
     eml='X-Unsent: 1\r\n'+
-      'From: COCOSEA <'+window.COCO_MAIL+'>\r\n'+
+      'From: COCOSEA <'+_senderEmail()+'>\r\n'+
       'To: '+to+'\r\n'+
       (cc?'Cc: '+cc+'\r\n':'')+
       'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
@@ -18646,6 +18650,7 @@ function renderUsers(){
           +'<div style="font-size:10.5px;color:var(--text-secondary)">'+(u.email||'')+'</div></div>'
         +'</div>'
       +'</td>'
+      +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light);font-size:11.5px;white-space:nowrap">'+(u.companyEmail?String(u.companyEmail).replace(/</g,'&lt;'):'<span style="color:var(--text-tertiary)" title="Chưa khai báo — email gửi đi dùng '+window.COCO_MAIL+'">'+window.COCO_MAIL+' (mặc định)</span>')+'</td>'
       +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light)">'
         +(isSelf
           ? '<span class="'+r.cls+'">'+r.label+'</span>'
@@ -18705,6 +18710,7 @@ function renderUsers(){
     +'<div class="table-card" style="margin-bottom:1.5rem"><div class="table-wrap"><table style="width:100%;border-collapse:collapse;font-size:12.5px">'
       +'<thead><tr>'
         +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;text-align:left">Người dùng</th>'
+        +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;text-align:left">Email Cty</th>'
         +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px">Vai trò</th>'
         +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px">Cập nhật</th>'
         +'<th style="padding:8px 10px;background:var(--bg-secondary);font-size:10px;font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;text-align:center">Thao tác</th>'
@@ -18824,6 +18830,8 @@ function openUserEdit(idx){
     <div class="fi full"><label class="lbl">Email (dùng để đăng nhập)</label><input type="email" id="uf_email" value="${u.email||''}" ${idx!==null?'readonly':''}/></div>
     <div class="fi"><label class="lbl">Tên đăng nhập (không bắt buộc)</label><input type="text" id="uf_username" value="${u.username||''}" placeholder="VD: nguyenvana" style="text-transform:lowercase"/></div>
     <div class="fi"><label class="lbl">Họ và tên</label><input type="text" id="uf_name" value="${u.name||''}"/></div>
+    <div class="fi full"><label class="lbl">Email Cty (người gửi trong file .eml)</label><input type="email" id="uf_coemail" value="${(u.companyEmail||'').replace(/"/g,'&quot;')}" placeholder="VD: tien@cocoseavn.com — để trống = ${window.COCO_MAIL}"/>
+      <div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">Khi user này bấm gửi email, file .eml sẽ ghi người gửi (From) là địa chỉ này. Để trống thì dùng ${window.COCO_MAIL}.</div></div>
     <div class="fi full">
       <label class="lbl">Ảnh đại diện</label>
       <div style="display:flex;align-items:center;gap:12px">
@@ -18877,6 +18885,8 @@ async function saveUser(){
   const username=(g('uf_username')?.value||'').trim().toLowerCase().replace(/[^a-z0-9_.]/g,'');
   const role=g('uf_role').value; const av=g('uf_av').value.slice(0,2).toUpperCase()||name.slice(0,2).toUpperCase()||'??';
   const emailSignature=g('uf_sig')?.value||'';
+  const companyEmail=(g('uf_coemail')?.value||'').trim().toLowerCase();
+  if(companyEmail && !/^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(companyEmail)){toast('Email Cty không hợp lệ','error');return;}
   if(!email){toast('Nhập email','error');return;}
   if(!name){toast('Nhập họ tên','error');return;}
   // Nếu có đặt username, kiểm tra không trùng với user khác
@@ -18913,7 +18923,7 @@ async function saveUser(){
         const ext=(window._userEditAvatarFile.name.split('.').pop()||'jpg').toLowerCase();
         avatarUrl=await _uploadFileToStorage(window._userEditAvatarFile,'avatars/'+docId+'/avatar_'+Date.now()+'.'+ext);
       }
-      const payload={uid,email,name,username,role,avatar:av,emailSignature,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''};
+      const payload={uid,email,name,username,role,avatar:av,emailSignature,companyEmail,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''};
       if(avatarUrl)payload.avatarUrl=avatarUrl;
       await fsSet('users', docId, payload);
       if(username)await db.collection('usernameMap').doc(username).set({email:email,updatedAt:Date.now()});
@@ -18930,7 +18940,7 @@ async function saveUser(){
       } else if(window._userEditAvatarCleared){
         avatarUrl=null;
       }
-      const payload={email,name,username,role,avatar:av,emailSignature,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
+      const payload={email,name,username,role,avatar:av,emailSignature,companyEmail,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
       if(avatarUrl!==undefined)payload.avatarUrl=avatarUrl;
       await fsSet('users', docId, payload);
       // Nếu đang tự sửa hồ sơ của chính mình, cập nhật currentProfile + giao diện ngay
@@ -21838,7 +21848,7 @@ function downloadEmlFile(id, tt){
   const subj=g('emailSubject')?.value||'';
   const body=g('emailBody')?.value||'';
   let emlContent='MIME-Version: 1.0\nDate: '+new Date().toUTCString()+'\n';
-  emlContent+='From: COCOSEA CO., LTD <'+window.COCO_MAIL+'>\n';
+  emlContent+='From: COCOSEA CO., LTD <'+_senderEmail()+'>\n';
   emlContent+='To: '+to+'\n';
   if(cc) emlContent+='Cc: '+cc+'\n';
   emlContent+='Subject: '+subj+'\n';
@@ -25850,6 +25860,20 @@ async function quickSetStatus(id, tt, status){
 }
 window.quickSetStatus=quickSetStatus;
 
+// Theo dõi VST mặc định bật cho lô xuất có ETD từ mốc VST_DEFAULT_FROM (lô IM dùng "TT Thông quan" nên bị loại).
+// Bật/tắt thủ công (vstEnabled true/false) luôn được ưu tiên hơn mặc định.
+// v4.89: mặc định bật CHỈ áp dụng cho lô có ETD từ ngày bắt đầu áp dụng (13/10/2026) trở đi; lô ETD cũ hơn hoặc
+// chưa có ETD thì không tự bật (vẫn bật tay được). Mốc cố định (không phải "hôm nay" trượt) để lô đã tới/qua ETD
+// mà chưa VST vẫn còn bị theo dõi/cảnh báo thay vì tự biến mất.
+window.VST_DEFAULT_FROM='2026-10-13';
+function _vstOn(r){
+  if(!r || r.loaiHang==='IM - Nhập khẩu') return false;
+  if(r.vstEnabled===true) return true;
+  if(r.vstEnabled===false) return false;
+  return !!r.etd && String(r.etd).slice(0,10) >= window.VST_DEFAULT_FROM;
+}
+window._vstOn=_vstOn;
+
 // ── Xác nhận VST (Vào sổ tàu) ──
 async function toggleVstEnabled(id, tt, checked){
   if(!can('editLot')){toast('Không có quyền','error');return;}
@@ -25877,11 +25901,11 @@ function openVstPopup(id, tt){
     +'<div class="msub">'+(r.bookingNo||r.jobNo||'—')+' — '+(r.pol||'—')+' → '+(r.pod||'—')+'</div></div>'
     +'<button class="x" onclick="closeOv(\'vstOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="mbody" style="padding:16px 20px">'
-      +'<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-bottom:'+(r.vstEnabled?'10px':'0')+'">'
-        +'<input type="checkbox" id="vstEnabledChkPopup" data-id="'+id+'" data-tt="'+tt+'" '+(r.vstEnabled?'checked':'')+' onchange="_vstPopupToggleEnabled(this)" style="width:18px;height:18px;cursor:pointer"/>'
+      +'<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-bottom:'+(_vstOn(r)?'10px':'0')+'">'
+        +'<input type="checkbox" id="vstEnabledChkPopup" data-id="'+id+'" data-tt="'+tt+'" '+(_vstOn(r)?'checked':'')+' onchange="_vstPopupToggleEnabled(this)" style="width:18px;height:18px;cursor:pointer"/>'
         +'<span style="font-size:13px;font-weight:600">Bật theo dõi Xác nhận VST cho lô này</span>'
       +'</label>'
-      +'<div id="vstConfirmBlock" style="display:'+(r.vstEnabled?'block':'none')+'">'
+      +'<div id="vstConfirmBlock" style="display:'+(_vstOn(r)?'block':'none')+'">'
         +'<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:.75rem 1rem;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light)">'
           +'<input type="checkbox" id="vstConfirmChk" '+(r.vstConfirmed?'checked':'')+' style="width:18px;height:18px;cursor:pointer"/>'
           +'<span style="font-size:13px;font-weight:600">Đã VST (Vào sổ tàu)</span>'
@@ -26285,7 +26309,7 @@ function renderVstWarning(tt){
   const el=g('vstWarnBar_'+tt); if(!el)return;
   const now=Date.now();
   const urgent=(cache[tt]||[]).filter(function(r){
-    if(!r.vstEnabled||r.vstConfirmed)return false;
+    if(!_vstOn(r)||r.vstConfirmed)return false;
     const cyStr=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
     if(!cyStr)return false;
     const cyTime=new Date(cyStr.replace(' ','T')).getTime();
@@ -32300,12 +32324,7 @@ function openLoadingConfirmEmail(id,tt){
   const r=d.r;
 
   // CC cố định giống booking confirm
-  const ccList=[
-    _findUserEmail(['hans','han']),
-    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
-    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
-  ].filter(Boolean);
-  const ccEmail=[...new Set(ccList)].join(', ');
+  const ccEmail=window.COCO_MAIL; // v4.88: CC duy nhất email công ty (bỏ CC Gmail cá nhân)
 
   const cellL='background:#eef2f7;border-bottom:1px solid #e2e8f0;padding:6px 12px;font-weight:600;font-size:12px;white-space:nowrap;vertical-align:top;width:155px;color:#334155';
   const rowsData=[
@@ -32564,12 +32583,7 @@ function openChangeVesselEmail(id,tt){
     +'</tr>';
   }).join('');
   const routeShort=((pol||'').split(',')[0]||'').trim().toUpperCase()+' &rarr; '+((pod||'').split(',')[0]||'').trim().toUpperCase();
-  const ccList=[
-    _findUserEmail(['hans','han']),
-    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
-    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
-  ].filter(Boolean);
-  const ccEmail=[...new Set(ccList)].join(', ');
+  const ccEmail=window.COCO_MAIL; // v4.88: CC duy nhất email công ty (bỏ CC Gmail cá nhân)
   const bodyHtml=''
     +'<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'
     +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#0C4A6E" style="background-color:#0C4A6E;padding:14px 18px;border-radius:8px 8px 0 0">'
@@ -32757,12 +32771,7 @@ function openDelayNoticeEmail(id,tt){
     +'</tr>';
   }).join('');
   const routeShort=((pol||'').split(',')[0]||'').trim().toUpperCase()+' &rarr; '+((pod||'').split(',')[0]||'').trim().toUpperCase();
-  const ccList=[
-    _findUserEmail(['hans','han']),
-    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
-    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
-  ].filter(Boolean);
-  const ccEmail=[...new Set(ccList)].join(', ');
+  const ccEmail=window.COCO_MAIL; // v4.88: CC duy nhất email công ty (bỏ CC Gmail cá nhân)
   const bodyHtml=''
     +'<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'
     +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#92400E" style="background-color:#92400E;padding:14px 18px;border-radius:8px 8px 0 0">'
@@ -35964,12 +35973,7 @@ function _vtDnSendEmail(idx,voyId,sh){
   const ta=document.getElementById('vt-dn-text-'+idx); if(!ta)return;
   const bodyText=ta.value;
 
-  const ccList=[
-    _findUserEmail(['hans','han']),
-    _findUserEmail(['tienntc','tien','cẩm tiên','cam tien']),
-    _findUserEmail(['maithuy','mai thuy','mai thúy','thuy','thúy'])
-  ].filter(Boolean);
-  const ccEmail=[...new Set(ccList)].join(', ');
+  const ccEmail=window.COCO_MAIL; // v4.88: CC duy nhất email công ty (bỏ CC Gmail cá nhân)
 
   const routeShort=((pol||'').split(',')[0]||'').trim().toUpperCase()+' &rarr; '+((pod||'').split(',')[0]||'').trim().toUpperCase();
   const cellL='background:#fef3c7;border-bottom:1px solid #fde68a;padding:6px 12px;font-weight:600;font-size:12px;white-space:nowrap;vertical-align:top;width:155px;color:#92400E';
