@@ -1216,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.93';
+window.APP_BUILD='v4.94';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4534,6 +4534,7 @@ function renderDetailPanel(r,tt){
       <button class="btn" onclick="addCustomSvcDetail()"><i class="ti ti-plus"></i> Thêm dịch vụ</button>
       <button class="btn" onclick="loadDefaultServices()" title="Tải dịch vụ mặc định của Shipper này (cấu hình ở CRM → Pricing); nếu Shipper chưa cấu hình sẽ dùng dịch vụ mặc định trong Danh mục dịch vụ"><i class="ti ti-download"></i> Load default</button>
       <button class="btn" onclick="openLoadQuotePicker()" title="Chọn 1 Quote đã tạo cho Shipper này (CRM → Pricing) — tải dịch vụ + giá tương ứng vào lô hàng"><i class="ti ti-download"></i> Load quote</button>
+      <button class="btn" onclick="openLoadBeforePicker()" title="Chọn 1 trong 5 lô gần nhất cùng Shipper + Type cont + POD — tải đúng danh sách dịch vụ (không kèm số tiền); tab Fill giá tự lấy đúng giá của lô đã chọn"><i class="ti ti-history"></i> Load before</button>
       <button class="rac" onclick="_svcTabRefresh()" title="Tải lại SL theo Vol mới nhất từ tab Chi tiết" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button>
     </div>
     <div style="margin-top:1rem;display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveDetailSvc()"><i class="ti ti-check"></i> Lưu dịch vụ</button></div>`;
@@ -5372,6 +5373,130 @@ async function _applyQuoteToLot(quoteId){
   setLoading(false);
 }
 window._applyQuoteToLot=_applyQuoteToLot;
+
+// ═══════════════ LOAD BEFORE (v4.94) — tải dịch vụ + giá Fill giá từ 1 lô trước đó ═══════════════
+// Danh sách: tối đa 5 lô gần nhất, cùng loại (xuất/nhập) với lô đang mở và GIỐNG Shipper + Type cont + POD.
+// Khi Load, COPY (sao chép giá trị, không tham chiếu) vào svcs của lô hiện tại:
+//  • Tab Dịch vụ: CHỈ danh mục dịch vụ (tên/mô tả, ĐV, SL, Curr, NCC...) — KHÔNG lấy số tiền (cost/VAT/thanh toán = 0).
+//  • Tab Fill giá: lấy đúng đơn giá/Curr/ĐV/Invoice/VAT/Party/tên hiển thị của lô đã chọn.
+// Chỉ thêm dịch vụ còn THIẾU; dịch vụ đã có sẵn giữ nguyên (chỉ điền giá Fill giá nếu đang trống).
+function _lbNorm(v){return String(v==null?'':v).trim().toUpperCase();}
+function _lbContTypes(l){
+  const set={};
+  if(l.typeCont)set[_lbNorm(l.typeCont)]=1;
+  (l.bookings||[]).forEach(function(b){if(b&&b.typeCont)set[_lbNorm(b.typeCont)]=1;});
+  return Object.keys(set).filter(Boolean);
+}
+function _lbCandidates(r,tt){
+  const sh=_lbNorm(r.shipper||r.supplier), pod=_lbNorm(r.pod), types=_lbContTypes(r);
+  return (cache[tt]||[]).filter(function(l){
+    if(!l||l._id===r._id)return false;
+    if(l.status==='Cancel'||l.status==='Xóa CB')return false;
+    if(_lbNorm(l.shipper||l.supplier)!==sh||_lbNorm(l.pod)!==pod)return false;
+    const lt=_lbContTypes(l);
+    if(!lt.some(function(t){return types.indexOf(t)>=0;}))return false;
+    return Object.keys(l.svcs||{}).some(function(k){return l.svcs[k]&&l.svcs[k].on;});
+  }).sort(function(a,b){
+    const ka=a.createdAt||Date.parse(a.etd)||0, kb=b.createdAt||Date.parse(b.etd)||0;
+    return kb-ka;
+  }).slice(0,5);
+}
+function openLoadBeforePicker(){
+  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  if(r.priceLocked){toast('Fill giá đang khóa — Unlock ở tab Fill giá trước khi load','error');return;}
+  const miss=[];
+  if(!(r.shipper||r.supplier))miss.push('Shipper');
+  if(!_lbContTypes(r).length)miss.push('Type cont');
+  if(!r.pod)miss.push('POD');
+  if(miss.length){toast('Lô hàng chưa có '+miss.join(', ')+' — cần điền để tìm lô tương tự','error');return;}
+  const list=_lbCandidates(r,detailTt);
+  const esc=function(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
+  const fmt=function(d){return d?String(d).split('-').reverse().join('/'):'—';};
+  const showPrice=can('fillPrice')||can('viewCost')||can('viewInvoice');
+  const head='<div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">'
+    +'<i class="ti ti-history" style="font-size:18px;color:#e8f0fe"></i>'
+    +'<div style="font-size:14px;font-weight:700;color:#fff;flex:1">Load before — '+esc(r.shipper||r.supplier)+'</div>'
+    +'<button onclick="closeOv(\'eportOv\')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer"><i class="ti ti-x"></i></button></div>';
+  const crit='<div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px">Điều kiện: cùng Shipper · Type cont <b>'+esc(_lbContTypes(r).join(', '))+'</b> · POD <b>'+esc(r.pod)+'</b> — 5 lô gần nhất</div>';
+  let body;
+  if(!list.length){
+    body='<div style="padding:1.25rem;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có lô nào trước đó trùng Shipper + Type cont + POD (và đã có dịch vụ).</div>';
+  } else {
+    body=list.map(function(l){
+      const sv=l.svcs||{};
+      const onKeys=Object.keys(sv).filter(function(k){return sv[k]&&sv[k].on;});
+      const names=onKeys.map(function(k){const m=SVCS.find(function(x){return x.key===k;});return sv[k]._code||(m&&m.code)||k;}).join(', ');
+      const priced=onKeys.filter(function(k){return parseFloat(sv[k].price)>0;}).length;
+      const contS=(l.bookings&&l.bookings.length?l.bookings.map(function(b){return (b.vol||'')+'x'+(b.typeCont||'');}).join(' + '):((l.vol||'')+'x'+(l.typeCont||'')));
+      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--border-light);border-radius:10px;margin-bottom:8px;background:#fff">'
+        +'<div style="min-width:0"><div style="font-size:12.5px;font-weight:700;color:#0F2747">'+esc(l.jobNo||l.bookingNo||'—')+(l.bookingNo&&l.bookingNo!==l.jobNo?' <span style="font-weight:500;color:var(--text-secondary)">· '+esc(l.bookingNo)+'</span>':'')+'</div>'
+        +'<div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">ETD '+fmt(l.etd)+' · '+esc(contS)+' · POD: '+esc(l.pod||'—')+' · '+esc(l.status||'')+'</div>'
+        +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:330px" title="'+esc(names)+'">'+onKeys.length+' dịch vụ'+(showPrice?' ('+priced+' có giá Fill giá)':'')+': '+esc(names)+'</div></div>'
+        +'<button class="btn sm pri" onclick="_applyBeforeLot(\''+esc(l._id)+'\')">Load</button>'
+      +'</div>';
+    }).join('');
+  }
+  g('eportOv').innerHTML='<div class="modal" style="max-width:520px;border-radius:14px;overflow:hidden">'+head
+    +'<div style="padding:14px 16px;background:var(--bg-secondary);max-height:62vh;overflow-y:auto">'+crit+body+'</div></div>';
+  openOv('eportOv');
+}
+window.openLoadBeforePicker=openLoadBeforePicker;
+
+async function _applyBeforeLot(srcId){
+  const _tt=detailTt, _id=detailId; // chốt biến local trước await
+  const r=cache[_tt]&&cache[_tt].find(function(x){return x._id===_id;});
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  if(r.priceLocked){toast('Fill giá đang khóa — Unlock ở tab Fill giá trước khi load','error');return;}
+  const src=(cache[_tt]||[]).find(function(x){return x._id===srcId;});
+  if(!src){toast('Không tìm thấy lô được chọn','error');return;}
+  const curVol=parseInt(r.vol)||1, srcVol=parseInt(src.vol)||1;
+  const existing=JSON.parse(JSON.stringify(r.svcs||{}));
+  let added=0, priced=0, filled=0;
+  Object.keys(src.svcs||{}).forEach(function(key){
+    const sv=src.svcs[key]; if(!sv||!sv.on)return;
+    // Giá Fill giá: copy giá trị. SL = Vol lô hiện tại nếu lô nguồn đang để SL = Vol của nó; ngược lại giữ SL của lô nguồn.
+    const srcQty=(sv.qty===''||sv.qty==null)?null:(parseFloat(sv.qty)||null);
+    const fpQty=(srcQty==null||srcQty===srcVol)?curVol:srcQty;
+    const price=parseFloat(sv.price)||0;
+    const fillFields=function(t){
+      t.price=price; t.cur=sv.cur||'USD'; t.unit=sv.unit||sv.svcUnit||'Cont';
+      t.invoice=sv.invoice||'Yes'; t.vat=sv.vat||'0%'; t.party=sv.party||'';
+      t.qty=fpQty; t.amount=price*fpQty;
+      if(sv.customName)t.customName=sv.customName;
+    };
+    const cur=existing[key];
+    if(cur){
+      // Dịch vụ đã có sẵn: không đụng phần Dịch vụ; chỉ điền giá Fill giá nếu đang trống
+      if(!(parseFloat(cur.price)>0)&&price>0){ fillFields(cur); filled++; }
+      return;
+    }
+    const sQtyRaw=parseFloat(sv.svcQty);
+    const svcQty=(!sQtyRaw||sQtyRaw===srcVol)?curVol:sQtyRaw;
+    const base={on:true,desc:sv.desc||'',
+      cost:0,svcQty:svcQty,svcUnit:sv.svcUnit||'Cont',svcCur:sv.svcCur||'VND',svcSupplier:sv.svcSupplier||'',svcVatAmt:0,
+      apPaidStatus:'unpaid',apPaidDate:'',apPaidBank:'',apRemark:'',finish:false,reqPayment:false,ocfConfirmed:false,ocfRevise:false,ocfReviseNote:''};
+    if(sv._name)base._name=sv._name;
+    if(sv._code)base._code=sv._code;
+    fillFields(base);
+    existing[key]=base; added++; if(price>0)priced++;
+  });
+  if(!added&&!filled){toast('Lô được chọn không có dịch vụ nào mới để tải','success');closeOv('eportOv');return;}
+  setLoading(true,'Đang tải dịch vụ...');
+  try{
+    await fsSet(colName(_tt),_id,{svcs:existing,updatedAt:Date.now(),updatedBy:currentUser.email});
+    const lbl=src.jobNo||src.bookingNo||srcId;
+    toast('Đã tải '+added+' dịch vụ từ lô '+lbl+(priced?' — '+priced+' dịch vụ có sẵn giá ở Fill giá':'')+(filled?' · điền giá cho '+filled+' dịch vụ đã có':''));
+    try{logLotEvent(_id,_tt,'svc','Load before','Tải dịch vụ từ lô '+lbl+': +'+added+' dịch vụ'+(filled?', điền giá '+filled+' dịch vụ có sẵn':''));}catch(e){}
+    closeOv('eportOv');
+    if(detailId===_id && detailTt===_tt){
+      const fresh=cache[_tt].find(function(x){return x._id===_id;});
+      renderDetailPanel(fresh,_tt);
+    }
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+}
+window._applyBeforeLot=_applyBeforeLot;
 
 function addCustomSvcDetail(){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
