@@ -1216,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.90';
+window.APP_BUILD='v4.92';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5009,12 +5009,10 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
         <button class="btn pri" onclick="addTruckingRow()"><i class="ti ti-plus"></i> Thêm cont</button>
       </div>
       <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;min-width:1350px">
+      <table style="width:100%;border-collapse:collapse;min-width:1230px">
         <thead><tr>
           <th style="${tdH};width:32px">#</th>
           <th style="${tdH};width:105px">Booking No</th>
-          <th style="${tdH};width:50px">Vol</th>
-          <th style="${tdH};width:70px">Type Cont</th>
           <th style="${tdH};width:130px">Kho đóng hàng</th>
           <th style="${tdH};width:130px">Full Return</th>
           <th style="${tdH};width:150px">Route</th>
@@ -5027,7 +5025,7 @@ bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85
           <th style="${tdH};width:130px">Tài xế</th>
           <th style="${tdH};width:70px"></th>
         </tr></thead>
-        <tbody id="truckingsBody">${rowsHtml||'<tr><td colspan="15" style="text-align:center;padding:24px;color:var(--text-secondary);font-size:12px"><i class="ti ti-truck" style="font-size:24px;opacity:.3;display:block;margin-bottom:6px"></i>Chưa có dữ liệu — bấm "Thêm cont" để bắt đầu</td></tr>'}</tbody>
+        <tbody id="truckingsBody">${rowsHtml||'<tr><td colspan="13" style="text-align:center;padding:24px;color:var(--text-secondary);font-size:12px"><i class="ti ti-truck" style="font-size:24px;opacity:.3;display:block;margin-bottom:6px"></i>Chưa có dữ liệu — bấm "Thêm cont" để bắt đầu</td></tr>'}</tbody>
       </table>
       </div>
     </div>`;
@@ -9080,7 +9078,10 @@ window._bookingEmailSignature=_bookingEmailSignature;
 
 // Tải 1 URL (Firebase Storage) về dạng base64 data URL — dùng để đính kèm vào email .eml
 async function _fetchAsDataUrl(url){
-  const res=await fetch(url);
+  let res;
+  try{ res=await fetch(url); }
+  catch(e){ const err=new Error('Trình duyệt chặn tải file từ Firebase Storage (lỗi CORS hoặc mất mạng)'); err.isCors=true; throw err; }
+  if(!res.ok){ const err=new Error('Máy chủ trả về HTTP '+res.status+' khi tải file'); err.httpStatus=res.status; throw err; }
   const blob=await res.blob();
   return await new Promise(function(resolve,reject){
     const fr=new FileReader();
@@ -9141,7 +9142,7 @@ async function _bookingFileAttachment(r, bk){
   }catch(e){
     console.error('Không tải được file Booking đính kèm:',e);
     // Báo RÕ RÀNG thay vì im lặng bỏ qua — tìm thấy file nhưng tải về lỗi (mạng/URL hỏng...)
-    if(typeof toast==='function')toast('Tìm thấy file Booking nhưng tải về thất bại — email sẽ KHÔNG có đính kèm. Kiểm tra lại file trong tab Document.','error');
+    if(typeof toast==='function')toast('Tìm thấy file Booking nhưng tải về thất bại ('+(e&&e.isCors?'trình duyệt chặn CORS — cần cấu hình CORS cho Firebase Storage theo file HUONG_DAN_CORS.md':(e&&e.message)||'lỗi không rõ')+') — email sẽ KHÔNG có đính kèm.','error');
     return null;
   }
 }
@@ -9534,11 +9535,9 @@ function _truckingTableRowHtml(row,i,bkList,polDefault){
     const nm=p.shortname||p.fullname||'';
     return '<option value="'+nm.replace(/"/g,'&quot;')+'"'+(nm===row.ncc?' selected':'')+'>'+nm+'</option>';
   }).join('');
-  return '<tr data-trk-row>'
+  return '<tr data-trk-row data-trk-type="'+String(row.typeCont||'').replace(/"/g,'&quot;')+'">'
     +'<td style="'+td+';text-align:center;font-weight:700;font-size:11px;color:var(--text-tertiary)">'+(i+1)+'</td>'
     +'<td style="'+td+';min-width:110px">'+bkSel+'</td>'
-    +'<td style="'+td+'"><input type="number" id="trk_vol_'+i+'" value="'+(row.vol!=null&&row.vol!==''?row.vol:1)+'" placeholder="1" min="1" style="'+inp+';text-align:center"/></td>'
-    +'<td style="'+td+'"><input type="text" id="trk_type_'+i+'" value="'+(row.typeCont||'').replace(/"/g,'&quot;')+'" placeholder="40HC" style="'+inp+'"/></td>'
     +'<td style="'+td+';min-width:120px"><select id="trk_wh_'+i+'" onchange="_truckingWhChange('+i+')" style="'+sel+'">'+_truckingWhOpts(row.wh||'')+'</select></td>'
     +'<td style="'+td+';min-width:110px">'+frSelect+'</td>'
     +'<td style="'+td+';min-width:160px"><input type="text" id="trk_route_'+i+'" value="'+(row.route||defRoute).replace(/"/g,'&quot;')+'" placeholder="'+defRoute+'" style="'+inp+'"/></td>'
@@ -9574,10 +9573,15 @@ function _readTruckingRows(){
     const whSel=row.querySelector('[id^="trk_wh_"]');
     const whName=whSel?whSel.value:'';
     const wh=whs.find(function(w){return w.name===whName;})||{};
+    const _bkNo=(row.querySelector('[id^="trk_bk_"]')||{}).value||'';
+    // v4.91: mỗi dòng Trucking = 1 lệnh = 1 số cont → Vol luôn là 1; Type Cont tự lấy theo booking của dòng
+    // (không còn ô nhập) để các email/Eport/báo cáo dùng chung vẫn có đủ dữ liệu.
+    const _lotR=(cache[detailTt]||[]).find(function(x){return x._id===detailId;})||{};
+    const _bkObj=(_lotR.bookings||[]).find(function(b){return b.bookingNo===_bkNo;});
     return {
-      bookingNo:(row.querySelector('[id^="trk_bk_"]')||{}).value||'',
-      vol:(row.querySelector('[id^="trk_vol_"]')||{}).value||'1',
-      typeCont:(row.querySelector('[id^="trk_type_"]')||{}).value||'',
+      bookingNo:_bkNo,
+      vol:'1',
+      typeCont:(_bkObj&&_bkObj.typeCont)||(row.getAttribute&&row.getAttribute('data-trk-type'))||_lotR.typeCont||'',
       wh:whName,
       whLocation:wh.location||'',
       whContact:wh.contact||'',
@@ -9611,6 +9615,7 @@ function addTruckingRow(){
   if(tbody.querySelector('td[colspan]'))tbody.innerHTML='';
   const tr=document.createElement('tr');
   tr.setAttribute('data-trk-row','');
+  tr.setAttribute('data-trk-type',defType||'');
   tr.innerHTML=_truckingTableRowHtml(newRow,idx,bkList,polDefault).replace(/^<tr[^>]*>/,'').replace(/<\/tr>$/,'');
   tbody.appendChild(tr);
 }
@@ -9631,6 +9636,11 @@ window._truckingDelRow=_truckingDelRow;
 async function saveTruckings(){
   const rows=_readTruckingRows();
   if(!rows){toast('Tab Trucking chưa mở','error');return;}
+  // Mỗi lệnh (dòng) chỉ gắn với 1 số cont — chặn nhập nhiều số cont trong cùng 1 dòng
+  for(let _i=0;_i<rows.length;_i++){
+    const _m=String(rows[_i].contNo||'').toUpperCase().match(/[A-Z]{4}\s?\d{6,7}/g)||[];
+    if(_m.length>1){ toast('Dòng '+(_i+1)+': mỗi lệnh chỉ gắn với 1 số cont — hãy tách mỗi cont thành 1 dòng ("Thêm cont")','error'); return; }
+  }
   setLoading(true,'Đang lưu...');
   try{
     // Sync contNo về bookingConts (Cont/Seal tab)
@@ -29984,8 +29994,6 @@ function renderTruckingReport(){
       +'<td style="'+tdS+'"><span style="font-size:11.5px">'+(r._shipper||'—')+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-size:11px;color:var(--text-secondary)">'+etdDisp+'</span></td>'
       +'<td style="'+tdS+'"><span style="font-weight:700;color:#1a4b8c">'+dateDisp+'</span></td>'
-      +'<td style="'+tdS+'">'+(r.vol||'1')+'</td>'
-      +'<td style="'+tdS+'">'+(r.typeCont||'—')+'</td>'
       +'<td style="'+tdS+'">'+(r.wh||'—')+'</td>'
       +'<td style="'+tdS+'">'+(r.fullReturn||'—')+'</td>'
       +'<td style="'+tdS+'">'+(r.route||'—')+'</td>'
@@ -30034,8 +30042,6 @@ function renderTruckingReport(){
         +'<th style="'+thS+'">Shipper</th>'
         +'<th style="'+thS+'">ETD</th>'
         +'<th style="'+thS+';cursor:pointer;user-select:none" onclick="window._truckRptSort={col:\'date\',dir:(window._truckRptSort.col===\'date\'&&window._truckRptSort.dir===\'desc\'?\'asc\':\'desc\')};renderTruckingReport()">Ngày đóng'+_sortIcon('date')+'</th>'
-        +'<th style="'+thS+';width:40px">Vol</th>'
-        +'<th style="'+thS+'">Type</th>'
         +'<th style="'+thS+'">Kho đóng</th>'
         +'<th style="'+thS+'">Full Return</th>'
         +'<th style="'+thS+'">Route</th>'
@@ -30044,7 +30050,7 @@ function renderTruckingReport(){
         +'<th style="'+thS+'">Số xe</th>'
         +'<th style="'+thS+'">Tài xế</th>'
       +'</tr></thead>'
-      +'<tbody>'+(bodyRows||'<tr><td colspan="14" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-truck" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu trucking</td></tr>')+'</tbody>'
+      +'<tbody>'+(bodyRows||'<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--text-secondary)"><i class="ti ti-truck" style="font-size:32px;opacity:.3;display:block;margin-bottom:8px"></i>Không có dữ liệu trucking</td></tr>')+'</tbody>'
     +'</table></div>'
   +'</div>';
 }
@@ -30083,17 +30089,17 @@ async function truckingReportExportExcel(){
     const ws=wb.addWorksheet('Trucking Report');
     // "STT dòng" — Item Index trong mảng truckings[] của lô, kết hợp với Job ID để khớp ĐÚNG dòng khi
     // Import (1 lô có thể có nhiều dòng trucking khác nhau, không thể chỉ dùng Job ID).
-    const headers=['Job ID','STT dòng','Booking No','Shipper','ETD','Ngày đóng','Vol','Type','Kho đóng','Full Return','Route','NCC','Số cont','Số xe','Tài xế'];
-    ws.columns=[{width:11},{width:9},{width:16},{width:16},{width:12},{width:12},{width:7},{width:9},{width:16},{width:12},{width:14},{width:14},{width:14},{width:14},{width:22}];
+    const headers=['Job ID','STT dòng','Booking No','Shipper','ETD','Ngày đóng','Kho đóng','Full Return','Route','NCC','Số cont','Số xe','Tài xế'];
+    ws.columns=[{width:11},{width:9},{width:16},{width:16},{width:12},{width:12},{width:16},{width:12},{width:14},{width:14},{width:14},{width:14},{width:22}];
     _svcRptXlsxHeader(ws,headers);
     rows.forEach(function(r,i){
       ws.addRow([
         r._lot.jobNo||'', r._itemIdx, r.bookingNo||r._bookingNo||'', r._shipper||'',
-        r._etd?fmtDMY(r._etd):'', r.date?fmtDMY(r.date):'', r.vol||'1', r.typeCont||'',
+        r._etd?fmtDMY(r._etd):'', r.date?fmtDMY(r.date):'',
         r.wh||'', r.fullReturn||'', r.route||'', r.ncc||'', r.contNo||'', r.truckNo||'',
         r.driver||(r.driverName?[r.driverName,r.driverPhone].filter(Boolean).join(' / '):'')||''
       ]);
-      _svcRptXlsxStyleDataRow(ws,i+2,[14]); // "Số xe" — cột cần điền
+      _svcRptXlsxStyleDataRow(ws,i+2,[12]); // "Số xe" — cột cần điền (cột 12 sau khi bỏ Vol/Type)
     });
     const buf=await wb.xlsx.writeBuffer();
     const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
@@ -30127,11 +30133,11 @@ function truckingReportExportPDF(){
     return true;
   });
   if(!rows.length){toast('Không có dữ liệu để xuất','error');return;}
-  const headers=['Booking No','Shipper','ETD','Ngày đóng','Vol','Type','Kho đóng','Full Return','Route','NCC','Số cont','Số xe','Tài xế'];
+  const headers=['Booking No','Shipper','ETD','Ngày đóng','Kho đóng','Full Return','Route','NCC','Số cont','Số xe','Tài xế'];
   const dataRows=rows.map(function(r){
     const driverInfo=r.driver||(r.driverName?[r.driverName,r.driverPhone].filter(Boolean).join(' / '):'')||'—';
     return [r._bookingNo||'—', r._shipper||'—', r._etd?fmtDMY(r._etd):'—', r.date?fmtDMY(r.date):'—',
-      r.vol||'1', r.typeCont||'—', r.wh||'—', r.fullReturn||'—', r.route||'—', r.ncc||'—', r.contNo||'—', r.truckNo||'—', driverInfo];
+      r.wh||'—', r.fullReturn||'—', r.route||'—', r.ncc||'—', r.contNo||'—', r.truckNo||'—', driverInfo];
   });
   _svcRptExportPDF('Trucking Report',headers,dataRows,'ETD: '+(fs.etdFrom?fmtDMY(fs.etdFrom):'—')+' → '+(fs.etdTo?fmtDMY(fs.etdTo):'—'));
 }
@@ -35874,6 +35880,28 @@ async function _vtDnSave(voyId){
 }
 window._vtDnSave=_vtDnSave;
 
+// v4.92: Dòng "Your shipment(s)" của Delay Notice theo tàu — mỗi lô: Job | vol x type | BKG | [POD] | ETA.
+// Shipper có ≥2 lô trên tàu → bỏ dòng POL → POD ở phần đầu, mỗi lô tự ghi POD + ETA riêng (multi=true).
+// ETA/POD lấy theo lô; thiếu thì lấy theo cảng đích tương ứng của chuyến tàu, cuối cùng là cảng đến đầu tiên.
+function _vtDnLotParts(l,v,multi,fmtDate){
+  const jobNo=l.jobNo||l.bookingNo||'—';
+  const bookings=(l.bookings&&l.bookings.length)?l.bookings:[{vol:l.vol||'',typeCont:l.typeCont||''}];
+  const typeMap={};
+  bookings.forEach(function(b){const t=(b.typeCont||l.typeCont||'').trim();const vi=parseInt(b.vol)||0;if(t&&vi){typeMap[t]=(typeMap[t]||0)+vi;}});
+  const contS=Object.keys(typeMap).length?Object.keys(typeMap).map(function(t){return typeMap[t]+'x'+t;}).join(' + '):(l.vol?l.vol+'x'+(l.typeCont||'CONT'):'—');
+  const pods=(v.pods||[]);
+  const podFirst=pods[0]||{};
+  const podName=l.pod||podFirst.pod||'';
+  const podMatch=pods.find(function(p){return p.pod&&podName&&p.pod.toUpperCase()===podName.toUpperCase();})||podFirst;
+  const eta=l.eta||podMatch.eta||'';
+  const parts=['Job: '+jobNo, contS];
+  if(l.bookingNo&&l.bookingNo!==jobNo)parts.push('BKG: '+l.bookingNo);
+  if(multi)parts.push('POD: '+(podName||'—'));
+  parts.push('ETA: '+(eta?fmtDate(eta):'—'));
+  return parts;
+}
+window._vtDnLotParts=_vtDnLotParts;
+
 function _vtDnShowNotify(voyId,v,lots,etdOld,cyOld,siOld,reason){
   const fmtDate=function(iso){return iso?iso.split('-').reverse().join('/'):'—';};
   const etdNew=v.etd||''; const cyNew=v.cutoffCY||''; const siNew=v.cutoffSI||'';
@@ -35896,23 +35924,16 @@ function _vtDnShowNotify(voyId,v,lots,etdOld,cyOld,siOld,reason){
   const buildTemplate=function(sh,entry,lang){
     const pt=cache.partners&&cache.partners[sh];
     const custName=(pt&&(pt.shortname||pt.name))||sh;
+    const multi=entry.lots.length>=2; // ≥2 lô cùng shipper trên tàu: bỏ dòng POL → POD, mỗi lô ghi POD + ETA
     const lotLines=entry.lots.map(function(item){
-      const l=item.l;
-      const jobNo=l.jobNo||l.bookingNo||'—';
-      const bookings=(l.bookings&&l.bookings.length)?l.bookings:[{vol:l.vol||'',typeCont:l.typeCont||''}];
-      const typeMap={};
-      bookings.forEach(function(b){const t=(b.typeCont||l.typeCont||'').trim();const vi=parseInt(b.vol)||0;if(t&&vi){typeMap[t]=(typeMap[t]||0)+vi;}});
-      const contS=Object.keys(typeMap).length?Object.keys(typeMap).map(function(t){return typeMap[t]+'x'+t;}).join(' + '):(l.vol?l.vol+'x'+(l.typeCont||'CONT'):'—');
-      return lang==='en'
-        ?('  • Job: '+jobNo+' | '+contS+(l.bookingNo&&l.bookingNo!==jobNo?' | BKG: '+l.bookingNo:''))
-        :('  • Job: '+jobNo+' | '+contS+(l.bookingNo&&l.bookingNo!==jobNo?' | BKG: '+l.bookingNo:''));
+      return '  • '+_vtDnLotParts(item.l,v,multi,fmtDate).join(' | ');
     }).join('\n');
 
     if(lang==='en'){
       return [
         '⚠️ DELAY NOTICE — SCHEDULE UPDATE:',SEP,
         '🚢 Vessel / Voyage : '+vesVoy,
-        '📍 POL → POD       : '+pol+' → '+pod,
+        (multi?'':'📍 POL → POD       : '+pol+' → '+pod),
         '📅 ETD (Old → New) : '+fmtDate(etdOld)+' → '+fmtDate(etdNew),
         '⏰ CY Cutoff (Old) : '+(cyOld||'—')+' → '+(cyNew||cyOld||'—'),
         '⏰ SI Cutoff (Old) : '+(siOld||'—')+' → '+(siNew||siOld||'—'),
@@ -35925,7 +35946,7 @@ function _vtDnShowNotify(voyId,v,lots,etdOld,cyOld,siOld,reason){
       return [
         '⚠️ THÔNG BÁO LỊCH TÀU THAY ĐỔI:',SEP,
         '🚢 Tàu / Chuyến       : '+vesVoy,
-        '📍 Cảng đi → Cảng đến : '+pol+' → '+pod,
+        (multi?'':'📍 Cảng đi → Cảng đến : '+pol+' → '+pod),
         '📅 ETD (Cũ → Mới)     : '+fmtDate(etdOld)+' → '+fmtDate(etdNew),
         '⏰ CY Cutoff (Cũ → Mới): '+(cyOld||'—')+' → '+(cyNew||cyOld||'—'),
         '⏰ SI Cutoff (Cũ → Mới): '+(siOld||'—')+' → '+(siNew||siOld||'—'),
@@ -36035,14 +36056,20 @@ function _vtDnSendEmail(idx,voyId,sh){
 
   const routeShort=((pol||'').split(',')[0]||'').trim().toUpperCase()+' &rarr; '+((pod||'').split(',')[0]||'').trim().toUpperCase();
   const cellL='background:#fef3c7;border-bottom:1px solid #fde68a;padding:6px 12px;font-weight:600;font-size:12px;white-space:nowrap;vertical-align:top;width:155px;color:#92400E';
+  // v4.92: thêm dòng "Your shipment(s)" (Job | vol | BKG | [POD] | ETA); shipper có ≥2 lô → bỏ dòng POL → POD
+  const _entry=(window._vtDnByShipper||{})[sh]||{lots:[]};
+  const _multi=_entry.lots.length>=2;
+  const _esc=function(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
+  const _shipHtml=_entry.lots.map(function(it){return _esc('• '+_vtDnLotParts(it.l,v,_multi,fmtDate).join(' | '));}).join('<br>');
   const rowsData=[
     ['Vessel / Voyage', (v.vessel||'—')+(v.voy?' / V.'+v.voy:'')],
-    ['POL &rarr; POD', pol+' &rarr; '+pod],
+    _multi?null:['POL &rarr; POD', pol+' &rarr; '+pod],
     ['ETD (Mới)', fmtDate(v.etd)],
     ['CY Cutoff (Mới)', v.cutoffCY||'—'],
     ['SI Cutoff (Mới)', v.cutoffSI||'—'],
     ['Carrier', carrier],
-  ];
+    _shipHtml?['Your shipment(s)', _shipHtml]:null,
+  ].filter(Boolean);
   const tblRows=rowsData.map(function(rw,i){
     const bg=i%2===0?'#fffbeb':'#ffffff';
     return '<tr><td style="'+cellL+'">'+rw[0]+'</td>'
@@ -36052,7 +36079,7 @@ function _vtDnSendEmail(idx,voyId,sh){
   const bodyHtml='<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'
     +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#92400E" style="background-color:#92400E;padding:14px 18px;border-radius:8px 8px 0 0">'
       +'<div style="color:#FDE68A;font-size:17px;font-weight:800;letter-spacing:.3px">⚠️ DELAY NOTICE — SCHEDULE UPDATE</div>'
-      +'<div style="color:#FCD34D;font-size:11.5px;margin-top:3px">'+routeShort+'</div>'
+      +(_multi?'':'<div style="color:#FCD34D;font-size:11.5px;margin-top:3px">'+routeShort+'</div>')
     +'</td></tr></table>'
     +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #fde68a;border-top:none;border-radius:0 0 8px 8px"><tr><td style="padding:16px 18px">'
     +'<p style="font-size:12.5px;margin:0 0 12px;line-height:1.6">To: <strong>'+custFull+'</strong><br>'
