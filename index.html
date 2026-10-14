@@ -1216,7 +1216,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='v4.89';
+window.APP_BUILD='v4.90';
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4323,9 +4323,12 @@ function renderDetailPanel(r,tt){
       <div class="dcard">
         <div class="dcard-hdr" style="color:#2E90FA">
           <i class="ti ti-bookmark"></i>2. Booking Numbers
+          <span style="margin-left:auto;display:inline-flex;gap:6px;align-items:center">
+          ${_bookingUploadBtnHtml(r,tt)}
           ${r.status==='Booking request'
-            ?`<button class="btn sm" onclick="sendBookingRequestEmail('${r._id}','${tt}')" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:600;color:#e07000;border-color:#e07000"><i class="ti ti-send"></i> Email: Booking Request</button>`
-            :`<button class="btn sm blu" onclick="openBookingEmail('${r._id}','${tt}')" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:600"><i class="ti ti-mail"></i> Email Booking</button>`}
+            ?`<button class="btn sm" onclick="sendBookingRequestEmail('${r._id}','${tt}')" style="text-transform:none;letter-spacing:0;font-weight:600;color:#e07000;border-color:#e07000"><i class="ti ti-send"></i> Email: Booking Request</button>`
+            :`<button class="btn sm blu" onclick="openBookingEmail('${r._id}','${tt}')" style="text-transform:none;letter-spacing:0;font-weight:600"><i class="ti ti-mail"></i> Email Booking</button>`}
+          </span>
         </div>
         ${bkHtml}
       </div>
@@ -9091,39 +9094,54 @@ async function _fetchAsDataUrl(url){
 // Trucking/SCY/Duyệt lệnh — đổi tên theo đúng mẫu: Số booking - POL - POD - Volxtype - ETD,
 // giữ nguyên phần mở rộng của file gốc. bk (optional): booking cụ thể (khi lô có nhiều booking),
 // mặc định lấy booking đầu tiên/giá trị đơn của lô nếu không truyền.
-async function _bookingFileAttachment(r, bk){
-  // Nhận diện file Booking: ƯU TIÊN type==='booking' (chuẩn mới, từ khi có tùy chọn "Booking (file
-  // gốc)" trong Upload chứng từ). DỰ PHÒNG: các lô ĐÃ UPLOAD file booking TRƯỚC KHI có tùy chọn này
-  // (gắn type khác, VD 'other') vẫn được nhận diện nếu tên/nhãn chứa từ "booking" — tránh bỏ sót file
-  // đã có sẵn chỉ vì tag type không khớp tuyệt đối.
-  const docs=(r.savedDocs||[]).slice().reverse();
-  let doc=docs.find(function(d){return d.type==='booking'&&d.fileUrl;});
+// File Booking duy nhất của lô (v4.90): ƯU TIÊN type==='booking'; dự phòng nhận file cũ upload trước khi có
+// tùy chọn này (tên/nhãn chứa chữ "booking"). Dùng chung cho nút Upload Booking, tab Document và đính kèm email.
+function _lotBookingDoc(r){
+  const docs=((r&&r.savedDocs)||[]).slice().reverse();
+  let doc=docs.find(function(d){return d.type==='booking'&&(d.fileUrl||d.fileData);});
   if(!doc){
     doc=docs.find(function(d){
-      if(!d.fileUrl)return false;
+      if(!(d.fileUrl||d.fileData))return false;
       const txt=((d.typeLabel||'')+' '+(d.name||'')+' '+(d.fileName||'')).toLowerCase();
       return txt.indexOf('booking')>=0;
     });
   }
+  return doc||null;
+}
+window._lotBookingDoc=_lotBookingDoc;
+
+// Tên file Booking khi đính kèm email: "BKG <số booking> | <vol> x <loại cont> | ETD <dd Mon yyyy> | <POL> - <POD>"
+// VD: BKG 2341554810 | 5 x 40HC | ETD 26 Oct 2026 | HCM - Qingdao
+// bk (tuỳ chọn): booking cụ thể; không truyền thì gộp mọi booking của lô (nối bằng " + "). Bỏ phần nào chưa có dữ liệu.
+function _bookingAttachName(r, bk, ext){
+  const list=bk?[bk]:((r.bookings&&r.bookings.length)?r.bookings:[{bookingNo:r.bookingNo,vol:r.vol,typeCont:r.typeCont}]);
+  const bkNo=list.map(function(b){return (b.bookingNo||'').trim();}).filter(Boolean).join(' + ');
+  const vol=list.map(function(b){return (b.typeCont||'')?((b.vol||1)+' x '+b.typeCont):'';}).filter(Boolean).join(' + ');
+  const etd=r.etd?_fmtDMY(r.etd).replace(/-/g,' '):'';
+  const pol=((r.pol||'').split(',')[0]||'').trim();
+  const pod=((r.pod||'').split(',')[0]||'').trim();
+  const route=[pol,pod].filter(Boolean).join(' - ');
+  const parts=['BKG'+(bkNo?' '+bkNo:''), vol, etd?('ETD '+etd):'', route].filter(Boolean);
+  let base=parts.join(' | ').replace(/[\\\/:*?"<>]+/g,'-').replace(/\s+/g,' ').trim();
+  if(base.length>150)base=base.slice(0,150).trim();
+  return base+'.'+(ext||'pdf');
+}
+window._bookingAttachName=_bookingAttachName;
+
+// Lấy file Booking đã upload (tab Document / nút Upload Booking) để đính kèm cho email Booking Confirm/
+// Trucking/SCY/Duyệt lệnh/Booking Request — tự đổi tên theo _bookingAttachName, giữ phần mở rộng file gốc.
+async function _bookingFileAttachment(r, bk){
+  const doc=_lotBookingDoc(r);
   if(!doc)return null;
   try{
-    const dataUrl=await _fetchAsDataUrl(doc.fileUrl);
+    const dataUrl=doc.fileUrl?await _fetchAsDataUrl(doc.fileUrl):doc.fileData;
     const extM=/\.([a-zA-Z0-9]+)$/.exec(doc.fileName||'');
-    const ext=extM?extM[1]:'pdf';
-    const bkNo=(bk&&bk.bookingNo)||r.bookingNo||'BOOKING';
-    const pol=((r.pol||'').split(',')[0]||'').trim().toUpperCase();
-    const pod=((r.pod||'').split(',')[0]||'').trim().toUpperCase();
-    const vol=(bk&&bk.vol)||r.vol||1;
-    const typeCont=(bk&&bk.typeCont)||r.typeCont||'';
-    const volType=vol+'x'+typeCont;
-    const etd=r.etd?_fmtDMY(r.etd).replace(/-/g,''):'';
-    const filename=[bkNo,pol,pod,volType,etd].filter(Boolean).join('-')+'.'+ext;
-    return {filename:filename,dataUrl:dataUrl};
+    const ext=extM?extM[1].toLowerCase():'pdf';
+    return {filename:_bookingAttachName(r,bk,ext),dataUrl:dataUrl};
   }catch(e){
     console.error('Không tải được file Booking đính kèm:',e);
-    // Báo RÕ RÀNG thay vì im lặng bỏ qua — tìm thấy file trong Document nhưng tải về lỗi (mạng/URL
-    // hỏng...), để người dùng biết cần kiểm tra lại thay vì tưởng nhầm là "chưa upload file".
-    if(typeof toast==='function')toast('Tìm thấy file Booking trong Document nhưng tải về thất bại — email sẽ KHÔNG có đính kèm. Kiểm tra lại file trong tab Document.','error');
+    // Báo RÕ RÀNG thay vì im lặng bỏ qua — tìm thấy file nhưng tải về lỗi (mạng/URL hỏng...)
+    if(typeof toast==='function')toast('Tìm thấy file Booking nhưng tải về thất bại — email sẽ KHÔNG có đính kèm. Kiểm tra lại file trong tab Document.','error');
     return null;
   }
 }
@@ -9322,7 +9340,6 @@ function _emailDownloadEml(){
   if(atts.length){
     // multipart/mixed: HTML body + 1..n file đính kèm (base64)
     eml='X-Unsent: 1\r\n'+
-      'From: COCOSEA <'+_senderEmail()+'>\r\n'+
       'To: '+to+'\r\n'+
       (cc?'Cc: '+cc+'\r\n':'')+
       'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
@@ -9345,15 +9362,14 @@ function _emailDownloadEml(){
       // Chia base64 thành dòng 76 ký tự theo chuẩn MIME
       const wrapped=(b64.match(/.{1,76}/g)||[]).join('\r\n');
       eml+='--'+boundary+'\r\n'+
-        'Content-Type: '+mime+'; name="'+a.filename+'"\r\n'+
+        'Content-Type: '+mime+'; name="'+_mimeFilename(a.filename)+'"\r\n'+
         'Content-Transfer-Encoding: base64\r\n'+
-        'Content-Disposition: attachment; filename="'+a.filename+'"\r\n\r\n'+
+        'Content-Disposition: attachment; filename="'+_mimeFilename(a.filename)+'"\r\n\r\n'+
         wrapped+'\r\n\r\n';
     });
     eml+='--'+boundary+'--';
   } else {
     eml='X-Unsent: 1\r\n'+
-      'From: COCOSEA <'+_senderEmail()+'>\r\n'+
       'To: '+to+'\r\n'+
       (cc?'Cc: '+cc+'\r\n':'')+
       'Subject: '+_encodeEmailHeader(subject)+'\r\n'+
@@ -9370,6 +9386,18 @@ function _emailDownloadEml(){
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   setTimeout(function(){URL.revokeObjectURL(url);},1000);
   toast('Đã tạo email'+(atts.length?(' kèm '+atts.length+' file đính kèm'):'')+' — bấm vào file vừa tải xuống để mở Outlook/Mail và gửi');
+}
+// Tên file đính kèm trong header MIME: ASCII thì giữ nguyên (escape dấu " và \); có ký tự Unicode
+// (tiếng Việt...) thì mã hoá RFC 2047, cắt từng đoạn ≤ ~45 byte rồi gập dòng để mọi client đọc đúng.
+function _mimeFilename(name){
+  name=String(name||'file').replace(/[\r\n]+/g,' ');
+  if(/^[\x20-\x7E]*$/.test(name)) return name.replace(/\\/g,'\\\\').replace(/"/g,'\\"');
+  const words=[]; let cur='';
+  Array.from(name).forEach(function(ch){
+    if(unescape(encodeURIComponent(cur+ch)).length>45){ words.push(cur); cur=ch; } else cur+=ch;
+  });
+  if(cur) words.push(cur);
+  return words.map(function(w){ return '=?UTF-8?B?'+btoa(unescape(encodeURIComponent(w)))+'?='; }).join('\r\n ');
 }
 function _encodeEmailHeader(str){
   // UTF-8 subject encoding for non-ASCII
@@ -21848,7 +21876,6 @@ function downloadEmlFile(id, tt){
   const subj=g('emailSubject')?.value||'';
   const body=g('emailBody')?.value||'';
   let emlContent='MIME-Version: 1.0\nDate: '+new Date().toUTCString()+'\n';
-  emlContent+='From: COCOSEA CO., LTD <'+_senderEmail()+'>\n';
   emlContent+='To: '+to+'\n';
   if(cc) emlContent+='Cc: '+cc+'\n';
   emlContent+='Subject: '+subj+'\n';
@@ -34488,14 +34515,43 @@ function _docTypeLabel(v, customLabel){
   return t?t.l:v;
 }
 
-function openUploadDocModal(){
-  const opts=DOC_UPLOAD_TYPES.map(function(t){return '<option value="'+t.v+'">'+t.l+'</option>';}).join('');
+// Nút "Upload Booking" cạnh nút Email Booking (chi tiết lô). Mỗi lô CHỈ CÓ 1 file Booking: đã up rồi thì nút đổi
+// thành "Đã up bkg" (bấm để mở file); muốn up booking mới phải xóa booking cũ ở tab Document.
+function _bookingUploadBtnHtml(r,tt){
+  const doc=_lotBookingDoc(r);
+  if(doc){
+    return '<button class="btn sm" onclick="viewBookingFile(\''+r._id+'\',\''+tt+'\')" title="Đã có file Booking: '+String(doc.fileName||'').replace(/"/g,'&quot;')+' — bấm để mở. Muốn up booking mới: xóa file cũ ở tab Document."'
+      +' style="text-transform:none;letter-spacing:0;font-weight:600;color:var(--green-dark,#15803d);border-color:var(--green-dark,#15803d)"><i class="ti ti-circle-check"></i> Đã up bkg</button>';
+  }
+  return '<button class="btn sm" onclick="openUploadDocModal(\'booking\')" title="Upload file Booking (lưu vào tab Document, tự đính kèm khi gửi email)"'
+    +' style="text-transform:none;letter-spacing:0;font-weight:600"><i class="ti ti-upload"></i> Upload Booking</button>';
+}
+window._bookingUploadBtnHtml=_bookingUploadBtnHtml;
+function viewBookingFile(id,tt){
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;})||{};
+  const doc=_lotBookingDoc(r);
+  if(!doc){toast('Lô chưa có file Booking','error');return;}
+  if(doc.fileUrl){ window.open(doc.fileUrl,'_blank'); return; }
+  const a=document.createElement('a'); a.href=doc.fileData; a.download=doc.fileName||'booking.pdf'; a.target='_blank';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+window.viewBookingFile=viewBookingFile;
+
+function openUploadDocModal(fixedType){
+  const _rr=(cache[detailTt]||[]).find(function(x){return x._id===detailId;})||{};
+  const _hasBkg=!!_lotBookingDoc(_rr);
+  if(fixedType==='booking' && _hasBkg){ toast('Lô đã có file Booking. Hãy xóa booking cũ ở tab Document trước khi up booking mới.','error'); return; }
+  const opts=DOC_UPLOAD_TYPES.filter(function(t){return fixedType!=='booking'||t.v==='booking';}).map(function(t){
+    const dis=(t.v==='booking'&&_hasBkg);
+    return '<option value="'+t.v+'"'+(dis?' disabled':'')+'>'+t.l+(dis?' — đã có, xóa file cũ trước':'')+'</option>';
+  }).join('');
   g('combineOv').innerHTML='<div class="modal" style="max-width:460px">'
-    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-upload" style="margin-right:6px"></i>Upload chứng từ</div>'
+    +'<div class="mhdr"><div class="mtitle"><i class="ti ti-upload" style="margin-right:6px"></i>'+(fixedType==='booking'?'Upload Booking':'Upload chứng từ')+'</div>'
     +'<button class="rac" onclick="closeOv(\'combineOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="mbody" style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">'
       +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Loại chứng từ</label>'
-        +'<select id="upDocType" onchange="_upDocTypeChange()" style="width:100%;font-size:13px">'+opts+'</select></div>'
+        +'<select id="upDocType" onchange="_upDocTypeChange()" style="width:100%;font-size:13px"'+(fixedType==='booking'?' disabled':'')+'>'+opts+'</select>'
+        +(fixedType==='booking'?'<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">Mỗi lô chỉ có 1 file Booking. File này cũng hiện ở tab Document và được tự đính kèm khi gửi email Booking / Trucking / Đóng bãi.</div>':'')+'</div>'
       +'<div id="upDocOtherWrap" style="display:none"><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Ghi rõ loại chứng từ</label>'
         +'<input type="text" id="upDocOther" placeholder="VD: Giấy chứng nhận xuất xứ" style="width:100%;font-size:13px"/></div>'
       +'<div><label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Số chứng từ</label>'
@@ -34524,6 +34580,8 @@ async function doUploadDoc(){
   if(!r){toast('Không tìm thấy lô hàng','error');return;}
   const type=g('upDocType')?.value||'other';
   const otherLabel=g('upDocOther')?.value||'';
+  // Chỉ 1 file Booking duy nhất / lô — muốn up mới phải xóa file cũ (áp dụng cho cả tab Document và nút Upload Booking)
+  if(type==='booking' && _lotBookingDoc(r)){ toast('Lô đã có file Booking. Hãy xóa booking cũ ở tab Document trước khi up booking mới.','error'); return; }
   const docNo=g('upDocNo')?.value.trim()||'';
   const fileEl=g('upDocFile');
   const file=fileEl&&fileEl.files&&fileEl.files[0];
