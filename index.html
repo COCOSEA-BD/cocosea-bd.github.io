@@ -22,6 +22,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 <script>
 // Load XLSX with multiple CDN fallbacks
 (function(){
@@ -1217,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.01';
+window.APP_BUILD='A 2.03';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -4750,6 +4751,8 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<label class="btn" style="cursor:pointer;color:#0D9488;border-color:#0D9488"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
       // v4.80: Ẩn nút "Quét ảnh" (OCR) ở tab Cont/Seal theo yêu cầu — giữ nguyên hàm openOcrContScan()
       // bên dưới (không xóa) để dễ khôi phục lại nếu cần dùng lại sau này, chỉ bỏ nút kích hoạt.
+      // A 2.02: bật lại nút "Quét ảnh" — nay đọc ảnh bằng AI (Claude qua Firebase Function), tự dự phòng Tesseract.
+      if(window.COCO_SHOW_OCR_BTN)sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="openOcrContScan(this.dataset.bk)" style="color:#C026D3;border-color:#C026D3"><i class="ti ti-photo"></i> Quét ảnh</button>';
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="exportContSealExcel(this.dataset.bk)" style="color:#4F46E5;border-color:#4F46E5"><i class="ti ti-table-export"></i> Xuất Excel</button>';
       sectionsHtml+='<button class="btn" style="color:#7C3AED;border-color:#7C3AED" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
       sectionsHtml+='<button class="btn pri" data-bk="'+bkNo+'" onclick="saveContSealAll()" style="margin-left:auto"><i class="ti ti-check"></i> Lưu</button>';
@@ -6484,7 +6487,7 @@ function _ocrContModalHtml(){
 }
 
 function _ocrContStep1Html(){
-  return '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px">Bước 1: Đưa ảnh bảng Cont/Seal vào (ảnh chỉ xử lý ngay trong trình duyệt, không gửi đi đâu cả) — chọn file hoặc dán từ Clipboard.</div>'
+  return '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:10px">Bước 1: Đưa ảnh bảng Cont/Seal vào (AI Claude sẽ đọc ảnh: ảnh được gửi qua máy chủ Cocosea tới Anthropic để xử lý, không lưu lại; nếu AI chưa sẵn sàng app tự chuyển sang quét thường ngay trong trình duyệt) — chọn file hoặc dán từ Clipboard.</div>'
     +'<div id="ocrPasteZone" tabindex="0" style="border:2px dashed var(--border-light);border-radius:10px;padding:22px;text-align:center;cursor:pointer;background:#fff;outline:none" onclick="g(\'ocrFileInput\').click()">'
       +'<i class="ti ti-photo" style="font-size:28px;color:var(--text-tertiary)"></i>'
       +'<div style="font-size:12.5px;color:var(--text-secondary);margin-top:6px">Bấm để chọn ảnh, hoặc click vào khung này rồi bấm <b>Ctrl+V</b> để dán ảnh từ Clipboard</div>'
@@ -6546,7 +6549,87 @@ function _ocrContShowPreview(dataUrl){
   g('ocrImgPreview').src=dataUrl;
 }
 
+/* ── A 2.02: ĐỌC ẢNH BẰNG AI (Claude) qua Firebase Callable Function 'ocrContScan' ──
+   Khóa API Anthropic nằm bí mật trên Firebase (Secret), app chỉ gọi hàm — xem HUONG_DAN.md.
+   Nếu hàm chưa deploy / lỗi mạng / AI lỗi → tự động quét bằng Tesseract (như cũ). */
+const AI_OCR_REGION='asia-southeast1', AI_OCR_FN='ocrContScan';
+
+function _ocrNoBorder(no){
+  if(!no||typeof checkContNoValid!=='function')return '';
+  const v=checkContNoValid(no);
+  return v&&v.valid===false?'border-color:#DC2626;background:#FEF2F2':'';
+}
+function _ocrContNoCheck(el){
+  const v=el.value?checkContNoValid(el.value):{valid:null};
+  el.style.borderColor=v.valid===false?'#DC2626':'';
+  el.style.background=v.valid===false?'#FEF2F2':'';
+  el.title=v.valid===false?(v.reason||''):'';
+}
+window._ocrContNoCheck=_ocrContNoCheck;
+
+// Chuẩn hóa dữ liệu AI trả về → cùng cấu trúc với kết quả Tesseract
+function _ocrNormalizeAiRows(arr){
+  if(!Array.isArray(arr))return [];
+  const num=function(v){ if(v==null||v==='')return ''; const n=parseFloat(String(v).replace(/,/g,'.').replace(/[^0-9.\-]/g,'')); return isNaN(n)?'':n; };
+  const out=[];
+  arr.forEach(function(r){
+    if(!r)return;
+    const no=String(r.no||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(!no)return;
+    let d=String(r.date||'').trim();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) d=_ocrNormalizeDate(d)||'';
+    out.push({no:no,seal:String(r.seal||'').replace(/[^A-Za-z0-9\-]/g,'').toUpperCase(),pkg:num(r.pkg),nw:num(r.nw),gw:num(r.gw),tare:num(r.tare),date:d});
+  });
+  return out;
+}
+
+// Chuẩn bị ảnh gửi AI: giữ dưới ~6.5 triệu ký tự base64 (giới hạn request của Firebase ~10MB)
+function _ocrContPayload(dataUrl,cb){
+  const m=/^data:([^;]+);base64,(.*)$/.exec(dataUrl||'');
+  if(m&&m[2].length<6500000){cb({imageBase64:m[2],mimeType:m[1]});return;}
+  const img=new Image();
+  img.onload=function(){
+    const maxW=1600, sc=Math.min(1,maxW/img.width);
+    const cv=document.createElement('canvas');
+    cv.width=Math.round(img.width*sc); cv.height=Math.round(img.height*sc);
+    cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+    const u=cv.toDataURL('image/jpeg',0.85);
+    cb({imageBase64:u.split(',')[1],mimeType:'image/jpeg'});
+  };
+  img.src=dataUrl;
+}
+
 function _ocrContRunScan(){
+  const st=window._ocrContState; if(!st||!st.imageDataUrl){toast('Chưa có ảnh','error');return;}
+  if(!(window.firebase&&firebase.functions)){ _ocrContRunTesseract(); return; }
+  setLoading(true,'AI đang đọc ảnh... (khoảng 5–20 giây)');
+  _ocrContPayload(st.imageDataUrl,function(p){
+    let fn;
+    try{ fn=firebase.app().functions(AI_OCR_REGION).httpsCallable(AI_OCR_FN,{timeout:90000}); }
+    catch(e){ setLoading(false); _ocrContRunTesseract(); return; }
+    fn(p).then(function(res){
+      setLoading(false);
+      st.engine='ai';
+      st.rows=_ocrNormalizeAiRows(res&&res.data&&res.data.rows);
+      if(!st.rows.length){
+        toast('AI không đọc được dòng cont nào trong ảnh — thử ảnh rõ hơn, hoặc nhập tay','error');
+        st.rows=[{no:'',seal:'',pkg:'',nw:'',gw:'',tare:'',date:''}];
+      }
+      _ocrContRenderPreviewTable();
+    }).catch(function(err){
+      setLoading(false);
+      const code=String((err&&err.code)||'').replace('functions/','');
+      console.warn('AI OCR lỗi:',code,err&&err.message);
+      if(code==='unauthenticated'||code==='permission-denied'){ toast('Cần đăng nhập lại để dùng AI','error'); return; }
+      if(code==='invalid-argument'){ toast((err&&err.message)||'Ảnh không hợp lệ','error'); return; }
+      // not-found (chưa deploy) / unavailable / deadline-exceeded / internal ... → dự phòng quét thường
+      toast('AI chưa sẵn sàng ('+(code||'lỗi')+') — chuyển sang quét thường','error');
+      _ocrContRunTesseract();
+    });
+  });
+}
+
+function _ocrContRunTesseract(){
   const st=window._ocrContState; if(!st||!st.imageDataUrl){toast('Chưa có ảnh','error');return;}
   setLoading(true,'Đang tải công cụ quét ảnh...');
   _loadTesseract(function(){
@@ -6557,6 +6640,7 @@ function _ocrContRunScan(){
       }
     }).then(function(result){
       setLoading(false);
+      st.engine='tess';
       st.rows=_ocrParseContRows(result.data);
       if(!st.rows.length) st.rows=[{no:'',seal:'',pkg:'',nw:'',gw:'',tare:'',date:''}];
       _ocrContRenderPreviewTable();
@@ -6627,7 +6711,7 @@ function _ocrRowHtml(r,i){
   r=r||{};
   return '<tr>'
     +'<td style="padding:3px;text-align:center;font-size:11px">'+(i+1)+'</td>'
-    +'<td style="padding:2px 4px"><input type="text" class="ocrNo" data-i="'+i+'" value="'+(r.no||'')+'" placeholder="Cont No" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
+    +'<td style="padding:2px 4px"><input type="text" class="ocrNo" data-i="'+i+'" value="'+(r.no||'')+'" placeholder="Cont No" oninput="_ocrContNoCheck(this)" style="font-size:11.5px;width:100%;box-sizing:border-box;'+_ocrNoBorder(r.no)+'"/></td>'
     +'<td style="padding:2px 4px"><input type="text" class="ocrSeal" data-i="'+i+'" value="'+(r.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
     +'<td style="padding:2px 4px"><input type="number" class="ocrPkg" data-i="'+i+'" value="'+(r.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
     +'<td style="padding:2px 4px"><input type="number" class="ocrNw" data-i="'+i+'" value="'+(r.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
@@ -6643,7 +6727,7 @@ function _ocrContRenderPreviewTable(){
   const body=g('ocrContBody'); if(!body)return;
   const rowsHtml=st.rows.map(function(r,i){ return _ocrRowHtml(r,i); }).join('');
   body.innerHTML=
-    '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px">Bước 2: Kiểm tra & chỉnh sửa dữ liệu đọc được (kết quả OCR chỉ mang tính tham khảo, hãy đối chiếu lại với ảnh gốc trước khi nhập) — đọc được <b>'+st.rows.length+'</b> dòng.</div>'
+    '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px">Bước 2: Kiểm tra & chỉnh sửa dữ liệu đọc được ('+(st.engine==='ai'?'AI':'OCR')+' có thể đọc sai — hãy đối chiếu với ảnh gốc; ô viền đỏ là số cont chưa đúng chuẩn ISO 6346) — đọc được <b>'+st.rows.length+'</b> dòng.</div>'
     +'<div style="max-height:320px;overflow:auto;border:1px solid var(--border-light);border-radius:8px">'
     +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
       +'<colgroup><col style="width:26px"/><col style="width:17%"/><col style="width:15%"/><col style="width:10%"/><col style="width:11%"/><col style="width:11%"/><col style="width:10%"/><col style="width:15%"/><col style="width:26px"/></colgroup>'
@@ -9311,7 +9395,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
-// A 2.01: chùm sáng hội tụ về 1 điểm trên đế (cả header/footer); mở màn: cây dừa → tia lan ra → các biểu tượng hiện lần lượt theo chiều kim đồng hồ từ Shipment. A 2.00: (đặt lại phiên bản; các bản sau đếm lên A 2.01, A 2.02…) tia sáng mềm hơn — chỉ 2 tia ngoài cùng, chỉ chiếu tới chân bảng/chân nội dung; icon Finance mới. v4.102: dashboard: đế kính dạng màn hình nhỏ gọn + tia sáng chiếu chữ/biểu tượng, bảng KPI/Lịch có đế + chùm tia, hiệu ứng mở màn, icon Finance mới. v4.101: mobile: icon lên trên, KPI/lịch xuống dưới, khôi phục vòng quay; thiết kế lại giao diện Shipment trên mobile. v4.100: bảng KPI/lịch/header/footer đứng yên, icon trôi nổi, đế kính mới. v4.99: bỏ thanh header/footer (chữ nổi trên đế kính), bảng KPI/Lịch dày 3D, donut+radar. v4.98: đổi vị trí Shipment/CRM. v4.97: Dashboard 3D (icon xếp đều trên sàn 3D, bảng KPI dựng đứng, hào quang hover). v4.96: Dashboard mới (mạng ánh sáng + hào quang holographic).
+// A 2.03: Document Maker — xem trước dạng sidebar trái + sửa trực tiếp (chữ, thêm/xóa dòng/cột) + lưu/xuất PDF/Excel; thêm dòng In word (số tiền bằng chữ tiếng Anh) cho Invoice/Contract; nút Quét ảnh (AI) tạm ẩn lại. A 2.02: bật lại nút Quét ảnh (Cont/Seal) — đọc ảnh bằng AI Claude qua Firebase Function, dự phòng Tesseract. A 2.01: chùm sáng hội tụ về 1 điểm trên đế (cả header/footer); mở màn: cây dừa → tia lan ra → các biểu tượng hiện lần lượt theo chiều kim đồng hồ từ Shipment. A 2.00: (đặt lại phiên bản; các bản sau đếm lên A 2.01, A 2.02…) tia sáng mềm hơn — chỉ 2 tia ngoài cùng, chỉ chiếu tới chân bảng/chân nội dung; icon Finance mới. v4.102: dashboard: đế kính dạng màn hình nhỏ gọn + tia sáng chiếu chữ/biểu tượng, bảng KPI/Lịch có đế + chùm tia, hiệu ứng mở màn, icon Finance mới. v4.101: mobile: icon lên trên, KPI/lịch xuống dưới, khôi phục vòng quay; thiết kế lại giao diện Shipment trên mobile. v4.100: bảng KPI/lịch/header/footer đứng yên, icon trôi nổi, đế kính mới. v4.99: bỏ thanh header/footer (chữ nổi trên đế kính), bảng KPI/Lịch dày 3D, donut+radar. v4.98: đổi vị trí Shipment/CRM. v4.97: Dashboard 3D (icon xếp đều trên sàn 3D, bảng KPI dựng đứng, hào quang hover). v4.96: Dashboard mới (mạng ánh sáng + hào quang holographic).
 // v4.95: địa chỉ + website chính thức của công ty (hiển thị trên chữ ký email, hợp đồng, báo giá...).
 window.COCO_ADDR='182/71 Đường số 6, Phường Bình Tân, Tp. Hồ Chí Minh';
 window.COCO_WEB='www.cocoseavn.com';
@@ -21437,6 +21521,47 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
   .cal-chip-vessel{background:rgba(37,99,235,.14)}
   .cal-chip-truck{background:rgba(180,83,9,.14)}
   .cal-chip-scy{background:rgba(124,58,237,.14)}
+}
+</style>
+<style id="dmpv-css">
+/* A 2.03 — Document Maker: xem trước dạng sidebar trái + khung sửa trực tiếp */
+.dmpv-modal{max-width:1320px;width:96vw;height:92vh;max-height:92vh;padding:0 !important;display:flex;flex-direction:column;overflow:hidden;border-radius:14px}
+.dmpv-head{background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.dmpv-body{flex:1;min-height:0;display:flex;background:var(--bg-secondary)}
+.dmpv-side{width:236px;flex:0 0 236px;overflow-y:auto;padding:12px;border-right:1px solid var(--border-light);background:var(--bg-primary)}
+.dmpv-lbl{font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--text-tertiary);margin:2px 2px 6px}
+.dmpv-docs,.dmpv-acts{display:flex;flex-direction:column;gap:4px}
+.dmpv-doc,.dmpv-act{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text-secondary);cursor:pointer;line-height:1.25}
+.dmpv-doc i,.dmpv-act i{font-size:15px;flex:0 0 auto}
+.dmpv-doc:hover,.dmpv-act:hover{background:var(--bg-secondary)}
+.dmpv-doc.active{background:#F3EEFF;border-color:#7C3AED;color:#5B21B6}
+.dmpv-doc em{margin-left:auto;font-style:normal;color:#EA580C;font-size:10px}
+.dmpv-act.pri{background:#1a4b8c;color:#fff;margin-bottom:2px}
+.dmpv-act.pri:hover{background:#163f75}
+.dmpv-act.xl{color:#0D9488}
+.dmpv-act.warn{color:#B45309}
+.dmpv-act.on{background:var(--bg-secondary);border-color:var(--border-light)}
+.dmpv-hint{margin-top:14px;font-size:11px;line-height:1.5;color:var(--text-tertiary);padding:8px 9px;border:1px dashed var(--border-light);border-radius:8px}
+.dmpv-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.dmpv-edit{flex:1;min-height:0;display:flex;flex-direction:column}
+.dmpv-toolbar{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:7px 12px;background:var(--bg-primary);border-bottom:1px solid var(--border-light);flex:0 0 auto}
+.dmpv-grp{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.dmpv-grp-tbl{padding-left:12px;border-left:1px solid var(--border-light)}
+.dmpv-grp-lbl{font-size:11px;font-weight:700;color:var(--text-tertiary);margin-right:2px}
+.dmpv-tb{border:1px solid var(--border-light);background:var(--bg-primary);color:var(--text-primary);border-radius:6px;padding:4px 9px;font-family:inherit;font-size:12px;cursor:pointer;min-width:28px;line-height:1.3}
+.dmpv-tb:hover{border-color:#7C3AED;background:#F3EEFF;color:#5B21B6}
+.dmpv-sel{font-size:12px;padding:3px 4px;border:1px solid var(--border-light);border-radius:6px;background:var(--bg-primary);color:var(--text-primary)}
+.dmpv-frame-wrap{flex:1;min-height:0;background:#e5e9f0}
+.dmpv-frame{width:100%;height:100%;border:none;display:block;background:#e5e9f0}
+.dmpv-saved{flex:1;overflow:auto;padding:14px 16px}
+@media(max-width:760px){
+  .dmpv-modal{width:100vw;height:100vh;max-height:100vh;border-radius:0}
+  .dmpv-body{flex-direction:column}
+  .dmpv-side{width:auto;flex:0 0 auto;max-height:30vh;border-right:none;border-bottom:1px solid var(--border-light);padding:8px}
+  .dmpv-docs,.dmpv-acts{flex-direction:row;flex-wrap:wrap}
+  .dmpv-doc,.dmpv-act{width:auto;padding:6px 9px;font-size:12px}
+  .dmpv-hint{display:none}
+  .dmpv-grp-tbl{padding-left:0;border-left:none}
 }
 </style>
 <style id="mobile-xuat-v4101">
@@ -34769,6 +34894,7 @@ async function _dmDoExportExcel(){
       ws.getCell(r,5).value=f2(grandTotal); ws.getCell(r,5).font={bold:true};
       [1,3,4,5].forEach(function(ci){ws.getCell(r,ci).border=B();});
       r++;
+      ws.mergeCells(r,1,r,6); ws.getCell(r,1).value='In word: '+_dmInWordText(grandTotal); ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={wrapText:true,vertical:'top'}; ws.getRow(r).height=28; r++;
       signBlock(ws,r,d);
       applyTimesFont(ws);
     }
@@ -34832,7 +34958,8 @@ async function _dmDoExportExcel(){
       ws.mergeCells(r,1,r,2); ws.getCell(r,1).value='TOTAL'; ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={horizontal:'center'};
       ws.getCell(r,3).value=d.qty; ws.getCell(r,5).value=f2(d.amount);
       [1,3,4,5].forEach(function(ci){ws.getCell(r,ci).font={bold:true};ws.getCell(r,ci).border=B();});
-      r+=2;
+      r++;
+      ws.mergeCells(r,1,r,6); ws.getCell(r,1).value='In word: '+_dmInWordText(d.amount); ws.getCell(r,1).font={bold:true}; ws.getCell(r,1).alignment={wrapText:true,vertical:'top'}; ws.getRow(r).height=28; r+=2;
       const terms=[
         '1. Commodity and Description:',
         'Origin: Vietnam. Only Shipment. Transshipment: Allowed. Partial Shipment: Allowed.',
@@ -35332,63 +35459,490 @@ function dmPreview(){
   if(!d.sName){toast('Shipper chưa có tên tiếng Anh — vào Đối tác để nhập','error');return;}
   ['dmBtnInv','dmBtnInvCont','dmBtnPkl','dmBtnCont','dmBtnContCont','dmBtnInvTk','dmBtnSI','dmBtnSIHede','dmBtnMerge'].forEach(function(id){const b=g(id);if(b){b.disabled=false;b.style.opacity='1';}});
   window._dmPreviewType=window._dmActiveDocType&&DM_PREVIEW_TYPES.some(function(t){return t.k===window._dmActiveDocType;})?window._dmActiveDocType:'INV';
-  g('eportOv').innerHTML=`
-  <div class="modal" style="max-width:980px;max-height:92vh;overflow-y:auto;border-radius:14px">
-    <div style="background:#1a4b8c;padding:12px 18px;display:flex;align-items:center;gap:10px">
-      <i class="ti ti-eye" style="font-size:18px;color:#e8f0fe"></i>
-      <div style="font-size:14px;font-weight:700;color:#fff;flex:1">Xem trước chứng từ — ${_dmLot.jobNo||''}</div>
-      <button onclick="closeOv('eportOv')" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer"><i class="ti ti-x"></i></button>
-    </div>
-    <div style="padding:16px 18px;background:var(--bg-secondary)">
-      <div class="dm-tabs" id="dmPreviewTabs" style="margin-bottom:10px"></div>
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <button class="btn ofr-btn navy sm" onclick="_dmPreviewCreatePdf()"><i class="ti ti-file-check"></i> Tạo PDF (loại đang xem)</button>
-        <button class="btn sm" onclick="dmMergePdf()" style="color:var(--blue);border-color:var(--blue)"><i class="ti ti-files"></i> Merge PDF</button>
-        <button class="btn sm" onclick="_dmOpenExcelPicker()" style="color:#0D9488;border-color:#0D9488"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>
-      </div>
-      <div style="background:#fff;border:1px solid var(--border-light);border-radius:10px;overflow:hidden">
-        <iframe id="dmPreviewFrame" style="width:100%;height:60vh;border:none;display:block"></iframe>
-      </div>
-      <div style="margin-top:18px">
-        <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px"><i class="ti ti-files" style="font-size:13px"></i> Chứng từ đã tạo của lô hàng này</div>
-        <input type="text" id="dmSavedSearchPreview" placeholder="Tìm theo Job ID / Booking / MBL..." oninput="_dmRenderSavedListPreview()" style="font-size:12px;width:100%;margin-bottom:8px;box-sizing:border-box"/>
-        <div id="dmSavedListPreview"></div>
-      </div>
-    </div>
-  </div>`;
+  window._dmPv={type:null,base:'',dirty:false,cell:null,view:'edit'};
+  const abtn=function(cls,icon,label,fn,extra){return '<button type="button" class="dmpv-act '+cls+'" onclick="'+fn+'"'+(extra||'')+'><i class="ti '+icon+'"></i><span>'+label+'</span></button>';};
+  const tb=function(label,fn,title,style){return '<button type="button" class="dmpv-tb" onmousedown="event.preventDefault()" onclick="'+fn+'" title="'+title+'"'+(style?' style="'+style+'"':'')+'>'+label+'</button>';};
+  g('eportOv').innerHTML=
+  '<div class="modal dmpv-modal">'
+    +'<div class="dmpv-head">'
+      +'<i class="ti ti-eye" style="font-size:18px;color:#e8f0fe"></i>'
+      +'<div style="font-size:14px;font-weight:700;color:#fff;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Xem trước & chỉnh sửa chứng từ — '+(_dmLot.jobNo||'')+'</div>'
+      +'<button onclick="_dmPvClose()" style="color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer"><i class="ti ti-x"></i></button>'
+    +'</div>'
+    +'<div class="dmpv-body">'
+      +'<aside class="dmpv-side">'
+        +'<div class="dmpv-lbl">Chứng từ</div>'
+        +'<div id="dmPreviewTabs" class="dmpv-docs"></div>'
+        +'<div class="dmpv-lbl" style="margin-top:12px">Thao tác</div>'
+        +'<div class="dmpv-acts">'
+          +abtn('pri','ti-device-floppy','Lưu chứng từ','_dmPvSave()')
+          +abtn('','ti-file-check','Tạo PDF (bản đang xem)','_dmPvPdf()')
+          +abtn('','ti-files','Merge PDF','_dmPvMerge()')
+          +abtn('xl','ti-file-spreadsheet','Xuất Excel (bản đang xem)','_dmPvExportExcel()')
+          +abtn('xl','ti-table-export','Excel nhiều sheet (theo dữ liệu gốc)','_dmPvExcelPicker()')
+          +abtn('xl','ti-file-spreadsheet','SI (HEDE) — Excel','_dmPvSIHede()')
+          +abtn('','ti-history','Chứng từ đã lưu','_dmPvToggleSaved()',' id="dmPvSavedBtn"')
+          +abtn('warn','ti-restore','Khôi phục bản gốc','_dmPvReset()')
+        +'</div>'
+        +'<div class="dmpv-hint">Bấm vào chữ trên trang để sửa trực tiếp như Word. Bản sửa được giữ trong phiên làm việc; bấm <b>Lưu chứng từ</b> để lưu vào lô hàng, rồi xuất PDF hoặc Excel.</div>'
+      +'</aside>'
+      +'<section class="dmpv-main">'
+        +'<div id="dmPvEditView" class="dmpv-edit">'
+          +'<div class="dmpv-toolbar" id="dmPvToolbar">'
+            +'<div class="dmpv-grp">'
+              +tb('<b>B</b>','_dmPvCmd(\'bold\')','In đậm')
+              +tb('<i>I</i>','_dmPvCmd(\'italic\')','In nghiêng')
+              +tb('<u>U</u>','_dmPvCmd(\'underline\')','Gạch chân')
+              +'<select id="dmPvSize" class="dmpv-sel" title="Cỡ chữ" onchange="_dmPvSize(this.value);this.value=\'\'"><option value="">Cỡ</option>'+[9,10,11,12,13,14,16,18,20].map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join('')+'</select>'
+            +'</div>'
+            +'<div class="dmpv-grp">'
+              +tb('Trái','_dmPvCmd(\'justifyLeft\')','Căn trái')
+              +tb('Giữa','_dmPvCmd(\'justifyCenter\')','Căn giữa')
+              +tb('Phải','_dmPvCmd(\'justifyRight\')','Căn phải')
+            +'</div>'
+            +'<div class="dmpv-grp">'
+              +tb('↶','_dmPvCmd(\'undo\')','Hoàn tác (Ctrl+Z)')
+              +tb('↷','_dmPvCmd(\'redo\')','Làm lại (Ctrl+Y)')
+            +'</div>'
+            +'<div class="dmpv-grp dmpv-grp-tbl">'
+              +'<span class="dmpv-grp-lbl">Bảng:</span>'
+              +tb('+ Dòng trên','_dmPvTable(\'rowBefore\')','Thêm dòng phía trên ô đang chọn')
+              +tb('+ Dòng dưới','_dmPvTable(\'rowAfter\')','Thêm dòng phía dưới ô đang chọn')
+              +tb('+ Cột trái','_dmPvTable(\'colBefore\')','Thêm cột bên trái ô đang chọn')
+              +tb('+ Cột phải','_dmPvTable(\'colAfter\')','Thêm cột bên phải ô đang chọn')
+              +tb('Xóa dòng','_dmPvTable(\'delRow\')','Xóa dòng chứa ô đang chọn','color:#B91C1C')
+              +tb('Xóa cột','_dmPvTable(\'delCol\')','Xóa cột chứa ô đang chọn','color:#B91C1C')
+            +'</div>'
+          +'</div>'
+          +'<div class="dmpv-frame-wrap"><iframe id="dmPreviewFrame" class="dmpv-frame"></iframe></div>'
+        +'</div>'
+        +'<div id="dmPvSavedView" class="dmpv-saved" style="display:none">'
+          +'<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px"><i class="ti ti-files" style="font-size:13px"></i> Chứng từ đã tạo của lô hàng này</div>'
+          +'<input type="text" id="dmSavedSearchPreview" placeholder="Tìm theo Job ID / Booking / MBL..." oninput="_dmRenderSavedListPreview()" style="font-size:12px;width:100%;margin-bottom:8px;box-sizing:border-box"/>'
+          +'<div id="dmSavedListPreview"></div>'
+        +'</div>'
+      +'</section>'
+    +'</div>'
+  +'</div>';
   openOv('eportOv');
-  _dmRenderPreviewTabs();
-  _dmRenderPreviewFrame();
+  _dmPvLoad(window._dmPreviewType);
   _dmRenderSavedListPreview();
 }
+
+// ── Lưu/khôi phục bản đã sửa: mỗi loại chứng từ có {base: HTML gốc lúc bắt đầu sửa, html: HTML đã sửa}.
+// Chỉ áp dụng khi dữ liệu lô hàng KHÔNG đổi (HTML gốc sinh ra bây giờ == base), tránh dùng nhầm bản sửa cũ.
+window._dmEdits=window._dmEdits||{};
+function _dmEditedOr(type,fresh){
+  const e=window._dmEdits&&window._dmEdits[type];
+  return (e&&e.base===fresh)?e.html:fresh;
+}
+window._dmEditedOr=_dmEditedOr;
+
+function _dmPvDoc(){ const f=g('dmPreviewFrame'); try{return f&&f.contentDocument;}catch(e){return null;} }
+function _dmPvSerialize(doc){
+  const clone=doc.documentElement.cloneNode(true);
+  const st=clone.querySelector('#dmEditStyle'); if(st)st.remove();
+  const b=clone.querySelector('body');
+  if(b){b.removeAttribute('contenteditable');b.removeAttribute('spellcheck');}
+  clone.querySelectorAll('.dm-sel').forEach(function(x){x.classList.remove('dm-sel'); if(!x.getAttribute('class'))x.removeAttribute('class');});
+  return '<!DOCTYPE html>'+clone.outerHTML;
+}
+function _dmPvCapture(){
+  const pv=window._dmPv; if(!pv||!pv.dirty||!pv.type)return;
+  const doc=_dmPvDoc(); if(!doc||!doc.body)return;
+  window._dmEdits[pv.type]={base:pv.base,html:_dmPvSerialize(doc)};
+  pv.dirty=false;
+}
+function _dmPvCurrentHtml(){
+  _dmPvCapture();
+  const pv=window._dmPv;
+  return _dmEditedOr(pv.type,pv.base);
+}
+function _dmPvTypeDef(type){ return DM_PREVIEW_TYPES.find(function(t){return t.k===type;})||DM_PREVIEW_TYPES[0]; }
+
+function _dmPvLoad(type){
+  _dmPvCapture();
+  const d=dmGetData(); if(!d)return;
+  const def=_dmPvTypeDef(type);
+  window._dmPreviewType=def.k;
+  let fresh='';
+  try{ fresh=def.gen(d); }catch(e){ fresh='<p style="font-family:sans-serif;padding:20px;color:#b91c1c">Không thể tạo bản xem trước: '+e.message+'</p>'; }
+  const e=window._dmEdits[def.k];
+  let useEdit=false;
+  if(e){
+    if(e.base===fresh) useEdit=true;
+    else { delete window._dmEdits[def.k]; toast('Dữ liệu lô hàng đã thay đổi — bản chỉnh sửa cũ của "'+def.label+'" được làm mới theo dữ liệu mới'); }
+  }
+  window._dmPv={type:def.k,base:fresh,dirty:false,cell:null,view:'edit'};
+  _dmPvShowView('edit');
+  _dmRenderPreviewTabs();
+  const frame=g('dmPreviewFrame'); if(!frame)return;
+  frame.onload=_dmPvSetup;
+  frame.srcdoc=useEdit?e.html:fresh;
+}
+window._dmPvLoad=_dmPvLoad;
 
 function _dmRenderPreviewTabs(){
   const box=g('dmPreviewTabs'); if(!box)return;
   box.innerHTML=DM_PREVIEW_TYPES.map(function(t){
-    const active=window._dmPreviewType===t.k;
-    return '<button type="button" class="dm-tab'+(active?' active':'')+'" onclick="window._dmPreviewType=\''+t.k+'\';_dmRenderPreviewTabs();_dmRenderPreviewFrame()"><i class="ti '+t.icon+'"></i>'+t.label+'</button>';
+    const active=window._dmPreviewType===t.k && (!window._dmPv||window._dmPv.view==='edit');
+    const edited=!!window._dmEdits[t.k] || (window._dmPv&&window._dmPv.type===t.k&&window._dmPv.dirty);
+    return '<button type="button" class="dmpv-doc'+(active?' active':'')+'" onclick="_dmPvLoad(\''+t.k+'\')"><i class="ti '+t.icon+'"></i><span>'+t.label+'</span>'+(edited?'<em title="Đã chỉnh sửa">●</em>':'')+'</button>';
   }).join('');
 }
 window._dmRenderPreviewTabs=_dmRenderPreviewTabs;
-
-function _dmRenderPreviewFrame(){
-  const frame=g('dmPreviewFrame'); if(!frame)return;
-  const d=dmGetData(); if(!d)return;
-  const type=DM_PREVIEW_TYPES.find(function(t){return t.k===window._dmPreviewType;})||DM_PREVIEW_TYPES[0];
-  let html='';
-  try{ html=type.gen(d); }catch(e){ html='<p style="font-family:sans-serif;padding:20px;color:#b91c1c">Không thể tạo bản xem trước: '+e.message+'</p>'; }
-  frame.srcdoc=html;
-}
+// Giữ tên cũ cho code gọi lại (nếu có)
+function _dmRenderPreviewFrame(){ _dmPvLoad(window._dmPreviewType||'INV'); }
 window._dmRenderPreviewFrame=_dmRenderPreviewFrame;
 
-// Tạo PDF đúng loại chứng từ ĐANG XEM trong popup preview — dùng lại nguyên vẹn dmExport()/
-// dmExportSIHede(), không đổi logic sinh PDF.
-function _dmPreviewCreatePdf(){
-  const type=window._dmPreviewType||'INV';
-  window._dmActiveDocType=type;
-  dmExport(type);
+// Bật chế độ chỉnh sửa trong iframe
+function _dmPvSetup(){
+  const doc=_dmPvDoc(); if(!doc||!doc.body)return;
+  const pv=window._dmPv;
+  const st=doc.createElement('style'); st.id='dmEditStyle';
+  st.textContent='html{background:#e5e9f0}body{background:#fff;width:210mm;max-width:100%;margin:12px auto !important;box-shadow:0 2px 14px rgba(0,0,0,.18);min-height:285mm;outline:none;cursor:text}table:hover{outline:1px dashed #a5b4fc}.dm-sel{outline:2px solid #7C3AED !important;outline-offset:-2px}::selection{background:#c7d2fe}';
+  doc.head.appendChild(st);
+  doc.body.setAttribute('contenteditable','true');
+  doc.body.setAttribute('spellcheck','false');
+  const markDirty=function(){ if(!window._dmPv)return; if(!window._dmPv.dirty){window._dmPv.dirty=true;_dmRenderPreviewTabs();} };
+  doc.body.addEventListener('input',markDirty);
+  doc.addEventListener('selectionchange',function(){
+    const sel=doc.getSelection(); if(!sel||!sel.anchorNode||!window._dmPv)return;
+    const el=sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement;
+    const cell=el&&el.closest?el.closest('td,th'):null;
+    if(window._dmPv.cell&&window._dmPv.cell!==cell)window._dmPv.cell.classList.remove('dm-sel');
+    window._dmPv.cell=cell;
+    if(cell)cell.classList.add('dm-sel');
+  });
+  // Dán: chỉ lấy chữ thuần để không kéo theo định dạng lạ
+  doc.body.addEventListener('paste',function(e){
+    const t=(e.clipboardData&&e.clipboardData.getData('text/plain'));
+    if(t==null)return;
+    e.preventDefault();
+    doc.execCommand('insertText',false,t);
+  });
+  // Tab = sang ô kế tiếp
+  doc.body.addEventListener('keydown',function(e){
+    if(e.key!=='Tab')return;
+    const c=window._dmPv&&window._dmPv.cell; if(!c)return;
+    e.preventDefault();
+    const cells=Array.from(c.closest('table').querySelectorAll('td,th'));
+    const i=cells.indexOf(c)+(e.shiftKey?-1:1);
+    if(cells[i]){ const r=doc.createRange(); r.selectNodeContents(cells[i]); r.collapse(true); const s=doc.getSelection(); s.removeAllRanges(); s.addRange(r); cells[i].scrollIntoView({block:'nearest'}); }
+  });
 }
+
+function _dmPvCmd(cmd){
+  const doc=_dmPvDoc(); if(!doc)return;
+  doc.execCommand(cmd,false,null);
+  if(window._dmPv&&!window._dmPv.dirty){window._dmPv.dirty=true;_dmRenderPreviewTabs();}
+}
+function _dmPvSize(px){
+  if(!px)return;
+  const doc=_dmPvDoc(); if(!doc)return;
+  doc.execCommand('fontSize',false,'7');
+  doc.querySelectorAll('font[size="7"]').forEach(function(f){
+    const s=doc.createElement('span'); s.style.fontSize=px+'px'; s.innerHTML=f.innerHTML; f.replaceWith(s);
+  });
+  if(window._dmPv&&!window._dmPv.dirty){window._dmPv.dirty=true;_dmRenderPreviewTabs();}
+}
+window._dmPvCmd=_dmPvCmd; window._dmPvSize=_dmPvSize;
+
+/* ── Chỉnh bảng: thêm/xóa dòng, cột (xử lý được ô gộp colspan/rowspan) ── */
+function _dmGrid(tbl){
+  const rows=Array.from(tbl.rows), grid=[];
+  rows.forEach(function(tr,r){
+    grid[r]=grid[r]||[]; let c=0;
+    Array.from(tr.cells).forEach(function(cell){
+      while(grid[r][c])c++;
+      const rs=Math.max(1,cell.rowSpan||1), cs=Math.max(1,cell.colSpan||1);
+      for(let i=0;i<rs&&r+i<rows.length;i++){ grid[r+i]=grid[r+i]||[]; for(let j=0;j<cs;j++)grid[r+i][c+j]=cell; }
+      c+=cs;
+    });
+  });
+  return grid;
+}
+function _dmNewCellLike(doc,ref,asTd){
+  const nc=doc.createElement(asTd?'td':ref.tagName.toLowerCase());
+  if(ref.getAttribute('class'))nc.setAttribute('class',(ref.getAttribute('class')||'').replace(/\bdm-sel\b/,'').trim());
+  if(ref.getAttribute('style'))nc.setAttribute('style',ref.getAttribute('style'));
+  nc.innerHTML='<br>';
+  return nc;
+}
+function _dmPvTable(op){
+  const pv=window._dmPv, doc=_dmPvDoc();
+  const cell=pv&&pv.cell;
+  if(!doc||!cell||!cell.isConnected){toast('Bấm vào một ô của bảng trước (ô được chọn sẽ có viền tím)','error');return;}
+  const tbl=cell.closest('table'); if(!tbl)return;
+  const tr=cell.parentNode, grid=_dmGrid(tbl), r0=tr.rowIndex, c0=grid[r0].indexOf(cell);
+  const done=new Set();
+  if(op==='rowBefore'||op==='rowAfter'){
+    const after=op==='rowAfter', ins=after?r0+1:r0, ref=grid[r0];
+    const nt=doc.createElement('tr');
+    const inHead=tr.parentNode.tagName==='THEAD';
+    for(let c=0;c<ref.length;c++){
+      const rc=ref[c]; if(!rc)continue;
+      const above=grid[ins-1]&&grid[ins-1][c], below=grid[ins]&&grid[ins][c];
+      if(above&&below&&above===below){ if(!done.has(above)){above.rowSpan=(above.rowSpan||1)+1;done.add(above);} continue; }
+      if(done.has(rc))continue; done.add(rc);
+      const nc=_dmNewCellLike(doc,rc,inHead&&after);
+      if((rc.colSpan||1)>1)nc.colSpan=rc.colSpan;
+      nt.appendChild(nc);
+    }
+    if(inHead&&after&&tbl.tBodies[0]){ const tb=tbl.tBodies[0]; tb.insertBefore(nt,tb.firstChild); }
+    else tr.parentNode.insertBefore(nt,after?tr.nextSibling:tr);
+  }
+  else if(op==='colBefore'||op==='colAfter'){
+    const ins=(op==='colAfter')?c0+(cell.colSpan||1):c0;
+    grid.forEach(function(row,r){
+      const left=row[ins-1], right=row[ins], trr=tbl.rows[r];
+      if(left&&right&&left===right){ if(!done.has(left)){left.colSpan=(left.colSpan||1)+1;done.add(left);} return; }
+      const cands=[left,right].filter(function(x){return x&&x.parentNode===trr;});
+      if(!cands.length)return;
+      const ref=cands.find(function(x){return (x.rowSpan||1)===1;})||cands[0];
+      const nc=_dmNewCellLike(doc,ref,false);
+      if((ref.rowSpan||1)>1)nc.rowSpan=ref.rowSpan;
+      let after=null;
+      Array.from(trr.cells).forEach(function(cl){ if(grid[r].indexOf(cl)<ins)after=cl; });
+      trr.insertBefore(nc,after?after.nextSibling:trr.firstChild);
+    });
+  }
+  else if(op==='delRow'){
+    Array.from(new Set(grid[r0])).forEach(function(cl){
+      if(!cl)return;
+      if(cl.parentNode===tr){
+        if((cl.rowSpan||1)>1&&tbl.rows[r0+1]){
+          const nxt=tbl.rows[r0+1], gn=grid[r0+1], col=grid[r0].indexOf(cl);
+          const cp=cl.cloneNode(true); cp.rowSpan=cl.rowSpan-1;
+          let before=null; Array.from(nxt.cells).forEach(function(x){ if(!before&&gn.indexOf(x)>col)before=x; });
+          nxt.insertBefore(cp,before);
+        }
+      } else cl.rowSpan=Math.max(1,(cl.rowSpan||1)-1);
+    });
+    pv.cell=null;
+    tr.remove();
+    if(!tbl.rows.length)tbl.remove();
+  }
+  else if(op==='delCol'){
+    if((grid[r0]||[]).length<=1){toast('Bảng chỉ còn 1 cột — hãy xóa nội dung thay vì xóa cột','error');return;}
+    pv.cell=null;
+    grid.forEach(function(row){
+      const cl=row[c0]; if(!cl||done.has(cl))return; done.add(cl);
+      if((cl.colSpan||1)>1)cl.colSpan--; else cl.remove();
+    });
+  }
+  pv.dirty=true; _dmRenderPreviewTabs();
+}
+window._dmPvTable=_dmPvTable;
+
+function _dmPvShowView(v){
+  if(window._dmPv)window._dmPv.view=v;
+  const e=g('dmPvEditView'), s=g('dmPvSavedView'), b=g('dmPvSavedBtn');
+  if(e)e.style.display=v==='edit'?'flex':'none';
+  if(s)s.style.display=v==='saved'?'block':'none';
+  if(b)b.classList.toggle('on',v==='saved');
+}
+function _dmPvToggleSaved(){
+  const v=(window._dmPv&&window._dmPv.view==='saved')?'edit':'saved';
+  if(v==='saved')_dmPvCapture();
+  _dmPvShowView(v);
+  _dmRenderPreviewTabs();
+  if(v==='saved')_dmRenderSavedListPreview();
+}
+window._dmPvToggleSaved=_dmPvToggleSaved;
+
+function _dmPvClose(){ _dmPvCapture(); closeOv('eportOv'); }
+window._dmPvClose=_dmPvClose;
+
+function _dmPvReset(){
+  const pv=window._dmPv; if(!pv||!pv.type)return;
+  if(!window._dmEdits[pv.type]&&!pv.dirty){toast('Chứng từ này chưa có chỉnh sửa nào');return;}
+  if(!confirm('Bỏ toàn bộ chỉnh sửa của chứng từ này và quay về bản gốc theo dữ liệu lô hàng?'))return;
+  delete window._dmEdits[pv.type];
+  pv.dirty=false;
+  _dmPvLoad(pv.type);
+  toast('Đã khôi phục bản gốc');
+}
+window._dmPvReset=_dmPvReset;
+
+function _dmPvDocName(type,d){
+  const bill=d.bkgNo||_dmBill(d), cnee=_dmCneeName(d);
+  const typeLabel={'INV':'Invoice','INV_CONT':'InvoiceByCont','PKL':'PackingList','CONTRACT':'Contract','CONTRACT_CONT':'ContractByCont','INV_TK':'InvoiceToKhai','SI':'SI'};
+  return [typeLabel[type]||type,_dmSafe(bill),_dmSafe(cnee)].filter(Boolean).join('_');
+}
+
+// LƯU bản đang xem (đã chỉnh sửa) vào tab Document của lô hàng
+function _dmPvSave(){
+  const pv=window._dmPv; if(!pv||!pv.type)return;
+  const d=dmGetData(); if(!d){toast('Chưa có dữ liệu','error');return;}
+  const html=_dmPvCurrentHtml();
+  const typeMap={'INV':'invoice','INV_CONT':'invoice','PKL':'pkl','CONTRACT':'contract','CONTRACT_CONT':'contract','INV_TK':'invoice','SI':'si'};
+  Promise.resolve(saveDocToLot(typeMap[pv.type]||pv.type.toLowerCase(),html,_dmPvDocName(pv.type,d))).then(function(){ _dmRenderSavedListPreview(); });
+}
+window._dmPvSave=_dmPvSave;
+
+function _dmPvPdf(){
+  const pv=window._dmPv; if(!pv||!pv.type)return;
+  _dmPvCapture();
+  window._dmActiveDocType=pv.type;
+  dmExport(pv.type);   // dmExport tự dùng bản đã sửa (nếu có) qua _dmEditedOr()
+}
+window._dmPvPdf=_dmPvPdf;
+function _dmPreviewCreatePdf(){ _dmPvPdf(); }
 window._dmPreviewCreatePdf=_dmPreviewCreatePdf;
+function _dmPvMerge(){ _dmPvCapture(); dmMergePdf(); }
+function _dmPvExcelPicker(){ _dmPvCapture(); _dmOpenExcelPicker(); }
+function _dmPvSIHede(){ _dmPvCapture(); dmExportSIHede(); }
+window._dmPvMerge=_dmPvMerge; window._dmPvExcelPicker=_dmPvExcelPicker; window._dmPvSIHede=_dmPvSIHede;
+
+/* ── Xuất Excel từ BẢN ĐANG XEM (đã chỉnh sửa): chuyển đúng bố cục trên trang sang 1 sheet ──
+   Ô/bảng/chữ lấy từ trang đang hiển thị (vị trí, độ rộng, ô gộp, đậm/nghiêng, căn lề, viền, con mộc). */
+async function _dmPvExportExcel(){
+  const pv=window._dmPv; if(!pv||!pv.type)return;
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const doc=_dmPvDoc(); if(!doc||!doc.body){toast('Chưa có trang để xuất','error');return;}
+  const d=dmGetData(); if(!d){toast('Chưa có dữ liệu','error');return;}
+  _dmPvCapture();
+  const win=doc.defaultView, body=doc.body;
+  const bcs=win.getComputedStyle(body);
+  const bRect=body.getBoundingClientRect();
+  const x0=bRect.left+(parseFloat(bcs.paddingLeft)||0);
+  const contentW=bRect.width-(parseFloat(bcs.paddingLeft)||0)-(parseFloat(bcs.paddingRight)||0);
+  const X=function(px){return px-x0;};
+  // 1) Gom các khối theo thứ tự trên trang
+  const blocks=[];
+  const cellText=function(el){
+    const tmp=[]; el.querySelectorAll('span').forEach(function(sp){ if(/inline-block/.test(sp.getAttribute('style')||'')&&!sp.textContent){ sp.textContent='  '; tmp.push(sp); } });
+    const t=(el.innerText||'');
+    tmp.forEach(function(sp){sp.textContent='';});
+    return t.replace(/[  ]/g,' ').replace(/\t+/g,' ').replace(/[ ]+\n/g,'\n').replace(/\n{2,}/g,'\n').trim();
+  };
+  function walk(parent){
+    Array.from(parent.children).forEach(function(el){
+      const tag=el.tagName;
+      if(tag==='STYLE'||tag==='SCRIPT')return;
+      if(tag==='TABLE'){ blocks.push({kind:'table',el:el}); return; }
+      if(tag==='IMG'){ blocks.push({kind:'img',el:el}); return; }
+      if(el.querySelector('table')){ walk(el); return; }
+      // khối gồm nhiều đoạn/khối con (p, div) → mỗi đoạn 1 dòng Excel riêng
+      if(el.querySelector(':scope > p, :scope > div')&&!Array.from(el.childNodes).some(function(n){return n.nodeType===3&&n.textContent.trim();})){ walk(el); return; }
+      const t=cellText(el), imgs=el.querySelectorAll('img');
+      if(t) blocks.push({kind:'text',el:el,text:t});
+      imgs.forEach(function(im){blocks.push({kind:'img',el:im});});
+    });
+  }
+  walk(body);
+  if(!blocks.length){toast('Trang trống, không có gì để xuất','error');return;}
+  // 2) Các mốc cột (theo vị trí thật trên trang) → cột Excel
+  const xs=[0,contentW];
+  const snap=function(v){return Math.round(v/4)*4;};
+  blocks.forEach(function(b){
+    if(b.kind!=='table')return;
+    Array.from(b.el.rows).forEach(function(tr){
+      Array.from(tr.cells).forEach(function(c){
+        const r=c.getBoundingClientRect();
+        xs.push(X(r.left),X(r.right));
+      });
+    });
+  });
+  let bounds=Array.from(new Set(xs.map(function(v){return snap(Math.max(0,Math.min(contentW,v)));}))).sort(function(a,b){return a-b;});
+  // gộp các mốc quá sát nhau (<10px) để không sinh cột quá hẹp
+  const merged=[bounds[0]];
+  for(let i=1;i<bounds.length;i++){ if(bounds[i]-merged[merged.length-1]>=10)merged.push(bounds[i]); }
+  if(merged[merged.length-1]!==snap(contentW))merged[merged.length-1]=snap(contentW);
+  bounds=merged;
+  const nCols=bounds.length-1;
+  const colOf=function(x){ // mốc gần nhất → chỉ số cột (0..nCols)
+    x=snap(Math.max(0,Math.min(contentW,x)));
+    let best=0,bd=1e9; bounds.forEach(function(b,i){const dd=Math.abs(b-x); if(dd<bd){bd=dd;best=i;}}); return best;
+  };
+  const wb=new ExcelJS.Workbook(); wb.creator='CocoFlow ERP'; wb.created=new Date();
+  const def=_dmPvTypeDef(pv.type);
+  const ws=wb.addWorksheet(def.label.slice(0,31),{views:[{showGridLines:false}],pageSetup:{paperSize:9,orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:0.4,right:0.4,top:0.5,bottom:0.5,header:0.2,footer:0.2}}});
+  ws.columns=bounds.slice(1).map(function(b,i){ return {width:Math.max(1.5,((b-bounds[i])-5)/7+0.7)}; });
+  const argb=function(css){ const m=/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/.exec(css||''); if(!m)return null; if(m[4]!==undefined&&parseFloat(m[4])===0)return null; const h=function(n){return ('0'+parseInt(n).toString(16)).slice(-2).toUpperCase();}; return 'FF'+h(m[1])+h(m[2])+h(m[3]); };
+  const hasBorder=function(cs,side){ return cs['border'+side+'Style']!=='none'&&(parseFloat(cs['border'+side+'Width'])||0)>0; };
+  const styleCell=function(xc,el,text){
+    const cs=win.getComputedStyle(el);
+    const px=parseFloat(cs.fontSize)||12;
+    xc.font={name:'Times New Roman',size:Math.round(px*0.75*2)/2,bold:(parseInt(cs.fontWeight)||400)>=600,italic:cs.fontStyle==='italic',underline:/underline/.test(cs.textDecorationLine||cs.textDecoration||''),color:{argb:argb(cs.color)||'FF000000'}};
+    const ta=cs.textAlign; const h=(ta==='center')?'center':(ta==='right'||ta==='end')?'right':'left';
+    const va=cs.verticalAlign==='middle'?'middle':(cs.verticalAlign==='bottom'?'bottom':'top');
+    xc.alignment={horizontal:h,vertical:va,wrapText:true};
+    const bk=argb(cs.backgroundColor); if(bk&&bk!=='FFFFFFFF')xc.fill={type:'pattern',pattern:'solid',fgColor:{argb:bk}};
+    const bd={}; const thin={style:'thin',color:{argb:'FF000000'}};
+    if(hasBorder(cs,'Top'))bd.top=thin; if(hasBorder(cs,'Bottom'))bd.bottom=thin; if(hasBorder(cs,'Left'))bd.left=thin; if(hasBorder(cs,'Right'))bd.right=thin;
+    if(Object.keys(bd).length)xc.border=bd;
+    xc.value=text;
+  };
+  const images=[]; let row=1;
+  const pushImg=function(im,rowIdx,colIdx){
+    const m=/^data:image\/(png|jpeg|jpg|gif);base64,/i.exec(im.getAttribute('src')||'');
+    if(!m)return;
+    const rr=im.getBoundingClientRect();
+    images.push({src:im.getAttribute('src'),ext:m[1].toLowerCase()==='jpg'?'jpeg':m[1].toLowerCase(),row:rowIdx,col:colIdx,w:Math.round(rr.width),h:Math.round(rr.height)});
+  };
+  blocks.forEach(function(b){
+    if(b.kind==='text'){
+      const r=win.getComputedStyle(b.el), rect=b.el.getBoundingClientRect();
+      ws.mergeCells(row,1,row,nCols);
+      const xc=ws.getCell(row,1); styleCell(xc,b.el,b.text);
+      ws.getRow(row).height=Math.max(13,Math.round(rect.height*0.75)+2);
+      row++;
+    } else if(b.kind==='img'){
+      const rect=b.el.getBoundingClientRect();
+      const col=colOf(X(rect.left)); pushImg(b.el,row-1,Math.min(col,nCols-1));
+      ws.getRow(row).height=Math.max(13,Math.round(rect.height*0.75)+2);
+      row++;
+    } else {
+      const tbl=b.el;
+      Array.from(tbl.rows).forEach(function(tr){
+        const trRect=tr.getBoundingClientRect();
+        let maxH=0;
+        Array.from(tr.cells).forEach(function(c){
+          const rect=c.getBoundingClientRect();
+          const c1=colOf(X(rect.left)), c2=Math.max(c1+1,colOf(X(rect.right)));
+          const rs=Math.max(1,c.rowSpan||1);
+          const r1=row, r2=row+rs-1;
+          if(c2-c1>1||rs>1){ try{ ws.mergeCells(r1,c1+1,r2,c2); }catch(e){} }
+          styleCell(ws.getCell(r1,c1+1),c,cellText(c));
+          // viền cho cả vùng gộp
+          const cs=win.getComputedStyle(c);
+          if(c2-c1>1||rs>1){
+            const thin={style:'thin',color:{argb:'FF000000'}};
+            for(let rr=r1;rr<=r2;rr++)for(let cc=c1+1;cc<=c2;cc++){
+              const bd={}; if(hasBorder(cs,'Top')&&rr===r1)bd.top=thin; if(hasBorder(cs,'Bottom')&&rr===r2)bd.bottom=thin; if(hasBorder(cs,'Left')&&cc===c1+1)bd.left=thin; if(hasBorder(cs,'Right')&&cc===c2)bd.right=thin;
+              if(Object.keys(bd).length)ws.getCell(rr,cc).border=bd;
+            }
+          }
+          c.querySelectorAll('img').forEach(function(im){ pushImg(im,r1-1,c1); });
+          if(rs===1)maxH=Math.max(maxH,rect.height);
+        });
+        const h=Math.max(maxH,0)||trRect.height;
+        ws.getRow(row).height=Math.max(13,Math.round(h*0.75));
+        row++;
+      });
+      // dòng trống ngăn cách bảng với khối sau (giống khoảng trắng trên trang) — rất nhỏ
+    }
+  });
+  images.forEach(function(im){
+    try{
+      const id=wb.addImage({base64:im.src,extension:im.ext});
+      ws.addImage(id,{tl:{col:im.col,row:im.row},ext:{width:im.w,height:im.h}});
+    }catch(e){ console.warn('bỏ qua ảnh',e); }
+  });
+  try{
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=_dmPvDocName(pv.type,d)+'.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},4000);
+    toast('Đã xuất Excel: '+_dmPvDocName(pv.type,d)+'.xlsx');
+  }catch(e){ toast('Lỗi xuất Excel: '+e.message,'error'); }
+}
+window._dmPvExportExcel=_dmPvExportExcel;
+
 
 // Danh sách chứng từ đã lưu — hiển thị NGAY TRONG popup Xem trước (thay cho popup Lịch sử riêng
 // trước đây) — tái sử dụng nguyên vẹn logic lọc/scope của renderDmSavedList().
@@ -35447,6 +36001,40 @@ function _dmBank(d){
     +(d.sBankAddr?'<tr><td class="lbl">BANK ADDRESS</td><td style="text-align:center">:</td><td>'+d.sBankAddr+'</td></tr>':'')
     +'</table>';
 }
+/* ── A 2.03: Số tiền bằng chữ (tiếng Anh) cho Invoice / Contract ── */
+function _dmNumWordsEn(n){
+  n=Math.floor(Math.abs(n||0));
+  const ones=['ZERO','ONE','TWO','THREE','FOUR','FIVE','SIX','SEVEN','EIGHT','NINE','TEN','ELEVEN','TWELVE','THIRTEEN','FOURTEEN','FIFTEEN','SIXTEEN','SEVENTEEN','EIGHTEEN','NINETEEN'];
+  const tens=['','','TWENTY','THIRTY','FORTY','FIFTY','SIXTY','SEVENTY','EIGHTY','NINETY'];
+  function below1000(x){
+    const s=[];
+    if(x>=100){ s.push(ones[Math.floor(x/100)]+' HUNDRED'); x%=100; }
+    if(x>=20){ s.push(tens[Math.floor(x/10)]+(x%10?'-'+ones[x%10]:'')); }
+    else if(x>0){ s.push(ones[x]); }
+    return s.join(' ');
+  }
+  if(n===0)return 'ZERO';
+  const scales=['',' THOUSAND',' MILLION',' BILLION',' TRILLION'];
+  const parts=[]; let i=0;
+  while(n>0 && i<scales.length){
+    const chunk=n%1000;
+    if(chunk)parts.unshift(below1000(chunk)+scales[i]);
+    n=Math.floor(n/1000); i++;
+  }
+  return parts.join(' ');
+}
+function _dmInWordText(amount){
+  const v=Math.round((parseFloat(amount)||0)*100);
+  const dollars=Math.floor(v/100), cents=v%100;
+  let s='US DOLLARS '+_dmNumWordsEn(dollars);
+  if(cents)s+=' AND '+_dmNumWordsEn(cents)+(cents===1?' CENT':' CENTS');
+  return s+' ONLY';
+}
+function _dmInWordHtml(amount){
+  return '<div class="dm-inword" style="margin:6px 0 4px;font-size:12px;font-weight:bold"><span class="b">In word:</span> <span class="b">'+_dmInWordText(amount)+'</span></div>';
+}
+window._dmInWordText=_dmInWordText;
+
 function _dmGoodsTable(d){
   const specLines=(d.specs||'').split('\n').map(function(s){return s.trim();}).filter(Boolean).join('<br>');
   const f2=function(v){return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
@@ -35460,7 +36048,7 @@ function _dmGoodsTable(d){
     +'</tr></thead><tbody>'
     +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+d.qty.toLocaleString()+'</td><td class="c">'+d.unitPrice+'</td><td class="c">'+f2(d.amount)+'</td></tr>'
     +'</tbody><tfoot><tr><td colspan="2" class="c b">TOTAL</td><td class="c b">'+d.qty.toLocaleString()+'</td><td></td><td class="c b">'+f2(d.amount)+'</td></tr></tfoot>'
-    +'</table>';
+    +'</table>'+_dmInWordHtml(d.amount);
 }
 // Bảng hàng hóa NHIỀU DÒNG — CHỈ dùng cho Invoice (_dmInvoice). Mỗi dòng có Tên hàng riêng (chỉ hiện
 // trên file Invoice). Nếu chỉ 1 dòng, hiển thị y hệt _dmGoodsTable() gốc. Nếu >1 dòng, tự cộng dồn
@@ -35486,7 +36074,7 @@ function _dmInvGoodsTable(d){
     +'<th class="c">AMOUNT<br>(USD)</th>'
     +'</tr></thead><tbody>'+rows+'</tbody>'
     +'<tfoot><tr><td colspan="2" class="c b">TOTAL</td><td class="c b">'+totalQty.toLocaleString()+'</td><td></td><td class="c b">'+f2(grandTotal)+'</td></tr></tfoot>'
-    +'</table>';
+    +'</table>'+_dmInWordHtml(grandTotal);
 }
 function _dmSign(d){
   const stampImg=d.sStamp?'<div style="margin-top:4px"><img src="'+d.sStamp+'" style="max-width:196px;max-height:138px;object-fit:contain"/></div>':'<div style="height:80px"></div>';
@@ -35525,7 +36113,7 @@ function _dmGoodsTableByCont(d){
     +'</tr></thead><tbody>'
     +'<tr style="height:120px"><td class="c b">'+d.goods+'</td><td style="font-size:11px">'+specLines+'</td><td class="c">'+contQtyLabel+'</td><td class="c">'+f2(d.totalNW)+' KGS</td><td class="c">'+d.unitPrice+'</td><td class="c">'+f2(amount)+'</td></tr>'
     +'</tbody><tfoot><tr><td colspan="3" class="c b">TOTAL</td><td class="c b">'+f2(d.totalNW)+' KGS</td><td></td><td class="c b">'+f2(amount)+'</td></tr></tfoot>'
-    +'</table>';
+    +'</table>'+_dmInWordHtml(amount);
 }
 
 function _dmInvoiceByCont(d){
@@ -39709,6 +40297,7 @@ function dmExport(type){
   function fname(t){return [typeLabel[t]||t,_dmSafe(bill),_dmSafe(cnee)].filter(Boolean).join('_');}
   const map={'INV':[_dmInvoice(d),fname('INV')],'INV_CONT':[_dmInvoiceByCont(d),fname('INV_CONT')],'PKL':[_dmPKL2(d),fname('PKL')],'CONTRACT':[_dmContract(d),fname('CONTRACT')],'CONTRACT_CONT':[_dmContractByCont(d),fname('CONTRACT_CONT')],'INV_TK':[_dmInvTK(d),fname('INV_TK')],'SI':[_dmSI(d),fname('SI')]};
   const entry=map[type];if(!entry)return;
+  entry[0]=_dmEditedOr(type,entry[0]);
   const w=window.open('','_blank','width=980,height=740,scrollbars=yes');
   w.document.write(entry[0]);w.document.close();w.focus();w.document.title=entry[1];
   setTimeout(function(){w.print();},600);
@@ -39754,7 +40343,7 @@ function dmDoMerge(){
   }
   const styleSet=[];
   const pages=chosen.map(function(type,i){
-    const html=builders[type](d);
+    const html=_dmEditedOr(type,builders[type](d));
     const p=extractParts(html);
     if(p.styles&&styleSet.indexOf(p.styles)<0)styleSet.push(p.styles);
     const brk=i<chosen.length-1?'page-break-after:always;':'';
