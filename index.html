@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.03';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.04';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3382,8 +3382,152 @@ function computeShipmentKpis(tt){
       +(tqNeed?'<div style="margin-top:2px;color:#EA580C">'+tqNeed+' <span style="font-size:11px;font-weight:500">lô chưa thông quan</span></div>':'');
     elVst.style.color='var(--text-primary)';
   }
+  if(typeof _wsTodoRender==='function')_wsTodoRender(tt);
 }
 window.computeShipmentKpis=computeShipmentKpis;
+
+/* ═══ A 2.04: To do list (thay khối "Cảnh báo") — hiển thị theo vai trò ═══
+   Doc (và các vai trò khác): lô cần VST / cần gửi chứng từ / chưa thông quan (đúng các điều kiện của khối Cảnh báo cũ)
+   Accountant: lô còn khoản phải trả NCC chưa thanh toán (ETD từ 01/09/2026)
+   Admin: 2 tab Doc + Accountant */
+const WS_TODO_ACC_FROM='2026-09-01';
+window._wsTodoState=window._wsTodoState||{tab:'doc',doc:'all'};
+window._wsExpand=window._wsExpand||{cal:false,notes:false};
+
+function _wsTodoEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _wsTodoRole(){ const r=currentProfile&&currentProfile.role; return r==='admin'?'admin':(r==='accountant'?'accountant':'doc'); }
+
+function _wsTodoDocItems(tt){
+  const rows=cache[tt]||[], now=Date.now(), out=[];
+  rows.forEach(function(r){
+    const tags=[]; let urgent=false;
+    if(_vstOn(r)&&!r.vstConfirmed){
+      let u=false, cyStr=r.cutoffCY||calcDefaultCutoff(r.etd,-2,'11:00');
+      if(cyStr){ const t=new Date(cyStr.replace(' ','T')).getTime(); if(!isNaN(t)&&(t-now)<=2*3600000)u=true; }
+      tags.push({k:'vst',label:'Chưa VST',urgent:u,title:u&&cyStr?('Cut Off CY '+cyStr+' — còn ≤2h hoặc đã trễ'):'Chưa xác nhận VST'});
+      if(u)urgent=true;
+    }
+    if(r.docTrackEnabled&&(r.docTrackKeys||[]).length&&_docTrackSentKeys(r).length<r.docTrackKeys.length){
+      let u=false, d='';
+      if(r.etd){ const e=new Date(r.etd+'T00:00:00').getTime(); if(!isNaN(e)){ const days=Math.floor((now-e)/86400000); if(days>=4){u=true;d=' (ETD +'+days+'ng)';} } }
+      const miss=r.docTrackKeys.length-_docTrackSentKeys(r).length;
+      tags.push({k:'doc',label:'Chưa gửi Ctừ',urgent:u,title:'Còn '+miss+' chứng từ chưa gửi'+d});
+      if(u)urgent=true;
+    }
+    if(r.loaiHang==='IM - Nhập khẩu'&&!r.thongQuan&&r.eta){
+      const e=new Date(r.eta+'T00:00:00').getTime();
+      if(!isNaN(e)&&(now-e)>=5*86400000){
+        const days=Math.floor((now-e)/86400000);
+        tags.push({k:'tq',label:'Chưa TQ',urgent:true,title:'Đã qua ETA +'+days+' ngày, chưa thông quan'}); urgent=true;
+      }
+    }
+    if(tags.length)out.push({r:r,tags:tags,urgent:urgent});
+  });
+  out.sort(function(a,b){ if(a.urgent!==b.urgent)return a.urgent?-1:1; return (a.r.etd||'9999').localeCompare(b.r.etd||'9999'); });
+  return out;
+}
+
+function _wsTodoAccItems(tt){
+  let br=[]; try{ br=_tcSupplierBreakdown({from:WS_TODO_ACC_FROM}); }catch(e){ br=[]; }
+  const by={};
+  br.forEach(function(p){
+    (p.lots||[]).forEach(function(l){
+      if(l.tt!==tt||l.paidStatus==='paid')return;
+      const o=by[l.lotId]||(by[l.lotId]={id:l.lotId,n:0,sums:{},ocf:false});
+      o.n++; o.sums[l.cur]=(o.sums[l.cur]||0)+(l.amt||0);
+    });
+  });
+  const out=[];
+  Object.keys(by).forEach(function(id){
+    const r=(cache[tt]||[]).find(function(x){return x._id===id;}); if(!r)return;
+    const o=by[id];
+    Object.keys(r.svcs||{}).forEach(function(k){
+      const sv=r.svcs[k]; if(sv&&sv.on&&sv.ocfConfirmed&&sv.apPaidStatus!=='paid'&&typeof _svcKeyBase==='function'&&_svcKeyBase(k)==='ocf')o.ocf=true;
+    });
+    out.push({r:r,acc:o});
+  });
+  out.sort(function(a,b){return (a.r.etd||'9999').localeCompare(b.r.etd||'9999');});
+  return out;
+}
+
+function _wsTodoSummary(r,tt){
+  const who=tt==='nhap'?(r.supplier||''):(r.shipper||'');
+  const vol=(r.vol?r.vol:'')+(r.typeCont?(r.vol?'x':'')+r.typeCont:'');
+  const parts=[who,r.pod||'',vol].filter(Boolean);
+  return parts.map(_wsTodoEsc).join(' · ');
+}
+function _wsTodoRowHtml(r,tt,tagsHtml,urgent,open3){
+  const bk=r.bookingNo||r.jobNo||'(chưa có BKG)';
+  const sum=_wsTodoSummary(r,tt);
+  return '<div class="ws-td-row'+(urgent?' urg':'')+'">'
+    +'<div class="ws-td-l1"><button type="button" class="ws-td-bkg" data-id="'+_wsTodoEsc(r._id)+'" data-tt="'+tt+'" onclick="openDetail(this.dataset.id,this.dataset.tt'+(open3?',\''+open3+'\'':'')+')" title="Mở lô hàng">'+_wsTodoEsc(bk)+'</button>'
+    +'<span class="ws-td-etd" title="ETD">'+(r.etd?'ETD '+_wsTodoEsc(fmtDMY(r.etd)):'ETD —')+'</span></div>'
+    +'<div class="ws-td-l2" title="Shipper · POD · Vol">'+(sum||'—')+'</div>'
+    +(tagsHtml?'<div class="ws-td-tags">'+tagsHtml+'</div>':'')
+  +'</div>';
+}
+function _wsTodoMoney(sums){
+  return Object.keys(sums).map(function(c){ return _wsTodoEsc(c)+' '+(sums[c]||0).toLocaleString('en-US',{maximumFractionDigits:c==='VND'?0:2}); }).join(' + ');
+}
+
+function _wsTodoDocBody(tt,items){
+  const st=window._wsTodoState; const f=st.doc||'all';
+  const cnt={vst:0,doc:0,tq:0};
+  items.forEach(function(it){it.tags.forEach(function(t){cnt[t.k]++;});});
+  const chip=function(k,l,n){return '<button type="button" class="ws-td-chip'+(f===k?' on':'')+'" onclick="_wsTodoFilter(\''+k+'\',\''+tt+'\')">'+l+' <b>'+n+'</b></button>';};
+  let h='<div class="ws-td-chips">'+chip('all','Tất cả',items.length)
+    +(cnt.vst?chip('vst','VST',cnt.vst):'')+(cnt.doc?chip('doc','Ctừ',cnt.doc):'')+(cnt.tq?chip('tq','Thông quan',cnt.tq):'')+'</div>';
+  const list=f==='all'?items:items.filter(function(it){return it.tags.some(function(t){return t.k===f;});});
+  if(!list.length)return h+'<div class="ws-td-empty"><i class="ti ti-circle-check"></i> Không có việc cần xử lý</div>';
+  return h+'<div class="ws-td-list">'+list.map(function(it){
+    const tg=it.tags.map(function(t){return '<span class="ws-td-tag '+t.k+(t.urgent?' u':'')+'" title="'+_wsTodoEsc(t.title)+'">'+t.label+'</span>';}).join('');
+    return _wsTodoRowHtml(it.r,tt,tg,it.urgent,'');
+  }).join('')+'</div>';
+}
+function _wsTodoAccBody(tt,items){
+  if(!items.length)return '<div class="ws-td-empty"><i class="ti ti-circle-check"></i> Không có lô nào còn khoản chưa thanh toán (từ 09/2026)</div>';
+  return '<div class="ws-td-note">Lô có ETD từ 01/09/2026 còn khoản phải trả NCC chưa thanh toán</div><div class="ws-td-list">'+items.map(function(it){
+    const tg='<span class="ws-td-tag unp">'+it.acc.n+' khoản chưa TT</span><span class="ws-td-amt">'+_wsTodoMoney(it.acc.sums)+'</span>'+(it.acc.ocf?'<span class="ws-td-tag cfm" title="Có dịch vụ OCF đã Confirm, chờ thanh toán">OCF đã confirm</span>':'');
+    return _wsTodoRowHtml(it.r,tt,tg,false,'svc');
+  }).join('')+'</div>';
+}
+
+function _wsTodoBodyHTML(tt){
+  const role=_wsTodoRole(), st=window._wsTodoState;
+  try{
+    if(role==='accountant')return _wsTodoAccBody(tt,_wsTodoAccItems(tt));
+    const docItems=_wsTodoDocItems(tt);
+    if(role==='doc')return _wsTodoDocBody(tt,docItems);
+    // admin: 2 tab
+    const accItems=_wsTodoAccItems(tt);
+    const tab=st.tab==='acc'?'acc':'doc';
+    const tabs='<div class="ws-td-tabs"><button type="button" class="'+(tab==='doc'?'on':'')+'" onclick="_wsTodoTab(\'doc\',\''+tt+'\')">Doc <b>'+docItems.length+'</b></button>'
+      +'<button type="button" class="'+(tab==='acc'?'on':'')+'" onclick="_wsTodoTab(\'acc\',\''+tt+'\')">Accountant <b>'+accItems.length+'</b></button></div>';
+    return tabs+(tab==='doc'?_wsTodoDocBody(tt,docItems):_wsTodoAccBody(tt,accItems));
+  }catch(e){
+    console.warn('To do list lỗi',e);
+    return '<div class="ws-td-empty">Không tải được To do list</div>';
+  }
+}
+function _wsTodoCardHTML(tt){
+  return '<div class="ws-side-card ws-todo" id="wsTodo_'+tt+'">'
+    +'<div class="ws-side-hdr"><i class="ti ti-checklist" style="color:var(--warning)"></i> To do list<span class="ws-side-link" onclick="_wsTodoRender(\''+tt+'\')" title="Tải lại"><i class="ti ti-refresh"></i></span></div>'
+    +'<div id="wsTodoBody_'+tt+'">'+_wsTodoBodyHTML(tt)+'</div></div>';
+}
+function _wsTodoRender(tt){ const el=g('wsTodoBody_'+tt); if(el)el.innerHTML=_wsTodoBodyHTML(tt); }
+function _wsTodoTab(t,tt){ window._wsTodoState.tab=t; _wsTodoRender(tt); }
+function _wsTodoFilter(f,tt){ window._wsTodoState.doc=f; _wsTodoRender(tt); }
+window._wsTodoRender=_wsTodoRender; window._wsTodoTab=_wsTodoTab; window._wsTodoFilter=_wsTodoFilter;
+
+// Thu gọn / mở rộng các thẻ Lịch & Ghi chú (mặc định thu gọn 1 dòng, ở cuối sidebar)
+function _wsCollToggle(hdr,ev){
+  if(ev&&ev.target&&ev.target.closest&&ev.target.closest('.ws-side-link,button:not(.ws-coll-btn)'))return;
+  const card=hdr.closest('.ws-coll'); if(!card)return;
+  const open=!card.classList.contains('open');
+  card.classList.toggle('open',open);
+  window._wsExpand[card.dataset.k]=open;
+}
+window._wsCollToggle=_wsCollToggle;
 
 function _wsSidebarHTML(tt){
   const vessels=_homeUpcomingVessels(3);
@@ -3399,19 +3543,13 @@ function _wsSidebarHTML(tt){
       </button>
     </div>
 
-    <div class="ws-side-card">
-      <div class="ws-side-hdr"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Cảnh báo<span class="ws-side-link" onclick="computeShipmentKpis('${tt}')" title="Tải lại"><i class="ti ti-refresh"></i></span></div>
-      <div id="kpiVst_${tt}" style="font-family:var(--font-disp);font-size:22px;font-weight:800;color:var(--warning-dark)">
-        <div>— <span style="font-size:11px;font-weight:500;color:var(--text-tertiary);font-family:inherit">lô cần VST</span></div>
-        <div style="margin-top:2px">— <span style="font-size:11px;font-weight:500;color:var(--text-tertiary);font-family:inherit">lô cần gửi Ctừ</span></div>
-      </div>
-      <div id="vstWarnBar_${tt}" style="margin-top:8px"></div>
-      <!-- Giữ nguyên id cũ để không phá logic computeShipmentKpis() -->
-      <div style="display:none"><span id="kpiTotal_${tt}"></span><span id="kpiPending_${tt}"></span></div>
-    </div>
+    ${_wsTodoCardHTML(tt)}
+    <!-- Giữ id cũ (ẩn) để computeShipmentKpis()/renderVstWarning() không lỗi -->
+    <div style="display:none"><span id="kpiTotal_${tt}"></span><span id="kpiPending_${tt}"></span><div id="kpiVst_${tt}"></div><div id="vstWarnBar_${tt}"></div></div>
 
-    <div class="ws-side-card">
-      <div class="ws-side-hdr"><i class="ti ti-calendar"></i> Lịch &amp; tàu sắp chạy<span class="ws-side-link" onclick="goTab('notes')">Xem tất cả</span></div>
+    <div class="ws-side-card ws-coll${window._wsExpand&&window._wsExpand.cal?' open':''}" data-k="cal">
+      <div class="ws-side-hdr ws-coll-hdr" onclick="_wsCollToggle(this,event)"><i class="ti ti-calendar"></i> Lịch &amp; tàu sắp chạy<span class="ws-side-link" onclick="goTab('notes')">Xem tất cả</span><button type="button" class="ws-coll-btn" title="Mở rộng / thu gọn"><i class="ti ti-chevron-down"></i></button></div>
+      <div class="ws-coll-body">
       <div class="ws-cal">
         <div class="kpi-cal-grid" style="margin-bottom:3px">${CAL_DOW.map(function(d){return '<div class="kpi-cal-dow">'+d+'</div>';}).join('')}</div>
         <div class="kpi-cal-grid">${_homeMiniCalendarCells()}</div>
@@ -3421,6 +3559,7 @@ function _wsSidebarHTML(tt){
         ${vessels.length?vessels.map(function(v){
           return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:3px"><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="ti ti-anchor" style="color:var(--blue);margin-right:3px"></i>'+v.vessel+(v.voy?' V.'+v.voy:'')+'</span><span style="color:var(--text-tertiary);white-space:nowrap;margin-left:6px">'+v.date.split('-').reverse().slice(0,2).join('/')+'</span></div>';
         }).join(''):'<div style="font-size:11px;color:var(--text-tertiary)">Chưa có tàu ETD sắp tới.</div>'}
+      </div>
       </div>
     </div>
 
@@ -3468,11 +3607,12 @@ function _wsNotesCardHTML(){
     return n?Object.assign({},n,{_scope:p.scope}):null;
   }).filter(Boolean);
   return `
-    <div class="ws-side-card">
-      <div class="ws-side-hdr">
+    <div class="ws-side-card ws-coll${window._wsExpand&&window._wsExpand.notes?' open':''}" data-k="notes">
+      <div class="ws-side-hdr ws-coll-hdr" onclick="_wsCollToggle(this,event)">
         <i class="ti ti-notes"></i> Ghi chú
-        <span style="margin-left:auto"><button class="rac" onclick="_wsNotesOpenPicker()" title="Thêm ghi chú hiển thị ở đây" style="width:20px;height:20px;flex-shrink:0"><i class="ti ti-plus" style="font-size:13px"></i></button></span>
+        <span style="margin-left:auto"><button class="rac" onclick="_wsNotesOpenPicker()" title="Thêm ghi chú hiển thị ở đây" style="width:20px;height:20px;flex-shrink:0"><i class="ti ti-plus" style="font-size:13px"></i></button></span><button type="button" class="ws-coll-btn" title="Mở rộng / thu gọn"><i class="ti ti-chevron-down"></i></button>
       </div>
+      <div class="ws-coll-body">
       ${!pinnedNotes.length?'<div style="font-size:11px;color:var(--text-tertiary)">Chưa có ghi chú nào được ghim — bấm "+" để thêm ghi chú có sẵn vào đây.</div>':
         pinnedNotes.map(function(n){
           const c=n.color||'#7c3aed';
@@ -3486,6 +3626,7 @@ function _wsNotesCardHTML(){
         }).join('')
       }
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-light)"><span class="ws-side-link" onclick="goTab('notes')" style="margin-left:0">Mở COCO NOTES <i class="ti ti-arrow-right"></i></span></div>
+      </div>
     </div>`;
 }
 // Popup chọn 1 ghi chú CÓ SẴN (chung hoặc riêng) để thêm vào ô hiển thị — KHÔNG tạo ghi chú mới
@@ -9395,7 +9536,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
-// A 2.03: Document Maker — xem trước dạng sidebar trái + sửa trực tiếp (chữ, thêm/xóa dòng/cột) + lưu/xuất PDF/Excel; thêm dòng In word (số tiền bằng chữ tiếng Anh) cho Invoice/Contract; nút Quét ảnh (AI) tạm ẩn lại. A 2.02: bật lại nút Quét ảnh (Cont/Seal) — đọc ảnh bằng AI Claude qua Firebase Function, dự phòng Tesseract. A 2.01: chùm sáng hội tụ về 1 điểm trên đế (cả header/footer); mở màn: cây dừa → tia lan ra → các biểu tượng hiện lần lượt theo chiều kim đồng hồ từ Shipment. A 2.00: (đặt lại phiên bản; các bản sau đếm lên A 2.01, A 2.02…) tia sáng mềm hơn — chỉ 2 tia ngoài cùng, chỉ chiếu tới chân bảng/chân nội dung; icon Finance mới. v4.102: dashboard: đế kính dạng màn hình nhỏ gọn + tia sáng chiếu chữ/biểu tượng, bảng KPI/Lịch có đế + chùm tia, hiệu ứng mở màn, icon Finance mới. v4.101: mobile: icon lên trên, KPI/lịch xuống dưới, khôi phục vòng quay; thiết kế lại giao diện Shipment trên mobile. v4.100: bảng KPI/lịch/header/footer đứng yên, icon trôi nổi, đế kính mới. v4.99: bỏ thanh header/footer (chữ nổi trên đế kính), bảng KPI/Lịch dày 3D, donut+radar. v4.98: đổi vị trí Shipment/CRM. v4.97: Dashboard 3D (icon xếp đều trên sàn 3D, bảng KPI dựng đứng, hào quang hover). v4.96: Dashboard mới (mạng ánh sáng + hào quang holographic).
+// A 2.04: tab Service — bấm file Debit Note đã up mở popup kiểm tra & thanh toán (sidebar số tiền/NCC + Need revise/Confirm/Thanh toán đồng bộ với dòng dịch vụ, bên phải xem file); Shipment List — khối Cảnh báo đổi thành To do list theo vai trò (Doc / Accountant / Admin 2 tab), Lịch & Ghi chú thu gọn 1 dòng ở cuối. A 2.03: Document Maker — xem trước dạng sidebar trái + sửa trực tiếp (chữ, thêm/xóa dòng/cột) + lưu/xuất PDF/Excel; thêm dòng In word (số tiền bằng chữ tiếng Anh) cho Invoice/Contract; nút Quét ảnh (AI) tạm ẩn lại. A 2.02: bật lại nút Quét ảnh (Cont/Seal) — đọc ảnh bằng AI Claude qua Firebase Function, dự phòng Tesseract. A 2.01: chùm sáng hội tụ về 1 điểm trên đế (cả header/footer); mở màn: cây dừa → tia lan ra → các biểu tượng hiện lần lượt theo chiều kim đồng hồ từ Shipment. A 2.00: (đặt lại phiên bản; các bản sau đếm lên A 2.01, A 2.02…) tia sáng mềm hơn — chỉ 2 tia ngoài cùng, chỉ chiếu tới chân bảng/chân nội dung; icon Finance mới. v4.102: dashboard: đế kính dạng màn hình nhỏ gọn + tia sáng chiếu chữ/biểu tượng, bảng KPI/Lịch có đế + chùm tia, hiệu ứng mở màn, icon Finance mới. v4.101: mobile: icon lên trên, KPI/lịch xuống dưới, khôi phục vòng quay; thiết kế lại giao diện Shipment trên mobile. v4.100: bảng KPI/lịch/header/footer đứng yên, icon trôi nổi, đế kính mới. v4.99: bỏ thanh header/footer (chữ nổi trên đế kính), bảng KPI/Lịch dày 3D, donut+radar. v4.98: đổi vị trí Shipment/CRM. v4.97: Dashboard 3D (icon xếp đều trên sàn 3D, bảng KPI dựng đứng, hào quang hover). v4.96: Dashboard mới (mạng ánh sáng + hào quang holographic).
 // v4.95: địa chỉ + website chính thức của công ty (hiển thị trên chữ ký email, hợp đồng, báo giá...).
 window.COCO_ADDR='182/71 Đường số 6, Phường Bình Tân, Tp. Hồ Chí Minh';
 window.COCO_WEB='www.cocoseavn.com';
@@ -21523,6 +21664,94 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
   .cal-chip-scy{background:rgba(124,58,237,.14)}
 }
 </style>
+<style id="svctodo-css">
+/* ═══ A 2.04 — popup Debit Note ═══ */
+.dnrv-modal{max-width:1280px;width:96vw;height:90vh;max-height:90vh;padding:0 !important;display:flex;flex-direction:column;overflow:hidden;border-radius:14px}
+.dnrv-head{background:#1a4b8c;padding:11px 16px;display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.dnrv-title{font-size:14px;font-weight:700;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dnrv-sub{font-size:11px;color:rgba(255,255,255,.8);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dnrv-x{color:#e8f0fe;font-size:18px;background:rgba(255,255,255,.12);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;flex:0 0 auto}
+.dnrv-body{flex:1;min-height:0;display:flex;background:var(--bg-secondary)}
+.dnrv-side{width:330px;flex:0 0 330px;overflow-y:auto;padding:12px;border-right:1px solid var(--border-light);background:var(--bg-primary);display:flex;flex-direction:column;gap:10px}
+.dnrv-main{flex:1;min-width:0;display:flex;flex-direction:column;background:#e5e9f0}
+.dnrv-frame{width:100%;height:100%;border:none;display:block;background:#fff}
+.dnrv-imgwrap{flex:1;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:12px}
+.dnrv-imgwrap img{max-width:100%;height:auto;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.15)}
+.dnrv-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text-secondary);font-size:13px;padding:20px;text-align:center}
+.dnrv-xls{flex:1;min-height:0;display:flex;flex-direction:column;background:#fff}
+.dnrv-sheets{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border-light);flex-wrap:wrap;background:var(--bg-primary)}
+.dnrv-sheet{border:1px solid var(--border-light);background:var(--bg-primary);color:var(--text-secondary);border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+.dnrv-sheet.on{background:#F3EEFF;border-color:#7C3AED;color:#5B21B6;font-weight:700}
+.dnrv-xlsbody{flex:1;overflow:auto;padding:10px;color:#111;font-size:12px}
+.dnrv-xlsbody table{border-collapse:collapse}.dnrv-xlsbody td,.dnrv-xlsbody th{border:1px solid #cbd5e1;padding:3px 6px;white-space:nowrap}
+.dnrv-card{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;padding:10px 12px}
+.dnrv-hd{font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:6px}
+.dnrv-big{font-size:14px;font-weight:700;color:var(--text-primary);word-break:break-word;line-height:1.3}
+.dnrv-sm{font-size:11px;color:var(--text-secondary);margin-top:3px;word-break:break-word}
+.dnrv-bank{font-size:11.5px;color:var(--text-primary);margin-top:6px;padding:6px 8px;background:var(--bg-primary);border:1px dashed var(--border-light);border-radius:7px;line-height:1.55}
+.dnrv-row{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--text-secondary);padding:2px 0}
+.dnrv-row b{color:var(--text-primary);font-weight:600;text-align:right}
+.dnrv-total{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:6px;padding-top:7px;border-top:1px solid var(--border-light);font-size:12px;color:var(--text-secondary)}
+.dnrv-total b{font-size:18px;color:var(--red);font-weight:800}.dnrv-total small{font-size:11px;font-weight:700}
+.dnrv-st{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-secondary);padding:3px 0}
+.dnrv-st em{font-style:normal;font-weight:700;font-size:11px;padding:3px 9px;border-radius:6px}
+.dnrv-note{margin-top:6px;font-size:11.5px;padding:6px 8px;border-radius:7px;background:rgba(193,85,62,.1);color:var(--coral-dark,#C1553E);line-height:1.45}
+.dnrv-acts{display:flex;flex-direction:column;gap:7px}
+.dnrv-btnrow{display:flex;gap:7px}
+.dnrv-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 10px;font-family:inherit;font-size:12.5px;font-weight:700;border:1.5px solid var(--border-light);background:var(--bg-primary);color:var(--text-primary);border-radius:8px;cursor:pointer;flex:1}
+.dnrv-btn:hover:not(:disabled){border-color:#7C3AED;background:#F3EEFF;color:#5B21B6}
+.dnrv-btn:disabled{opacity:.45;cursor:not-allowed}
+.dnrv-btn.rev{color:var(--coral-dark,#C1553E)}.dnrv-btn.rev.on{background:rgba(193,85,62,.12);border-color:var(--coral-dark,#C1553E)}
+.dnrv-btn.cfm{color:#2563eb}.dnrv-btn.cfm.on{background:rgba(37,99,235,.1);border-color:#2563eb}
+.dnrv-btn.pay{background:var(--green);border-color:var(--green);color:#fff;padding:10px}
+.dnrv-btn.pay:hover:not(:disabled){background:#1f9d57;border-color:#1f9d57;color:#fff}
+.dnrv-btn.pay.done{background:rgba(40,167,69,.12);color:var(--green)}
+.dnrv-revbox textarea{width:100%;box-sizing:border-box;font-family:inherit;font-size:12.5px;padding:7px;border:1.5px solid var(--border-light);border-radius:8px;resize:vertical}
+@media(max-width:760px){
+  .dnrv-modal{width:100vw;height:100vh;max-height:100vh;border-radius:0}
+  .dnrv-body{flex-direction:column}
+  .dnrv-side{width:auto;flex:0 0 auto;max-height:46vh;border-right:none;border-bottom:1px solid var(--border-light)}
+  .dnrv-main{min-height:40vh}
+}
+/* ═══ A 2.04 — To do list + thẻ thu gọn ═══ */
+.ws-todo{display:flex;flex-direction:column}
+.ws-td-tabs{display:flex;gap:4px;margin-bottom:8px;border-bottom:1px solid var(--border-light)}
+.ws-td-tabs button{flex:1;border:none;background:transparent;padding:6px 4px;font-family:inherit;font-size:12px;font-weight:700;color:var(--text-tertiary);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.ws-td-tabs button.on{color:var(--blue);border-bottom-color:var(--blue)}
+.ws-td-tabs b{font-size:10.5px;background:var(--bg-secondary);border-radius:9px;padding:1px 6px;margin-left:3px}
+.ws-td-chips{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
+.ws-td-chip{border:1px solid var(--border-light);background:var(--bg-primary);color:var(--text-secondary);border-radius:12px;padding:2px 9px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer}
+.ws-td-chip.on{background:#1a4b8c;border-color:#1a4b8c;color:#fff}
+.ws-td-chip b{margin-left:2px}
+.ws-td-note{font-size:10.5px;color:var(--text-tertiary);margin-bottom:6px}
+.ws-td-list{display:flex;flex-direction:column;gap:6px;max-height:calc(100vh - 430px);min-height:0;overflow-y:auto;padding-right:2px}
+.ws-td-row{padding:7px 9px;border:1px solid var(--border-light);border-left:3px solid var(--border-light);border-radius:8px;background:var(--bg-secondary)}
+.ws-td-row.urg{border-left-color:var(--red,#dc3545)}
+.ws-td-l1{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.ws-td-bkg{background:none;border:none;padding:0;font-family:inherit;font-size:12.5px;font-weight:800;color:var(--blue);cursor:pointer;text-decoration:underline;text-align:left;word-break:break-all}
+.ws-td-etd{font-size:10.5px;color:var(--text-tertiary);white-space:nowrap}
+.ws-td-l2{font-size:11px;color:var(--text-secondary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-td-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;align-items:center}
+.ws-td-tag{font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:9px;background:rgba(234,179,8,.15);color:#b45309}
+.ws-td-tag.vst{background:rgba(220,53,69,.1);color:#b02a37}
+.ws-td-tag.doc{background:rgba(217,119,6,.12);color:#92400E}
+.ws-td-tag.tq{background:rgba(234,88,12,.12);color:#9A3412}
+.ws-td-tag.unp{background:rgba(220,53,69,.1);color:#b02a37}
+.ws-td-tag.cfm{background:rgba(37,99,235,.1);color:#2563eb}
+.ws-td-tag.u{box-shadow:inset 0 0 0 1px currentColor}
+.ws-td-amt{font-size:10.5px;font-weight:700;color:var(--text-primary);margin-left:auto}
+.ws-td-empty{font-size:11.5px;color:var(--text-tertiary);padding:14px 4px;text-align:center}
+.ws-td-empty i{color:var(--green);font-size:15px;vertical-align:-2px}
+.ws-coll .ws-side-hdr{cursor:pointer;user-select:none}
+.ws-coll:not(.open){padding-top:9px;padding-bottom:9px}
+.ws-coll:not(.open) .ws-side-hdr{margin-bottom:0}
+.ws-coll .ws-coll-body{display:none;margin-top:0}
+.ws-coll.open .ws-coll-body{display:block}
+.ws-coll-btn{margin-left:6px;border:none;background:transparent;color:var(--text-tertiary);width:22px;height:22px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;padding:0}
+.ws-coll-btn:hover{background:var(--bg-secondary);color:var(--text-primary)}
+.ws-coll-btn i{transition:transform .18s;font-size:15px}
+.ws-coll.open .ws-coll-btn i{transform:rotate(180deg)}
+</style>
 <style id="dmpv-css">
 /* A 2.03 — Document Maker: xem trước dạng sidebar trái + khung sửa trực tiếp */
 .dmpv-modal{max-width:1320px;width:96vw;height:92vh;max-height:92vh;padding:0 !important;display:flex;flex-direction:column;overflow:hidden;border-radius:14px}
@@ -27887,8 +28116,231 @@ async function handleSvcDnUpload(input, svcKey){
 }
 window.handleSvcDnUpload=handleSvcDnUpload;
 
-// Xem / tải Debit Note của 1 dịch vụ
-function viewSvcDn(svcKey){
+/* ═══ A 2.04: Popup "Kiểm tra & thanh toán Debit Note" (tab Service) ═══
+   Bấm vào file Debit Note đã upload → popup: sidebar trái (số tiền, NCC, trạng thái + nút Need revise /
+   Confirm / Thanh toán — ĐỒNG BỘ với nút/badge ở dòng dịch vụ), bên phải xem file. */
+window._dnRv=null;
+function _dnEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _dnRvLot(){ const c=window._dnRv; if(!c)return null; return (cache[c.tt]||[]).find(function(x){return x._id===c.id;})||null; }
+
+// Số liệu dịch vụ: ưu tiên ô đang hiển thị ở dòng dịch vụ (cùng công thức cột Total của tab Service), dự phòng dữ liệu đã lưu
+function _dnRvVals(r,key,sv){
+  const dv=function(id){const e=g(id+key);return e?e.value:null;};
+  const num=function(v,f){const n=parseFloat(v);return isNaN(n)?f:n;};
+  const cost=num(dv('scost_'),num(sv.cost,0));
+  const qty=num(dv('sqty_'),num(sv.svcQty,parseInt(r.vol)||1));
+  const unit=dv('svcunit_')||sv.svcUnit||'Cont';
+  const cur=dv('svcur_')||sv.svcCur||'VND';
+  const vat=num(dv('svvatamt_'),num(sv.svcVatAmt,0));
+  const supplier=dv('ssup_')!=null?dv('ssup_'):(sv.svcSupplier||'');
+  const amt=cost*qty;
+  return {cost:cost,qty:qty,unit:unit,cur:cur,vat:vat,amt:amt,total:amt+vat,supplier:supplier,remark:dv('sremark_')!=null?dv('sremark_'):(sv.apRemark||'')};
+}
+function _dnRvFmt(n,cur){
+  n=n||0;
+  return n.toLocaleString('en-US',{maximumFractionDigits:(cur&&cur!=='VND')?2:0});
+}
+function _dnRvBank(supplierKey){
+  const sp=supplierKey?(cache.partners[supplierKey]||{}):{};
+  const isSaLan=sp&&typeof _partnerHasType==='function'&&_partnerHasType(sp,'salan');
+  if(isSaLan){ const t=(sp.remark||'').replace(/\r?\n+/g,' - ').trim(); return {name:sp.shortname||supplierKey,full:sp.fullname||'',lines:t?[t]:[]}; }
+  const vnd=(sp.vndBanks&&sp.vndBanks.length)?sp.vndBanks[0]:null;
+  const acct=(vnd&&vnd.acctName)||sp.acctName||sp.enName||sp.fullname||'';
+  const no=(vnd&&vnd.account)||sp.bankAcc||'', bank=(vnd&&vnd.bank)||sp.bankName||'';
+  const lines=[]; if(acct)lines.push('Chủ TK: '+acct); if(no)lines.push('Số TK: '+no); if(bank)lines.push('Ngân hàng: '+bank);
+  return {name:sp.shortname||supplierKey||'',full:sp.fullname||'',lines:lines};
+}
+
+function _openDnReview(key){
+  const tt=detailTt, id=detailId;
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;});
+  const sv=r&&(r.svcs||{})[key];
+  if(!sv||!(sv.dnFile||sv.dnUrl||sv.dnData)){toast('Chưa có Debit Note','error');return;}
+  window._dnRv={tt:tt,id:id,key:key,reviseOpen:false};
+  let ov=g('dnReviewOv');
+  if(!ov){ov=document.createElement('div');ov.id='dnReviewOv';ov.className='ov';ov.style.zIndex='190';document.body.appendChild(ov);}
+  ov.innerHTML=_dnRvShell();
+  openOv('dnReviewOv');
+  _dnRvRenderSide();
+  _dnRvLoadFile();
+}
+window._openDnReview=_openDnReview;
+
+function _dnRvShell(){
+  const r=_dnRvLot()||{}, c=window._dnRv;
+  const def=SVCS.find(function(s){return s.key===c.key;})||{};
+  const sv=(r.svcs||{})[c.key]||{};
+  const name=sv.customName||sv._name||def.name||c.key;
+  return '<div class="modal dnrv-modal">'
+    +'<div class="dnrv-head">'
+      +'<i class="ti ti-file-check" style="font-size:18px;color:#e8f0fe"></i>'
+      +'<div style="flex:1;min-width:0"><div class="dnrv-title">Kiểm tra &amp; thanh toán Debit Note — '+_dnEsc(name)+'</div><div class="dnrv-sub">Booking: '+_dnEsc(r.bookingNo||r.jobNo||'')+(sv.dnFile?' · '+_dnEsc(sv.dnFile):'')+'</div></div>'
+      +'<button class="dnrv-x" onclick="_dnRvClose()" title="Đóng"><i class="ti ti-x"></i></button>'
+    +'</div>'
+    +'<div class="dnrv-body">'
+      +'<aside class="dnrv-side" id="dnRvSide"></aside>'
+      +'<section class="dnrv-main" id="dnRvMain"></section>'
+    +'</div>'
+  +'</div>';
+}
+function _dnRvClose(){ closeOv('dnReviewOv'); window._dnRv=null; }
+window._dnRvClose=_dnRvClose;
+
+function _dnRvRenderSide(){
+  const box=g('dnRvSide'); const c=window._dnRv; if(!box||!c)return;
+  const r=_dnRvLot(); const sv=r&&(r.svcs||{})[c.key];
+  if(!sv){box.innerHTML='<div style="padding:12px;font-size:12px;color:var(--text-tertiary)">Không tìm thấy dịch vụ</div>';return;}
+  const def=SVCS.find(function(s){return s.key===c.key;})||{};
+  const name=sv.customName||sv._name||def.name||c.key;
+  const v=_dnRvVals(r,c.key,sv);
+  const bank=_dnRvBank(v.supplier);
+  const isOcf=(typeof _svcKeyBase==='function'&&_svcKeyBase(c.key)==='ocf')||((def.code||'').toUpperCase()==='OCF');
+  const isAdmin=(currentProfile&&currentProfile.role==='admin');
+  const canPay=can('fillPrice')||can('viewCost')||can('svcCost');
+  const ocf=_ocfStatusInfo(sv);
+  const paid=sv.apPaidStatus==='paid';
+  const row=function(l,val,extra){return '<div class="dnrv-row"><span>'+l+'</span><b'+(extra?' style="'+extra+'"':'')+'>'+val+'</b></div>';};
+  let h='';
+  // 1) Dịch vụ + NCC
+  h+='<div class="dnrv-card"><div class="dnrv-hd">Dịch vụ</div><div class="dnrv-big">'+_dnEsc(name)+'</div>'
+    +'<div class="dnrv-sm">'+_dnEsc((def.code||'').toUpperCase())+(r.jobNo?' · Job '+_dnEsc(r.jobNo):'')+'</div></div>';
+  h+='<div class="dnrv-card"><div class="dnrv-hd">Nhà cung cấp</div><div class="dnrv-big">'+(v.supplier?_dnEsc(bank.name||v.supplier):'<span style="color:var(--red);font-weight:600">Chưa chọn NCC</span>')+'</div>'
+    +(bank.full&&bank.full!==bank.name?'<div class="dnrv-sm">'+_dnEsc(bank.full)+'</div>':'')
+    +(bank.lines.length?'<div class="dnrv-bank">'+bank.lines.map(_dnEsc).join('<br>')+'</div>':(v.supplier?'<div class="dnrv-sm" style="color:#B45309">NCC chưa có thông tin ngân hàng trong CRM</div>':''))+'</div>';
+  // 2) Số tiền
+  h+='<div class="dnrv-card"><div class="dnrv-hd">Số tiền</div>'
+    +row('Đơn giá × SL',_dnRvFmt(v.cost,v.cur)+' × '+_dnRvFmt(v.qty,'x')+' '+_dnEsc(v.unit))
+    +row('Thành tiền',_dnRvFmt(v.amt,v.cur)+' '+_dnEsc(v.cur))
+    +row('VAT',_dnRvFmt(v.vat,v.cur)+' '+_dnEsc(v.cur))
+    +'<div class="dnrv-total"><span>Tổng (gồm VAT)</span><b>'+_dnRvFmt(v.total,v.cur)+' <small>'+_dnEsc(v.cur)+'</small></b></div>'
+    +(v.remark?'<div class="dnrv-sm" style="margin-top:6px">Remark: '+_dnEsc(v.remark)+'</div>':'')+'</div>';
+  // 3) Trạng thái
+  h+='<div class="dnrv-card"><div class="dnrv-hd">Trạng thái</div>';
+  if(isOcf)h+='<div class="dnrv-st"><span>Duyệt</span><em style="background:'+ocf.bg+';color:'+ocf.color+'">'+ocf.label+'</em></div>';
+  h+='<div class="dnrv-st"><span>Thanh toán</span><em style="background:'+(paid?'rgba(40,167,69,.12)':'rgba(220,53,69,.08)')+';color:'+(paid?'var(--green)':'var(--red)')+'">'+(paid?('Đã TT'+(sv.apPaidDate?' · '+fmtDMY(sv.apPaidDate):'')):'Chưa TT')+'</em></div>';
+  if(paid&&sv.apPaidBank)h+='<div class="dnrv-sm">TK: '+_dnEsc(sv.apPaidBank)+'</div>';
+  if(isOcf&&sv.ocfRevise&&sv.ocfReviseNote)h+='<div class="dnrv-note"><b>Nội dung cần sửa:</b> '+_dnEsc(sv.ocfReviseNote)+'</div>';
+  h+='</div>';
+  // 4) Nút lệnh
+  h+='<div class="dnrv-card dnrv-acts"><div class="dnrv-hd">Lệnh</div>';
+  if(isOcf){
+    const canReview=isAdmin&&sv.reqPayment&&!sv.ocfConfirmed;
+    let why='';
+    if(!isAdmin)why='Chỉ Admin được xét duyệt';
+    else if(sv.ocfConfirmed)why='Đã Confirm';
+    else if(!sv.reqPayment)why=sv.ocfRevise?'Chờ Doc/Cus sửa và tick lại Req.Pay':'Chờ Doc/Cus tick Req.Pay ở dòng dịch vụ';
+    h+='<div class="dnrv-btnrow">'
+      +'<button type="button" class="dnrv-btn rev'+(sv.ocfRevise?' on':'')+'" '+(canReview?'':'disabled')+' onclick="_dnRvReviseOpen()" title="'+_dnEsc(why)+'"><i class="ti ti-edit"></i> Need revise</button>'
+      +'<button type="button" class="dnrv-btn cfm'+(sv.ocfConfirmed?' on':'')+'" '+(canReview?'':'disabled')+' onclick="_dnRvDecide(\'confirm\')" title="'+_dnEsc(why)+'"><i class="ti ti-check"></i> Confirm</button>'
+    +'</div>';
+    if(why&&!canReview)h+='<div class="dnrv-sm" style="margin:-2px 0 8px">'+_dnEsc(why)+'</div>';
+    if(c.reviseOpen&&canReview){
+      h+='<div class="dnrv-revbox"><textarea id="dnRvNote" rows="3" placeholder="Nội dung cần chỉnh sửa (VD: giá cước chưa khớp booking...)"></textarea>'
+        +'<div style="display:flex;gap:6px;margin-top:6px"><button type="button" class="dnrv-btn" onclick="_dnRvReviseCancel()">Hủy</button><button type="button" class="dnrv-btn rev on" style="flex:1" onclick="_dnRvDecide(\'revise\')">Gửi yêu cầu sửa</button></div></div>';
+    }
+  }
+  if(canPay){
+    h+='<button type="button" class="dnrv-btn pay'+(paid?' done':'')+'" onclick="_dnRvPay()"><i class="ti ti-credit-card"></i> '+(paid?'Đã thanh toán — xem / sửa':'Thanh toán')+'</button>'
+      +'<button type="button" class="dnrv-btn" onclick="_openSvcPayCmdPopup(\''+c.key+'\')"><i class="ti ti-currency-dollar"></i> Lệnh thanh toán (copy)</button>';
+  }
+  h+='<button type="button" class="dnrv-btn" onclick="_dnRvOpenTab()"><i class="ti ti-external-link"></i> Mở file ở tab mới</button>';
+  h+='</div>';
+  // 5) File
+  h+='<div class="dnrv-sm" style="padding:2px 4px">File: '+_dnEsc(sv.dnFile||'')+(sv.dnAt?' · '+_dnEsc(new Date(sv.dnAt).toLocaleDateString('vi-VN')):'')+'</div>';
+  box.innerHTML=h;
+}
+window._dnRvRenderSide=_dnRvRenderSide;
+
+function _dnRvReviseOpen(){ if(!window._dnRv)return; window._dnRv.reviseOpen=true; _dnRvRenderSide(); const t=g('dnRvNote'); if(t)t.focus(); }
+function _dnRvReviseCancel(){ if(!window._dnRv)return; window._dnRv.reviseOpen=false; _dnRvRenderSide(); }
+window._dnRvReviseOpen=_dnRvReviseOpen; window._dnRvReviseCancel=_dnRvReviseCancel;
+
+// Confirm / Need revise — cùng quy tắc & cùng dữ liệu với _ocfReviewUpdate() (nút ở dòng OCF tự đổi theo)
+async function _dnRvDecide(choice){
+  const c=window._dnRv; if(!c)return;
+  if(currentProfile?.role!=='admin'){toast('Chỉ Admin được xét duyệt','error');return;}
+  const r=_dnRvLot(); if(!r)return;
+  const svcs=r.svcs||{}; const sv=svcs[c.key];
+  if(!sv||!sv.reqPayment){toast('Dịch vụ chưa được request payment','error');return;}
+  let note='';
+  if(choice==='revise'){
+    note=(g('dnRvNote')?.value||'').trim();
+    if(!note){toast('Nhập nội dung cần chỉnh sửa','error');return;}
+  }
+  setLoading(true,'Đang cập nhật...');
+  try{
+    if(choice==='confirm'){ sv.ocfConfirmed=true; sv.ocfRevise=false; sv.ocfReviseNote=''; }
+    else { sv.ocfConfirmed=false; sv.ocfRevise=true; sv.ocfReviseNote=note; sv.reqPayment=false; }
+    await fsSet(colName(c.tt),c.id,{svcs:svcs,updatedAt:Date.now()});
+    toast(choice==='confirm'?'Đã Confirm — chờ thanh toán':'Đã gửi yêu cầu chỉnh sửa');
+    c.reviseOpen=false;
+    if(typeof detailId!=='undefined'&&detailId===c.id&&detailTt===c.tt)renderDetailPanel(r,c.tt);
+    if(typeof renderLotTable==='function')renderLotTable(c.tt);
+    if(typeof computeShipmentKpis==='function')computeShipmentKpis(c.tt);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+  _dnRvRenderSide();
+}
+window._dnRvDecide=_dnRvDecide;
+
+// Thanh toán — mở đúng popup thanh toán dùng ở tab Service (lưu Sổ quỹ, khóa dòng, đồng bộ badge ngoài)
+function _dnRvPay(){ const c=window._dnRv; if(!c)return; _openSvcPayPopup(c.key); }
+window._dnRvPay=_dnRvPay;
+function _dnRvOpenTab(){ const c=window._dnRv; if(!c)return; _viewSvcDnRaw(c.key); }
+window._dnRvOpenTab=_dnRvOpenTab;
+
+// Sau khi lưu thanh toán (popup thanh toán dùng chung) → làm mới sidebar trái
+(function(){
+  if(typeof savePayStatusDetail!=='function'||window.__dnRvPayWrapped)return;
+  window.__dnRvPayWrapped=true;
+  const orig=savePayStatusDetail;
+  window.savePayStatusDetail=async function(){
+    const rs=await orig.apply(this,arguments);
+    try{ if(window._dnRv&&g('dnReviewOv')&&g('dnReviewOv').classList.contains('open'))_dnRvRenderSide(); }catch(e){}
+    return rs;
+  };
+})();
+
+// Khung xem file bên phải
+function _dnRvLoadFile(){
+  const c=window._dnRv, main=g('dnRvMain'); if(!c||!main)return;
+  const r=_dnRvLot(); const sv=r&&(r.svcs||{})[c.key]; if(!sv)return;
+  const src=sv.dnUrl||sv.dnData||'';
+  const nm=(sv.dnFile||'').toLowerCase();
+  const isPdf=/\.pdf$/.test(nm)||src.indexOf('application/pdf')>=0;
+  const isImg=/\.(png|jpe?g|gif|webp)$/.test(nm)||src.indexOf('data:image/')===0;
+  const isXls=/\.xlsx?$/.test(nm);
+  const fallback=function(msg){
+    main.innerHTML='<div class="dnrv-empty"><i class="ti ti-file-text" style="font-size:42px;opacity:.35"></i><div style="margin:8px 0 12px">'+msg+'</div><button class="btn pri" onclick="_dnRvOpenTab()"><i class="ti ti-external-link"></i> Mở / tải file</button></div>';
+  };
+  if(!src){fallback('Không có dữ liệu file.');return;}
+  if(isPdf){ main.innerHTML='<iframe class="dnrv-frame" src="'+_dnEsc(src)+'"></iframe>'; return; }
+  if(isImg){ main.innerHTML='<div class="dnrv-imgwrap"><img src="'+_dnEsc(src)+'" alt="Debit Note"/></div>'; return; }
+  if(isXls){
+    main.innerHTML='<div class="dnrv-empty"><i class="ti ti-loader-2"></i><div style="margin-top:8px">Đang tải bảng tính...</div></div>';
+    const tok=c.key+'_'+Date.now(); main.dataset.tok=tok;
+    const render=function(buf){
+      try{
+        const wb=XLSX.read(buf,{type:'array'});
+        if(main.dataset.tok!==tok)return;
+        const tabs=wb.SheetNames.map(function(n,i){return '<button class="dnrv-sheet'+(i===0?' on':'')+'" data-i="'+i+'">'+_dnEsc(n)+'</button>';}).join('');
+        main.innerHTML='<div class="dnrv-xls"><div class="dnrv-sheets">'+tabs+'</div><div class="dnrv-xlsbody" id="dnRvXls"></div></div>';
+        const show=function(i){ g('dnRvXls').innerHTML=XLSX.utils.sheet_to_html(wb.Sheets[wb.SheetNames[i]],{editable:false}); main.querySelectorAll('.dnrv-sheet').forEach(function(b){b.classList.toggle('on',+b.dataset.i===i);}); };
+        main.querySelectorAll('.dnrv-sheet').forEach(function(b){b.onclick=function(){show(+b.dataset.i);};});
+        show(0);
+      }catch(e){ fallback('Không đọc được file Excel để xem trước.'); }
+    };
+    if(typeof XLSX==='undefined'){ fallback('Thư viện Excel chưa sẵn sàng — hãy mở file ở tab mới.'); return; }
+    if(src.indexOf('data:')===0){ try{ render(Uint8Array.from(atob(src.split(',')[1]),function(ch){return ch.charCodeAt(0);})); }catch(e){fallback('Không đọc được file Excel để xem trước.');} return; }
+    fetch(src).then(function(rs){return rs.arrayBuffer();}).then(render).catch(function(){ fallback('Không xem trước được file Excel trong cửa sổ này.'); });
+    return;
+  }
+  fallback('Định dạng file này không xem trước được trong cửa sổ.');
+}
+window._dnRvLoadFile=_dnRvLoadFile;
+
+// Xem / tải Debit Note của 1 dịch vụ (mở file ở tab mới — nút "Mở file ở tab mới" trong popup dùng hàm này)
+function _viewSvcDnRaw(svcKey){
   const r=cache[detailTt].find(x=>x._id===detailId)||{};
   const sv=(r.svcs||{})[svcKey]||{};
   const src=sv.dnUrl||sv.dnData; // ưu tiên URL Storage mới, fallback base64 cũ (file upload trước khi sửa)
@@ -27904,7 +28356,8 @@ function viewSvcDn(svcKey){
     const a=w.document.createElement('a');a.href=src;a.download=sv.dnFile||'debit-note';a.click();
   }
 }
-window.viewSvcDn=viewSvcDn;
+window._viewSvcDnRaw=_viewSvcDnRaw;
+window.viewSvcDn=function(k){ _openDnReview(k); };
 window.handleDnUpload=handleDnUpload;
 
 window.autoFpQtyByUnit=autoFpQtyByUnit;
