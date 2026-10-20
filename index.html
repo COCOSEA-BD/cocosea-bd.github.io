@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.08';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.10';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3849,11 +3849,12 @@ window._lotSaveFilterPrefs=_lotSaveFilterPrefs;
 // Sort state per tab
 var sortState={xuat:{key:'etd',dir:1},nhap:{key:'etd',dir:1}};
 
-function toggleSort(tt){
-  sortState[tt].dir*=-1;
-  const el=g('sortDir_'+tt);
-  if(el)el.textContent=sortState[tt].dir===1?'↑':'↓';
-  renderLotTable(tt);
+function toggleSort(tt,S){
+  S=S||tt; if(!sortState[S])sortState[S]={key:'etd',dir:1};
+  sortState[S].dir*=-1;
+  const el=g('sortDir_'+S);
+  if(el)el.textContent=sortState[S].dir===1?'↑':'↓';
+  renderLotTable(tt,S);
 }
 
 function calcDefaultCutoff(etdStr, dayOffset, time){
@@ -3964,21 +3965,22 @@ window._isAlwaysShowSpecialLot=_isAlwaysShowSpecialLot;
 // Shipper/Carrier/POD/Cargo/Khóa-VST nếu đang bật...). Tách riêng khỏi renderLotTable() để dùng
 // chung cho cả việc VẼ BẢNG và XUẤT EXCEL (đảm bảo Excel xuất ra ĐÚNG những gì đang hiển thị trên
 // màn hình — không đổi logic lọc cũ, chỉ thêm điều kiện lọc Cargo mới + tách hàm).
-function _filterLotRows(tt){
+function _filterLotRows(tt,S){ S=S||tt;
   // ── Đọc TẤT CẢ filter values TRƯỚC filter loop (không đọc DOM trong loop)
-  const q=(g('srch_'+tt)?.value||'').toLowerCase();
-  const fs=g('fst_'+tt)?.value||'';
-  const etdFrom=g('etdFrom_'+tt)?.value||'';
-  const etdTo=g('etdTo_'+tt)?.value||'';
-  const sfShipper=(g('sfShipper_'+tt)?.value||'').toLowerCase().trim();
-  const sfCarrier=(g('sfCarrier_'+tt)?.value||'').toLowerCase().trim();
-  const sfLock=g('sfLock_'+tt)?.value||'';
-  const sfPod=(g('sfPod_'+tt)?.value||'').toLowerCase().trim();
-  const sfCargo=g('sfCargo_'+tt)?.value||'';
+  const q=(g('srch_'+S)?.value||'').toLowerCase();
+  const fs=g('fst_'+S)?.value||'';
+  const etdFrom=g('etdFrom_'+S)?.value||'';
+  const etdTo=g('etdTo_'+S)?.value||'';
+  const sfShipper=(g('sfShipper_'+S)?.value||'').toLowerCase().trim();
+  const sfCarrier=(g('sfCarrier_'+S)?.value||'').toLowerCase().trim();
+  const sfLock=g('sfLock_'+S)?.value||'';
+  const sfPod=(g('sfPod_'+S)?.value||'').toLowerCase().trim();
+  const sfCargo=g('sfCargo_'+S)?.value||'';
 
   // ── Filter tối ưu: short-circuit sớm, không dùng Object.values() cho search
-  const sortDir=(sortState[tt]||{dir:1}).dir;
+  const sortDir=(sortState[S]||{dir:1}).dir;
   return (cache[tt]||[]).filter(r=>{
+    if(S==='bkcf'&&String(r.jobNo||'').toUpperCase().indexOf('XK')!==0)return false; // A 2.09: tab Booking confirm chỉ lấy Job ID XK
     if(tt==='xuat'&&(r.status==='Standby'||r.status==='Booking request'))return false; // A 2.07: nằm ở Booking List
     if(fs==='confirm'&&r.status!=='Confirm')return false;
     if(fs==='standby'&&r.status!=='Standby')return false;
@@ -4023,30 +4025,30 @@ function _filterLotRows(tt){
 }
 window._filterLotRows=_filterLotRows;
 
-function renderLotTable(tt){
+function renderLotTable(tt,S){ S=S||tt;
   const cols=tt==='xuat'?XCOLS_LIST:NCOLS_LIST;
   const today=new Date();today.setHours(0,0,0,0);
   const deadlineDays=parseInt(localStorage.getItem('deadlineDays')||'3');
   // etdFrom/etdTo: cần lại ở đây (ngoài _filterLotRows) vì buildRowHtml() bên dưới còn dùng để tính
   // isPinnedRow (lô "ghim" do nằm ngoài khoảng ETD đang lọc) — giữ đúng như logic gốc trước khi tách
   // _filterLotRows() ra, chỉ đọc lại giá trị, không đổi cách tính.
-  const etdFrom=g('etdFrom_'+tt)?.value||'';
-  const etdTo=g('etdTo_'+tt)?.value||'';
-  const rows=_filterLotRows(tt);
+  const etdFrom=g('etdFrom_'+S)?.value||'';
+  const etdTo=g('etdTo_'+S)?.value||'';
+  const rows=_filterLotRows(tt,S);
 
-  const thEl=g('th_'+tt);
-  const tbody=g('tb_'+tt);
+  const thEl=g('th_'+S);
+  const tbody=g('tb_'+S);
   if(!thEl||!tbody)return;
 
   // Cập nhật thanh trạng thái: số lô đang hiển thị (sau lọc) và tổng số lô
-  const _shownEl=g('lotCountShown_'+tt), _totalEl=g('lotCountTotal_'+tt);
+  const _shownEl=g('lotCountShown_'+S), _totalEl=g('lotCountTotal_'+S);
   if(_shownEl)_shownEl.textContent=rows.length.toLocaleString();
-  if(_totalEl)_totalEl.textContent=((cache[tt]||[]).length).toLocaleString();
+  if(_totalEl)_totalEl.textContent=((S==='bkcf'&&typeof _bkConfirmRows==='function')?_bkConfirmRows().length:(cache[tt]||[]).length).toLocaleString();
 
   thEl.innerHTML='<tr style="background:#e8f0fe">'+cols.map(c=>{
     if(c.k==='etd'){
-      const dir=sortState[tt]&&sortState[tt].dir===1?'↑':'↓';
-      return `<th onclick="toggleSort('${tt}')" style="cursor:pointer;color:#1a4b8c;font-weight:800;font-size:11.5px;padding:8px 9px;text-align:center;white-space:nowrap;letter-spacing:.3px" title="Bấm để đổi thứ tự sắp xếp ETD">${c.l} <span id="sortDir_${tt}">${dir}</span></th>`;
+      const dir=sortState[S]&&sortState[S].dir===1?'↑':'↓';
+      return `<th onclick="toggleSort('${tt}','${S}')" style="cursor:pointer;color:#1a4b8c;font-weight:800;font-size:11.5px;padding:8px 9px;text-align:center;white-space:nowrap;letter-spacing:.3px" title="Bấm để đổi thứ tự sắp xếp ETD">${c.l} <span id="sortDir_${S}">${dir}</span></th>`;
     }
     return `<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center;white-space:nowrap;letter-spacing:.3px">${c.l}</th>`;
   }).join('')+'<th style="color:#1a4b8c;font-weight:700;font-size:11px;padding:8px 9px;text-align:center">Thao tác</th></tr>';
@@ -4242,12 +4244,12 @@ function renderLotTable(tt){
   const batch2=rows.slice(C1,C1+C2);
   const batch3=rows.slice(C1+C2,PAGE);
   const rest=rows.slice(PAGE);
-  _lotRestRows[tt]={rows:rest,tt,cols,buildRowHtml};
+  _lotRestRows[S]={rows:rest,tt,cols,buildRowHtml};
 
   const phase2Loading=(typeof _phase2Ready!=='undefined')&&!_phase2Ready[tt];
   const loadMoreHtml=rest.length
-    ?`<tr id="loadMoreRow_${tt}"><td colspan="${cols.length+1}" style="text-align:center;padding:12px;background:var(--bg-secondary)"><button class="btn" onclick="_loadMoreLots('${tt}')" style="font-size:12px"><i class="ti ti-chevron-down"></i> Xem thêm ${rest.length} lô hàng...</button></td></tr>`
-    :(phase2Loading?`<tr id="loadMoreRow_${tt}"><td colspan="${cols.length+1}" style="text-align:center;padding:10px;font-size:11.5px;color:var(--text-secondary)"><i class="ti ti-loader ti-spin"></i> Đang tải thêm lô hàng...</td></tr>`:'');
+    ?`<tr id="loadMoreRow_${S}"><td colspan="${cols.length+1}" style="text-align:center;padding:12px;background:var(--bg-secondary)"><button class="btn" onclick="_loadMoreLots('${S}')" style="font-size:12px"><i class="ti ti-chevron-down"></i> Xem thêm ${rest.length} lô hàng...</button></td></tr>`
+    :(phase2Loading?`<tr id="loadMoreRow_${S}"><td colspan="${cols.length+1}" style="text-align:center;padding:10px;font-size:11.5px;color:var(--text-secondary)"><i class="ti ti-loader ti-spin"></i> Đang tải thêm lô hàng...</td></tr>`:'');
 
   // Chunk 1: ghi ngay (user thấy 15 row đầu trong ~0ms)
   tbody.innerHTML=batch1.map(buildRowHtml).join('');
@@ -4280,9 +4282,9 @@ window._loadMoreLots=_loadMoreLots;
 // Khóa-VST nếu đang bật) bằng cách dùng lại _filterLotRows(), không phụ thuộc số dòng đã render
 // trên màn hình (bỏ qua giới hạn phân đoạn hiển thị progressive — xuất TOÀN BỘ kết quả đang lọc).
 // Không đổi logic lọc/dữ liệu — chỉ đọc để xuất báo cáo.
-async function exportLotListExcel(tt){
+async function exportLotListExcel(tt,S){ S=S||tt;
   if(typeof ExcelJS==='undefined'){toast('ExcelJS chưa sẵn sàng, vui lòng thử lại sau giây lát','error');return;}
-  const rows=_filterLotRows(tt);
+  const rows=_filterLotRows(tt,S);
   if(!rows.length){toast('Không có lô hàng nào để xuất (theo bộ lọc hiện tại)','error');return;}
 
   const partnersRef=cache.partners||{};
@@ -4323,8 +4325,8 @@ async function exportLotListExcel(tt){
 
   ws.mergeCells(2,1,2,nCols);
   const t2=ws.getCell(2,1);
-  const fFst=g('fst_'+tt)?.value||'';
-  const etdFromV=g('etdFrom_'+tt)?.value||'', etdToV=g('etdTo_'+tt)?.value||'';
+  const fFst=g('fst_'+S)?.value||'';
+  const etdFromV=g('etdFrom_'+S)?.value||'', etdToV=g('etdTo_'+S)?.value||'';
   const filterParts=[];
   if(fFst)filterParts.push('Trạng thái: '+(FST_LABEL[fFst]||fFst));
   if(etdFromV||etdToV)filterParts.push('ETD: '+(etdFromV?_fmtDMY(etdFromV):'...')+' – '+(etdToV?_fmtDMY(etdToV):'...'));
@@ -7310,6 +7312,7 @@ async function saveDetailSvc(){
     if(prev.dnData)svcs[s.key].dnData=prev.dnData;
     if(prev.dnAt)svcs[s.key].dnAt=prev.dnAt;
     if(prev.dnUrl)svcs[s.key].dnUrl=prev.dnUrl;
+    if(prev.dnList)svcs[s.key].dnList=prev.dnList; // A 2.10: nhiều Debit Note
     if(prev.svcStatus)svcs[s.key].svcStatus=prev.svcStatus;
     if(s.custom){
       const _nm=(gS('sname_'+s.key)?.value||'').trim();
@@ -9473,7 +9476,7 @@ function svcRowHTML(s, sv){
       </div>
       <div style="display:flex;justify-content:center"><input type="checkbox" id="sfin_${s.key}" ${sv.finish?'checked':''} ${sv.on?'':'disabled'} onchange="onSvcFinishToggle()" style="width:16px;height:16px;cursor:pointer" title="${locked?'Bỏ tick để chỉnh sửa lại dòng này':'Đánh dấu hoàn tất'}"/></div>
       <div style="display:flex;justify-content:flex-end;gap:3px">
-        ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)" title="Xem Debit Note"><i class="ti ti-file-check"></i></button>`:`<button class="rac" onclick="_openDnReview('${s.key}')" style="font-size:13px;color:var(--text-secondary)" title="Upload Debit Note"><i class="ti ti-upload"></i></button>`}
+        ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)" title="Xem Debit Note"><i class="ti ti-file-check"></i>${(sv.dnList&&sv.dnList.length>1)?`<sup style="font-size:9px;font-weight:800;margin-left:1px">${sv.dnList.length}</sup>`:''}</button>`:`<button class="rac" onclick="_openDnReview('${s.key}')" style="font-size:13px;color:var(--text-secondary)" title="Upload Debit Note"><i class="ti ti-upload"></i></button>`}
         <button class="rac red" onclick="removeSvc('${s.key}')" ${delDis} title="${delTip}" style="font-size:13px"><i class="ti ti-trash"></i></button>
       </div>
       <label style="display:flex;align-items:center;justify-content:center;gap:3px;font-size:9px;color:var(--text-secondary);cursor:${sv.ocfConfirmed?'not-allowed':'pointer'}" title="Request Payment (OCF)">
@@ -9532,7 +9535,7 @@ function svcRowHTML(s, sv){
     <div style="display:flex;justify-content:flex-end;gap:3px">
       ${(_svcKeyBase(s.key)==='stuffing')?`<button class="rac" onclick="switchDetailTab('scy')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-package"></i></button>`:''}
       ${_isTruckingLikeSvc(s.key)?`<button class="rac" onclick="switchDetailTab('trucking')" style="font-size:13px;color:#1a4b8c"><i class="ti ti-truck"></i></button>`:''}
-      ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)"><i class="ti ti-file-check"></i></button>`:`<button class="rac" onclick="_openDnReview('${s.key}')" style="font-size:13px;color:var(--text-secondary)" title="Upload Debit Note"><i class="ti ti-upload"></i></button>`}
+      ${sv.dnFile?`<button class="rac" onclick="viewSvcDn('${s.key}')" style="font-size:13px;color:var(--green)"><i class="ti ti-file-check"></i>${(sv.dnList&&sv.dnList.length>1)?`<sup style="font-size:9px;font-weight:800;margin-left:1px">${sv.dnList.length}</sup>`:''}</button>`:`<button class="rac" onclick="_openDnReview('${s.key}')" style="font-size:13px;color:var(--text-secondary)" title="Upload Debit Note"><i class="ti ti-upload"></i></button>`}
       <button class="rac red" onclick="removeSvc('${s.key}')" ${delDis} title="${delTip}" style="font-size:13px"><i class="ti ti-trash"></i></button>
     </div>
   </div>`;
@@ -9563,6 +9566,8 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.10: pop-up Debit Note (tab Service) — thêm nút Xóa debit (để up lại) và Thêm Debit Note (1 dịch vụ nhiều Debit Note, chuyển qua lại giữa các file).
+// A 2.09: Booking List — tạo request chọn Carrier → POD → Tàu/chuyến (lọc theo carrier + POD); Booking party/Shipper chỉ chọn từ CRM/Shipper; nút Booking request ở từng tàu (Vessel tool); tab Booking confirm = mọi lô Job XK, hiển thị + bộ lọc như Shipment List.
 // A 2.08: pop-up Debit Note — Admin bấm lại nút Confirm để hoàn tác (về trạng thái chờ duyệt, sửa lại được; không hoàn tác khi đã thanh toán / lô khóa).
 // A 2.07: module BOOKING LIST (Booking request / Booking Standby / Booking confirm) kề Shipment List; nút Booking ở Vessel tool; lô Standby + Booking request chuyển khỏi Shipment List.
 // A 2.06: sửa lỗi lưu SCY/Service/Trucking... đọc nhầm dữ liệu từ lô cũ còn sót trong trang (mở lô từ SCY Report rồi lưu → các lô bị nhảy cùng số booking/sà lan): mỗi lần mở lô, dọn sạch vùng hiển thị lô cũ. A 2.05: tab Service — nút Upload Debit Note mở popup (upload + xem file bên phải; sidebar trái = toàn bộ nội dung dòng dịch vụ, sửa ở popup đồng bộ ra dòng ngoài và ngược lại; Request Payment/Need revise/Confirm/Thanh toán đồng bộ); Dashboard — bỏ chùm tia sáng từ đế chiếu lên ở header, thu gọn khoảng cách đế-nội dung. A 2.04: tab Service — bấm file Debit Note đã up mở popup kiểm tra & thanh toán (sidebar số tiền/NCC + Need revise/Confirm/Thanh toán đồng bộ với dòng dịch vụ, bên phải xem file); Shipment List — khối Cảnh báo đổi thành To do list theo vai trò (Doc / Accountant / Admin 2 tab), Lịch & Ghi chú thu gọn 1 dòng ở cuối. A 2.03: Document Maker — xem trước dạng sidebar trái + sửa trực tiếp (chữ, thêm/xóa dòng/cột) + lưu/xuất PDF/Excel; thêm dòng In word (số tiền bằng chữ tiếng Anh) cho Invoice/Contract; nút Quét ảnh (AI) tạm ẩn lại. A 2.02: bật lại nút Quét ảnh (Cont/Seal) — đọc ảnh bằng AI Claude qua Firebase Function, dự phòng Tesseract. A 2.01: chùm sáng hội tụ về 1 điểm trên đế (cả header/footer); mở màn: cây dừa → tia lan ra → các biểu tượng hiện lần lượt theo chiều kim đồng hồ từ Shipment. A 2.00: (đặt lại phiên bản; các bản sau đếm lên A 2.01, A 2.02…) tia sáng mềm hơn — chỉ 2 tia ngoài cùng, chỉ chiếu tới chân bảng/chân nội dung; icon Finance mới. v4.102: dashboard: đế kính dạng màn hình nhỏ gọn + tia sáng chiếu chữ/biểu tượng, bảng KPI/Lịch có đế + chùm tia, hiệu ứng mở màn, icon Finance mới. v4.101: mobile: icon lên trên, KPI/lịch xuống dưới, khôi phục vòng quay; thiết kế lại giao diện Shipment trên mobile. v4.100: bảng KPI/lịch/header/footer đứng yên, icon trôi nổi, đế kính mới. v4.99: bỏ thanh header/footer (chữ nổi trên đế kính), bảng KPI/Lịch dày 3D, donut+radar. v4.98: đổi vị trí Shipment/CRM. v4.97: Dashboard 3D (icon xếp đều trên sàn 3D, bảng KPI dựng đứng, hào quang hover). v4.96: Dashboard mới (mạng ánh sáng + hào quang holographic).
@@ -21810,6 +21815,14 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 .ws-coll-btn:hover{background:var(--bg-secondary);color:var(--text-primary)}
 .ws-coll-btn i{transition:transform .18s;font-size:15px}
 .ws-coll.open .ws-coll-btn i{transform:rotate(180deg)}
+.dnrv-bbtn.del{color:#B91C1C;border-color:#B91C1C55}
+.dnrv-bbtn.del:hover:not([disabled]){background:#FEF2F2;border-color:#B91C1C;color:#991B1B}
+.dnrv-bbtn[disabled]{opacity:.45;cursor:not-allowed}
+.dnrv-files{flex:0 0 100%;display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.dnrv-fchip{display:inline-flex;align-items:center;gap:5px;max-width:240px;padding:4px 10px;font-family:inherit;font-size:11.5px;font-weight:600;border:1.5px solid var(--border-light);background:var(--bg-primary);color:var(--text-secondary);border-radius:999px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dnrv-fchip b{color:var(--text-primary)}
+.dnrv-fchip.on{border-color:#1a4b8c;background:#E8F0FE;color:#1a4b8c}
+.dnrv-fchip.on b{color:#1a4b8c}
 </style>
 <style id="dmpv-css">
 /* A 2.03 — Document Maker: xem trước dạng sidebar trái + khung sửa trực tiếp */
@@ -21925,6 +21938,10 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 /* thêm 1 mục menu (Booking List) → thu nhẹ khoảng đệm các nút topbar ở màn hình vừa/nhỏ để không bị đẩy mất nút cuối */
 @media (min-width:769px) and (max-width:1680px){.topnav-menu .sb-item{padding:8px 11px;margin:0 1px}}
 @media (min-width:769px) and (max-width:1440px){.topnav-menu .sb-item{padding:8px 9px;gap:5px}}
+.bk-adv{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px}
+.bk-advl{font-size:12px;font-weight:700;color:var(--text-secondary);display:inline-flex;align-items:center;gap:5px}
+.bk-adv input,.bk-adv select{width:auto;flex:0 1 170px;min-width:120px;font-size:12px;padding:6px 9px}
+.bk-adv{margin-bottom:6px}
 </style>
 <style id="mobile-xuat-v4101">
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -28313,9 +28330,24 @@ function _dnRvSig(){
   const c=window._dnRv; const r=_dnRvLot(); const sv=r&&(r.svcs||{})[c.key]; if(!sv)return 'x';
   const rq=_dnRvOut('sreqpay_');
   const dis=['scost_','sqty_','svcunit_','svcur_','svvatamt_','ssup_','sremark_','sfin_'].map(function(p){const e=_dnRvOut(p);return e?(e.disabled?1:0):'-';}).join('');
-  return JSON.stringify([_dnRvVals(r,c.key,sv),sv.reqPayment,sv.ocfConfirmed,sv.ocfRevise,sv.ocfReviseNote,sv.apPaidStatus,rq?(rq.checked?1:0)+''+(rq.disabled?1:0):'-',dis,!!r.locked,sv.dnFile||'',sv.dnUrl||'',sv.dnAt||0]);
+  return JSON.stringify([_dnRvVals(r,c.key,sv),sv.reqPayment,sv.ocfConfirmed,sv.ocfRevise,sv.ocfReviseNote,sv.apPaidStatus,rq?(rq.checked?1:0)+''+(rq.disabled?1:0):'-',dis,!!r.locked,_dnRvListSig(sv)]);
 }
-function _dnRvFileSig(){ const r=_dnRvLot(); const c=window._dnRv; const sv=r&&(r.svcs||{})[c.key]||{}; return (sv.dnFile||'')+'|'+(sv.dnUrl||'')+'|'+(sv.dnAt||0); }
+// A 2.10: 1 dịch vụ có thể có NHIỀU Debit Note. sv.dnList = [{name,url,at,by}]; dnFile/dnUrl/dnAt luôn phản chiếu file MỚI NHẤT (tương thích bản cũ).
+function _dnRvFiles(sv){
+  if(sv&&Array.isArray(sv.dnList)&&sv.dnList.length)return sv.dnList;
+  if(sv&&(sv.dnFile||sv.dnUrl||sv.dnData))return [{name:sv.dnFile||'Debit Note',url:sv.dnUrl||'',at:sv.dnAt||0,legacyData:!!(sv.dnData&&!sv.dnUrl)}];
+  return [];
+}
+function _dnRvListSig(sv){ return _dnRvFiles(sv).map(function(f){return (f.name||'')+'|'+(f.url||'')+'|'+(f.at||0);}).join('~'); }
+function _dnRvCur(sv){
+  const c=window._dnRv; const L=_dnRvFiles(sv); if(!L.length)return null;
+  let i=(c&&typeof c.idx==='number')?c.idx:L.length-1;
+  if(i<0||i>=L.length)i=L.length-1;
+  return L[i];
+}
+function _dnRvCurIdx(sv){ const c=window._dnRv; const L=_dnRvFiles(sv); let i=(c&&typeof c.idx==='number')?c.idx:L.length-1; if(i<0||i>=L.length)i=L.length-1; return i; }
+function _dnRvSrc(sv,f){ return f?(f.url||(f.legacyData?(sv.dnData||''):'')||''):''; }
+function _dnRvFileSig(){ const r=_dnRvLot(); const c=window._dnRv; const sv=r&&(r.svcs||{})[c.key]||{}; return _dnRvListSig(sv)+'#'+_dnRvCurIdx(sv); }
 
 function _openDnReview(key){
   const tt=detailTt, id=detailId;
@@ -28324,7 +28356,7 @@ function _openDnReview(key){
   if(!r){toast('Không tìm thấy lô hàng','error');return;}
   if(!sv){toast('Dịch vụ chưa được lưu — hãy bấm "Lưu dịch vụ" trước','error');return;}
   if(window._dnRv&&window._dnRv.timer)clearInterval(window._dnRv.timer);
-  window._dnRv={tt:tt,id:id,key:key,reviseOpen:false,local:null,sig:'',fsig:''};
+  window._dnRv={tt:tt,id:id,key:key,reviseOpen:false,local:null,sig:'',fsig:'',idx:-1};
   let ov=g('dnReviewOv');
   if(!ov){ov=document.createElement('div');ov.id='dnReviewOv';ov.className='ov';ov.style.zIndex='190';document.body.appendChild(ov);}
   ov.innerHTML=_dnRvShell();
@@ -28348,7 +28380,7 @@ function _dnRvPoll(){
   _dnRvRenderSide(); _dnRvUpdateHead();
   const fs=_dnRvFileSig(); if(fs!==c.fsig){ c.fsig=fs; if(c.local&&_dnRvCurName()!==c.local.name)c.local=null; _dnRvLoadFile(); }
 }
-function _dnRvCurName(){ const r=_dnRvLot(), c=window._dnRv; const sv=r&&(r.svcs||{})[c.key]||{}; return sv.dnFile||''; }
+function _dnRvCurName(){ const r=_dnRvLot(), c=window._dnRv; const sv=r&&(r.svcs||{})[c.key]||{}; const f=_dnRvCur(sv); return f?f.name:''; }
 
 function _dnRvShell(){
   const r=_dnRvLot()||{}, c=window._dnRv;
@@ -28371,7 +28403,7 @@ function _dnRvShell(){
 function _dnRvUpdateHead(){
   const r=_dnRvLot(), c=window._dnRv; const el=g('dnRvSub'); if(!el||!r||!c)return;
   const sv=(r.svcs||{})[c.key]||{};
-  el.textContent='Booking: '+(r.bookingNo||r.jobNo||'')+(sv.dnFile?' · '+sv.dnFile:' · chưa có Debit Note');
+  el.textContent='Booking: '+(r.bookingNo||r.jobNo||'')+(function(){const L=_dnRvFiles(sv);return L.length?(' · '+L.length+' Debit Note'):' · chưa có Debit Note';})();
 }
 function _dnRvClose(){ const c=window._dnRv; if(c&&c.timer)clearInterval(c.timer); if(c&&c.local&&c.local.url){try{URL.revokeObjectURL(c.local.url);}catch(e){}} closeOv('dnReviewOv'); window._dnRv=null; }
 window._dnRvClose=_dnRvClose;
@@ -28589,7 +28621,12 @@ window._dnRvUndo=_dnRvUndo;
 // Thanh toán — mở đúng popup thanh toán dùng ở tab Service (lưu Sổ quỹ, khóa dòng, đồng bộ badge ngoài)
 function _dnRvPay(){ const c=window._dnRv; if(!c)return; _openSvcPayPopup(c.key); }
 window._dnRvPay=_dnRvPay;
-function _dnRvOpenTab(){ const c=window._dnRv; if(!c)return; _viewSvcDnRaw(c.key); }
+function _dnRvOpenTab(){
+  const c=window._dnRv; if(!c)return;
+  const r=_dnRvLot(); const sv=r&&(r.svcs||{})[c.key]||{}; const f=_dnRvCur(sv);
+  if(f&&f.url){ window.open(f.url,'_blank'); return; }
+  _viewSvcDnRaw(c.key);
+}
 window._dnRvOpenTab=_dnRvOpenTab;
 
 // Sau khi lưu thanh toán (popup thanh toán dùng chung) → làm mới sidebar trái
@@ -28630,38 +28667,87 @@ async function _dnRvUpload(src){
     const url=await _uploadFileToStorage(file,path);
     const now=Date.now();
     const upd={updatedAt:now,updatedBy:(currentUser&&currentUser.email)||''};
+    // A 2.10: THÊM vào danh sách (không ghi đè file cũ)
+    const list=_dnRvFiles(sv0).map(function(f){return Object.assign({},f);});
+    list.push({name:file.name,url:url,at:now,by:(currentUser&&currentUser.email)||''});
+    upd['svcs.'+key+'.dnList']=list;
     upd['svcs.'+key+'.dnFile']=file.name;
     upd['svcs.'+key+'.dnUrl']=url;
     upd['svcs.'+key+'.dnAt']=now;
-    upd['svcs.'+key+'.dnData']=firebase.firestore.FieldValue.delete();
     await _dnRvFsUpdate(tt,id,upd);
     // cập nhật cache ngay (không render lại cả panel → giữ nguyên phần người dùng đang sửa dở ở dòng ngoài)
     const rr=(cache[tt]||[]).find(function(x){return x._id===id;});
-    if(rr){ rr.svcs=rr.svcs||{}; const s=rr.svcs[key]=rr.svcs[key]||{on:true}; s.dnFile=file.name; s.dnUrl=url; s.dnAt=now; delete s.dnData; }
+    if(rr){ rr.svcs=rr.svcs||{}; const s=rr.svcs[key]=rr.svcs[key]||{on:true}; s.dnList=list; s.dnFile=file.name; s.dnUrl=url; s.dnAt=now; }
     ok=true;
-    toast('Đã upload Debit Note: '+file.name);
+    toast('Đã thêm Debit Note: '+file.name+(list.length>1?' (tổng '+list.length+' file)':''));
     if(window._dnRv&&window._dnRv.id===id&&window._dnRv.key===key){
       const cc=window._dnRv;
       if(cc.local&&cc.local.url){try{URL.revokeObjectURL(cc.local.url);}catch(e){}}
       let bu=''; try{bu=URL.createObjectURL(file);}catch(e){}
       cc.local=bu?{name:file.name,url:bu}:null;
+      cc.idx=list.length-1;
     }
     _dnRvSyncRowBtn(key);
   }catch(e){ toast('Lỗi upload: '+(e&&e.message||e),'error'); }
   setLoading(false);
   reset();
-  if(window._dnRv){ const cc=window._dnRv; cc.sig=_dnRvSig(); cc.fsig=_dnRvFileSig(); _dnRvUpdateHead(); _dnRvLoadFile(); if(ok)_dnRvBanner('Upload thành công: '+file.name); }
+  if(window._dnRv){ const cc=window._dnRv; cc.sig=_dnRvSig(); cc.fsig=_dnRvFileSig(); _dnRvUpdateHead(); _dnRvLoadFile(); if(ok)_dnRvBanner('Đã thêm: '+file.name); }
 }
 window._dnRvUpload=_dnRvUpload; window._dnRvDrop=_dnRvDrop;
 // Nút upload ở dòng ngoài → đổi thành nút "đã có Debit Note" (không render lại cả panel)
 function _dnRvSyncRowBtn(key){
   try{
     const row=document.getElementById('srow_'+key); if(!row)return;
-    const b=row.querySelector('button[onclick*="_openDnReview"]'); if(!b)return;
-    b.title='Xem Debit Note'; b.style.color='var(--green)';
-    b.innerHTML='<i class="ti ti-file-check"></i>';
+    const b=row.querySelector('button[onclick*="_openDnReview"],button[onclick*="viewSvcDn"]'); if(!b)return;
+    const r=_dnRvLot(); const sv=r&&(r.svcs||{})[key]||{}; const n=_dnRvFiles(sv).length;
+    if(n){ b.title=n>1?('Xem Debit Note ('+n+' file)'):'Xem Debit Note'; b.style.color='var(--green)'; b.innerHTML='<i class="ti ti-file-check"></i>'+(n>1?'<sup style="font-size:9px;font-weight:800;margin-left:1px">'+n+'</sup>':''); }
+    else{ b.title='Upload Debit Note'; b.style.color='var(--text-secondary)'; b.innerHTML='<i class="ti ti-upload"></i>'; }
   }catch(e){}
 }
+// Xóa Debit Note đang xem (để up lại file đúng). Không xóa được khi dịch vụ đã Confirm / đã thanh toán / lô khóa.
+async function _dnRvDelete(){
+  const c=window._dnRv; if(!c)return;
+  const r=_dnRvLot(); if(!r)return;
+  if(r.locked){toast('Lô hàng đã khóa','error');return;}
+  const sv=(r.svcs||{})[c.key]; if(!sv)return;
+  if(sv.apPaidStatus==='paid'){toast('Dịch vụ đã thanh toán — không xóa Debit Note được','error');return;}
+  if(sv.ocfConfirmed){toast('Dịch vụ đã Confirm — Admin hoàn tác Confirm trước rồi mới xóa Debit Note','error');return;}
+  const L=_dnRvFiles(sv).map(function(f){return Object.assign({},f);}); if(!L.length)return;
+  const idx=_dnRvCurIdx(sv); const f=L[idx];
+  if(!confirm('Xóa Debit Note "'+f.name+'"?'+(L.length>1?'\n\n(Các Debit Note khác của dịch vụ này được giữ nguyên.)':'\n\nSau khi xóa bạn có thể upload lại file khác.')))return;
+  setLoading(true,'Đang xóa Debit Note...');
+  try{
+    L.splice(idx,1);
+    const now=Date.now();
+    const upd={updatedAt:now,updatedBy:(currentUser&&currentUser.email)||''};
+    const del=firebase.firestore.FieldValue.delete();
+    const last=L[L.length-1];
+    if(L.length){ upd['svcs.'+c.key+'.dnList']=L; upd['svcs.'+c.key+'.dnFile']=last.name; upd['svcs.'+c.key+'.dnUrl']=last.url||del; upd['svcs.'+c.key+'.dnAt']=last.at||now; }
+    else{ upd['svcs.'+c.key+'.dnList']=del; upd['svcs.'+c.key+'.dnFile']=del; upd['svcs.'+c.key+'.dnUrl']=del; upd['svcs.'+c.key+'.dnAt']=del; }
+    if(f.legacyData||!L.length)upd['svcs.'+c.key+'.dnData']=del;
+    await _dnRvFsUpdate(c.tt,c.id,upd);
+    const rr=(cache[c.tt]||[]).find(function(x){return x._id===c.id;});
+    if(rr&&rr.svcs&&rr.svcs[c.key]){
+      const s2=rr.svcs[c.key];
+      if(L.length){ s2.dnList=L; s2.dnFile=last.name; if(last.url)s2.dnUrl=last.url; else delete s2.dnUrl; s2.dnAt=last.at||now; }
+      else{ delete s2.dnList; delete s2.dnFile; delete s2.dnUrl; delete s2.dnAt; }
+      if(f.legacyData||!L.length)delete s2.dnData;
+    }
+    try{ if(typeof logLotEvent==='function')logLotEvent(c.id,c.tt,'update','Xóa Debit Note "'+f.name+'" — dịch vụ '+(sv._name||sv.customName||c.key),''); }catch(e){}
+    toast('Đã xóa Debit Note: '+f.name);
+    if(c.local&&c.local.name===f.name){ try{URL.revokeObjectURL(c.local.url);}catch(e){} c.local=null; }
+    c.idx=-1;
+    _dnRvSyncRowBtn(c.key);
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+  if(window._dnRv){ const cc=window._dnRv; cc.sig=_dnRvSig(); cc.fsig=_dnRvFileSig(); _dnRvUpdateHead(); _dnRvLoadFile(); }
+}
+function _dnRvPick(i){
+  const c=window._dnRv; if(!c)return;
+  c.idx=i; c.fsig=''; _dnRvLoadFile();
+  const r=_dnRvLot(); const sv=r&&(r.svcs||{})[c.key]||{}; c.fsig=_dnRvFileSig();
+}
+window._dnRvDelete=_dnRvDelete; window._dnRvPick=_dnRvPick;
 function _dnRvBanner(msg){
   const bar=g('dnRvBar'); if(!bar)return;
   const old=bar.querySelector('.dnrv-ok'); if(old)old.remove();
@@ -28671,13 +28757,23 @@ function _dnRvBanner(msg){
 function _dnRvRenderBar(){
   const bar=g('dnRvBar'), c=window._dnRv; if(!bar||!c)return;
   const r=_dnRvLot(); const sv=r&&(r.svcs||{})[c.key]||{};
-  const has=!!(sv.dnFile||sv.dnUrl||sv.dnData);
+  const L=_dnRvFiles(sv), has=L.length>0, idx=_dnRvCurIdx(sv), cur=has?L[idx]:null;
   const keep=bar.querySelector('.dnrv-ok');
-  bar.innerHTML='<div class="dnrv-fname">'+(has?'<i class="ti ti-file-check" style="color:var(--green)"></i> '+_dnEsc(sv.dnFile||'Debit Note')+(sv.dnAt?' <small>· '+_dnEsc(new Date(sv.dnAt).toLocaleDateString('vi-VN'))+'</small>':''):'<i class="ti ti-file-off"></i> Chưa có Debit Note')+'</div>'
+  const frozen=!!(r&&r.locked);
+  const canDel=has&&!frozen&&sv.apPaidStatus!=='paid'&&!sv.ocfConfirmed;
+  const delWhy=!has?'':(frozen?'Lô đã khóa':(sv.apPaidStatus==='paid'?'Đã thanh toán — không xóa được':(sv.ocfConfirmed?'Đã Confirm — Admin hoàn tác Confirm trước':'Xóa Debit Note đang xem')));
+  let chips='';
+  if(L.length>1){
+    chips='<div class="dnrv-files">'+L.map(function(f,i){
+      return '<button type="button" class="dnrv-fchip'+(i===idx?' on':'')+'" onclick="_dnRvPick('+i+')" title="'+_dnEsc(f.name)+(f.at?' · '+_dnEsc(new Date(f.at).toLocaleDateString('vi-VN')):'')+'"><i class="ti ti-file-check"></i> <b>'+(i+1)+'</b> '+_dnEsc(f.name)+'</button>';
+    }).join('')+'</div>';
+  }
+  bar.innerHTML='<div class="dnrv-fname">'+(has?'<i class="ti ti-file-check" style="color:var(--green)"></i> '+_dnEsc(cur.name||'Debit Note')+(cur.at?' <small>· '+_dnEsc(new Date(cur.at).toLocaleDateString('vi-VN'))+'</small>':'')+(L.length>1?' <small>· '+(idx+1)+'/'+L.length+'</small>':''):'<i class="ti ti-file-off"></i> Chưa có Debit Note')+'</div>'
     +'<div class="dnrv-barbtns">'
     +(has?'<button type="button" class="dnrv-bbtn" onclick="_dnRvOpenTab()" title="Mở file ở tab mới"><i class="ti ti-external-link"></i><span> Mở tab mới</span></button>':'')
-    +(r&&!r.locked?'<label class="dnrv-bbtn up"><i class="ti ti-upload"></i><span> '+(has?'Thay file':'Upload Debit Note')+'</span><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="_dnRvUpload(this)"/></label>':'')
-    +'</div>';
+    +(has?'<button type="button" class="dnrv-bbtn del" '+(canDel?'':'disabled ')+'onclick="_dnRvDelete()" title="'+_dnEsc(delWhy)+'"><i class="ti ti-trash"></i><span> Xóa debit</span></button>':'')
+    +(r&&!r.locked?'<label class="dnrv-bbtn up"><i class="ti ti-'+(has?'file-plus':'upload')+'"></i><span> '+(has?'Thêm Debit Note':'Upload Debit Note')+'</span><input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" style="display:none" onchange="_dnRvUpload(this)"/></label>':'')
+    +'</div>'+chips;
   if(keep)bar.appendChild(keep);
 }
 
@@ -28686,16 +28782,17 @@ function _dnRvLoadFile(){
   const c=window._dnRv, main=g('dnRvView'); if(!c||!main)return;
   const r=_dnRvLot(); const sv=r&&(r.svcs||{})[c.key]; if(!sv)return;
   _dnRvUpdateHead(); _dnRvRenderBar();
-  const useLocal=c.local&&c.local.name===sv.dnFile;
-  const src=useLocal?c.local.url:(sv.dnUrl||sv.dnData||'');
-  const nm=(sv.dnFile||'').toLowerCase();
+  const curF=_dnRvCur(sv);
+  const useLocal=c.local&&curF&&c.local.name===curF.name;
+  const src=useLocal?c.local.url:_dnRvSrc(sv,curF);
+  const nm=((curF&&curF.name)||'').toLowerCase();
   const isPdf=/\.pdf$/.test(nm)||src.indexOf('application/pdf')>=0;
   const isImg=/\.(png|jpe?g|gif|webp)$/.test(nm)||src.indexOf('data:image/')===0;
   const isXls=/\.xlsx?$/.test(nm);
   const fallback=function(msg){
     main.innerHTML='<div class="dnrv-empty"><i class="ti ti-file-text" style="font-size:42px;opacity:.35"></i><div style="margin:8px 0 12px">'+msg+'</div><button class="btn pri" onclick="_dnRvOpenTab()"><i class="ti ti-external-link"></i> Mở / tải file</button></div>';
   };
-  if(!src&&!sv.dnFile){
+  if(!src&&!curF){
     main.innerHTML='<div class="dnrv-empty dnrv-drop"><i class="ti ti-cloud-upload" style="font-size:52px;opacity:.5"></i>'
       +'<div style="font-size:15px;font-weight:700;margin:10px 0 4px;color:var(--text-primary)">Chưa có Debit Note cho dịch vụ này</div>'
       +'<div style="margin-bottom:14px">Kéo thả file vào đây hoặc bấm nút bên dưới (PDF, JPG, PNG, XLS, XLSX — tối đa 8MB)</div>'
@@ -37530,7 +37627,6 @@ window._vtComputeKpis=_vtComputeKpis;
    - Từ lúc chuyển Standby/Confirm: tạo LÔ trong lots_xuat (status Standby / Confirm, có bkReqId)
    - Lô Standby ẩn khỏi Shipment List (chỉ nằm ở tab Booking Standby); Confirm hiện ở cả 2 nơi.
    ═══════════════════════════════════════════════════════════════════════════ */
-const BK_CONFIRM_FROM='2026-10-01';   // tab Booking confirm: lô XK có ETD từ ngày này
 window._bkTab=window._bkTab||'req';
 window._bkQ=window._bkQ||'';
 window._bkChip=window._bkChip||'';
@@ -37559,9 +37655,8 @@ function _bkReqRows(){
 function _bkStandbyRows(){ return (cache.xuat||[]).filter(function(r){return r.status==='Standby'&&_bkIsXK(r);}); }
 function _bkConfirmRows(){
   return (cache.xuat||[]).filter(function(r){
-    if(!_bkIsXK(r))return false;
-    if(r.status==='Standby'||r.status==='Booking request'||r.status==='Cancel'||r.status==='Xóa CB')return false;
-    return !!r.etd;
+    if(String(r.jobNo||'').toUpperCase().indexOf('XK')!==0)return false;
+    return r.status!=='Standby'&&r.status!=='Booking request';
   });
 }
 function _bkCounts(){ return {req:_bkReqRows().length,standby:_bkStandbyRows().length}; }
@@ -37571,23 +37666,27 @@ function renderBookingList(){
   const pg=g('page-booking'); if(!pg)return;
   const tab=window._bkTab;
   const c=_bkCounts();
-  if(window._bkFrom===undefined)window._bkFrom='';
-  if(window._bkTo===undefined)window._bkTo='';
-  const dFrom=(tab==='confirm'&&window._bkFrom==='')?BK_CONFIRM_FROM:window._bkFrom;
   const T=function(k,ic,lb,n,cls){return '<button class="bk-tab'+(tab===k?' on':'')+'" onclick="_bkSetTab(\''+k+'\')"><i class="ti '+ic+'"></i><span>'+lb+'</span><b class="bk-n '+(cls||'')+'">'+n+'</b></button>';};
-  pg.innerHTML='<div class="bk-wrap">'
-    +'<div class="bk-head"><div class="bk-title"><i class="ti ti-ticket"></i><div><h2>Booking List</h2><p>Booking do COCOSEA submit với hãng tàu — theo dõi từ lúc request đến khi release</p></div></div>'
+  const head='<div class="bk-head"><div class="bk-title"><i class="ti ti-ticket"></i><div><h2>Booking List</h2><p>Booking do COCOSEA submit với hãng tàu — theo dõi từ lúc request đến khi release</p></div></div>'
     +(_bkCanCreate()?'<button class="btn pri" onclick="_bkOpenNew()"><i class="ti ti-plus"></i> Tạo booking request</button>':'')
     +'</div>'
     +'<div class="bk-tabs">'
       +T('req','ti-clock-play','Booking request',c.req,'')
       +T('standby','ti-hourglass','Booking Standby',c.standby,'sb')
-      +T('confirm','ti-circle-check','Booking confirm','…','cf')
-    +'</div>'
+      +T('confirm','ti-circle-check','Booking confirm',_bkConfirmRows().length,'cf')
+    +'</div>';
+  if(tab==='confirm'){
+    pg.innerHTML='<div class="bk-wrap">'+head+_bkCfShell()+'</div>';
+    _bkCfInit();
+    return;
+  }
+  if(window._bkFrom===undefined)window._bkFrom='';
+  if(window._bkTo===undefined)window._bkTo='';
+  pg.innerHTML='<div class="bk-wrap">'+head
     +'<div class="toolbar bk-tool">'
       +'<div class="search-wrap" style="flex:1;min-width:220px"><i class="ti ti-search"></i><input type="text" id="bkQ" value="'+_bkE(window._bkQ)+'" placeholder="Tìm tàu, chuyến, số booking, Booking Party, Shipper, Carrier, POD..." oninput="window._bkQ=this.value;_bkRenderTable()"/></div>'
       +(tab==='req'?'<select id="bkChip" onchange="window._bkChip=this.value;_bkRenderTable()" style="width:170px"><option value="">Tất cả trạng thái</option><option value="request"'+(window._bkChip==='request'?' selected':'')+'>Chưa lấy booking</option><option value="booking"'+(window._bkChip==='booking'?' selected':'')+'>Booking request</option></select>':'')
-      +'<label class="bk-dl">ETD từ <input type="date" id="bkFrom" value="'+_bkE(dFrom)+'" onchange="window._bkFrom=this.value||\'\';if(!this.value)window._bkFrom=\'\';_bkRenderTable()"/></label>'
+      +'<label class="bk-dl">ETD từ <input type="date" id="bkFrom" value="'+_bkE(window._bkFrom)+'" onchange="window._bkFrom=this.value||\'\';_bkRenderTable()"/></label>'
       +'<label class="bk-dl">đến <input type="date" id="bkTo" value="'+_bkE(window._bkTo)+'" onchange="window._bkTo=this.value;_bkRenderTable()"/></label>'
     +'</div>'
     +'<div id="bkTblWrap"></div>'
@@ -37595,6 +37694,65 @@ function renderBookingList(){
   _bkRenderTable();
 }
 window.renderBookingList=renderBookingList;
+
+/* ── Tab 3: Booking confirm — dùng CHÍNH bảng + bộ lọc của Shipment List (lọc riêng, chỉ lô có Job ID bắt đầu bằng XK) ── */
+function _bkCfShell(){
+  const tt='xuat', S='bkcf';
+  return ''
+  +'<div class="toolbar">'
+    +'<div class="search-wrap" style="flex:1;min-width:220px"><i class="ti ti-search"></i><input type="text" id="srch_'+S+'" placeholder="Tìm Booking No, MBL, Carrier, Booking Party, Số tờ khai..." oninput="_bkCfRender()"/></div>'
+    +'<button class="btn sm" onclick="_bkCfQuick(\'vst_no\')" style="font-size:11px;padding:6px 10px;color:#B91C1C;border-color:#B91C1C55;flex-shrink:0;white-space:nowrap"><i class="ti ti-alert-triangle" style="font-size:11px"></i> Chưa VST</button>'
+    +'<button class="btn sm" onclick="_bkCfQuick(\'doc_pending\')" style="font-size:11px;padding:6px 10px;color:#B45309;border-color:#B4530955;flex-shrink:0;white-space:nowrap"><i class="ti ti-file-alert" style="font-size:11px"></i> Chưa gửi Ctừ</button>'
+    +'<div style="width:1px;align-self:stretch;background:var(--border-light);flex-shrink:0;margin:0 2px"></div>'
+    +'<button class="btn sm" onclick="exportLotListExcel(\'xuat\',\'bkcf\')" style="font-size:11px;padding:6px 10px;color:#0F6E56;border-color:#0F6E56;flex-shrink:0;white-space:nowrap" title="Xuất Excel danh sách đang hiển thị (theo bộ lọc hiện tại)"><i class="ti ti-file-spreadsheet" style="font-size:12px"></i> Excel</button>'
+    +'<select id="fst_'+S+'" style="width:150px;flex-shrink:0" onchange="_bkCfRender()">'
+      +'<option value="">Tất cả</option><option value="confirm">Confirm</option><option value="vst_yes">Đã VST</option><option value="vst_no">Chưa VST</option><option value="doc_pending">Chưa gửi Ctừ</option>'
+    +'</select>'
+    +'<div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);flex-shrink:0">'
+      +'<button class="btn sm" onclick="_bkCfRange(7)" style="font-size:11px;padding:3px 8px">-1wk</button>'
+      +'<button class="btn sm" onclick="_bkCfRange(14)" style="font-size:11px;padding:3px 8px">-2wk</button>'
+      +'<button class="btn sm" onclick="_bkCfRange(30)" style="font-size:11px;padding:3px 8px">-1mo</button>'
+      +'<button class="btn sm" onclick="_bkCfReset()" style="font-size:11px;padding:3px 8px;color:var(--text-secondary)" title="Xóa tất cả bộ lọc"><i class="ti ti-refresh" style="font-size:11px"></i> Reset</button>'
+      +'<i class="ti ti-calendar" style="font-size:13px"></i>'
+      +'<input type="date" id="etdFrom_'+S+'" value="'+getDefaultEtdFrom()+'" onchange="_bkCfRender()" style="width:128px;font-size:11.5px;padding:5px 7px"/>'
+      +'<span>→</span>'
+      +'<input type="date" id="etdTo_'+S+'" value="'+getDefaultEtdTo()+'" onchange="_bkCfRender()" style="width:128px;font-size:11.5px;padding:5px 7px"/>'
+      +'<button class="btn sm" onclick="_bkCfClearEtd()" title="Tất cả"><i class="ti ti-calendar-off"></i></button>'
+    +'</div>'
+  +'</div>'
+  +'<div class="toolbar bk-adv">'
+    +'<span class="bk-advl"><i class="ti ti-filter"></i> Bộ lọc</span>'
+    +'<input type="text" id="sfShipper_'+S+'" placeholder="Shipper..." oninput="_bkCfRender()"/>'
+    +'<input type="text" id="sfCarrier_'+S+'" placeholder="Carrier..." oninput="_bkCfRender()"/>'
+    +'<input type="text" id="sfPod_'+S+'" placeholder="POD..." oninput="_bkCfRender()"/>'
+    +'<select id="sfCargo_'+S+'" onchange="_bkCfRender()"><option value="">Cargo: Tất cả</option><option>Hàng khô</option><option>Hàng lạnh</option><option>LCL</option></select>'
+    +'<select id="sfLock_'+S+'" onchange="_bkCfRender()"><option value="">Khóa / VST: Tất cả</option><option value="locked">Đã khóa</option><option value="unlocked">Chưa khóa</option><option value="vst_yes">Đã VST</option><option value="vst_no">Chưa VST</option></select>'
+  +'</div>'
+  +'<div class="table-card"><div class="table-wrap"><table class="lot-table"><thead id="th_'+S+'"></thead><tbody id="tb_'+S+'"></tbody></table></div></div>'
+  +'<div style="margin-top:4px;padding:7px 14px;background:#0F1E2E;color:#cbd5e1;border-radius:8px;font-size:12.5px;display:flex;align-items:center;gap:16px">'
+    +'<span style="display:flex;align-items:center;gap:6px"><i class="ti ti-package" style="font-size:14px;color:#14B8A6"></i> Đang hiển thị: <strong id="lotCountShown_'+S+'" style="color:#fff">0</strong></span>'
+    +'<span style="color:#64748b">|</span><span>Tổng: <strong id="lotCountTotal_'+S+'" style="color:#fff">0</strong> lô XK (Job ID bắt đầu từ XK)</span>'
+  +'</div>';
+}
+function _bkCfInit(){ _bkCfRender(); }
+function _bkCfRender(){
+  if(!g('tb_bkcf'))return;
+  renderLotTable('xuat','bkcf');
+  const t=g('lotCountTotal_bkcf'); if(t)t.textContent=_bkConfirmRows().length.toLocaleString();
+  const cb=document.querySelector('.bk-tab .bk-n.cf'); if(cb)cb.textContent=_bkConfirmRows().length;
+}
+function _bkCfQuick(v){ const el=g('fst_bkcf'); if(!el)return; el.value=(el.value===v)?'':v; _bkCfRender(); }
+function _bkCfRange(days){
+  const from=new Date(Date.now()-days*86400000).toISOString().slice(0,10), to=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+  g('etdFrom_bkcf').value=from; g('etdTo_bkcf').value=to; _bkCfRender();
+}
+function _bkCfClearEtd(){ g('etdFrom_bkcf').value=''; g('etdTo_bkcf').value=''; _bkCfRender(); }
+function _bkCfReset(){
+  ['srch_bkcf','fst_bkcf','sfShipper_bkcf','sfCarrier_bkcf','sfPod_bkcf','sfCargo_bkcf','sfLock_bkcf'].forEach(function(i){const e=g(i);if(e)e.value='';});
+  g('etdFrom_bkcf').value=getDefaultEtdFrom(); g('etdTo_bkcf').value=getDefaultEtdTo();
+  _bkCfRender(); toast('Đã reset bộ lọc');
+}
+Object.assign(window,{_bkCfRender,_bkCfQuick,_bkCfRange,_bkCfClearEtd,_bkCfReset});
 
 function _bkSetTab(k){ window._bkTab=k; window._bkQ=''; window._bkChip=''; window._bkFrom=''; window._bkTo=''; renderBookingList(); }
 window._bkSetTab=_bkSetTab;
@@ -37606,14 +37764,10 @@ function _bkRenderTable(){
   const box=g('bkTblWrap'); if(!box)return;
   const tab=window._bkTab, q=(window._bkQ||'').toLowerCase().trim();
   let from=window._bkFrom||'', to=window._bkTo||'';
-  if(tab==='confirm'&&!from)from=BK_CONFIRM_FROM;
   let html='';
   if(tab==='req')html=_bkTblReq(q,from,to);
   else if(tab==='standby')html=_bkTblStandby(q,from,to);
-  else html=_bkTblConfirm(q,from,to);
   box.innerHTML=html;
-  const cb=document.querySelector('.bk-tab .bk-n.cf');
-  if(cb)cb.textContent=_bkConfirmRows().filter(function(r){return _bkInRange(r.etd,BK_CONFIRM_FROM,'');}).length;
 }
 window._bkRenderTable=_bkRenderTable;
 
@@ -37705,18 +37859,6 @@ function _bkTblStandby(q,from,to){
   return h+'</tbody></table></div><div class="bk-foot">'+rows.length+' booking standby — bấm <b>Release</b> khi được hãng tàu/khách duyệt để chuyển sang Booking confirm.</div>';
 }
 
-/* ── Tab 3: Booking confirm ── */
-function _bkTblConfirm(q,from,to){
-  const rows=_bkConfirmRows().filter(function(l){
-    if(!_bkInRange(l.etd,from,to))return false;
-    return _bkMatch([l.vessel,l.voy,l.pod,l.carrier,l.bookingParty,l.shipper,_bkLotBkNo(l),l.jobNo,l.tenHang,l.status].join(' '),q);
-  }).sort(function(a,b){return (a.etd||'')>(b.etd||'')?1:-1;});
-  if(!rows.length)return _bkEmpty('Không có booking confirm trong khoảng ETD đã chọn.','ti-circle-check');
-  let h='<div class="bk-tw"><table class="bk-tbl"><thead><tr><th>#</th><th>Job ID</th><th>Tàu / Chuyến</th><th>ETD</th><th>Route</th><th>Carrier</th><th>Booking Party</th><th>Shipper</th><th>Booking No</th><th>Vol</th><th>File</th><th>Trạng thái</th></tr></thead><tbody>';
-  rows.forEach(function(l,i){ h+=_bkLotRow(l,i,false,'cf'); });
-  return h+'</tbody></table></div><div class="bk-foot">'+rows.length+' lô xuất khẩu (ETD từ '+_bkFd(window._bkFrom||BK_CONFIRM_FROM)+') — bấm vào dòng để mở lô trong Shipment List.</div>';
-}
-
 /* ───────── Mở lô trong Shipment List ───────── */
 function _bkOpenLot(id){
   goTab('xuat');
@@ -37761,20 +37903,30 @@ function _bkVessels(){
   const lim=today.toISOString().slice(0,10);
   return (cache.vessels||[]).filter(function(v){return v.etd&&v.etd>=lim;}).sort(function(a,b){return (a.etd||'')>(b.etd||'')?1:-1;});
 }
+function _bkCands(){
+  // Chuyến tàu có thể chọn: sắp chạy (ETD từ hôm nay-7) — thu hẹp theo nơi mở (1 chuyến cụ thể / 1 tàu)
+  const F=window._bkForm||{};
+  let list=_bkVessels();
+  const cur=F.q?_bkFindVessel(F.q):null;
+  if(F.presetId&&!F.id){ const v=(cache.vessels||[]).find(function(x){return x._id===F.presetId;}); list=v?[v]:[]; }
+  else if(F.vesselName&&!F.id){ list=list.filter(function(v){return (v.vessel||'')===F.vesselName;}); }
+  if(cur&&!list.some(function(v){return v._id===cur._id;}))list=[cur].concat(list);
+  return list;
+}
 function _bkFindVessel(q){
   if(!q)return null;
   const list=cache.vessels||[];
   return list.find(function(v){return v._id===q.vesselId;})||list.find(function(v){return v.vessel===q.vessel&&(v.voy||'')===(q.voy||'');})||null;
 }
 function _bkPartnerList(kind){
+  // Booking Party / Shipper: chọn từ danh sách Shipper đang có trong CRM (đối tác có vai trò Shipper)
   const all=Object.values(cache.partners||{});
-  let arr=all;
-  if(kind==='shipper'){ const s=all.filter(function(p){return _partnerHasType(p,'shipper');}); if(s.length)arr=s; }
-  return arr.map(function(p){return p.shortname;}).filter(Boolean).sort(function(a,b){return a.localeCompare(b);});
+  const sh=all.filter(function(p){return _partnerHasType(p,'shipper');});
+  return (sh.length?sh:all).map(function(p){return p.shortname;}).filter(Boolean).sort(function(a,b){return a.localeCompare(b);});
 }
-function _bkOpenNew(vesselId){
+function _bkOpenNew(vesselId,vesselName){
   if(!_bkCanCreate()){toast('Bạn không có quyền tạo booking request','error');return;}
-  window._bkForm={id:null,q:null,vesselId:vesselId||''};
+  window._bkForm={id:null,q:null,vesselId:vesselId||'',presetId:vesselId||'',vesselName:vesselName||''};
   _bkRenderForm();
 }
 function _bkOpenReq(id){
@@ -37812,7 +37964,7 @@ function _bkRenderForm(){
   const carriers=(cur&&cur.carriers)||[];
   const cargoNames=(window._cargoNames||[]).map(function(n){return n.name||n;});
   const intent=q.intent||'Standby';
-  const catalog=_bkPartnerList('all'), shipList=_bkPartnerList('shipper');
+  const catalog=_bkPartnerList('shipper'), shipList=catalog;
   const titleTxt=isNew?'Booking request mới':(q.stage==='booking'?'Booking request':'Request chưa lấy booking');
   const stageChip=isNew?'':(' '+_bkStageChip(q));
   const hasFileNote=q.fileUrl?'<div class="bk-note">Đã có file: <a href="'+_bkE(q.fileUrl)+'" target="_blank">'+_bkE(q.fileName||'booking')+'</a></div>':'';
@@ -37829,18 +37981,18 @@ function _bkRenderForm(){
   ov.innerHTML='<div class="modal bk-modal">'
     +'<div class="mhdr"><div class="mtitle"><i class="ti ti-ticket" style="margin-right:6px"></i>'+titleTxt+stageChip+'</div><button class="rac" onclick="closeOv(\'bkOv\')"><i class="ti ti-x"></i></button></div>'
     +'<div class="mbody bk-body">'
-      +'<div class="bk-sec"><div class="bk-sh"><i class="ti ti-ship"></i> Chuyến tàu</div>'
+      +'<div class="bk-sec"><div class="bk-sh"><i class="ti ti-ship"></i> Chuyến tàu <span class="mut" style="font-weight:500;text-transform:none;letter-spacing:0">— chọn Carrier → POD → Tàu / Chuyến</span></div>'
         +'<div class="bk-g">'
-          +'<div class="bk-f full"><label>Tàu / Chuyến <span class="req">*</span></label><select id="bkVes" onchange="_bkVesChange()"'+dis+'>'+vOpts+'</select></div>'
+          +'<div class="bk-f"><label>1. Carrier <span class="req">*</span></label><select id="bkCarrier" onchange="_bkCarrierChange()"'+dis+'></select></div>'
+          +'<div class="bk-f"><label>2. Route (POD) <span class="req">*</span></label><select id="bkRoute" onchange="_bkPodChange()"'+dis+'></select></div>'
+          +'<div class="bk-f full"><label>3. Tàu / Chuyến <span class="req">*</span></label><select id="bkVes" onchange="_bkVesChange()"'+dis+'></select></div>'
           +'<div class="bk-info" id="bkVesInfo"></div>'
-          +'<div class="bk-f"><label>Route (POD) <span class="req">*</span></label><select id="bkRoute"'+dis+'></select></div>'
-          +'<div class="bk-f"><label>Carrier <span class="req">*</span></label><select id="bkCarrier"'+dis+'></select></div>'
           +'<div class="bk-f full"><label>Carrier remark</label><input type="text" id="bkCRem" value="'+_bkE(q.carrierRemark||'')+'" placeholder="Ghi chú cho hãng tàu / yêu cầu đặc biệt"'+dis+'/></div>'
         +'</div></div>'
       +'<div class="bk-sec"><div class="bk-sh"><i class="ti ti-users"></i> Khách hàng</div>'
         +'<div class="bk-g">'
-          +'<div class="bk-f"><label>Booking Party <span class="req">*</span></label><input list="bkDlAll" id="bkParty" value="'+_bkE(q.bookingParty||'')+'" placeholder="Chọn / gõ để tìm"'+dis+' autocomplete="off"/></div>'
-          +'<div class="bk-f"><label>Shipper <span class="req">*</span></label><input list="bkDlShip" id="bkShipper" value="'+_bkE(q.shipper||'')+'" placeholder="Chọn / gõ để tìm" onchange="_bkRefreshCnee()"'+dis+' autocomplete="off"/></div>'
+          +'<div class="bk-f"><label>Booking Party <span class="req">*</span> <span class="mut">(Shipper CRM)</span></label><input list="bkDlAll" id="bkParty" value="'+_bkE(q.bookingParty||'')+'" placeholder="Chọn từ danh sách Shipper"'+dis+' autocomplete="off"/></div>'
+          +'<div class="bk-f"><label>Shipper <span class="req">*</span></label><input list="bkDlShip" id="bkShipper" value="'+_bkE(q.shipper||'')+'" placeholder="Chọn từ danh sách Shipper" onchange="_bkRefreshCnee()"'+dis+' autocomplete="off"/></div>'
         +'</div>'
         +'<datalist id="bkDlAll">'+catalog.map(function(n){return '<option value="'+_bkE(n)+'"></option>';}).join('')+'</datalist>'
         +'<datalist id="bkDlShip">'+shipList.map(function(n){return '<option value="'+_bkE(n)+'"></option>';}).join('')+'</datalist>'
@@ -37870,37 +38022,60 @@ function _bkRenderForm(){
       +(!isNew&&canP?'<button class="btn sb-b" onclick="_bkConvert(\'standby\')"><i class="ti ti-hourglass"></i> Chuyển Standby</button><button class="btn pri" onclick="_bkConvert(\'confirm\')"><i class="ti ti-circle-check"></i> Chuyển Confirm</button>':'')
     +'</div></div>';
   openOv('bkOv');
-  _bkFillVessel(cur, q);
+  _bkCascade('init',{carrier:q.carrier||'',route:q.route||'',vesselId:(q.vesselId&&_bkFindVessel(q))?_bkFindVessel(q)._id:(F.vesselId||'')});
   _bkCargoChange(q.typeCont||'');
   _bkRefreshCnee(q.cnee||'');
   _bkQtyChange();
 }
 
-function _bkFillVessel(v,q){
-  q=q||{};
-  const route=g('bkRoute'), car=g('bkCarrier'), info=g('bkVesInfo');
-  if(!route||!car)return;
-  const dis=route.disabled;
-  const pods=(v&&v.pods||[]).filter(function(p){return p.pod;});
-  const keepRoute=q.route||'';
-  const rOpts=pods.length?pods.map(function(p){return p.pod;}):(keepRoute?[keepRoute]:[]);
-  route.innerHTML=(rOpts.length>1||!rOpts.length?'<option value="">— Chọn route —</option>':'')+rOpts.map(function(o){const p=pods.find(function(x){return x.pod===o;})||{};return '<option value="'+_bkE(o)+'"'+(o===keepRoute?' selected':'')+'>'+_bkE((v&&v.pol?v.pol+' → ':'')+o)+(p.eta?' · ETA '+_bkFd(p.eta):'')+'</option>';}).join('');
-  const carriers=(v&&v.carriers&&v.carriers.length)?v.carriers:(q.carrier?[q.carrier]:[]);
-  car.innerHTML=(carriers.length>1||!carriers.length?'<option value="">— Chọn carrier —</option>':'')+carriers.map(function(o){return '<option'+(o===q.carrier?' selected':'')+'>'+_bkE(o)+'</option>';}).join('');
-  if(!dis&&!route.value&&pods.length===1)route.value=pods[0].pod;
-  if(info){
-    info.innerHTML=v?('<span><i class="ti ti-calendar"></i> ETD <b>'+_bkFd(v.etd)+'</b></span>'
-      +'<span><i class="ti ti-map-pin"></i> POL <b>'+_bkE(v.pol||'—')+'</b></span>'
-      +'<span><i class="ti ti-clock"></i> Cut-off CY <b>'+_bkE(String(v.cutoffCY||'—').slice(0,16))+'</b></span>'
-      +'<span><i class="ti ti-clock"></i> SI <b>'+_bkE(String(v.cutoffSI||'—').slice(0,16))+'</b></span>'):'<span class="mut">Chọn tàu để xem ETD, POL, cut-off</span>';
-  }
+function _bkVoyPods(v){ return ((v&&v.pods)||[]).filter(function(p){return p.pod;}); }
+function _bkUniq(a){ const o=[]; a.forEach(function(x){ if(x&&o.indexOf(x)<0)o.push(x); }); return o; }
+function _bkSetOpts(sel,items,keep,ph,autoOne){
+  // items: [{v,label}]
+  if(!sel)return '';
+  let val=keep;
+  if(!items.some(function(i){return i.v===val;}))val='';
+  if(!val&&autoOne&&items.length===1)val=items[0].v;
+  sel.innerHTML=((items.length===1&&val)?'':'<option value="">'+ph+'</option>')+items.map(function(i){return '<option value="'+_bkE(i.v)+'"'+(i.v===val?' selected':'')+'>'+_bkE(i.label)+'</option>';}).join('');
+  sel.value=val;
+  return val;
 }
-function _bkVesChange(){
-  const id=g('bkVes').value;
-  const v=(cache.vessels||[]).find(function(x){return x._id===id;})||null;
-  window._bkForm.vesselId=id;
-  _bkFillVessel(v,{});
+// Thứ tự: Carrier → POD → Tàu/Chuyến. Mỗi bước chỉ liệt kê lựa chọn còn phù hợp với các bước trước.
+function _bkCascade(from,init){
+  init=init||{};
+  const c=_bkCands();
+  const carSel=g('bkCarrier'), podSel=g('bkRoute'), vesSel=g('bkVes'); if(!carSel||!podSel||!vesSel)return;
+  // 1) Carrier
+  const cars=_bkUniq([].concat.apply([],c.map(function(v){return v.carriers||[];}))).sort();
+  if(init.carrier&&cars.indexOf(init.carrier)<0)cars.push(init.carrier);
+  const car=_bkSetOpts(carSel,cars.map(function(x){return {v:x,label:x};}),from==='init'?(init.carrier||''):carSel.value,'— Chọn Carrier —',true);
+  // 2) POD (chỉ các tàu của carrier đã chọn)
+  const byCar=c.filter(function(v){return !car||(v.carriers||[]).indexOf(car)>=0;});
+  const pods=_bkUniq([].concat.apply([],byCar.map(function(v){return _bkVoyPods(v).map(function(p){return p.pod;});}))).sort();
+  if(init.route&&pods.indexOf(init.route)<0)pods.push(init.route);
+  const pod=_bkSetOpts(podSel,pods.map(function(x){return {v:x,label:x};}),from==='init'?(init.route||''):podSel.value,car?'— Chọn POD —':'— Chọn Carrier trước —',true);
+  // 3) Tàu / Chuyến (carrier + POD khớp)
+  const byPod=byCar.filter(function(v){return !pod||_bkVoyPods(v).some(function(p){return p.pod===pod;});});
+  const items=(car&&pod)?byPod.map(function(v){
+    const pi=_bkVoyPods(v).find(function(p){return p.pod===pod;})||{};
+    return {v:v._id,label:_bkVoyLabel(v)+' · ETD '+_bkFd(v.etd)+(pi.eta?' → ETA '+_bkFd(pi.eta):'')};
+  }):[];
+  const vid=_bkSetOpts(vesSel,items,from==='init'?(init.vesselId||''):vesSel.value,(car&&pod)?(items.length?'— Chọn tàu / chuyến —':'Không có chuyến phù hợp'):'— Chọn Carrier và POD trước —',true);
+  window._bkForm.vesselId=vid;
+  _bkShowInfo(vid);
 }
+function _bkShowInfo(vid){
+  const info=g('bkVesInfo'); if(!info)return;
+  const v=(cache.vessels||[]).find(function(x){return x._id===vid;})||null;
+  info.innerHTML=v?('<span><i class="ti ti-ship"></i> <b>'+_bkE(_bkVoyLabel(v))+'</b></span>'
+    +'<span><i class="ti ti-calendar"></i> ETD <b>'+_bkFd(v.etd)+'</b></span>'
+    +'<span><i class="ti ti-map-pin"></i> POL <b>'+_bkE(v.pol||'—')+'</b></span>'
+    +'<span><i class="ti ti-clock"></i> Cut-off CY <b>'+_bkE(String(v.cutoffCY||'—').slice(0,16))+'</b></span>'
+    +'<span><i class="ti ti-clock"></i> SI <b>'+_bkE(String(v.cutoffSI||'—').slice(0,16))+'</b></span>'):'<span class="mut">Chọn tàu / chuyến để xem ETD, POL, cut-off</span>';
+}
+function _bkCarrierChange(){ _bkCascade('carrier'); }
+function _bkPodChange(){ _bkCascade('pod'); }
+function _bkVesChange(){ const id=(g('bkVes')||{}).value||''; window._bkForm.vesselId=id; _bkShowInfo(id); }
 function _bkCargoChange(keep){
   const cargo=(g('bkCargo')||{}).value||'Hàng khô';
   const sel=g('bkType'); if(!sel)return;
@@ -37931,7 +38106,7 @@ function _bkQtyChange(){
   if(pre){pre.disabled=multi; if(multi)pre.value='';}
   if(note)note.style.display=multi?'block':'none';
 }
-Object.assign(window,{_bkVesChange,_bkCargoChange,_bkRefreshCnee,_bkPickIntent,_bkQtyChange});
+Object.assign(window,{_bkVesChange,_bkCarrierChange,_bkPodChange,_bkCargoChange,_bkRefreshCnee,_bkPickIntent,_bkQtyChange});
 
 function _bkReadForm(){
   const F=window._bkForm;
@@ -37940,7 +38115,8 @@ function _bkReadForm(){
   const val=function(id){return ((g(id)||{}).value||'').trim();};
   const intentBtn=document.querySelector('#bkIntent button.on');
   const partners=cache.partners||{};
-  const fixName=function(n){ if(!n)return n; if(partners[n])return n; const k=Object.keys(partners).find(function(x){return x.toLowerCase()===n.toLowerCase();}); return k||n; };
+  const shl0=_bkPartnerList('shipper');
+  const fixName=function(n){ if(!n)return n; if(shl0.indexOf(n)>=0)return n; const k=shl0.find(function(x){return x.toLowerCase()===n.toLowerCase();}); return k||n; };
   return {
     v:v, vesselId:vid,
     route:val('bkRoute'), carrier:val('bkCarrier'), carrierRemark:val('bkCRem'),
@@ -37957,10 +38133,11 @@ function _bkValidateBase(d,needAll){
   if(!d.v)m.push('Tàu / Chuyến');
   if(!d.route)m.push('Route (POD)');
   if(!d.carrier)m.push('Carrier');
+  const shl=_bkPartnerList('shipper');
   if(!d.bookingParty)m.push('Booking Party');
-  else if(!(cache.partners||{})[d.bookingParty])m.push('Booking Party "'+d.bookingParty+'" chưa có trong CRM — chọn từ danh sách');
+  else if(shl.indexOf(d.bookingParty)<0)m.push('Booking Party "'+d.bookingParty+'" không nằm trong danh sách Shipper của CRM — chọn từ danh sách');
   if(!d.shipper)m.push('Shipper');
-  else if(!(cache.partners||{})[d.shipper])m.push('Shipper "'+d.shipper+'" chưa có trong CRM — chọn từ danh sách');
+  else if(shl.indexOf(d.shipper)<0)m.push('Shipper "'+d.shipper+'" không nằm trong danh sách Shipper của CRM — chọn từ danh sách');
   if(!d.typeCont)m.push('Type cont');
   if(!(d.vol>=1))m.push('Vol (≥ 1)');
   return m;
@@ -38096,7 +38273,7 @@ function _bkUpdateBadge(){
 window._bkUpdateBadge=_bkUpdateBadge;
 function _bkOnData(){
   _bkUpdateBadge();
-  if(currentTab==='booking'){ clearTimeout(window._bkRT); window._bkRT=setTimeout(function(){ if(!g('bkOv')||!g('bkOv').classList.contains('open')){ const q=g('bkQ'); const keep=q&&document.activeElement===q; if(keep){_bkRenderTable();}else renderBookingList(); } },80); }
+  if(currentTab==='booking'){ clearTimeout(window._bkRT); window._bkRT=setTimeout(function(){ if(!g('bkOv')||!g('bkOv').classList.contains('open')){ const q=g('bkQ'); const keep=q&&document.activeElement===q; if(window._bkTab==='confirm'){_bkCfRender();}else if(keep){_bkRenderTable();}else renderBookingList(); } },80); }
 }
 window._bkOnData=_bkOnData;
 
@@ -38227,6 +38404,7 @@ function renderVesselTool(){
             +'<div class="vt2-vrow-name">'+vesName+(vList[0].carriers&&vList[0].carriers[0]?'<span class="vt2-chip">'+vList[0].carriers[0]+'</span>':'')+'</div>'
             +'<div class="vt2-vrow-meta">'+vList.length+' chuyến • '+lotsCount+' shipment</div>'
           +'</div>'
+          +(_bkCanCreate()?'<button class="vt2-rowbtn bkreq" onclick="event.stopPropagation();_bkOpenNew(\'\',\''+vesNameEsc+'\')" title="Tạo booking request cho tàu này"><i class="ti ti-ticket"></i> Booking request</button>':'')
           +'<span class="vt2-status '+(anyActive?'active':'closed')+'">'+(anyActive?'Hoạt động':'Đã đóng')+'</span>'
           +'<i class="ti ti-chevron-down vt2-vrow-chevron" style="margin-left:6px"></i>'
         +'</div>'
