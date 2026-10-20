@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.11';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.12';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9566,6 +9566,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.12: Bảng lương — Phụ cấp trách nhiệm: Lô đạt = hoàn thành chứng từ trong ETD +3 ngày LÀM VIỆC (không tính thứ 7, chủ nhật), tính cho người bấm tick hoàn thành.
 // A 2.11: PDF/Excel/form Debit Note — Shipper + Consignee (tên tiếng Anh) chuyển vào box Bill To; gọn bố cục để vừa 1 trang (không còn nhảy NOTE/Bank Account sang trang 2 khi trang 1 còn trống).
 // A 2.10: pop-up Debit Note (tab Service) — thêm nút Xóa debit (để up lại) và Thêm Debit Note (1 dịch vụ nhiều Debit Note, chuyển qua lại giữa các file).
 // A 2.09: Booking List — tạo request chọn Carrier → POD → Tàu/chuyến (lọc theo carrier + POD); Booking party/Shipper chỉ chọn từ CRM/Shipper; nút Booking request ở từng tàu (Vessel tool); tab Booking confirm = mọi lô Job XK, hiển thị + bộ lọc như Shipment List.
@@ -11865,7 +11866,21 @@ async function _prLoad(y,m){
      từ bảng này nên mọi nơi đang đọc phuCapTrachNhiem (tổng lương, KPI, Excel, báo cáo) tự đồng bộ, không đổi công thức.
 ─────────────────────────────────────────────────────────────── */
 const _PR_DOC_BONUS_DEFAULT=50000;
-const _PR_DOC_DAYS=4; // mốc ETD + 4 ngày
+const _PR_DOC_DAYS=3; // A 2.12: mốc ETD + 3 NGÀY LÀM VIỆC (bỏ thứ 7, chủ nhật)
+// Cộng n ngày làm việc (thứ 2–6) vào ngày s (yyyy-mm-dd). Ví dụ ETD thứ 6 +3 → thứ 4 tuần sau; ETD thứ 7 +1 → thứ 2.
+function _prAddWorkDays(s,n){
+  const d=new Date(s+'T00:00:00Z');
+  while(n>0){ d.setUTCDate(d.getUTCDate()+1); const w=d.getUTCDay(); if(w!==0&&w!==6)n--; }
+  return d.toISOString().slice(0,10);
+}
+// Số ngày làm việc từ b đến a (a sau b → dương = trễ; a trước b → âm = sớm)
+function _prWorkDiff(a,b){
+  if(a===b)return 0;
+  const later=a>b, from=later?b:a, to=later?a:b;
+  const d=new Date(from+'T00:00:00Z'), end=new Date(to+'T00:00:00Z'); let c=0;
+  while(d<end){ d.setUTCDate(d.getUTCDate()+1); const w=d.getUTCDay(); if(w!==0&&w!==6)c++; }
+  return later?c:-c;
+}
 window._prRate=(window._prRate==null)?_PR_DOC_BONUS_DEFAULT:window._prRate;
 function _prAddDaysStr(s,n){ const d=new Date(s+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
 function _prDmy(s){ return s?String(s).split('-').reverse().join('-'):'—'; }
@@ -11878,7 +11893,7 @@ function _prDocLotsForMonth(y,m){
     (cache[tt]||[]).forEach(function(r){
       if(!r.docTrackEnabled||!(r.docTrackKeys||[]).length)return;
       if(!r.etd||String(r.etd).slice(0,7)!==ym)return;
-      const limit=_prAddDaysStr(r.etd,_PR_DOC_DAYS);
+      const limit=_prAddWorkDays(r.etd,_PR_DOC_DAYS);
       const done=r.docDoneDate||'';
       out.push({id:r._id,tt:tt,label:r.bookingNo||r.jobNo||'—',etd:r.etd,limit:limit,doneDate:done,
         doneBy:(r.docDoneBy||'').toLowerCase(),ok:!!done&&done<=limit,late:!!done&&done>limit,pending:!done});
@@ -11951,7 +11966,7 @@ function _prTnSummaryHTML(rows){
     +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:.7rem 1rem;background:var(--bg-secondary)">'
       +'<i class="ti ti-award" style="color:#C99A3C;font-size:18px"></i>'
       +'<b style="font-size:13px">Bảng phụ cấp trách nhiệm</b>'
-      +'<span style="font-size:11.5px;color:var(--text-secondary)">đồng bộ cột TN · mốc ETD +'+_PR_DOC_DAYS+' ngày</span>'
+      +'<span style="font-size:11.5px;color:var(--text-secondary)">đồng bộ cột TN · mốc ETD +'+_PR_DOC_DAYS+' ngày làm việc</span>'
       +'<div style="flex:1"></div>'
       +'<span style="font-size:12px">Thưởng tiến độ chứng từ / lô đạt: '+rateCtl+' đ</span>'
     +'</div>'
@@ -11959,7 +11974,7 @@ function _prTnSummaryHTML(rows){
       +'<th class="pr-th" style="width:36px">#</th><th class="pr-th" style="text-align:left">Nhân viên</th>'
       +'<th class="pr-th">1 · Thưởng tiến độ chứng từ</th><th class="pr-th">Khoản khác</th><th class="pr-th">Tổng TN</th><th class="pr-th"></th>'
     +'</tr></thead><tbody>'+(body||'<tr><td colspan="6" class="pr-td" style="text-align:center;padding:1.2rem;color:var(--text-secondary)">Chưa có nhân viên</td></tr>')+'</tbody></table></div>'
-    +'<div style="font-size:11px;color:var(--text-secondary);padding:.5rem 1rem"><i class="ti ti-info-circle"></i> Lô đạt = hoàn thành chứng từ trong vòng ETD +'+_PR_DOC_DAYS+' ngày; tính theo tháng của ETD, cho người bấm tick hoàn thành. '
+    +'<div style="font-size:11px;color:var(--text-secondary);padding:.5rem 1rem"><i class="ti ti-info-circle"></i> Lô đạt = hoàn thành chứng từ trong vòng ETD +'+_PR_DOC_DAYS+' ngày làm việc (không tính thứ 7, chủ nhật); tính theo tháng của ETD, cho người bấm tick hoàn thành. '
       +'Tháng này có <b>'+pending+'</b> lô đang theo dõi chưa hoàn thành (chưa tính)'+(orphan?' · <b>'+orphan+'</b> lô do người chưa có trong bảng lương hoàn thành':'')+'.</div>'
   +'</div>';
 }
@@ -11976,10 +11991,10 @@ window._prOpenTn=_prOpenTn;
 function _prTnLotTable(list,okFlag){
   if(!list.length)return '<div style="padding:.6rem .8rem;font-size:12px;color:var(--text-secondary)">Không có lô nào.</div>';
   return '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
-    +['Booking / Job','ETD','Hạn (ETD+'+_PR_DOC_DAYS+')','Hoàn thành','Chênh lệch'].map(function(h){return '<th class="pr-th" style="font-size:9px">'+h+'</th>';}).join('')
+    +['Booking / Job','ETD','Hạn (ETD+'+_PR_DOC_DAYS+' ngày LV)','Hoàn thành','Chênh lệch (ngày LV)'].map(function(h){return '<th class="pr-th" style="font-size:9px">'+h+'</th>';}).join('')
     +'</tr></thead><tbody>'
     +list.map(function(l){
-      const d=_prDayDiff(l.doneDate,l.limit);
+      const d=_prWorkDiff(l.doneDate,l.limit);
       const txt=d<=0?(d===0?'đúng hạn':'sớm '+(-d)+' ngày'):'trễ '+d+' ngày';
       return '<tr><td class="pr-td">'+l.label+'</td><td class="pr-td" style="text-align:center">'+_prDmy(l.etd)+'</td><td class="pr-td" style="text-align:center">'+_prDmy(l.limit)+'</td>'
         +'<td class="pr-td" style="text-align:center">'+_prDmy(l.doneDate)+'</td><td class="pr-td" style="text-align:center;font-weight:700;color:'+(okFlag?'#16A34A':'#DC2626')+'">'+txt+'</td></tr>';
@@ -12004,14 +12019,14 @@ function _prTnDraw(){
     +'<div style="padding:12px 16px">'
       +'<table style="width:100%;border-collapse:collapse"><thead><tr><th class="pr-th" style="width:36px">#</th><th class="pr-th" style="text-align:left">Khoản phụ cấp</th><th class="pr-th">Số tiền (đ)</th><th class="pr-th" style="width:40px"></th></tr></thead><tbody>'
       +'<tr style="background:rgba(201,154,60,.08)"><td class="pr-td" style="text-align:center;font-weight:700">1</td>'
-        +'<td class="pr-td"><b>Thưởng tiến độ chứng từ</b><div style="font-size:11px;color:var(--text-secondary)">'+d.count+' lô đạt (≤ ETD+'+_PR_DOC_DAYS+') × '+_prFmt(rate)+' đ — tự động, không sửa tay</div></td>'
+        +'<td class="pr-td"><b>Thưởng tiến độ chứng từ</b><div style="font-size:11px;color:var(--text-secondary)">'+d.count+' lô đạt (≤ ETD+'+_PR_DOC_DAYS+' ngày làm việc) × '+_prFmt(rate)+' đ — tự động, không sửa tay</div></td>'
         +'<td class="pr-td-r" style="font-weight:800">'+_prFmt(d.amount)+'</td><td class="pr-td"></td></tr>'
       +items
       +'</tbody></table>'
       +'<div style="display:flex;align-items:center;gap:8px;margin-top:8px"><button class="btn sm" onclick="_prTnAdd()"><i class="ti ti-plus"></i> Thêm khoản phụ cấp</button><div style="flex:1"></div>'
         +'<span style="font-size:13px">Tổng TN: <b id="prTnTotal" style="color:#14B8A6;font-size:15px">'+_prFmt(r.phuCapTrachNhiem||0)+'</b> đ</span></div>'
-      +'<div style="margin-top:14px"><div style="font-weight:700;font-size:12.5px;color:#16A34A;margin:0 0 4px"><i class="ti ti-circle-check"></i> Lô đạt — hoàn thành ≤ ETD +'+_PR_DOC_DAYS+' ngày ('+d.ok.length+')</div>'+_prTnLotTable(d.ok,true)+'</div>'
-      +'<div style="margin-top:12px"><div style="font-weight:700;font-size:12.5px;color:#DC2626;margin:0 0 4px"><i class="ti ti-alert-circle"></i> Lô không đạt — hoàn thành > ETD +'+_PR_DOC_DAYS+' ngày ('+d.late.length+')</div>'+_prTnLotTable(d.late,false)+'</div>'
+      +'<div style="margin-top:14px"><div style="font-weight:700;font-size:12.5px;color:#16A34A;margin:0 0 4px"><i class="ti ti-circle-check"></i> Lô đạt — hoàn thành ≤ ETD +'+_PR_DOC_DAYS+' ngày làm việc ('+d.ok.length+')</div>'+_prTnLotTable(d.ok,true)+'</div>'
+      +'<div style="margin-top:12px"><div style="font-weight:700;font-size:12.5px;color:#DC2626;margin:0 0 4px"><i class="ti ti-alert-circle"></i> Lô không đạt — hoàn thành > ETD +'+_PR_DOC_DAYS+' ngày làm việc ('+d.late.length+')</div>'+_prTnLotTable(d.late,false)+'</div>'
     +'</div>'
     +'<div class="mftr"><span style="margin-right:auto;font-size:11px;color:var(--text-secondary)">Bấm <b>Lưu</b> ở bảng lương để ghi lại.</span><button class="btn pri" onclick="_prTnClose()">Xong</button></div>'
   +'</div>';
