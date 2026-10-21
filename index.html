@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.13';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.14';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9572,6 +9572,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.14: Bảng lương — nút Xuất phiếu lương: chọn nhân viên → xuất PDF / Excel (layout giống SOA, đủ thu nhập, khấu trừ, phụ cấp trách nhiệm + lô đạt/không đạt) hoặc gửi email phiếu lương (mẫu email giống các email khác của app).
 // A 2.13: Pop-up theo dõi tiến độ chứng từ — thêm Ghi chú tự động (ngày hoàn thành, người tick, hạn, kết quả) để đối chiếu Phụ cấp trách nhiệm; danh sách Ngày nghỉ/lễ (admin duyệt) cấn trừ khi tính hạn ETD +3 ngày làm việc.
 // A 2.12: Bảng lương — Phụ cấp trách nhiệm: Lô đạt = hoàn thành chứng từ trong ETD +3 ngày LÀM VIỆC (không tính thứ 7, chủ nhật), tính cho người bấm tick hoàn thành.
 // A 2.11: PDF/Excel/form Debit Note — Shipper + Consignee (tên tiếng Anh) chuyển vào box Bill To; gọn bố cục để vừa 1 trang (không còn nhảy NOTE/Bank Account sang trang 2 khi trang 1 còn trống).
@@ -11873,6 +11874,441 @@ async function _prLoad(y,m){
      từ bảng này nên mọi nơi đang đọc phuCapTrachNhiem (tổng lương, KPI, Excel, báo cáo) tự đồng bộ, không đổi công thức.
 ─────────────────────────────────────────────────────────────── */
 const _PR_DOC_BONUS_DEFAULT=50000;
+/* ═══ A 2.14: PHIẾU LƯƠNG — xuất PDF / Excel / Email cho từng nhân viên (layout đồng bộ SOA / Debit Note) ═══
+   Dữ liệu lấy từ bảng lương đang hiển thị (window._prRows) + chi tiết phụ cấp trách nhiệm (_prDocBonusCalc, tnItems). */
+function _psE(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _psSlug(s){return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_+|_+$/g,'')||'NV';}
+function _psMoney(n){return (Math.round(parseFloat(n)||0)).toLocaleString('vi-VN');}
+function _psWork(r){
+  const v=function(x){return (x!=null&&x!=='')?(parseFloat(x)||0):0;};
+  return v(r);
+}
+// Gom toàn bộ số liệu của 1 nhân viên (idx trong window._prRows)
+function _prSlipData(idx){
+  _prSyncAllTn();
+  const st=window._prState, r=(window._prRows||[])[idx]; if(!r)return null;
+  const c=_prCalcRow(r);
+  const base=parseFloat(r.luongCoBan)||0, days=parseFloat(r.ngayCong)||0, std=parseFloat(r.ngayCongChuan)||26;
+  const manual=(r.realManual!=null&&r.realManual!=='');
+  const at=parseFloat(r.phuCapAnTrua)||0, dt=parseFloat(r.phuCapDienThoai)||0, tn=parseFloat(r.phuCapTrachNhiem)||0;
+  const hasBH=r.hasInsurance!==false;
+  const bhxh=hasBH?((r.bhxhManual!=null&&r.bhxhManual!=='')?parseFloat(r.bhxhManual):0):0;
+  const bhyt=hasBH?((r.bhytManual!=null&&r.bhytManual!=='')?parseFloat(r.bhytManual):0):0;
+  const d=_prDocBonusCalc(r,window._prLots||[]);
+  const rate=parseFloat(window._prRate)||0;
+  const items=(r.tnItems||[]).filter(function(it){return it&&((parseFloat(it.amount)||0)||(it.label||'').trim());}).map(function(it){return {label:it.label||'Phụ cấp trách nhiệm khác',amount:parseFloat(it.amount)||0};});
+  const co=_coInfo();
+  const now=new Date();
+  const dd=String(now.getDate()).padStart(2,'0')+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+now.getFullYear();
+  const em=_prEmpEmail(r);
+  return {
+    idx:idx, name:r.name||'', position:r.position||'', email:em, month:st.month, year:st.year,
+    period:'Tháng '+String(st.month).padStart(2,'0')+'/'+st.year,
+    slipNo:'PL-'+String(st.year).slice(-2)+String(st.month).padStart(2,'0')+'-'+String(idx+1).padStart(3,'0'),
+    base:base, days:days, std:std, manual:manual, real:c.real, at:at, dt:dt, tn:tn, tong:c.tong,
+    hasBH:hasBH, bhxh:bhxh, bhyt:bhyt, tru:c.tru, nhan:c.nhan,
+    docOk:d.ok, docLate:d.late, docCount:d.count, docAmount:d.amount, rate:rate, items:items,
+    extra:items.reduce(function(s,it){return s+it.amount;},0),
+    dateStr:dd, genBy:(currentProfile&&(currentProfile.name||currentProfile.email))||(currentUser&&currentUser.email)||'COCOSEA ERP',
+    co:co, words:String(_numToWordsVN(c.nhan)||'').replace(/\s+/g,' ').trim()
+  };
+}
+function _psRuleText(){ return 'Lô đạt = hoàn thành chứng từ trong vòng ETD + '+_PR_DOC_DAYS+' ngày làm việc (không tính thứ 7, chủ nhật và ngày lễ/nghỉ đã được Admin duyệt); tính theo tháng của ETD, cho người tick hoàn thành.'; }
+function _psLogo(cb){
+  if(window._dnLogoUrl!==undefined){cb(window._dnLogoUrl);return;}
+  try{
+    fetch(new URL('icons/icon-navy-192.png',location.href).href).then(function(res){return res.ok?res.blob():null;}).then(function(b){
+      if(!b){window._dnLogoUrl=null;cb(null);return;}
+      const fr=new FileReader(); fr.onload=function(){window._dnLogoUrl=fr.result;cb(fr.result);}; fr.onerror=function(){window._dnLogoUrl=null;cb(null);}; fr.readAsDataURL(b);
+    }).catch(function(){window._dnLogoUrl=null;cb(null);});
+  }catch(e){window._dnLogoUrl=null;cb(null);}
+}
+
+/* ─────────────── PDF (jsPDF + autoTable) ─────────────── */
+function _prSlipPdf(D,cb){
+  _psLogo(function(logo){
+  try{
+    const NS=window.jspdf; if(!NS||!NS.jsPDF){cb(null,'jsPDF chưa sẵn sàng');return;}
+    const doc=new NS.jsPDF({unit:'mm',format:'a4'});
+    _registerRobotoFont(doc); doc.setFont('Roboto','normal');
+    const PW=210, PH=297, ML=14, MR=14, CW=PW-ML-MR;
+    const NAVY=[16,58,111], TEAL=[15,118,110], AMBER=[245,158,11], GREY=[100,116,139], INK=[26,46,42], LIGHTBG=[239,246,255], BORDERC=[219,234,254], LIGHTGRAY=[247,248,250], RED=[220,38,38], GREEN=[22,101,52], MINT=[236,253,245], CREAM=[255,251,235];
+    let y=15;
+    function txt(t,x,yy,o){doc.text(String(t),x,yy,o||{});}
+    function setF(style,size,col){doc.setFont('Roboto',style);doc.setFontSize(size);doc.setTextColor(col[0],col[1],col[2]);}
+    function need(h){ if(y+h>PH-18){doc.addPage();y=16;} }
+    // HEADER — logo + công ty (trái) · PHIẾU LƯƠNG + chip (phải) · gạch teal như SOA
+    let tx=ML;
+    if(logo){try{doc.addImage(logo,'PNG',ML,y-5.5,13,13,undefined,'FAST');tx=ML+17;}catch(e){}}
+    setF('bold',15,NAVY); txt((D.co.name||'COCO SEA CO., LTD').toUpperCase(),tx,y);
+    setF('normal',8.5,TEAL); txt('Keep Going . Keep Growing',tx,y+5);
+    setF('bold',18,NAVY); txt('PHIẾU LƯƠNG',PW-MR,y,{align:'right'});
+    setF('normal',8,GREY); txt('PAYSLIP  •  Currency: VND',PW-MR,y+5,{align:'right'});
+    const chipY=y+8, chipH=8.5;
+    doc.setFont('Roboto','bold'); doc.setFontSize(8.3);
+    const w1=Math.max(doc.getTextWidth(D.slipNo),doc.getTextWidth('MÃ PHIẾU'))+6, w2=Math.max(doc.getTextWidth(D.period),doc.getTextWidth('KỲ LƯƠNG'))+6;
+    const x2=PW-MR-w2, x1=x2-3-w1;
+    function chip(cx,cw,l,v){
+      doc.setFillColor(LIGHTBG[0],LIGHTBG[1],LIGHTBG[2]); doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.2); doc.roundedRect(cx,chipY,cw,chipH,1.3,1.3,'FD');
+      setF('normal',6.2,GREY); txt(l,cx+3,chipY+3.3); setF('bold',8.3,NAVY); txt(v,cx+3,chipY+7);
+    }
+    chip(x1,w1,'MÃ PHIẾU',D.slipNo); chip(x2,w2,'KỲ LƯƠNG',D.period);
+    y=chipY+chipH+3.5;
+    doc.setDrawColor(TEAL[0],TEAL[1],TEAL[2]); doc.setLineWidth(0.9); doc.line(ML,y,PW-MR,y); y+=6;
+
+    // 2 CARD: NHÂN VIÊN | KỲ LƯƠNG
+    const gap=5, cw=(CW-gap)/2, rowH=5.2;
+    function infoCard(x,title,rows){
+      const h=6.5+3.6+rows.length*rowH+1.2;
+      doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.15); doc.setFillColor(255,255,255); doc.roundedRect(x,y,cw,h,1.5,1.5,'FD');
+      doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.roundedRect(x,y,cw,6.5,1.5,1.5,'F'); doc.rect(x,y+3.2,cw,3.3,'F');
+      setF('bold',8,[255,255,255]); txt(title.toUpperCase(),x+3,y+4.5);
+      let yy=y+6.5+4.2;
+      rows.forEach(function(rw){ setF('normal',7.4,GREY); txt(rw[0],x+3,yy); setF('bold',8,INK); const l=doc.splitTextToSize(String(rw[1]||'-'),cw-34)[0]; txt(l,x+30,yy); yy+=rowH; });
+      return h;
+    }
+    const h1=infoCard(ML,'Nhân viên',[['Họ và tên',D.name],['Chức vụ',D.position||'-'],['Email',D.email||'-']]);
+    infoCard(ML+cw+gap,'Thông tin kỳ lương',[['Kỳ lương',D.period],['Ngày công',D.days+' / '+D.std+' ngày'],['Ngày lập',D.dateStr]]);
+    y+=h1+5;
+
+    // 4 KPI
+    const kg=3, kw=(CW-kg*3)/4, kh=15;
+    function kpi(i,label,val,fill,col){
+      const x=ML+i*(kw+kg);
+      if(fill){doc.setFillColor(col[0],col[1],col[2]);doc.roundedRect(x,y,kw,kh,1.8,1.8,'F');}
+      else{doc.setFillColor(255,255,255);doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]);doc.setLineWidth(0.2);doc.roundedRect(x,y,kw,kh,1.8,1.8,'FD');}
+      setF('normal',6.6,fill?[220,252,247]:GREY); txt(label.toUpperCase(),x+3,y+4.8);
+      setF('bold',10.5,fill?[255,255,255]:col); txt(val,x+3,y+11.2);
+    }
+    kpi(0,'Lương thực tế',_psMoney(D.real),false,NAVY);
+    kpi(1,'Tổng phụ cấp',_psMoney(D.at+D.dt+D.tn),false,AMBER);
+    kpi(2,'Tổng khấu trừ',_psMoney(D.tru),false,RED);
+    kpi(3,'Thực nhận',_psMoney(D.nhan),true,TEAL);
+    y+=kh+6;
+
+    function sec(label){ need(16); doc.setFillColor(TEAL[0],TEAL[1],TEAL[2]); doc.rect(ML,y,1.2,5.2,'F'); setF('bold',9.5,NAVY); txt(label.toUpperCase(),ML+3.2,y+4); y+=7; }
+    const head={font:'Roboto',fillColor:NAVY,textColor:255,fontStyle:'bold',fontSize:7.8,halign:'center'};
+    const base={font:'Roboto',fontSize:8.6,cellPadding:{top:1.9,bottom:1.9,left:2.4,right:2.4},lineColor:BORDERC,lineWidth:0.1,textColor:INK,overflow:'linebreak'};
+    // I. THU NHẬP
+    sec('I. Thu nhập');
+    const real_note=D.manual?'Điều chỉnh thủ công':('Lương cơ bản ÷ '+D.std+' × '+D.days+' ngày công');
+    const inc=[
+      ['Lương cơ bản','Mức lương theo hợp đồng',_psMoney(D.base)],
+      ['Ngày công thực tế',D.days+' ngày / ngày công chuẩn '+D.std,'—'],
+      ['Lương thực tế',real_note,_psMoney(D.real)],
+      ['Phụ cấp ăn trưa','Phụ cấp cố định hằng tháng',_psMoney(D.at)],
+      ['Phụ cấp điện thoại','Phụ cấp cố định hằng tháng',_psMoney(D.dt)],
+      ['Phụ cấp trách nhiệm','Thưởng tiến độ chứng từ + khoản khác (xem mục III)',_psMoney(D.tn)]
+    ];
+    inc.push([{content:'TỔNG THU NHẬP',colSpan:2,styles:{fontStyle:'bold',halign:'right',fillColor:LIGHTBG,textColor:NAVY}},{content:_psMoney(D.tong),styles:{fontStyle:'bold',halign:'right',fillColor:LIGHTBG,textColor:NAVY}}]);
+    doc.autoTable({startY:y,margin:{left:ML,right:MR},head:[['Khoản mục','Diễn giải','Số tiền (VND)']],body:inc,theme:'grid',headStyles:head,styles:base,alternateRowStyles:{fillColor:LIGHTGRAY},
+      columnStyles:{0:{cellWidth:46,fontStyle:'bold'},1:{cellWidth:'auto',textColor:GREY},2:{cellWidth:38,halign:'right',fontStyle:'bold'}}});
+    y=doc.lastAutoTable.finalY+5;
+    // II. KHẤU TRỪ
+    sec('II. Các khoản khấu trừ');
+    const ded=D.hasBH?[['Bảo hiểm xã hội (BHXH)','Người lao động đóng',_psMoney(D.bhxh)],['Bảo hiểm y tế (BHYT)','Người lao động đóng',_psMoney(D.bhyt)]]:[['Bảo hiểm','Không tham gia / không khấu trừ','0']];
+    ded.push([{content:'TỔNG KHẤU TRỪ',colSpan:2,styles:{fontStyle:'bold',halign:'right',fillColor:[254,242,242],textColor:RED}},{content:_psMoney(D.tru),styles:{fontStyle:'bold',halign:'right',fillColor:[254,242,242],textColor:RED}}]);
+    doc.autoTable({startY:y,margin:{left:ML,right:MR},head:[['Khoản mục','Diễn giải','Số tiền (VND)']],body:ded,theme:'grid',headStyles:head,styles:base,
+      columnStyles:{0:{cellWidth:46,fontStyle:'bold'},1:{cellWidth:'auto',textColor:GREY},2:{cellWidth:38,halign:'right',fontStyle:'bold'}}});
+    y=doc.lastAutoTable.finalY+5;
+    // THỰC NHẬN
+    need(28);
+    doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.roundedRect(ML,y,CW,11,1.8,1.8,'F');
+    setF('bold',9.5,[255,255,255]); txt('THỰC NHẬN (NET PAY)',ML+4,y+7.2);
+    setF('bold',13,[255,255,255]); txt(_psMoney(D.nhan)+' VND',PW-MR-4,y+7.4,{align:'right'});
+    y+=11+2.8;
+    setF('italic',8,NAVY); const wl=doc.splitTextToSize('Bằng chữ: '+D.words,CW); wl.forEach(function(l,i){txt(l,PW-MR,y+i*3.8,{align:'right'});}); y+=wl.length*3.8+4;
+
+    // III. PHỤ CẤP TRÁCH NHIỆM
+    sec('III. Phụ cấp trách nhiệm');
+    const tnRows=[['1','Thưởng tiến độ chứng từ',D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ / lô',_psMoney(D.docAmount)]];
+    D.items.forEach(function(it,i){tnRows.push([String(i+2),it.label,'Khoản phụ cấp khác',_psMoney(it.amount)]);});
+    tnRows.push([{content:'TỔNG PHỤ CẤP TRÁCH NHIỆM',colSpan:3,styles:{fontStyle:'bold',halign:'right',fillColor:CREAM,textColor:[146,64,14]}},{content:_psMoney(D.tn),styles:{fontStyle:'bold',halign:'right',fillColor:CREAM,textColor:[146,64,14]}}]);
+    doc.autoTable({startY:y,margin:{left:ML,right:MR},head:[['#','Khoản','Diễn giải','Số tiền (VND)']],body:tnRows,theme:'grid',headStyles:head,styles:base,
+      columnStyles:{0:{cellWidth:9,halign:'center'},1:{cellWidth:62,fontStyle:'bold'},2:{cellWidth:'auto',textColor:GREY},3:{cellWidth:38,halign:'right',fontStyle:'bold'}}});
+    y=doc.lastAutoTable.finalY+4;
+    function lotTable(title,list,okFlag){
+      if(!list.length)return;
+      need(24);
+      setF('bold',8.4,okFlag?GREEN:RED); txt(title+' ('+list.length+')',ML,y+3); y+=5;
+      const body=list.map(function(l){
+        const df=_prWorkDiff(l.doneDate,l.limit);
+        return [l.label||'-',_prDmy(l.etd),_prDmy(l.limit),_prDmy(l.doneDate),df===0?'Đúng hạn':(df<0?'Sớm '+(-df)+' ngày LV':'Trễ '+df+' ngày LV')];
+      });
+      doc.autoTable({startY:y,margin:{left:ML,right:MR},head:[['Booking / Job','ETD','Hạn (ETD+'+_PR_DOC_DAYS+' ngày LV)','Hoàn thành','Kết quả']],body:body,theme:'grid',
+        headStyles:{font:'Roboto',fillColor:okFlag?TEAL:[185,28,28],textColor:255,fontStyle:'bold',fontSize:7.4,halign:'center'},
+        styles:Object.assign({},base,{fontSize:8,cellPadding:{top:1.4,bottom:1.4,left:2,right:2}}),
+        columnStyles:{0:{cellWidth:'auto',fontStyle:'bold'},1:{cellWidth:24,halign:'center'},2:{cellWidth:34,halign:'center'},3:{cellWidth:24,halign:'center'},4:{cellWidth:30,halign:'center',textColor:okFlag?GREEN:RED,fontStyle:'bold'}}});
+      y=doc.lastAutoTable.finalY+4;
+    }
+    lotTable('Lô đạt — tính thưởng tiến độ chứng từ',D.docOk,true);
+    lotTable('Lô không đạt — hoàn thành quá hạn',D.docLate,false);
+    if(!D.docOk.length&&!D.docLate.length){ setF('italic',8,GREY); txt('Không có lô theo dõi chứng từ nào do nhân viên hoàn thành trong tháng này.',ML,y+3); y+=7; }
+    // Ghi chú
+    const rule=doc.splitTextToSize('Ghi chú: '+_psRuleText(),CW-8);
+    need(rule.length*3.6+18);
+    doc.setFillColor(CREAM[0],CREAM[1],CREAM[2]); doc.setDrawColor(245,158,11); doc.setLineWidth(0.2); doc.roundedRect(ML,y,CW,rule.length*3.6+5,1.5,1.5,'FD');
+    setF('normal',7.6,[124,90,0]); rule.forEach(function(l,i){txt(l,ML+4,y+4.6+i*3.6);}); y+=rule.length*3.6+9;
+    // Chữ ký
+    need(30);
+    const sw=(CW-12)/3;
+    [['Người lập',D.genBy],['Giám đốc',''],['Nhân viên nhận',D.name]].forEach(function(s,i){
+      const x=ML+i*(sw+6); setF('bold',8.2,NAVY); txt(s[0],x+sw/2,y,{align:'center'});
+      setF('italic',7,GREY); txt('(Ký, ghi rõ họ tên)',x+sw/2,y+3.6,{align:'center'});
+      doc.setDrawColor(BORDERC[0],BORDERC[1],BORDERC[2]); doc.setLineWidth(0.25); doc.line(x+6,y+19,x+sw-6,y+19);
+      if(s[1]){setF('normal',7.6,INK); txt(String(s[1]).slice(0,34),x+sw/2,y+23,{align:'center'});}
+    });
+    y+=27;
+    // Footer mỗi trang
+    const n=doc.getNumberOfPages();
+    for(let p=1;p<=n;p++){
+      doc.setPage(p);
+      doc.setFillColor(NAVY[0],NAVY[1],NAVY[2]); doc.roundedRect(ML,PH-13,CW,7.5,1.5,1.5,'F');
+      setF('bold',8,[255,255,255]); txt((D.co.name||'COCO SEA CO., LTD').toUpperCase(),ML+4,PH-8.2);
+      setF('italic',7.2,[203,213,225]); txt('Bảo mật — chỉ dành cho người nhận  •  Trang '+p+'/'+n,PW-MR-4,PH-8.2,{align:'right'});
+    }
+    cb(doc.output('blob'),null);
+  }catch(e){ cb(null,e&&e.message||String(e)); }
+  });
+}
+
+/* ─────────────── EXCEL (ExcelJS) ─────────────── */
+async function _prSlipXlsx(D){
+  const ExcelJS=window.ExcelJS; if(!ExcelJS)throw new Error('Thư viện Excel chưa sẵn sàng');
+  const NAVY='FF103A6F',TEAL='FF0F766E',AMB='FFF59E0B',GREY='FF64748B',LB='FFEFF6FF',LG='FFF7F8FA',RED='FFDC2626',GREEN='FF166534',CREAM='FFFFFBEB';
+  const thin={style:'thin',color:{argb:'FFD0D5DD'}}; const B=function(){return {top:thin,left:thin,bottom:thin,right:thin};};
+  const wb=new ExcelJS.Workbook(); wb.creator='CocoSea ERP'; wb.created=new Date();
+  const ws=wb.addWorksheet('Phiếu lương',{views:[{showGridLines:false}],pageSetup:{paperSize:9,orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:1,margins:{left:.4,right:.4,top:.5,bottom:.5,header:.2,footer:.2}}});
+  ws.columns=[{width:3},{width:30},{width:36},{width:14},{width:16},{width:16},{width:3}];
+  const LAST=6; let row=1;
+  const F=function(sz,bold,col,it){return {name:'Arial',size:sz,bold:!!bold,italic:!!it,color:{argb:col||'FF1A2E2A'}};};
+  const fill=function(c){return {type:'pattern',pattern:'solid',fgColor:{argb:c}};};
+  const merge=function(r1,c1,r2,c2){try{ws.mergeCells(r1,c1,r2,c2);}catch(e){}};
+  const put=function(r,c,v,font,al,fl,bd,nf){const x=ws.getCell(r,c);x.value=v;if(font)x.font=font;if(al)x.alignment=al;if(fl)x.fill=fl;if(bd)x.border=bd;if(nf)x.numFmt=nf;return x;};
+  // HEADER
+  merge(row,2,row,3); put(row,2,(D.co.name||'COCO SEA CO., LTD').toUpperCase(),F(14,true,TEAL));
+  merge(row,4,row,LAST); put(row,4,'PHIẾU LƯƠNG',F(18,true,NAVY),{horizontal:'right'}); ws.getRow(row).height=26; row++;
+  merge(row,2,row,3); put(row,2,'Keep Going . Keep Growing',F(9,false,GREY,true));
+  merge(row,4,row,LAST); put(row,4,'PAYSLIP  •  Currency: VND',F(8.5,false,GREY),{horizontal:'right'}); row++;
+  for(let c=2;c<=LAST;c++){ws.getCell(row,c).border={bottom:{style:'medium',color:{argb:TEAL}}};} ws.getRow(row).height=6; row+=2;
+  // Meta
+  put(row,2,'MÃ PHIẾU',F(8,true,GREY)); put(row,5,'KỲ LƯƠNG',F(8,true,GREY)); merge(row,5,row,6); row++;
+  put(row,2,D.slipNo,F(12,true,NAVY)); put(row,5,D.period,F(12,true,NAVY)); merge(row,5,row,6); row+=2;
+  function sec(label,color){
+    merge(row,2,row,LAST); const c=put(row,2,label.toUpperCase(),F(10,true,'FFFFFFFF'),{vertical:'middle'},fill(color||NAVY));
+    for(let ci=2;ci<=LAST;ci++)ws.getCell(row,ci).fill=fill(color||NAVY); ws.getRow(row).height=18; row++;
+  }
+  function kv(label,val,bold){
+    put(row,2,label,F(9,false,GREY),null,fill('FFFFFFFF'),B());
+    merge(row,3,row,LAST); put(row,3,val,F(9.5,true,'FF1A2E2A'),{horizontal:'left'},null,B());
+    for(let ci=3;ci<=LAST;ci++)ws.getCell(row,ci).border=B(); row++;
+  }
+  sec('Thông tin nhân viên');
+  kv('Họ và tên',D.name); kv('Chức vụ',D.position||'-'); kv('Email',D.email||'-'); kv('Kỳ lương',D.period); kv('Ngày công',D.days+' / '+D.std+' ngày'); kv('Ngày lập',D.dateStr); row++;
+  function thead(cols,color){
+    cols.forEach(function(t,i){put(row,2+i,t,F(8.5,true,'FFFFFFFF'),{horizontal:'center',vertical:'middle'},fill(color||NAVY),B());}); ws.getRow(row).height=17; row++;
+  }
+  function line(a,b,amt,opt){
+    opt=opt||{};
+    put(row,2,a,F(9.5,true,opt.col),{vertical:'middle'},opt.fill?fill(opt.fill):null,B());
+    merge(row,3,row,5); put(row,3,b,F(9,false,opt.sub||GREY),{vertical:'middle',wrapText:true},opt.fill?fill(opt.fill):null,B());
+    for(let ci=3;ci<=5;ci++)ws.getCell(row,ci).border=B();
+    const x=put(row,6,amt,F(10,true,opt.col),{horizontal:'right',vertical:'middle'},opt.fill?fill(opt.fill):null,B()); if(typeof amt==='number')x.numFmt='#,##0';
+    row++;
+  }
+  function total(label,amt,col,fl){
+    merge(row,2,row,5); put(row,2,label,F(10,true,col),{horizontal:'right',vertical:'middle'},fill(fl),B());
+    for(let ci=2;ci<=5;ci++){ws.getCell(row,ci).fill=fill(fl);ws.getCell(row,ci).border=B();}
+    const x=put(row,6,amt,F(11,true,col),{horizontal:'right',vertical:'middle'},fill(fl),B()); x.numFmt='#,##0'; ws.getRow(row).height=19; row++;
+  }
+  sec('I. Thu nhập'); thead(['Khoản mục','Diễn giải','','','Số tiền (VND)']); merge(row-1,3,row-1,5);
+  line('Lương cơ bản','Mức lương theo hợp đồng',D.base);
+  line('Ngày công thực tế',D.days+' ngày / ngày công chuẩn '+D.std,'—');
+  line('Lương thực tế',D.manual?'Điều chỉnh thủ công':('Lương cơ bản ÷ '+D.std+' × '+D.days+' ngày công'),D.real);
+  line('Phụ cấp ăn trưa','Phụ cấp cố định hằng tháng',D.at);
+  line('Phụ cấp điện thoại','Phụ cấp cố định hằng tháng',D.dt);
+  line('Phụ cấp trách nhiệm','Thưởng tiến độ chứng từ + khoản khác (mục III)',D.tn);
+  total('TỔNG THU NHẬP',D.tong,NAVY,LB); row++;
+  sec('II. Các khoản khấu trừ'); thead(['Khoản mục','Diễn giải','','','Số tiền (VND)']); merge(row-1,3,row-1,5);
+  if(D.hasBH){line('Bảo hiểm xã hội (BHXH)','Người lao động đóng',D.bhxh);line('Bảo hiểm y tế (BHYT)','Người lao động đóng',D.bhyt);}
+  else line('Bảo hiểm','Không tham gia / không khấu trừ',0);
+  total('TỔNG KHẤU TRỪ',D.tru,RED,'FFFEF2F2'); row++;
+  // THỰC NHẬN
+  merge(row,2,row,5); put(row,2,'THỰC NHẬN (NET PAY)',F(12,true,'FFFFFFFF'),{vertical:'middle'},fill(NAVY));
+  for(let ci=2;ci<=LAST;ci++)ws.getCell(row,ci).fill=fill(NAVY);
+  const nx=put(row,6,D.nhan,F(13,true,'FFFFFFFF'),{horizontal:'right',vertical:'middle'},fill(NAVY)); nx.numFmt='#,##0'; ws.getRow(row).height=24; row++;
+  merge(row,2,row,LAST); put(row,2,'Bằng chữ: '+D.words,F(9.5,true,NAVY,true),{horizontal:'right',wrapText:true}); ws.getRow(row).height=18; row+=2;
+  // III. TN
+  sec('III. Phụ cấp trách nhiệm',TEAL); thead(['Khoản','Diễn giải','','','Số tiền (VND)'],TEAL); merge(row-1,3,row-1,5);
+  line('Thưởng tiến độ chứng từ',D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ / lô',D.docAmount);
+  D.items.forEach(function(it){line(it.label,'Khoản phụ cấp khác',it.amount);});
+  total('TỔNG PHỤ CẤP TRÁCH NHIỆM',D.tn,'FF92400E',CREAM); row++;
+  function lots(title,list,okFlag){
+    if(!list.length)return;
+    merge(row,2,row,LAST); put(row,2,title+' ('+list.length+')',F(9.5,true,okFlag?GREEN:RED)); row++;
+    thead(['Booking / Job','ETD','Hạn ETD+'+_PR_DOC_DAYS+' LV','Hoàn thành','Kết quả'],okFlag?TEAL:'FFB91C1C');
+    list.forEach(function(l){
+      const df=_prWorkDiff(l.doneDate,l.limit);
+      put(row,2,l.label||'-',F(9,true),null,null,B());
+      put(row,3,_prDmy(l.etd),F(9),{horizontal:'center'},null,B());
+      put(row,4,_prDmy(l.limit),F(9),{horizontal:'center'},null,B());
+      put(row,5,_prDmy(l.doneDate),F(9),{horizontal:'center'},null,B());
+      put(row,6,df===0?'Đúng hạn':(df<0?'Sớm '+(-df)+' ngày LV':'Trễ '+df+' ngày LV'),F(9,true,okFlag?GREEN:RED),{horizontal:'center'},null,B());
+      row++;
+    });
+    row++;
+  }
+  lots('Lô đạt — tính thưởng tiến độ chứng từ',D.docOk,true);
+  lots('Lô không đạt — hoàn thành quá hạn',D.docLate,false);
+  merge(row,2,row,LAST); put(row,2,'Ghi chú: '+_psRuleText(),F(8.5,false,'FF7C5A00'),{wrapText:true,vertical:'top'},fill(CREAM),B());
+  for(let ci=2;ci<=LAST;ci++){ws.getCell(row,ci).fill=fill(CREAM);ws.getCell(row,ci).border=B();} ws.getRow(row).height=40; row+=2;
+  // Chữ ký
+  put(row,2,'Người lập',F(9,true,NAVY),{horizontal:'center'}); put(row,3,'Giám đốc',F(9,true,NAVY),{horizontal:'center'}); merge(row,4,row,LAST); put(row,4,'Nhân viên nhận',F(9,true,NAVY),{horizontal:'center'}); row++;
+  ['(Ký, ghi rõ họ tên)'].forEach(function(t){put(row,2,t,F(8,false,GREY,true),{horizontal:'center'});put(row,3,t,F(8,false,GREY,true),{horizontal:'center'});merge(row,4,row,LAST);put(row,4,t,F(8,false,GREY,true),{horizontal:'center'});}); ws.getRow(row+3).height=14; row+=4;
+  put(row,2,D.genBy,F(8.5,false,GREY),{horizontal:'center'}); put(row,4,D.name,F(8.5,false,GREY),{horizontal:'center'}); merge(row,4,row,LAST); row+=2;
+  merge(row,2,row,LAST); put(row,2,(D.co.name||'COCO SEA CO., LTD').toUpperCase()+'   •   Bảo mật — chỉ dành cho người nhận',F(9,true,'FFFFFFFF'),{horizontal:'center',vertical:'middle'},fill(NAVY));
+  for(let ci=2;ci<=LAST;ci++)ws.getCell(row,ci).fill=fill(NAVY); ws.getRow(row).height=18;
+  return await wb.xlsx.writeBuffer();
+}
+
+/* ─────────────── EMAIL (cùng form email Debit Note) ─────────────── */
+function _prSlipEmailBody(D){
+  const cellL='padding:7px 10px;border:1px solid #000;font-weight:700;background:#fff;font-size:12.5px;width:200px;vertical-align:top';
+  const cellR='padding:7px 10px;border:1px solid #000;font-size:12.5px;vertical-align:top';
+  const R='text-align:right;white-space:nowrap';
+  const th='padding:6px 10px;border:1px solid #103A6F;background:#103A6F;color:#fff;font-size:12px;text-align:left';
+  const td='padding:6px 10px;border:1px solid #cbd5e1;font-size:12.5px;vertical-align:top';
+  function tbl(title,head,rowsHtml,color){
+    return '<div style="margin:16px 0 6px;font-weight:800;font-size:13px;color:'+(color||'#103A6F')+';border-left:4px solid #0F766E;padding-left:8px">'+title+'</div>'
+      +'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse"><tr>'+head.map(function(h,i){return '<th style="'+th+(i===head.length-1?';text-align:right':'')+(color?';background:'+color+';border-color:'+color:'')+'">'+h+'</th>';}).join('')+'</tr>'+rowsHtml+'</table>';
+  }
+  function r3(a,b,c,bold,bg,col){return '<tr><td style="'+td+(bold?';font-weight:700':'')+(bg?';background:'+bg:'')+(col?';color:'+col:'')+'">'+a+'</td><td style="'+td+';color:#64748b'+(bg?';background:'+bg:'')+'">'+b+'</td><td style="'+td+';'+R+';font-weight:700'+(bg?';background:'+bg:'')+(col?';color:'+col:'')+'">'+c+'</td></tr>';}
+  const inc=r3('Lương cơ bản','Mức lương theo hợp đồng',_psMoney(D.base))
+    +r3('Ngày công thực tế',D.days+' ngày / chuẩn '+D.std,'—')
+    +r3('Lương thực tế',D.manual?'Điều chỉnh thủ công':('Lương cơ bản ÷ '+D.std+' × '+D.days),_psMoney(D.real),true)
+    +r3('Phụ cấp ăn trưa','',_psMoney(D.at))+r3('Phụ cấp điện thoại','',_psMoney(D.dt))
+    +r3('Phụ cấp trách nhiệm','Chi tiết ở phần bên dưới',_psMoney(D.tn))
+    +r3('TỔNG THU NHẬP','',_psMoney(D.tong),true,'#EFF6FF','#103A6F');
+  const ded=(D.hasBH?r3('BHXH','Người lao động đóng',_psMoney(D.bhxh))+r3('BHYT','Người lao động đóng',_psMoney(D.bhyt)):r3('Bảo hiểm','Không tham gia','0'))
+    +r3('TỔNG KHẤU TRỪ','',_psMoney(D.tru),true,'#FEF2F2','#DC2626');
+  let tn=r3('Thưởng tiến độ chứng từ',D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ',_psMoney(D.docAmount));
+  D.items.forEach(function(it){tn+=r3(_psE(it.label),'Khoản phụ cấp khác',_psMoney(it.amount));});
+  tn+=r3('TỔNG PHỤ CẤP TRÁCH NHIỆM','',_psMoney(D.tn),true,'#FFFBEB','#92400E');
+  function lotTbl(title,list,ok){
+    if(!list.length)return '';
+    const rows=list.map(function(l){const df=_prWorkDiff(l.doneDate,l.limit);
+      return '<tr><td style="'+td+';font-weight:700">'+_psE(l.label)+'</td><td style="'+td+';text-align:center">'+_prDmy(l.etd)+'</td><td style="'+td+';text-align:center">'+_prDmy(l.limit)+'</td><td style="'+td+';text-align:center">'+_prDmy(l.doneDate)+'</td><td style="'+td+';text-align:center;font-weight:700;color:'+(ok?'#166534':'#DC2626')+'">'+(df===0?'Đúng hạn':(df<0?'Sớm '+(-df)+' ngày LV':'Trễ '+df+' ngày LV'))+'</td></tr>';}).join('');
+    return '<div style="margin:12px 0 5px;font-weight:700;font-size:12px;color:'+(ok?'#166534':'#DC2626')+'">'+title+' ('+list.length+')</div>'
+      +'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse"><tr>'+['Booking / Job','ETD','Hạn (ETD+'+_PR_DOC_DAYS+' ngày LV)','Hoàn thành','Kết quả'].map(function(h){return '<th style="'+th+';text-align:center;background:'+(ok?'#0F766E':'#B91C1C')+';border-color:'+(ok?'#0F766E':'#B91C1C')+'">'+h+'</th>';}).join('')+'</tr>'+rows+'</table>';
+  }
+  return '<table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" style="width:680px;max-width:680px;font-family:Arial,Helvetica,sans-serif;color:#0f172a"><tr><td>'
+    +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#103A6F" style="background-color:#103A6F;padding:12px 16px;border-radius:8px 8px 0 0">'
+      +'<div style="color:#fff200;font-size:17px;font-weight:800;letter-spacing:.3px">PAYSLIP — PHIẾU LƯƠNG '+_psE(D.period.toUpperCase())+'</div>'
+    +'</td></tr></table>'
+    +'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px"><tr><td style="padding:14px 16px">'
+    +'<div style="margin-bottom:4px"><strong>To: ['+_psE(D.name.toUpperCase())+']</strong></div>'
+    +'<div>Dear '+_psE(D.name)+',</div>'
+    +'<div style="margin-bottom:10px">Công ty gửi bạn phiếu lương <b>'+_psE(D.period)+'</b>. Vui lòng xem chi tiết bên dưới và file đính kèm:</div>'
+    +'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'
+      +'<tr><td style="'+cellL+'">Mã phiếu:</td><td style="'+cellR+'">'+_psE(D.slipNo)+'</td></tr>'
+      +'<tr><td style="'+cellL+'">Họ và tên:</td><td style="'+cellR+'">'+_psE(D.name)+'</td></tr>'
+      +'<tr><td style="'+cellL+'">Chức vụ:</td><td style="'+cellR+'">'+_psE(D.position||'-')+'</td></tr>'
+      +'<tr><td style="'+cellL+'">Kỳ lương:</td><td style="'+cellR+'">'+_psE(D.period)+'</td></tr>'
+      +'<tr><td style="'+cellL+'">Ngày công:</td><td style="'+cellR+'">'+D.days+' / '+D.std+' ngày</td></tr>'
+      +'<tr><td style="'+cellL+'">Thực nhận:</td><td style="'+cellR+';font-weight:800;color:#0F766E;font-size:14px">'+_psMoney(D.nhan)+' VND</td></tr>'
+    +'</table>'
+    +tbl('I. THU NHẬP',['Khoản mục','Diễn giải','Số tiền (VND)'],inc)
+    +tbl('II. CÁC KHOẢN KHẤU TRỪ',['Khoản mục','Diễn giải','Số tiền (VND)'],ded)
+    +'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-top:10px"><tr><td bgcolor="#103A6F" style="background:#103A6F;color:#fff;padding:10px 12px;font-weight:800;font-size:13px;border-radius:6px 0 0 6px">THỰC NHẬN (NET PAY)</td><td bgcolor="#103A6F" style="background:#103A6F;color:#fff;padding:10px 12px;font-weight:800;font-size:15px;text-align:right;border-radius:0 6px 6px 0">'+_psMoney(D.nhan)+' VND</td></tr></table>'
+    +'<div style="text-align:right;font-style:italic;font-size:11.5px;color:#103A6F;margin-top:4px">Bằng chữ: '+_psE(D.words)+'</div>'
+    +tbl('III. PHỤ CẤP TRÁCH NHIỆM',['Khoản','Diễn giải','Số tiền (VND)'],tn,'#0F766E')
+    +lotTbl('Lô đạt — tính thưởng tiến độ chứng từ',D.docOk,true)
+    +lotTbl('Lô không đạt — hoàn thành quá hạn',D.docLate,false)
+    +'<div style="margin-top:12px;padding:8px 12px;border-radius:6px;background:#FFFBEB;border:1px solid #F59E0B55;font-size:11.5px;color:#7C5A00"><strong>Ghi chú:</strong> '+_psE(_psRuleText())+'</div>'
+    +'<div style="margin-top:12px;font-style:italic;color:#c0392b">Nếu có thắc mắc về phiếu lương, vui lòng phản hồi lại email này trong vòng 3 ngày làm việc.</div>'
+    +_bookingEmailSignature()
+    +'</td></tr></table></td></tr></table>';
+}
+
+/* ─────────────── POPUP + hành động ─────────────── */
+window._psSel=window._psSel||{idx:-1,pdf:true,xls:false};
+function openPayslipPopup(){
+  const rows=window._prRows||[];
+  if(!rows.length){toast('Chưa có dòng lương nào để xuất','error');return;}
+  const st=window._prState;
+  let i=window._psSel.idx;
+  if(i<0||i>=rows.length){ const f=st.emp?rows.findIndex(function(r){return r.uid===st.emp;}):-1; i=f>=0?f:0; }
+  window._psSel.idx=i;
+  let ov=g('psOv'); if(!ov){ov=document.createElement('div');ov.id='psOv';ov.className='ov';ov.style.zIndex='186';document.body.appendChild(ov);}
+  _psDraw(); openOv('psOv');
+}
+function _psDraw(){
+  const ov=g('psOv'); if(!ov)return;
+  const rows=window._prRows||[], st=window._prState, i=window._psSel.idx;
+  const D=_prSlipData(i); if(!D)return;
+  const opts=rows.map(function(r,k){return '<option value="'+k+'"'+(k===i?' selected':'')+'>'+_psE(r.name||'(không tên)')+(r.position?' — '+_psE(r.position):'')+'</option>';}).join('');
+  const kv=function(l,v,c){return '<div style="display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px dashed var(--border-light);font-size:12.5px"><span style="color:var(--text-secondary)">'+l+'</span><b style="'+(c?'color:'+c:'')+'">'+v+'</b></div>';};
+  ov.innerHTML='<div class="modal" style="max-width:560px">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-file-invoice" style="margin-right:6px;color:#0F766E"></i>Xuất phiếu lương</div><div class="msub">'+_psE(D.period)+' · gửi cho từng nhân viên (PDF / Excel / Email)</div></div><button class="x" onclick="closeOv(\'psOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:16px 20px">'
+      +'<label style="font-size:11.5px;font-weight:700;color:var(--text-secondary)">Chọn nhân viên</label>'
+      +'<select id="psEmp" onchange="window._psSel.idx=parseInt(this.value);_psDraw()" style="width:100%;margin:4px 0 12px;font-size:13px">'+opts+'</select>'
+      +'<div style="border:1px solid var(--border-light);border-radius:10px;padding:10px 14px;background:var(--bg-secondary)">'
+        +kv('Email',D.email?_psE(D.email):'<span style="color:#B45309">Chưa có email — nhập khi gửi</span>')
+        +kv('Ngày công',D.days+' / '+D.std)
+        +kv('Lương thực tế',_psMoney(D.real))
+        +kv('Phụ cấp (ăn trưa + ĐT + trách nhiệm)',_psMoney(D.at+D.dt+D.tn),'#B45309')
+        +kv('Tổng thu nhập',_psMoney(D.tong))
+        +kv('Khấu trừ (BHXH + BHYT)',_psMoney(D.tru),'#DC2626')
+        +'<div style="display:flex;justify-content:space-between;padding-top:7px;font-size:14px"><b>Thực nhận</b><b style="color:#0F766E;font-size:16px">'+_psMoney(D.nhan)+' VND</b></div>'
+        +'<div style="font-size:11px;color:var(--text-secondary);margin-top:6px">Phụ cấp trách nhiệm: '+D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ'+(D.items.length?' + '+D.items.length+' khoản khác':'')+(D.docLate.length?' · '+D.docLate.length+' lô không đạt':'')+'</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:18px;margin:12px 0 4px;font-size:12.5px"><span style="color:var(--text-secondary);font-weight:600">Đính kèm khi gửi email:</span>'
+        +'<label style="cursor:pointer"><input type="checkbox" id="psAttPdf" '+(window._psSel.pdf?'checked':'')+' onchange="window._psSel.pdf=this.checked"/> PDF</label>'
+        +'<label style="cursor:pointer"><input type="checkbox" id="psAttXls" '+(window._psSel.xls?'checked':'')+' onchange="window._psSel.xls=this.checked"/> Excel</label></div>'
+      +'<div style="font-size:11px;color:var(--text-secondary)"><i class="ti ti-info-circle"></i> Số liệu lấy từ bảng lương đang hiển thị — nhớ bấm <b>Lưu</b> nếu vừa chỉnh sửa. Phiếu lương là thông tin bảo mật, chỉ gửi đúng người nhận.</div>'
+    +'</div>'
+    +'<div class="mftr" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">'
+      +'<button class="btn" onclick="closeOv(\'psOv\')" style="margin-right:auto">Đóng</button>'
+      +'<button class="btn" onclick="_psPdf()" style="color:#DC2626;border-color:#DC262655"><i class="ti ti-file-type-pdf"></i> Tải PDF</button>'
+      +'<button class="btn" onclick="_psXls()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Tải Excel</button>'
+      +'<button class="btn pri" onclick="_psEmail()"><i class="ti ti-mail"></i> Gửi email</button>'
+    +'</div></div>';
+}
+function _psFileBase(D){ return 'PhieuLuong_'+_psSlug(D.name)+'_'+String(D.month).padStart(2,'0')+'-'+D.year; }
+function _psSave(blob,name){ const u=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=u; a.download=name; a.click(); setTimeout(function(){URL.revokeObjectURL(u);},2000); }
+function _psPdfBlob(D){ return new Promise(function(res){ _loadJsPdf(function(){ if(!window.jspdf||!window.jspdf.jsPDF){res({err:'thư viện PDF chưa sẵn sàng'});return;} _prSlipPdf(D,function(b,e){res({blob:b,err:e});}); }); }); }
+function _psBlobUrl(blob){ return new Promise(function(res){ const fr=new FileReader(); fr.onload=function(){res(fr.result);}; fr.readAsDataURL(blob); }); }
+async function _psPdf(){
+  const D=_prSlipData(window._psSel.idx); if(!D)return;
+  setLoading(true,'Đang tạo phiếu lương PDF...');
+  const r=await _psPdfBlob(D); setLoading(false);
+  if(!r.blob){toast('Lỗi tạo PDF'+(r.err?': '+r.err:''),'error');return;}
+  _psSave(r.blob,_psFileBase(D)+'.pdf'); toast('Đã tạo phiếu lương PDF: '+D.name);
+}
+async function _psXls(){
+  const D=_prSlipData(window._psSel.idx); if(!D)return;
+  setLoading(true,'Đang tạo phiếu lương Excel...');
+  try{ const buf=await _prSlipXlsx(D); _psSave(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),_psFileBase(D)+'.xlsx'); toast('Đã tạo phiếu lương Excel: '+D.name); }
+  catch(e){ toast('Lỗi tạo Excel: '+(e&&e.message||e),'error'); }
+  setLoading(false);
+}
+async function _psEmail(){
+  const D=_prSlipData(window._psSel.idx); if(!D)return;
+  const wantPdf=!!(g('psAttPdf')&&g('psAttPdf').checked), wantXls=!!(g('psAttXls')&&g('psAttXls').checked);
+  window._psSel.pdf=wantPdf; window._psSel.xls=wantXls;
+  setLoading(true,'Đang chuẩn bị email phiếu lương...');
+  const atts=[];
+  try{
+    if(wantPdf){ const r=await _psPdfBlob(D); if(r.blob)atts.push({filename:_psFileBase(D)+'.pdf',dataUrl:await _psBlobUrl(r.blob)}); else toast('Không tạo được PDF đính kèm'+(r.err?': '+r.err:''),'error'); }
+    if(wantXls){ const buf=await _prSlipXlsx(D); atts.push({filename:_psFileBase(D)+'.xlsx',dataUrl:await _psBlobUrl(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}))}); }
+  }catch(e){ toast('Lỗi tạo file đính kèm: '+(e&&e.message||e),'error'); }
+  setLoading(false);
+  closeOv('psOv');
+  _openEmailModal({title:'Gửi phiếu lương → '+D.name,to:D.email||'',cc:'',subject:'[COCOSEA] Phiếu lương '+D.period+' - '+D.name,bodyHtml:_prSlipEmailBody(D),attachments:atts});
+}
+Object.assign(window,{openPayslipPopup,_psDraw,_psPdf,_psXls,_psEmail,_prSlipData,_prSlipPdf,_prSlipXlsx,_prSlipEmailBody});
+
 /* ═══ A 2.13: DANH SÁCH NGÀY NGHỈ / NGÀY LỄ (cấn trừ khi tính hạn chứng từ — Phụ cấp trách nhiệm) ═══
    • Collection `holidays` (docId = yyyy-mm-dd): {date,name,status:'pending'|'approved',createdBy,createdAt,approvedBy,approvedAt}
    • CHỈ ngày đã được ADMIN duyệt (status='approved') mới được trừ; thứ 7, chủ nhật luôn được trừ.
@@ -12366,6 +12802,7 @@ function _prListTabHTML(){
     +'<button class="btn sm" onclick="_prAddRow()"><i class="ti ti-user-plus"></i> Thêm</button>'
     +'<button class="btn sm pri" onclick="_prSave()"><i class="ti ti-device-floppy"></i> Lưu</button>'
     +'<button class="btn sm" onclick="_prExportExcel()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+    +'<button class="btn sm" onclick="openPayslipPopup()" style="color:#103A6F;border-color:#103A6F"><i class="ti ti-file-export"></i> Xuất phiếu lương</button>'
     +'</div>'
     +'<div class="pr-kpi-row">'
     +'<div class="pr-kpi k-blue"><div class="pr-kpi-lbl">Nhân viên</div><div class="pr-kpi-val c-blue" id="kpiEmpCount">—</div></div>'
