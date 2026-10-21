@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.14';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.15';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9572,6 +9572,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.15: Booking List — mỗi booking request có Job ID RQA0001, RQA0002… (đủ 9999 thì A→B, đánh lại từ 0001); khi chuyển sang Booking Standby/Confirm được cấp lại Job ID XK; request cũ tự được đánh số (Admin mở trang).
 // A 2.14: Bảng lương — nút Xuất phiếu lương: chọn nhân viên → xuất PDF / Excel (layout giống SOA, đủ thu nhập, khấu trừ, phụ cấp trách nhiệm + lô đạt/không đạt) hoặc gửi email phiếu lương (mẫu email giống các email khác của app).
 // A 2.13: Pop-up theo dõi tiến độ chứng từ — thêm Ghi chú tự động (ngày hoàn thành, người tick, hạn, kết quả) để đối chiếu Phụ cấp trách nhiệm; danh sách Ngày nghỉ/lễ (admin duyệt) cấn trừ khi tính hạn ETD +3 ngày làm việc.
 // A 2.12: Bảng lương — Phụ cấp trách nhiệm: Lô đạt = hoàn thành chứng từ trong ETD +3 ngày LÀM VIỆC (không tính thứ 7, chủ nhật), tính cho người bấm tick hoàn thành.
@@ -38292,6 +38293,30 @@ function _bkLotBkNo(r){ return _bkLotBks(r).map(function(b){return b.bookingNo;}
 function _bkLotVol(r){ return _bkLotBks(r).filter(function(b){return b.vol||b.typeCont;}).map(function(b){return (b.vol||1)+'x'+(b.typeCont||'');}).join(' + '); }
 function _bkVoyLabel(v){ return (v.vessel||'')+(v.voy?(' / '+v.voy):''); }
 
+/* ───────── A 2.15: Job ID của booking request — RQA0001, RQA0002… (đến 9999 thì A→B, đánh lại từ 0001) ───────── */
+function _bkReqKey(no){ const m=String(no||'').match(/^RQ([A-Z])(\d{4})$/); return m?((m[1].charCodeAt(0)-65)*10000+parseInt(m[2],10)):-1; }
+function _bkReqFmt(k){ const L=Math.floor((k-1)/9999), n=((k-1)%9999)+1; return 'RQ'+String.fromCharCode(65+Math.min(L,25))+String(n).padStart(4,'0'); }
+// Số thứ tự tiếp theo = lớn nhất đang có + 1 (tăng dần, không lấp chỗ trống); used = các mã vừa cấp trong cùng lượt
+function _bkNextReqNo(used){
+  let max=0;
+  (cache.bkreq||[]).forEach(function(q){ const k=_bkReqKey(q.reqNo); if(k>0){ const seq=Math.floor(k/10000)*9999+(k%10000); if(seq>max)max=seq; } });
+  (used||[]).forEach(function(no){ const k=_bkReqKey(no); if(k>0){ const seq=Math.floor(k/10000)*9999+(k%10000); if(seq>max)max=seq; } });
+  return _bkReqFmt(max+1);
+}
+// Request cũ (tạo trước A 2.15) chưa có Job ID → Admin mở trang là tự cấp theo thứ tự tạo
+async function _bkBackfillReqNo(){
+  if(window._bkBackfilling)return;
+  if(!currentProfile||currentProfile.role!=='admin'||!currentUser)return;
+  const todo=(cache.bkreq||[]).filter(function(q){return !q.reqNo&&(q.stage==='request'||q.stage==='booking');}).sort(function(a,b){return (a.createdAt||0)-(b.createdAt||0);});
+  if(!todo.length)return;
+  window._bkBackfilling=true;
+  try{
+    const used=[];
+    for(let i=0;i<todo.length;i++){ const no=_bkNextReqNo(used); used.push(no); todo[i].reqNo=no; await fsSet('booking_requests',todo[i]._id,{reqNo:no}); }
+  }catch(e){}
+  window._bkBackfilling=false;
+}
+
 /* ───────── Dữ liệu 3 tab ───────── */
 function _bkReqRows(){
   const out=[];
@@ -38434,7 +38459,7 @@ function _bkTblReq(q,from,to){
       const r=x.q;
       if(chip&&r.stage!==chip)return false;
       if(!_bkInRange(r.etd,from,to))return false;
-      return _bkMatch([r.vessel,r.voy,r.route,r.carrier,r.bookingParty,r.shipper,r.bookingNo,r.preBookingNo,r.carrierRemark,r.createdBy].join(' '),q);
+      return _bkMatch([r.reqNo,r.vessel,r.voy,r.route,r.carrier,r.bookingParty,r.shipper,r.bookingNo,r.preBookingNo,r.carrierRemark,r.createdBy].join(' '),q);
     }
     const l=x.r;
     if(chip&&chip!=='booking')return false;
@@ -38444,12 +38469,12 @@ function _bkTblReq(q,from,to){
   rows.sort(function(a,b){ const ea=(a.kind==='req'?a.q.etd:a.r.etd)||'9999', eb=(b.kind==='req'?b.q.etd:b.r.etd)||'9999'; if(ea!==eb)return ea>eb?1:-1; const ca=(a.kind==='req'?a.q.createdAt:a.r.createdAt)||0, cb=(b.kind==='req'?b.q.createdAt:b.r.createdAt)||0; return ca-cb; });
   if(!rows.length)return _bkEmpty('Chưa có booking request nào'+(_bkCanCreate()?' — bấm <b>Tạo booking request</b> hoặc vào <b>Vessel tool</b> và bấm nút Booking ở từng chuyến tàu.':'.'),'ti-clock-play');
   const canP=_bkCanProcess();
-  let h='<div class="bk-tw"><table class="bk-tbl"><thead><tr><th>#</th><th>Trạng thái</th><th>Tàu / Chuyến</th><th>ETD</th><th>Route</th><th>Carrier</th><th>Booking Party</th><th>Shipper</th><th>Booking No</th><th>Pre-booking</th><th>Vol</th><th>Lấy ở</th><th>Tạo bởi</th><th></th></tr></thead><tbody>';
+  let h='<div class="bk-tw"><table class="bk-tbl"><thead><tr><th>#</th><th>Job ID</th><th>Trạng thái</th><th>Tàu / Chuyến</th><th>ETD</th><th>Route</th><th>Carrier</th><th>Booking Party</th><th>Shipper</th><th>Booking No</th><th>Pre-booking</th><th>Vol</th><th>Lấy ở</th><th>Tạo bởi</th><th></th></tr></thead><tbody>';
   rows.forEach(function(x,i){
     if(x.kind==='req'){
       const r=x.q;
       h+='<tr class="bk-row" onclick="_bkOpenReq(\''+r._id+'\')">'
-        +'<td class="c">'+(i+1)+'</td><td>'+_bkStageChip(r)+'</td>'
+        +'<td class="c">'+(i+1)+'</td><td class="nw mono"><b>'+(_bkE(r.reqNo)||'<span class="mut">—</span>')+'</b></td><td>'+_bkStageChip(r)+'</td>'
         +'<td><b>'+_bkE(r.vessel)+'</b><div class="s">'+_bkE(r.voy)+'</div></td>'
         +'<td class="nw">'+_bkFd(r.etd)+'</td>'
         +'<td class="nw">'+_bkE(r.pol||'')+' <i class="ti ti-arrow-right"></i> '+_bkE(r.route||'')+'</td>'
@@ -38464,7 +38489,7 @@ function _bkTblReq(q,from,to){
     } else {
       const l=x.r;
       h+='<tr class="bk-row" onclick="_bkOpenLot(\''+l._id+'\')">'
-        +'<td class="c">'+(i+1)+'</td><td><span class="bk-chip bkq">Booking request</span><div class="s">lô cũ · '+_bkE(l.jobNo||'')+'</div></td>'
+        +'<td class="c">'+(i+1)+'</td><td class="nw mono"><b>'+_bkE(l.jobNo||'—')+'</b></td><td><span class="bk-chip bkq">Booking request</span><div class="s">lô cũ</div></td>'
         +'<td><b>'+_bkE(l.vessel)+'</b><div class="s">'+_bkE(l.voy)+'</div></td><td class="nw">'+_bkFd(l.etd)+'</td>'
         +'<td class="nw">'+_bkE(l.pol||'')+' <i class="ti ti-arrow-right"></i> '+_bkE(l.pod||'')+'</td>'
         +'<td>'+_bkE(l.carrier)+'</td><td>'+_bkE(l.bookingParty)+'</td><td>'+_bkE(l.shipper||l.supplier)+'</td>'
@@ -38613,7 +38638,7 @@ function _bkRenderForm(){
   const cargoNames=(window._cargoNames||[]).map(function(n){return n.name||n;});
   const intent=q.intent||'Standby';
   const catalog=_bkPartnerList('shipper'), shipList=catalog;
-  const titleTxt=isNew?'Booking request mới':(q.stage==='booking'?'Booking request':'Request chưa lấy booking');
+  const titleTxt=isNew?'Booking request mới':((q.reqNo?q.reqNo+' · ':'')+(q.stage==='booking'?'Booking request':'Request chưa lấy booking'));
   const stageChip=isNew?'':(' '+_bkStageChip(q));
   const hasFileNote=q.fileUrl?'<div class="bk-note">Đã có file: <a href="'+_bkE(q.fileUrl)+'" target="_blank">'+_bkE(q.fileName||'booking')+'</a></div>':'';
   const processBlock=isNew?'':(
@@ -38807,16 +38832,17 @@ async function _bkSave(){
   setLoading(true,'Đang lưu...');
   try{
     if(isNew){
-      const n=Math.max(1,Math.min(30,d.qty)), gid=genId();
+      const n=Math.max(1,Math.min(30,d.qty)), gid=genId(), usedNo=[];
       for(let i=1;i<=n;i++){
         const id=genId();
+        const reqNo=_bkNextReqNo(usedNo); usedNo.push(reqNo);
         const bn=(n===1)?d.bookingNo:'', pre=(n===1)?d.preBookingNo:'';
-        const rec=Object.assign({},base,{bookingNo:bn,preBookingNo:pre,qty:n,seq:i,groupId:gid,
+        const rec=Object.assign({},base,{reqNo:reqNo,bookingNo:bn,preBookingNo:pre,qty:n,seq:i,groupId:gid,
           stage:(bn||pre)?'booking':'request',createdAt:now+i,createdBy:by,
-          history:[{at:now,by:by,text:'Tạo request'+(n>1?(' ('+i+'/'+n+')'):'')}]});
+          history:[{at:now,by:by,text:'Tạo request '+reqNo+(n>1?(' ('+i+'/'+n+')'):'')}]});
         await fsSet('booking_requests',id,rec);
       }
-      toast('Đã tạo '+n+' booking request');
+      toast('Đã tạo '+n+' booking request ('+usedNo[0]+(n>1?' → '+usedNo[n-1]:'')+')');
       closeOv('bkOv');
     } else {
       const q=F.q;
@@ -38862,7 +38888,7 @@ async function _bkConvert(target){
   if(miss.length){alert('Chưa thể chuyển — còn thiếu:\n\n- '+miss.join('\n- '));return;}
   const v=d.v, podInfo=(v.pods||[]).find(function(p){return p.pod===d.route;})||{};
   const status=target==='confirm'?'Confirm':'Standby';
-  if(!confirm('Chuyển request này sang '+(target==='confirm'?'BOOKING CONFIRM':'BOOKING STANDBY')+'?\n\nBooking No: '+d.bookingNo+'\n'+_bkVoyLabel(v)+' → '+d.route+(target==='confirm'?'\n\nLô sẽ xuất hiện trong Shipment List.':'\n\nLô nằm ở tab Booking Standby (không hiện ở Shipment List) cho đến khi Release.')))return;
+  if(!confirm('Chuyển request này sang '+(target==='confirm'?'BOOKING CONFIRM':'BOOKING STANDBY')+'?\n\nBooking No: '+d.bookingNo+'\n'+_bkVoyLabel(v)+' → '+d.route+'\n\nJob ID: '+(q.reqNo||'(request)')+' → sẽ được cấp lại Job ID XK mới.'+(target==='confirm'?'\n\nLô sẽ xuất hiện trong Shipment List.':'\n\nLô nằm ở tab Booking Standby (không hiện ở Shipment List) cho đến khi Release.')))return;
   const lotId=genId(), now=Date.now(), by=currentUser.email;
   const rec={
     svcs:{}, tasks:{},
@@ -38875,7 +38901,7 @@ async function _bkConvert(target){
     bookingNo:d.bookingNo, vol:String(d.vol), typeCont:d.typeCont,
     preBookingNo:d.preBookingNo||'',
     remark:d.carrierRemark?('Carrier remark: '+d.carrierRemark):'',
-    status:status, bkReqId:F.id, bkSource:'booking-list',
+    status:status, bkReqId:F.id, bkReqNo:q.reqNo||'', bkSource:'booking-list',
     createdAt:now, createdBy:by, updatedAt:now, updatedBy:by
   };
   rec.jobNo=getNextJobNo('XK - Xuất khẩu');
@@ -38895,14 +38921,14 @@ async function _bkConvert(target){
     rec.savedDocs=[doc];
     await fsSet('lots_xuat',lotId,rec);
     const hist=(q.history||[]).slice(-28);
-    hist.push({at:now,by:by,text:'Chuyển sang '+(status==='Confirm'?'Booking confirm':'Booking Standby')+' — lô '+rec.jobNo});
+    hist.push({at:now,by:by,text:'Chuyển sang '+(status==='Confirm'?'Booking confirm':'Booking Standby')+' — cấp lại Job ID '+(q.reqNo||'')+' → '+rec.jobNo});
     await fsSet('booking_requests',F.id,{
       vesselId:v._id,vessel:rec.vessel,voy:rec.voy,etd:rec.etd,pol:rec.pol,route:d.route,carrier:d.carrier,carrierRemark:d.carrierRemark,
       bookingParty:d.bookingParty,shipper:d.shipper,cargoType:d.cargoType,typeCont:d.typeCont,vol:d.vol,intent:d.intent,
       bookingNo:d.bookingNo,preBookingNo:d.preBookingNo,tenHang:d.tenHang,cnee:d.cnee,fileUrl:doc.fileUrl,fileName:doc.fileName,
       stage:target==='confirm'?'confirm':'standby',lotId:lotId,jobNo:rec.jobNo,history:hist,updatedAt:now,updatedBy:by
     });
-    try{logLotEvent(lotId,'xuat','create','Tạo lô từ Booking List ('+status+')','Booking '+d.bookingNo);}catch(e){}
+    try{logLotEvent(lotId,'xuat','create','Tạo lô từ Booking List ('+status+')','Booking '+d.bookingNo+(q.reqNo?' · Job ID request '+q.reqNo+' → '+rec.jobNo:''));}catch(e){}
     closeOv('bkOv');
     toast('Đã chuyển sang '+(status==='Confirm'?'Booking confirm — lô '+rec.jobNo+' đã có trong Shipment List':'Booking Standby'));
   }catch(e){
@@ -38921,6 +38947,7 @@ function _bkUpdateBadge(){
 window._bkUpdateBadge=_bkUpdateBadge;
 function _bkOnData(){
   _bkUpdateBadge();
+  try{_bkBackfillReqNo();}catch(e){}
   if(currentTab==='booking'){ clearTimeout(window._bkRT); window._bkRT=setTimeout(function(){ if(!g('bkOv')||!g('bkOv').classList.contains('open')){ const q=g('bkQ'); const keep=q&&document.activeElement===q; if(window._bkTab==='confirm'){_bkCfRender();}else if(keep){_bkRenderTable();}else renderBookingList(); } },80); }
 }
 window._bkOnData=_bkOnData;
