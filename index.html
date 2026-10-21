@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.12';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.13';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2164,6 +2164,12 @@ function startListeners(){
       if(typeof _bkOnData==='function')_bkOnData();
     },function(){});
     listeners.push(uBkReq);
+    // A 2.13: danh sách ngày nghỉ / lễ (admin duyệt) — dùng cấn trừ hạn chứng từ
+    const uHol = db.collection('holidays').onSnapshot(snap => {
+      cache.holidays = snap.docs.map(d=>({_id:d.id,...d.data()}));
+      if(typeof _holOnData==='function')_holOnData();
+    },function(){ cache.holidays=cache.holidays||[]; });
+    listeners.push(uHol);
 
     // Quản lý thu chi: giao dịch sổ quỹ (realtime)
     const uCashTx = db.collection('cashTransactions').onSnapshot(snap => {
@@ -9566,6 +9572,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.13: Pop-up theo dõi tiến độ chứng từ — thêm Ghi chú tự động (ngày hoàn thành, người tick, hạn, kết quả) để đối chiếu Phụ cấp trách nhiệm; danh sách Ngày nghỉ/lễ (admin duyệt) cấn trừ khi tính hạn ETD +3 ngày làm việc.
 // A 2.12: Bảng lương — Phụ cấp trách nhiệm: Lô đạt = hoàn thành chứng từ trong ETD +3 ngày LÀM VIỆC (không tính thứ 7, chủ nhật), tính cho người bấm tick hoàn thành.
 // A 2.11: PDF/Excel/form Debit Note — Shipper + Consignee (tên tiếng Anh) chuyển vào box Bill To; gọn bố cục để vừa 1 trang (không còn nhảy NOTE/Bank Account sang trang 2 khi trang 1 còn trống).
 // A 2.10: pop-up Debit Note (tab Service) — thêm nút Xóa debit (để up lại) và Thêm Debit Note (1 dịch vụ nhiều Debit Note, chuyển qua lại giữa các file).
@@ -11866,11 +11873,197 @@ async function _prLoad(y,m){
      từ bảng này nên mọi nơi đang đọc phuCapTrachNhiem (tổng lương, KPI, Excel, báo cáo) tự đồng bộ, không đổi công thức.
 ─────────────────────────────────────────────────────────────── */
 const _PR_DOC_BONUS_DEFAULT=50000;
+/* ═══ A 2.13: DANH SÁCH NGÀY NGHỈ / NGÀY LỄ (cấn trừ khi tính hạn chứng từ — Phụ cấp trách nhiệm) ═══
+   • Collection `holidays` (docId = yyyy-mm-dd): {date,name,status:'pending'|'approved',createdBy,createdAt,approvedBy,approvedAt}
+   • CHỈ ngày đã được ADMIN duyệt (status='approved') mới được trừ; thứ 7, chủ nhật luôn được trừ.
+   • Admin thêm → duyệt luôn; Accountant thêm → "Chờ duyệt" cho tới khi Admin duyệt. */
+const _HOL_WD=['CN','T2','T3','T4','T5','T6','T7'];
+function _holDmy(s){ return s?String(s).split('-').reverse().join('-'):'—'; }
+function _holWd(s){ return _HOL_WD[new Date(s+'T00:00:00Z').getUTCDay()]; }
+function _holList(){ return Array.isArray(cache.holidays)?cache.holidays:[]; }
+// Bản đồ {yyyy-mm-dd: tên} của các ngày ĐÃ DUYỆT (nhớ theo mảng cache để không tính lại)
+function _holApproved(){
+  const L=_holList();
+  if(window._holMemo&&window._holMemo.ref===L&&window._holMemo.n===L.length)return window._holMemo.map;
+  const m={}; L.forEach(function(h){ if(h&&h.status==='approved'&&h.date)m[h.date]=h.name||'Ngày nghỉ'; });
+  window._holMemo={ref:L,n:L.length,map:m}; return m;
+}
+function _holPendingCount(){ return _holList().filter(function(h){return h.status!=='approved';}).length; }
+// Ngày không tính vào "ngày làm việc": thứ 7, chủ nhật, hoặc ngày nghỉ/lễ đã được Admin duyệt
+function _prIsOffDay(ds){
+  const w=new Date(ds+'T00:00:00Z').getUTCDay();
+  return w===0||w===6||!!_holApproved()[ds];
+}
+function _holBtnHTML(){
+  const n=_holPendingCount();
+  return '<button type="button" class="btn sm" onclick="openHolidayPopup()" title="Danh sách ngày nghỉ / ngày lễ được cấn trừ khi tính hạn chứng từ" style="font-size:11.5px"><i class="ti ti-calendar-event"></i> Ngày nghỉ / lễ'
+    +(n?' <span style="background:#F59E0B;color:#fff;border-radius:9px;padding:0 6px;font-size:10px;font-weight:800;margin-left:2px">'+n+' chờ duyệt</span>':'')+'</button>';
+}
+function _holUserName(email){
+  const u=(cache.users||[]).find(function(x){return (x.email||'').toLowerCase()===String(email||'').toLowerCase();});
+  return (u&&u.name)||email||'—';
+}
+function _holIsAdmin(){ return currentProfile&&currentProfile.role==='admin'; }
+function _holCanAdd(){ return !!(currentProfile&&(currentProfile.role==='admin'||currentProfile.role==='accountant')); }
+window._holYear=window._holYear||'';
+function openHolidayPopup(){
+  let ov=g('holOv'); if(!ov){ov=document.createElement('div');ov.id='holOv';ov.className='ov';ov.style.zIndex='185';document.body.appendChild(ov);}
+  _holDraw(); openOv('holOv');
+}
+function _holDraw(){
+  const ov=g('holOv'); if(!ov)return;
+  const isAd=_holIsAdmin(), canAdd=_holCanAdd();
+  const all=_holList().slice().sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;});
+  const years=[]; all.forEach(function(h){const y=(h.date||'').slice(0,4); if(y&&years.indexOf(y)<0)years.push(y);});
+  const nowY=String(new Date().getFullYear()); if(years.indexOf(nowY)<0)years.push(nowY); years.sort();
+  const yr=window._holYear||nowY;
+  const list=all.filter(function(h){return yr==='all'||(h.date||'').slice(0,4)===yr;});
+  const pend=all.filter(function(h){return h.status!=='approved';}).length;
+  const rows=list.map(function(h){
+    const ok=h.status==='approved';
+    const canDel=isAd||(canAdd&&!ok&&(h.createdBy||'').toLowerCase()===((currentUser&&currentUser.email)||'').toLowerCase());
+    return '<tr>'
+      +'<td class="pr-td" style="text-align:center;white-space:nowrap">'+_holDmy(h.date)+'</td>'
+      +'<td class="pr-td" style="text-align:center;color:var(--text-secondary)">'+_holWd(h.date)+'</td>'
+      +'<td class="pr-td">'+_dnEsc(h.name||'')+'</td>'
+      +'<td class="pr-td" style="text-align:center">'+(ok?'<span style="background:#DCFCE7;color:#166534;border-radius:10px;padding:2px 8px;font-size:10.5px;font-weight:700">Đã duyệt</span>':'<span style="background:#FEF3C7;color:#92400E;border-radius:10px;padding:2px 8px;font-size:10.5px;font-weight:700">Chờ duyệt</span>')+'</td>'
+      +'<td class="pr-td" style="font-size:11px;color:var(--text-secondary)">'+_dnEsc(_holUserName(h.createdBy))+(ok&&h.approvedBy?'<br>duyệt: '+_dnEsc(_holUserName(h.approvedBy)):'')+'</td>'
+      +'<td class="pr-td" style="white-space:nowrap;text-align:right">'
+        +(isAd&&!ok?'<button class="btn sm" style="font-size:11px;color:#166534;border-color:#16653455" onclick="_holApprove(\''+h.date+'\')"><i class="ti ti-check"></i> Duyệt</button> ':'')
+        +(canDel?'<button class="btn sm" style="font-size:11px;color:#B91C1C;border-color:#B91C1C55" onclick="_holDelete(\''+h.date+'\')" title="'+(ok?'Xóa (không còn được cấn trừ)':(isAd?'Từ chối / xóa':'Xóa đề xuất'))+'"><i class="ti ti-trash"></i></button>':'')
+      +'</td></tr>';
+  }).join('');
+  const today=new Date().toISOString().slice(0,10);
+  ov.innerHTML='<div class="modal" style="max-width:720px">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-calendar-event" style="margin-right:6px;color:#C99A3C"></i>Ngày nghỉ / Ngày lễ</div>'
+    +'<div class="msub">Cấn trừ khi tính hạn "Lô đạt" (ETD +'+_PR_DOC_DAYS+' ngày làm việc) · chỉ ngày đã được <b>Admin duyệt</b> mới được trừ · thứ 7, chủ nhật luôn được trừ</div></div>'
+    +'<button class="x" onclick="closeOv(\'holOv\')"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:14px 18px">'
+      +(canAdd?'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:8px;margin-bottom:12px">'
+        +'<div><div style="font-size:10.5px;color:var(--text-secondary);margin-bottom:2px">Từ ngày</div><input type="date" id="holFrom" value="'+today+'" style="width:140px"/></div>'
+        +'<div><div style="font-size:10.5px;color:var(--text-secondary);margin-bottom:2px">Đến ngày (nếu nghỉ nhiều ngày)</div><input type="date" id="holTo" style="width:140px"/></div>'
+        +'<div style="flex:1;min-width:150px"><div style="font-size:10.5px;color:var(--text-secondary);margin-bottom:2px">Tên (VD: Quốc khánh, Nghỉ Tết)</div><input type="text" id="holName" placeholder="Tên ngày lễ / lý do nghỉ" style="width:100%"/></div>'
+        +'<button class="btn pri" onclick="_holAdd()"><i class="ti ti-plus"></i> '+(isAd?'Thêm (duyệt luôn)':'Đề xuất')+'</button>'
+      +'</div>':'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">Chỉ Admin / Accountant được thêm; Admin duyệt.</div>')
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">'
+        +'<span style="font-size:12px">Năm:</span><select onchange="window._holYear=this.value;_holDraw()" style="width:100px">'+years.map(function(y){return '<option'+(y===yr?' selected':'')+'>'+y+'</option>';}).join('')+'<option value="all"'+(yr==='all'?' selected':'')+'>Tất cả</option></select>'
+        +'<span style="font-size:11.5px;color:var(--text-secondary)">'+list.length+' ngày'+(pend?' · <b style="color:#B45309">'+pend+' chờ duyệt</b> (chưa được cấn trừ)':'')+'</span>'
+      +'</div>'
+      +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:auto;max-height:46vh"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>'
+        +'<th class="pr-th" style="width:100px">Ngày</th><th class="pr-th" style="width:44px">Thứ</th><th class="pr-th" style="text-align:left">Tên</th><th class="pr-th" style="width:92px">Trạng thái</th><th class="pr-th" style="text-align:left;width:150px">Người đề xuất / duyệt</th><th class="pr-th" style="width:110px"></th>'
+      +'</tr></thead><tbody>'+(rows||'<tr><td colspan="6" class="pr-td" style="text-align:center;padding:1.2rem;color:var(--text-secondary)">Chưa có ngày nghỉ / lễ nào trong danh sách.</td></tr>')+'</tbody></table></div>'
+    +'</div>'
+    +'<div class="mftr"><button class="btn" onclick="closeOv(\'holOv\')">Đóng</button></div>'
+  +'</div>';
+}
+async function _holAdd(){
+  if(!_holCanAdd()){toast('Chỉ Admin / Accountant được thêm','error');return;}
+  const f=(g('holFrom')||{}).value, t=(g('holTo')||{}).value||f, name=((g('holName')||{}).value||'').trim();
+  if(!f){toast('Chọn ngày','error');return;}
+  if(!name){toast('Nhập tên ngày lễ / lý do nghỉ','error');return;}
+  if(t<f){toast('"Đến ngày" phải sau "Từ ngày"','error');return;}
+  const days=[]; const d=new Date(f+'T00:00:00Z'), end=new Date(t+'T00:00:00Z');
+  while(d<=end&&days.length<=60){ days.push(d.toISOString().slice(0,10)); d.setUTCDate(d.getUTCDate()+1); }
+  if(days.length>45){toast('Tối đa 45 ngày mỗi lần thêm','error');return;}
+  const exist={}; _holList().forEach(function(h){exist[h.date]=1;});
+  const todo=days.filter(function(x){const w=new Date(x+'T00:00:00Z').getUTCDay(); return w!==0&&w!==6&&!exist[x];});
+  const skipped=days.length-todo.length;
+  if(!todo.length){toast('Các ngày này đã có trong danh sách hoặc là thứ 7 / chủ nhật (mặc định đã nghỉ)','error');return;}
+  const isAd=_holIsAdmin(), me=(currentUser&&currentUser.email)||'', now=Date.now();
+  setLoading(true,'Đang lưu...');
+  try{
+    for(const x of todo){
+      const rec={date:x,name:name,status:isAd?'approved':'pending',createdBy:me,createdAt:now};
+      if(isAd){rec.approvedBy=me;rec.approvedAt=now;}
+      await fsSet('holidays',x,rec);
+      if(!Array.isArray(cache.holidays))cache.holidays=[];
+      if(!cache.holidays.some(function(h){return h.date===x;}))cache.holidays=cache.holidays.concat([Object.assign({_id:x},rec)]);
+    }
+    toast((isAd?'Đã thêm & duyệt ':'Đã gửi đề xuất ')+todo.length+' ngày'+(skipped?' (bỏ qua '+skipped+' ngày trùng / T7 / CN)':'')+(isAd?'':' — chờ Admin duyệt'));
+    if(g('holName'))g('holName').value='';
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+  _holAfterChange();
+}
+async function _holApprove(date){
+  if(!_holIsAdmin()){toast('Chỉ Admin được duyệt','error');return;}
+  const me=(currentUser&&currentUser.email)||'', now=Date.now();
+  try{
+    await fsSet('holidays',date,{status:'approved',approvedBy:me,approvedAt:now});
+    const h=_holList().find(function(x){return x.date===date;}); if(h){h.status='approved';h.approvedBy=me;h.approvedAt=now;}
+    cache.holidays=_holList().slice();
+    toast('Đã duyệt '+_holDmy(date)+' — được cấn trừ khi tính hạn chứng từ');
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  _holAfterChange();
+}
+async function _holDelete(date){
+  const h=_holList().find(function(x){return x.date===date;}); if(!h)return;
+  if(!confirm('Xóa ngày '+_holDmy(date)+(h.name?' ('+h.name+')':'')+' khỏi danh sách?'+(h.status==='approved'?'\n\nNgày này sẽ không còn được cấn trừ khi tính hạn chứng từ.':'')))return;
+  try{
+    await fsDel('holidays',date);
+    cache.holidays=_holList().filter(function(x){return x.date!==date;});
+    toast('Đã xóa '+_holDmy(date));
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  _holAfterChange();
+}
+function _holAfterChange(){
+  try{ if(g('holOv')&&g('holOv').classList.contains('open'))_holDraw(); }catch(e){}
+  try{ const w=g('prTableWrap'); if(w&&w.offsetParent!==null&&window._prRows&&window._prState&&typeof _prRenderTable==='function')_prRenderTable(); }catch(e){}
+  try{ if(g('prTnOv')&&g('prTnOv').classList.contains('open')&&typeof _prTnDraw==='function')_prTnDraw(); }catch(e){}
+  try{ if(g('docTrackOv')&&g('docTrackOv').classList.contains('open')&&window._docTrackOpen)openDocTrackPopup(window._docTrackOpen.id,window._docTrackOpen.tt); }catch(e){}
+}
+function _holOnData(){ _holAfterChange(); }
+Object.assign(window,{openHolidayPopup,_holDraw,_holAdd,_holApprove,_holDelete,_holOnData,_prIsOffDay,_holApproved});
+
+// Ghi chú tự động ở cuối popup "Theo dõi tiến độ chứng từ" — căn cứ đối chiếu với bảng Phụ cấp trách nhiệm
+function _prDocNoteHTML(r){
+  const keys=r.docTrackKeys||[];
+  const sent=keys.filter(function(k){return r.svcs&&r.svcs[k]&&r.svcs[k].finish;}).length;
+  const L=function(k,v){return '<div style="display:flex;gap:8px;padding:2px 0"><span style="flex:0 0 118px;color:var(--text-secondary)">'+k+'</span><span style="flex:1;min-width:0">'+v+'</span></div>';};
+  let h='<div style="margin-top:12px;border:1px solid var(--border-light);border-radius:8px;background:var(--bg-secondary);padding:10px 12px;font-size:12px;line-height:1.5">'
+    +'<div style="font-weight:700;font-size:12px;margin-bottom:4px"><i class="ti ti-notes" style="color:#C99A3C"></i> Ghi chú tự động <span style="font-weight:500;color:var(--text-secondary)">— căn cứ đối chiếu Phụ cấp trách nhiệm</span></div>';
+  const limit=r.etd?_prAddWorkDays(r.etd,_PR_DOC_DAYS):'';
+  if(r.docDoneDate){
+    const at=r.docDoneAt?new Date(r.docDoneAt):null;
+    const hm=at?(' lúc '+String(at.getHours()).padStart(2,'0')+':'+String(at.getMinutes()).padStart(2,'0')):'';
+    const by=r.docDoneBy||'';
+    h+=L('Trạng thái','<b style="color:#166534">Đã hoàn thành</b> ('+keys.length+'/'+keys.length+' chứng từ đã gửi)');
+    h+=L('Ngày hoàn thành','<b>'+_prDmy(r.docDoneDate)+'</b> ('+_holWd(r.docDoneDate)+')'+hm);
+    h+=L('Người tick','<b>'+_dnEsc(_holUserName(by))+'</b>'+(by&&_holUserName(by)!==by?' <span style="color:var(--text-secondary)">('+_dnEsc(by)+')</span>':'')+' <span style="color:var(--text-secondary)">— người tick chứng từ cuối cùng, được tính phụ cấp</span>');
+  }else{
+    h+=L('Trạng thái','<b style="color:#B45309">Chưa hoàn thành</b> — đã gửi '+sent+'/'+keys.length+' chứng từ');
+    h+=L('Ngày / người tick','<span style="color:var(--text-secondary)">Tự ghi khi tick chứng từ cuối cùng</span>');
+  }
+  if(r.etd){
+    h+=L('ETD','<b>'+_prDmy(r.etd)+'</b> ('+_holWd(r.etd)+')');
+    h+=L('Hạn (ETD +'+_PR_DOC_DAYS+' ngày LV)','<b>'+_prDmy(limit)+'</b> ('+_holWd(limit)+')');
+    // các ngày nghỉ lễ (đã duyệt) nằm trong khoảng ETD → hạn được cấn trừ
+    const hol=[]; const d=new Date(r.etd+'T00:00:00Z'); const end=new Date(limit+'T00:00:00Z');
+    const map=_holApproved();
+    while(d<end){ d.setUTCDate(d.getUTCDate()+1); const ds=d.toISOString().slice(0,10); if(map[ds])hol.push(_prDmy(ds).slice(0,5)+' '+map[ds]); }
+    h+=L('Cấn trừ','Thứ 7, chủ nhật'+(hol.length?' + ngày lễ/nghỉ đã duyệt: <b>'+_dnEsc(hol.join('; '))+'</b>':' (không có ngày lễ đã duyệt trong khoảng này)'));
+    if(r.docDoneDate){
+      const df=_prWorkDiff(r.docDoneDate,limit);
+      const ok=df<=0;
+      h+=L('Kết quả','<b style="color:'+(ok?'#166534':'#B91C1C')+'">'+(ok?'ĐẠT':'KHÔNG ĐẠT')+'</b> — '+(df===0?'đúng hạn':(df<0?'sớm '+(-df)+' ngày làm việc':'trễ '+df+' ngày làm việc')));
+      h+=L('Tính phụ cấp','Tháng <b>'+r.etd.slice(5,7)+'/'+r.etd.slice(0,4)+'</b> (theo tháng của ETD) cho người tick'+(ok?'':' — <span style="color:#B91C1C">lô không đạt nên không có thưởng</span>'));
+    }else{
+      const today=new Date().toISOString().slice(0,10);
+      const df=_prWorkDiff(today,limit);
+      h+=L('Kết quả','<span style="color:var(--text-secondary)">Chưa có — '+(df>0?'<b style="color:#B91C1C">đã quá hạn '+df+' ngày làm việc</b>':'còn trong hạn')+'</span>');
+    }
+  }else{
+    h+=L('ETD','<span style="color:#B91C1C">Lô chưa có ETD — không tính được hạn</span>');
+  }
+  return h+'</div>';
+}
+window._prDocNoteHTML=_prDocNoteHTML;
+
 const _PR_DOC_DAYS=3; // A 2.12: mốc ETD + 3 NGÀY LÀM VIỆC (bỏ thứ 7, chủ nhật)
-// Cộng n ngày làm việc (thứ 2–6) vào ngày s (yyyy-mm-dd). Ví dụ ETD thứ 6 +3 → thứ 4 tuần sau; ETD thứ 7 +1 → thứ 2.
+// Cộng n ngày làm việc (thứ 2–6, trừ ngày lễ/nghỉ ĐÃ ĐƯỢC ADMIN DUYỆT — xem _prIsOffDay) vào ngày s (yyyy-mm-dd). Ví dụ ETD thứ 6 +3 → thứ 4 tuần sau; ETD thứ 7 +1 → thứ 2.
 function _prAddWorkDays(s,n){
   const d=new Date(s+'T00:00:00Z');
-  while(n>0){ d.setUTCDate(d.getUTCDate()+1); const w=d.getUTCDay(); if(w!==0&&w!==6)n--; }
+  while(n>0){ d.setUTCDate(d.getUTCDate()+1); if(!_prIsOffDay(d.toISOString().slice(0,10)))n--; }
   return d.toISOString().slice(0,10);
 }
 // Số ngày làm việc từ b đến a (a sau b → dương = trễ; a trước b → âm = sớm)
@@ -11878,7 +12071,7 @@ function _prWorkDiff(a,b){
   if(a===b)return 0;
   const later=a>b, from=later?b:a, to=later?a:b;
   const d=new Date(from+'T00:00:00Z'), end=new Date(to+'T00:00:00Z'); let c=0;
-  while(d<end){ d.setUTCDate(d.getUTCDate()+1); const w=d.getUTCDay(); if(w!==0&&w!==6)c++; }
+  while(d<end){ d.setUTCDate(d.getUTCDate()+1); if(!_prIsOffDay(d.toISOString().slice(0,10)))c++; }
   return later?c:-c;
 }
 window._prRate=(window._prRate==null)?_PR_DOC_BONUS_DEFAULT:window._prRate;
@@ -11966,7 +12159,7 @@ function _prTnSummaryHTML(rows){
     +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:.7rem 1rem;background:var(--bg-secondary)">'
       +'<i class="ti ti-award" style="color:#C99A3C;font-size:18px"></i>'
       +'<b style="font-size:13px">Bảng phụ cấp trách nhiệm</b>'
-      +'<span style="font-size:11.5px;color:var(--text-secondary)">đồng bộ cột TN · mốc ETD +'+_PR_DOC_DAYS+' ngày làm việc</span>'
+      +'<span style="font-size:11.5px;color:var(--text-secondary)">đồng bộ cột TN · mốc ETD +'+_PR_DOC_DAYS+' ngày làm việc</span>'+_holBtnHTML()
       +'<div style="flex:1"></div>'
       +'<span style="font-size:12px">Thưởng tiến độ chứng từ / lô đạt: '+rateCtl+' đ</span>'
     +'</div>'
@@ -11974,7 +12167,7 @@ function _prTnSummaryHTML(rows){
       +'<th class="pr-th" style="width:36px">#</th><th class="pr-th" style="text-align:left">Nhân viên</th>'
       +'<th class="pr-th">1 · Thưởng tiến độ chứng từ</th><th class="pr-th">Khoản khác</th><th class="pr-th">Tổng TN</th><th class="pr-th"></th>'
     +'</tr></thead><tbody>'+(body||'<tr><td colspan="6" class="pr-td" style="text-align:center;padding:1.2rem;color:var(--text-secondary)">Chưa có nhân viên</td></tr>')+'</tbody></table></div>'
-    +'<div style="font-size:11px;color:var(--text-secondary);padding:.5rem 1rem"><i class="ti ti-info-circle"></i> Lô đạt = hoàn thành chứng từ trong vòng ETD +'+_PR_DOC_DAYS+' ngày làm việc (không tính thứ 7, chủ nhật); tính theo tháng của ETD, cho người bấm tick hoàn thành. '
+    +'<div style="font-size:11px;color:var(--text-secondary);padding:.5rem 1rem"><i class="ti ti-info-circle"></i> Lô đạt = hoàn thành chứng từ trong vòng ETD +'+_PR_DOC_DAYS+' ngày làm việc (không tính thứ 7, chủ nhật và ngày lễ/nghỉ đã được Admin duyệt); tính theo tháng của ETD, cho người bấm tick hoàn thành. '
       +'Tháng này có <b>'+pending+'</b> lô đang theo dõi chưa hoàn thành (chưa tính)'+(orphan?' · <b>'+orphan+'</b> lô do người chưa có trong bảng lương hoàn thành':'')+'.</div>'
   +'</div>';
 }
@@ -27905,7 +28098,8 @@ function openDocTrackPopup(id, tt){
     +'</div>';
   }).join('');
   const hasAnySvcForHint=Object.keys(r.svcs||{}).some(function(k){return r.svcs[k]&&r.svcs[k].on;});
-  ov.innerHTML='<div class="modal" style="max-width:460px">'
+  window._docTrackOpen={id:id,tt:tt};
+  ov.innerHTML='<div class="modal" style="max-width:520px">'
     +'<div class="mhdr"><div><div class="mtitle">Theo dõi tiến độ chứng từ</div>'
     +'<div class="msub">'+(r.bookingNo||r.jobNo||'—')+' — '+(r.pol||'—')+' → '+(r.pod||'—')+'</div></div>'
     +'<button class="x" onclick="closeOv(\'docTrackOv\')"><i class="ti ti-x"></i></button></div>'
@@ -27923,6 +28117,7 @@ function openDocTrackPopup(id, tt){
           ?'<div style="display:flex;align-items:center;gap:8px;padding:.55rem .8rem;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:8px;margin-bottom:8px;font-size:12px;color:#166534"><i class="ti ti-circle-check" style="font-size:16px"></i><span><b>Đã hoàn thành</b> ngày '+r.docDoneDate.split('-').reverse().join('-')+' — bởi '+(r.docDoneBy||'—')+(r.etd?' <span style="opacity:.8">(ETD '+r.etd.split('-').reverse().join('-')+')</span>':'')+'</span></div>'
           :'')
         +'<button class="btn" data-id="'+id+'" data-tt="'+tt+'" onclick="openDocTrackAddPicker(this.dataset.id,this.dataset.tt)"><i class="ti ti-plus"></i> Thêm chứng từ khác</button>'
+        +_prDocNoteHTML(r)
       +'</div>'
     +'</div>'
     +'<div class="mftr"><button class="btn" onclick="closeOv(\'docTrackOv\')">Đóng</button></div>'
