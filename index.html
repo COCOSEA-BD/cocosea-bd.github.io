@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.21';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.22';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1547,7 +1547,8 @@ async function doLogin(){
   const pass  = g('loginPass').value;
   if(!input||!pass){ toast('Vui lòng nhập email/tên đăng nhập và mật khẩu','error'); return; }
   setLoading(true,'Đang đăng nhập...');
-  window._freshLogin=true; // A 2.21: đăng nhập chủ động → sau đó hiện màn chọn Dashboard / Shipment List
+  window._freshLogin=true; // A 2.22: đăng nhập chủ động → vào trang đã tick dưới nút Đăng nhập
+  window._startPage=_getStartPage();
   try {
     let email=input;
     // Nếu không phải định dạng email → coi là USERNAME, tra cứu email tương ứng trước khi đăng nhập
@@ -1879,20 +1880,33 @@ function _applySecuritySettings(){
 }
 
 let _pwPromptOpen=false; // guard tránh mở popup nhiều lần
-function _checkPasswordExpiry(){
+// A 2.22: SỬA LỖI "Bắt buộc đổi mật khẩu định kỳ" không hoạt động.
+// Lỗi cũ: mốc đổi mật khẩu được ghi vào collection 'profiles' nhưng hồ sơ người dùng đọc từ 'users' → luôn đọc ra
+// "chưa có mốc" → mỗi lần kiểm tra lại đặt mốc = bây giờ → KHÔNG BAO GIỜ hết hạn.
+// Cách mới: lấy thời điểm đổi mật khẩu thật từ Firebase Authentication (passwordUpdatedAt) — không phụ thuộc
+// Firestore/rules; nếu không lấy được thì dùng mốc lần đầu hệ thống thấy tài khoản (lưu bền trên máy) thay vì đặt lại.
+async function _getPasswordChangedAt(force){
+  if(!force&&window._pwChangedAt&&window._pwChangedAtUid===currentUser.uid)return window._pwChangedAt;
+  let t=0;
+  try{
+    const tok=await currentUser.getIdToken();
+    const r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key='+encodeURIComponent(firebaseConfig.apiKey),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:tok})});
+    const j=await r.json();
+    const u=j&&j.users&&j.users[0];
+    if(u){ t=Number(u.passwordUpdatedAt)||Number(u.createdAt)||0; }
+  }catch(e){ console.warn('COCOFLOW: không lấy được thời điểm đổi mật khẩu từ Auth',e); }
+  if(!t){
+    const k='_cocoPwStart_'+currentUser.uid;
+    try{ t=Number(localStorage.getItem(k))||0; if(!t){ t=Date.now(); localStorage.setItem(k,String(t)); } }catch(e){ t=Date.now(); }
+  }
+  window._pwChangedAt=t; window._pwChangedAtUid=currentUser.uid;
+  return t;
+}
+async function _checkPasswordExpiry(){
   if(!currentUser||!_securitySettings.password||!_securitySettings.password.enabled)return;
   if(_pwPromptOpen)return; // popup đang mở, không gọi lại
-
-  const lastChange=currentProfile&&currentProfile.lastPasswordChange;
-
-  // Nếu chưa có lastPasswordChange, khởi tạo ngay (không ép đổi mật khẩu lần đầu)
-  if(!lastChange){
-    const now=Date.now();
-    db.collection('profiles').doc(currentUser.uid).set({lastPasswordChange:now},{merge:true}).catch(function(){});
-    if(currentProfile)currentProfile.lastPasswordChange=now;
-    return; // bắt đầu tính từ bây giờ, chưa ép đổi
-  }
-
+  const lastChange=await _getPasswordChangedAt();
+  if(!currentUser||_pwPromptOpen)return;
   const limitMs=(_securitySettings.password.minutes||10080)*60*1000;
   const elapsed=Date.now()-lastChange;
   if(elapsed>limitMs){
@@ -1900,6 +1914,7 @@ function _checkPasswordExpiry(){
     openPasswordChangePrompt();
   }
 }
+window._checkPasswordExpiry=_checkPasswordExpiry;
 
 function openPasswordChangePrompt(){
   _pwPromptOpen=true;
@@ -1935,12 +1950,14 @@ async function doChangePassword(){
     await currentUser.reauthenticateWithCredential(cred);
     await currentUser.updatePassword(nw);
     const now=Date.now();
-    await db.collection('profiles').doc(currentUser.uid).set({lastPasswordChange:now},{merge:true});
+    window._pwChangedAt=now; window._pwChangedAtUid=currentUser.uid; // A 2.22: mốc mới ngay lập tức
+    try{ localStorage.setItem('_cocoPwStart_'+currentUser.uid,String(now)); }catch(e){}
+    try{ await db.collection('profiles').doc(currentUser.uid).set({lastPasswordChange:now},{merge:true}); }catch(e){} // phụ — lỗi quyền không làm hỏng việc đổi mật khẩu
     if(currentProfile)currentProfile.lastPasswordChange=now;
     _pwPromptOpen=false;
     closeOv('payStatusOv');
     toast('Đã đổi mật khẩu thành công');
-  }catch(e){toast('Lỗi: '+(e.code==='auth/wrong-password'?'Mật khẩu hiện tại không đúng':e.message),'error');}
+  }catch(e){toast('Lỗi: '+((e.code==='auth/wrong-password'||e.code==='auth/invalid-credential'||e.code==='auth/invalid-login-credentials')?'Mật khẩu hiện tại không đúng':e.message),'error');}
   setLoading(false);
 }
 window.doChangePassword=doChangePassword;
@@ -1971,47 +1988,16 @@ function _syncCloseLogoutFlag(){
 }
 window._syncCloseLogoutFlag=_syncCloseLogoutFlag;
 
-/* A 2.21: Màn hình chọn trang sau khi ĐĂNG NHẬP — Dashboard hoặc vào thẳng Shipment List */
-function _showStartChooser(){
-  try{
-    const old=document.getElementById('startChooser'); if(old)old.remove();
-    const name=(currentProfile&&(currentProfile.name||currentProfile.email))||'';
-    const ov=document.createElement('div'); ov.id='startChooser';
-    ov.style.cssText='position:fixed;inset:0;z-index:9500;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(6,16,32,.72);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)';
-    const logo=window._sigLogoB64?'<img src="'+window._sigLogoB64+'" alt="" style="width:62px;height:auto;display:block;margin:0 auto 10px"/>':'';
-    const card=function(id,ic,t,sub){
-      return '<button type="button" id="'+id+'" style="flex:1 1 200px;min-width:0;cursor:pointer;border:1px solid rgba(255,255,255,.16);background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));color:#fff;border-radius:16px;padding:22px 16px;text-align:center;font-family:inherit;transition:transform .15s,border-color .15s,background .15s">'
-        +'<i class="ti '+ic+'" style="font-size:34px;color:#F5C451;display:block;margin-bottom:10px"></i>'
-        +'<div style="font-size:16px;font-weight:700;margin-bottom:4px">'+t+'</div>'
-        +'<div style="font-size:12px;color:rgba(255,255,255,.66);line-height:1.45">'+sub+'</div></button>';
-    };
-    ov.innerHTML='<div style="width:min(560px,100%);border-radius:22px;padding:26px 24px 22px;background:linear-gradient(165deg,#12305A,#0A1D3A);border:1px solid rgba(245,196,81,.28);box-shadow:0 24px 70px rgba(0,0,0,.5);color:#fff">'
-      +logo
-      +'<div style="text-align:center;font-size:12px;letter-spacing:.14em;color:#F5C451;font-weight:700">COCO SEA</div>'
-      +'<div style="text-align:center;font-size:20px;font-weight:800;margin:6px 0 4px">Xin chào'+(name?', '+String(name).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}):'')+'</div>'
-      +'<div style="text-align:center;font-size:13px;color:rgba(255,255,255,.7);margin-bottom:18px">Bạn muốn bắt đầu từ đâu?</div>'
-      +'<div style="display:flex;gap:12px;flex-wrap:wrap">'
-        +card('startDash','ti-layout-dashboard','Dashboard','Tổng quan &amp; lối tắt tới các module')
-        +card('startShip','ti-arrow-up-right','Shipment List','Vào thẳng danh sách lô hàng')
-      +'</div></div>';
-    document.body.appendChild(ov);
-    const close=function(dest){
-      try{document.removeEventListener('keydown',onKey,true);}catch(e){}
-      ov.remove();
-      try{ if(dest==='xuat')goTab('xuat'); else goTab('home'); }catch(e){ console.warn(e); }
-    };
-    const onKey=function(e){ if(e.key==='Escape'){ e.preventDefault(); close('home'); } };
-    document.addEventListener('keydown',onKey,true);
-    ['startDash','startShip'].forEach(function(id){
-      const b=document.getElementById(id);
-      b.addEventListener('click',function(){close(id==='startShip'?'xuat':'home');});
-      b.addEventListener('mouseenter',function(){b.style.transform='translateY(-3px)';b.style.borderColor='rgba(245,196,81,.7)';b.style.background='linear-gradient(160deg,rgba(245,196,81,.16),rgba(255,255,255,.04))';});
-      b.addEventListener('mouseleave',function(){b.style.transform='';b.style.borderColor='rgba(255,255,255,.16)';b.style.background='linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03))';});
-    });
-    setTimeout(function(){ const b=document.getElementById('startDash'); if(b)b.focus(); },50);
-  }catch(e){ console.warn('startChooser',e); }
+/* A 2.22: chọn trang vào sau khi đăng nhập — ô tick dưới nút "Đăng nhập" (nhớ lựa chọn trên máy này) */
+function _getStartPage(){ try{ return localStorage.getItem('_cocoStartPage')==='xuat'?'xuat':'home'; }catch(e){ return 'home'; } }
+function _setStartPage(v){
+  v=(v==='xuat')?'xuat':'home';
+  try{ localStorage.setItem('_cocoStartPage',v); }catch(e){}
+  const d=document.getElementById('startOptHome'), x=document.getElementById('startOptXuat');
+  if(d)d.checked=(v==='home'); if(x)x.checked=(v==='xuat');
 }
-window._showStartChooser=_showStartChooser;
+window._getStartPage=_getStartPage; window._setStartPage=_setStartPage;
+document.addEventListener('DOMContentLoaded',function(){ try{ _setStartPage(_getStartPage()); }catch(e){} });
 
 function _resetInactivityTimer(){
   if(!currentUser||!_securitySettings.inactivity||!_securitySettings.inactivity.enabled)return;
@@ -2463,7 +2449,11 @@ function showApp(){
   g('appShell').style.display='flex';
   updateSidebar();
   goTab('home');
-  if(window._freshLogin){ window._freshLogin=false; _showStartChooser(); } // A 2.21
+  if(window._freshLogin){ // A 2.22: đăng nhập chủ động → vào đúng trang đã tick (Dashboard / Shipment List)
+    window._freshLogin=false;
+    if(window._startPage==='xuat'){ try{ goTab('xuat'); }catch(e){ console.warn(e); } }
+    window._startPage=null;
+  }
 }
 
 // ═══ Menu mobile (hamburger) — chỉ hiển thị/hoạt động khi màn hình hẹp qua CSS.
@@ -9631,6 +9621,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.22: chữ ký email dùng lại logo như A 2.19; chọn trang vào sau đăng nhập = ô tick dưới nút Đăng nhập (bỏ pop-up); sửa lỗi 'Bắt buộc đổi mật khẩu định kỳ' không hoạt động
 // A 2.21: icon app mới (bộ icons/ + manifest + favicon); chữ ký email chỉ dùng logo mới + nhúng ảnh dạng CID trong .eml (Outlook hiện được); 'Đăng xuất khi tắt tab/trình duyệt' hoạt động thật + màn chọn Dashboard / Shipment List sau khi đăng nhập
 // A 2.20: chữ ký email 100% tiếng Anh (logo COCO SEA mới, tên + địa chỉ EN); pop-up hỏi gửi email release booking khi chuyển Request/Standby → Confirm; Document Maker sidebar hiện Ghi chú/Remark của lô
 // A 2.19: To do list — lô quá ETD +4 ngày chưa gửi Ctừ và lô còn ≤4 giờ tới Cut Off CY (chưa VST) đỏ cả dòng; Document Maker — khôi phục ô POD (sửa tay, chứng từ dùng ô này), Payment term gọn cùng hàng với POD; đổi Cnee (Buyer/Cnee) ở Document Maker thì Cnee của lô đổi theo.
@@ -9855,10 +9846,10 @@ window.openBookingEmail=openBookingEmail;
 
 // Chữ ký email chuyên nghiệp cho Booking Confirmation
 function _bookingEmailSignature(){
-  const logo=window._sigLogoB64; // A 2.21: chỉ dùng logo mới (vàng) cho chữ ký email — không fallback về logo cũ
+  const logo=window._emailLogoB64; // A 2.22: dùng lại logo như bản A 2.19
   const co=_coInfo(); // ← luôn lấy từ Thông tin Bên A (Hợp đồng DV)
   const logoCell=logo
-    ? '<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:60px"><img src="'+logo+'" width="56" height="62" alt="COCO SEA" style="display:block;width:56px;height:62px"/></td>'
+    ? '<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:66px"><img src="'+logo+'" width="62" height="62" style="display:block;border-radius:12px"/></td>'
        +'<td style="border:none;padding:0 16px 0 0;vertical-align:middle;width:1px;background:#e2e8f0"></td>'
     : '';
   return ''
@@ -23031,6 +23022,11 @@ body.xuat-lotmode #xuat-lot-work .cs-main button[onclick^="addBkContRow"]{
       <div class="fi"><label class="lbl">Email hoặc Tên đăng nhập</label><input type="text" id="loginEmail" placeholder="email@company.vn hoặc tên đăng nhập" onkeydown="if(event.key==='Enter')g('loginPass').focus()"/></div>
       <div class="fi"><label class="lbl">Mật khẩu</label><input type="password" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"/></div>
       <button class="btn pri" style="justify-content:center;margin-top:.25rem" onclick="doLogin()"><i class="ti ti-login"></i> Đăng nhập</button>
+      <div style="margin-top:.5rem;display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)">
+        <span style="font-weight:600;width:100%;text-align:center">Sau khi đăng nhập vào:</span>
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="startOptHome" onchange="_setStartPage(this.checked?'home':'xuat')" style="width:15px;height:15px;cursor:pointer"/> Dashboard</label>
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="startOptXuat" onchange="_setStartPage(this.checked?'xuat':'home')" style="width:15px;height:15px;cursor:pointer"/> Shipment List</label>
+      </div>
     </div>
     <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border-light);font-size:11px;color:var(--text-tertiary);text-align:center">
       <i class="ti ti-shield-check" style="font-size:14px;vertical-align:-2px;color:var(--green)"></i> Xác thực qua Firebase Authentication
