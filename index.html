@@ -88,6 +88,42 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 const storage = firebase.storage();
+// A 2.27: BỘ NHỚ ĐỆM FIRESTORE TRÊN MÁY (IndexedDB). Từ lần mở thứ 2 dữ liệu hiện gần như ngay từ bộ nhớ đệm,
+// server chỉ gửi phần thay đổi (giảm cả lượng đọc Firestore). Tự XÓA bộ đệm khi đăng xuất / đổi tài khoản.
+window._cfPersist={on:false,err:''};
+try{ db.settings({cacheSizeBytes:250*1024*1024,merge:true}); }catch(e){}
+const _cfPersistReady=(async function(){
+  let clr=false; try{ clr=localStorage.getItem('cf_clear_cache')==='1'; }catch(e){}
+  if(clr){
+    try{
+      await db.clearPersistence();
+      try{
+        localStorage.removeItem('cf_clear_cache'); localStorage.removeItem('cf_cache_uid');
+        Object.keys(localStorage).filter(function(k){return k.indexOf('cf_lots_ok_')===0;}).forEach(function(k){localStorage.removeItem(k);});
+      }catch(e){}
+    }catch(e){ window._cfPersist.err='clear:'+((e&&e.code)||e); }
+  }
+  try{ await db.enablePersistence({synchronizeTabs:true}); window._cfPersist.on=true; }
+  catch(e){ window._cfPersist.err=(e&&e.code)||String(e); } // trình duyệt không hỗ trợ / nhiều tab xung đột → chạy như cũ
+})();
+function _cfLotsSynced(){ try{ return !!(window._cfPersist.on&&currentUser&&localStorage.getItem('cf_lots_ok_'+currentUser.uid)==='1'); }catch(e){ return false; } }
+function _cfMarkLotsSynced(){ try{ if(window._cfPersist.on&&currentUser)localStorage.setItem('cf_lots_ok_'+currentUser.uid,'1'); }catch(e){} }
+// Đăng xuất (mọi đường: nút, hết phiên, tài khoản bị chặn...) → xóa sạch bộ đệm rồi tải lại trang
+async function _cfWipeAndReload(){
+  try{ localStorage.setItem('cf_clear_cache','1'); }catch(e){}
+  let ok=false;
+  try{
+    await Promise.race([
+      (async function(){ await db.terminate(); await db.clearPersistence(); ok=true; })(),
+      new Promise(function(r){ setTimeout(r,4000); })
+    ]);
+  }catch(e){}
+  if(ok){ try{
+    localStorage.removeItem('cf_clear_cache'); localStorage.removeItem('cf_cache_uid');
+    Object.keys(localStorage).filter(function(k){return k.indexOf('cf_lots_ok_')===0;}).forEach(function(k){localStorage.removeItem(k);});
+  }catch(e){} }
+  location.reload();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  LỊCH ÂM VIỆT NAM — thuật toán thiên văn chuẩn (Hồ Ngọc Đức), tính trực tiếp
@@ -1225,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.26';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.27';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1617,11 +1653,23 @@ auth.onAuthStateChanged(async (user) => {
   if (user && window._cocoForceSignOut && !window._freshLogin) {
     // A 2.21: mở lại app/trình duyệt sau khi đã đóng + đang bật "Đăng xuất khi tắt tab/trình duyệt" → bắt đăng nhập lại
     window._cocoForceSignOut=false;
+    window._cfHadUser=true;
     try{ await auth.signOut(); }catch(e){}
     return;
   }
   if (user) {
-    currentUser = user;
+    try{ await _cfPersistReady; }catch(e){}
+    currentUser = user; window._cfHadUser=true;
+    // A 2.27: bộ đệm thuộc về tài khoản khác → xóa rồi tải lại 1 lần
+    try{
+      if(window._cfPersist.on){
+        const _last=localStorage.getItem('cf_cache_uid');
+        if(_last&&_last!==user.uid&&!sessionStorage.getItem('cf_uidrl')){
+          sessionStorage.setItem('cf_uidrl','1'); localStorage.setItem('cf_clear_cache','1'); location.reload(); return;
+        }
+        sessionStorage.removeItem('cf_uidrl'); localStorage.setItem('cf_cache_uid',user.uid);
+      }
+    }catch(e){}
     setLoading(true,'Đang tải dữ liệu...');
     window._bootPerf={t0:performance.now(),marks:{}};
     // A 2.26: 3 lần tải độc lập (users / cài đặt bảo mật / giao diện) chạy SONG SONG thay vì nối đuôi nhau
@@ -1720,10 +1768,12 @@ auth.onAuthStateChanged(async (user) => {
       alert('Đăng nhập thành công nhưng xảy ra lỗi khi tải dữ liệu ứng dụng:\n\n'+(e2&&e2.message?e2.message:e2)+'\n\nVui lòng tải lại trang (nhấn F5) để thử lại. Nếu lỗi vẫn lặp lại, chụp màn hình lỗi này gửi cho bộ phận kỹ thuật.');
     }
   } else {
+    const _hadUser=window._cfHadUser; window._cfHadUser=false;
     currentUser = null; currentProfile = null;
     _stopInactivityTracker();
     stopListeners();
     showLogin();
+    if(_hadUser&&window._cfPersist&&window._cfPersist.on) _cfWipeAndReload();
   }
 });
 
@@ -1739,6 +1789,7 @@ async function doLogin(){
     // Nếu không phải định dạng email → coi là USERNAME, tra cứu email tương ứng trước khi đăng nhập
     if(!input.includes('@')){
       const uname=input.toLowerCase();
+      try{ await _cfPersistReady; }catch(e){}
       const snap=await db.collection('usernameMap').doc(uname).get();
       if(!snap.exists){ setLoading(false); toast('Không tìm thấy tên đăng nhập "'+input+'"','error'); return; }
       email=snap.data().email;
@@ -2263,7 +2314,9 @@ function startListeners(){
   // ══════════════════════════════════════════════════════════════════
 
   // PHASE 1 — lots_xuat: chỉ load lô có ETD trong cửa sổ -2/+20 ngày (nhanh)
-  db.collection('lots_xuat').where('etd','>=',_p1From).where('etd','<=',_p1To)
+  // A 2.27: đã từng đồng bộ đủ lô xuất + có bộ đệm → bỏ Phase 1, nghe toàn bộ ngay (dữ liệu hiện từ bộ đệm trong chớp mắt)
+  const _lotsSynced=_cfLotsSynced();
+  (_lotsSynced?Promise.resolve():db.collection('lots_xuat').where('etd','>=',_p1From).where('etd','<=',_p1To)
     .get().then(function(snap){
       if(_phase2Ready.xuat)return; // Phase 2 đã xong, bỏ qua Phase 1
       if(snap.empty)return;
@@ -2272,16 +2325,21 @@ function startListeners(){
       try{ if(window._bootPerf){ window._bootPerf.marks.lotsWindow=Math.round(performance.now()-window._bootPerf.t0); window._bootPerf.nWindow=cache.xuat.length; } }catch(e){}
       if(currentTab==='xuat'){clearTimeout(_xRenderTimer);_xRenderTimer=setTimeout(function(){renderLotTable('xuat');},0);}
       updateSidebar();
-    }).catch(function(){})
+    }).catch(function(){}))
     .then(function(){
       // PHASE 2 — lots_xuat: toàn bộ lô hàng (onSnapshot real-time)
       const u1 = db.collection('lots_xuat').onSnapshot(snap => {
+        const _fc=!!(snap.metadata&&snap.metadata.fromCache);
+        if(!_fc)_cfMarkLotsSynced();
+        else if(!_lotsSynced&&!_phase2Ready.xuat)return; // bộ đệm chưa từng đủ → chờ bản server, tránh hiện thiếu lô
         _phase2Ready.xuat=true;
         cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
         cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
         window._homeDataLoaded=true;
-        try{ const bp=window._bootPerf; if(bp&&!bp.marks.lotsAll){ bp.marks.lotsAll=Math.round(performance.now()-bp.t0); bp.nAll=cache.xuat.length; bp.fromCache=!!(snap.metadata&&snap.metadata.fromCache);
-          console.log('COCOFLOW [Perf] (ms từ lúc đăng nhập xong) users='+bp.marks.users+' · cài đặt='+bp.marks.settings+' · hiện app='+bp.marks.app+' · lô cửa sổ ETD='+bp.marks.lotsWindow+' ('+bp.nWindow+' lô) · TẤT CẢ lô xuất='+bp.marks.lotsAll+' ('+bp.nAll+' lô)'); } }catch(e){}
+        try{ const bp=window._bootPerf; if(bp){ const t=Math.round(performance.now()-bp.t0);
+          if(!bp.marks.lotsAll){ bp.marks.lotsAll=t; bp.nAll=cache.xuat.length; bp.src=_fc?'BỘ NHỚ ĐỆM':'server';
+            console.log('COCOFLOW [Perf] (ms từ lúc đăng nhập xong) users='+bp.marks.users+' · cài đặt='+bp.marks.settings+' · hiện app='+bp.marks.app+' · lô cửa sổ ETD='+bp.marks.lotsWindow+' ('+bp.nWindow+' lô) · TẤT CẢ lô xuất='+t+' ('+bp.nAll+' lô, nguồn '+bp.src+') · nhớ đệm='+(window._cfPersist.on?'BẬT':'tắt '+window._cfPersist.err)); }
+          else if(!_fc&&!bp.marks.lotsServer&&bp.src==='BỘ NHỚ ĐỆM'){ bp.marks.lotsServer=t; console.log('COCOFLOW [Perf] server xác nhận xong sau '+t+'ms ('+cache.xuat.length+' lô)'); } } }catch(e){}
         if(currentTab==='home')renderHomePage();
         if(typeof _bkOnData==='function')_bkOnData();
         if(currentTab==='xuat'){
@@ -9821,6 +9879,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.27: Bộ nhớ đệm Firestore trên máy (offline persistence) — từ lần mở thứ 2 danh sách lô hiện ngay từ bộ đệm; tự xóa bộ đệm khi đăng xuất/đổi tài khoản
 // A 2.26: Tăng tốc tải trang — 2 ảnh nền PNG nhúng (3,1MB) đổi sang WebP (~0,17MB); kiểm tra phiên bản chỉ đọc phần đầu file thay vì tải 8MB mỗi 5 phút; users + cài đặt bảo mật + giao diện tải song song; CSS icon/font không chặn hiển thị + preconnect; bỏ quét bảng responsive trên màn rộng; log thời gian tải [Perf] trong Console
 // A 2.25: Shipment List — cột Thao tác hiện tên ngắn các PIC; Bảng lương — phạt lô hoàn thành chứng từ trễ hạn (mặc định 30,000đ/lô, admin chỉnh, trừ vào TN) + popup xem trước thưởng/phạt tới 1 mốc ngày
 // A 2.24: Service Report (Phyto / C/O / Fumi) — nút "Cập nhật hàng loạt" NCC + đơn giá (chỉ Admin/Accountant): popup theo bộ lọc ETD, dòng điền hàng loạt, ghi từng lô bằng transaction, chặn lô khóa/đã Costing/NCC đã thanh toán, đồng bộ tab Dịch vụ + Lịch sử
