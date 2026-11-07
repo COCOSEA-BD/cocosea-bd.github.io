@@ -1218,7 +1218,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.24';window.COCO_SHOW_OCR_BTN=false;
+window.APP_BUILD='A 2.25';window.COCO_SHOW_OCR_BTN=false;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1436,6 +1436,30 @@ function _picResolveUser(token){
   f=users.find(function(u){return _picNorm(u.name).split(/\s+/)[0]===t;}); return f||null;
 }
 function _picUserLabel(u){ return (u.name||u.username||u.email||'')+(u.username&&u.name?' ('+u.username+')':''); }
+// A 2.25: tên NGẮN của PIC để hiện dưới cột Thao tác (username → từ đầu của tên → phần trước @; chưa khớp tài khoản thì giữ nguyên giá trị gán)
+let _picShortMemo={n:-1,m:{}};
+function _picShortName(token){
+  const n=(cache.users||[]).length;
+  if(_picShortMemo.n!==n)_picShortMemo={n:n,m:{}};
+  const k=_picNorm(token); if(!k)return '';
+  if(Object.prototype.hasOwnProperty.call(_picShortMemo.m,k))return _picShortMemo.m[k];
+  const u=_picResolveUser(token);
+  let out;
+  if(u)out=(u.username||String(u.name||'').trim().split(/\s+/)[0]||String(u.email||'').split('@')[0]||'').trim();
+  else out=String(token).trim();
+  return (_picShortMemo.m[k]=out);
+}
+// HTML dòng PIC: tên các PIC (bỏ trùng, giữ thứ tự Sale · Doc · Acc · Cus · OPS); tooltip ghi rõ vị trí
+function _picShortLineHtml(lot){
+  const pic=_picLotPic(lot); const names=[]; const tip=[];
+  PIC_POS.forEach(function(x){
+    const nm=_picShortName(pic[x.k]); if(!nm)return;
+    tip.push(x.l+': '+nm);
+    if(names.indexOf(nm)<0)names.push(nm);
+  });
+  if(!names.length)return '';
+  return '<div class="lot-pic" title="'+_bkE(tip.join(' · '))+'" style="margin-top:3px;font-size:10px;line-height:1.25;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px;margin-left:auto;margin-right:auto"><i class="ti ti-user-check" style="font-size:10px;vertical-align:-1px;margin-right:2px"></i>'+names.map(_bkE).join(' · ')+'</div>';
+}
 function _picPartnerPic(shipperKey){
   const p=(cache.partners||{})[shipperKey]||{};
   const own=(p.pic&&typeof p.pic==='object')?p.pic:{};
@@ -4425,6 +4449,7 @@ function renderLotTable(tt,S){ S=S||tt;
         +`<button class="btn sm" onclick="openDetail('${r._id}','${tt}')" title="${r.locked?'Đã khóa — Xem chi tiết':'Chưa khóa — Xem chi tiết'}" style="color:${r.locked?'var(--coral)':'var(--green)'}"><i class="ti ${r.locked?'ti-lock':'ti-lock-open'}"></i></button>`
         +` <button class="rac" onclick="event.stopPropagation();showLoadingConfirm('${r._id}','${tt}')" title="Loading Confirm — Thông báo hàng lên tàu" style="color:#059669;font-size:14px"><i class="ti ti-circle-check"></i></button>`
         +(canDelete?` <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa lô"><i class="ti ti-trash"></i></button>`:'')
+        +_picShortLineHtml(r)
       +`</td></tr>`;
   }
 
@@ -9764,6 +9789,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.25: Shipment List — cột Thao tác hiện tên ngắn các PIC; Bảng lương — phạt lô hoàn thành chứng từ trễ hạn (mặc định 30,000đ/lô, admin chỉnh, trừ vào TN) + popup xem trước thưởng/phạt tới 1 mốc ngày
 // A 2.24: Service Report (Phyto / C/O / Fumi) — nút "Cập nhật hàng loạt" NCC + đơn giá (chỉ Admin/Accountant): popup theo bộ lọc ETD, dòng điền hàng loạt, ghi từng lô bằng transaction, chặn lô khóa/đã Costing/NCC đã thanh toán, đồng bộ tab Dịch vụ + Lịch sử
 // A 2.23: Document Maker hiện đủ mọi số booking (PKL / SI Hede); PIC (Sale/Doc/Accountant/Cus/OPS) gán theo Shipper ở CRM + bộ lọc PIC/All ở Shipment List & Booking List + thẻ PIC trong form lô
 // A 2.22: chữ ký email dùng lại logo như A 2.19; chọn trang vào sau đăng nhập = ô tick dưới nút Đăng nhập (bỏ pop-up); sửa lỗi 'Bắt buộc đổi mật khẩu định kỳ' không hoạt động
@@ -12112,6 +12138,12 @@ async function _prLoad(y,m){
      từ bảng này nên mọi nơi đang đọc phuCapTrachNhiem (tổng lương, KPI, Excel, báo cáo) tự đồng bộ, không đổi công thức.
 ─────────────────────────────────────────────────────────────── */
 const _PR_DOC_BONUS_DEFAULT=50000;
+// A 2.25: PHẠT lô hoàn thành chứng từ TRỄ HẠN (ETD + 3 ngày làm việc) — mặc định 30,000đ/lô, admin chỉnh được, lưu theo từng tháng lương.
+// Các tháng lương TRƯỚC 11/2026 mà chưa từng lưu mức phạt thì coi như 0 (không tính phạt hồi tố khi mở lại bảng lương cũ).
+const _PR_DOC_PENALTY_DEFAULT=30000;
+const _PR_PEN_FROM='2026-11';
+function _prPenDefaultFor(y,m){ return (y+'-'+String(m).padStart(2,'0'))<_PR_PEN_FROM?0:_PR_DOC_PENALTY_DEFAULT; }
+window._prPenRate=(window._prPenRate==null)?_PR_DOC_PENALTY_DEFAULT:window._prPenRate;
 /* ═══ A 2.14: PHIẾU LƯƠNG — xuất PDF / Excel / Email cho từng nhân viên (layout đồng bộ SOA / Debit Note) ═══
    Dữ liệu lấy từ bảng lương đang hiển thị (window._prRows) + chi tiết phụ cấp trách nhiệm (_prDocBonusCalc, tnItems). */
 function _psE(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
@@ -12146,12 +12178,13 @@ function _prSlipData(idx){
     base:base, days:days, std:std, manual:manual, real:c.real, at:at, dt:dt, tn:tn, tong:c.tong,
     hasBH:hasBH, bhxh:bhxh, bhyt:bhyt, tru:c.tru, nhan:c.nhan,
     docOk:d.ok, docLate:d.late, docCount:d.count, docAmount:d.amount, rate:rate, items:items,
+    penCount:d.penCount, penRate:parseFloat(window._prPenRate)||0, penNominal:d.penNominal, penApplied:r.tnPenApplied||0,
     extra:items.reduce(function(s,it){return s+it.amount;},0),
     dateStr:dd, genBy:(currentProfile&&(currentProfile.name||currentProfile.email))||(currentUser&&currentUser.email)||'COCOSEA ERP',
     co:co, words:String(_numToWordsVN(c.nhan)||'').replace(/\s+/g,' ').trim()
   };
 }
-function _psRuleText(){ return 'Lô đạt = hoàn thành chứng từ trong vòng ETD + '+_PR_DOC_DAYS+' ngày làm việc (không tính thứ 7, chủ nhật và ngày lễ/nghỉ đã được Admin duyệt); tính theo tháng của ETD, cho người tick hoàn thành.'; }
+function _psRuleText(){ return 'Lô đạt = hoàn thành chứng từ trong vòng ETD + '+_PR_DOC_DAYS+' ngày làm việc (không tính thứ 7, chủ nhật và ngày lễ/nghỉ đã được Admin duyệt); tính theo tháng của ETD, cho người tick hoàn thành. Lô hoàn thành sau hạn bị phạt '+_psMoney(window._prPenRate)+' đ / lô, trừ vào phụ cấp trách nhiệm (không làm âm).'; }
 function _psLogo(cb){
   if(window._dnLogoUrl!==undefined){cb(window._dnLogoUrl);return;}
   try{
@@ -12260,7 +12293,8 @@ function _prSlipPdf(D,cb){
     // III. PHỤ CẤP TRÁCH NHIỆM
     sec('III. Phụ cấp trách nhiệm');
     const tnRows=[['1','Thưởng tiến độ chứng từ',D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ / lô',_psMoney(D.docAmount)]];
-    D.items.forEach(function(it,i){tnRows.push([String(i+2),it.label,'Khoản phụ cấp khác',_psMoney(it.amount)]);});
+    if(D.penCount>0)tnRows.push(['2','Phạt chứng từ trễ hạn',D.penCount+' lô trễ × '+_psMoney(D.penRate)+' đ / lô'+(D.penNominal>D.penApplied?' (TN không âm, chỉ trừ '+_psMoney(D.penApplied)+' đ)':''),'-'+_psMoney(D.penApplied)]);
+    D.items.forEach(function(it,i){tnRows.push([String(i+(D.penCount>0?3:2)),it.label,'Khoản phụ cấp khác',_psMoney(it.amount)]);});
     tnRows.push([{content:'TỔNG PHỤ CẤP TRÁCH NHIỆM',colSpan:3,styles:{fontStyle:'bold',halign:'right',fillColor:CREAM,textColor:[146,64,14]}},{content:_psMoney(D.tn),styles:{fontStyle:'bold',halign:'right',fillColor:CREAM,textColor:[146,64,14]}}]);
     doc.autoTable({startY:y,margin:{left:ML,right:MR},head:[['#','Khoản','Diễn giải','Số tiền (VND)']],body:tnRows,theme:'grid',headStyles:head,styles:base,
       columnStyles:{0:{cellWidth:9,halign:'center'},1:{cellWidth:62,fontStyle:'bold'},2:{cellWidth:'auto',textColor:GREY},3:{cellWidth:38,halign:'right',fontStyle:'bold'}}});
@@ -12379,6 +12413,7 @@ async function _prSlipXlsx(D){
   // III. TN
   sec('III. Phụ cấp trách nhiệm',TEAL); thead(['Khoản','Diễn giải','','','Số tiền (VND)'],TEAL); merge(row-1,3,row-1,5);
   line('Thưởng tiến độ chứng từ',D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ / lô',D.docAmount);
+  if(D.penCount>0)line('Phạt chứng từ trễ hạn',D.penCount+' lô trễ × '+_psMoney(D.penRate)+' đ / lô'+(D.penNominal>D.penApplied?' (TN không âm, chỉ trừ '+_psMoney(D.penApplied)+' đ)':''),-D.penApplied,{col:'FFB91C1C'});
   D.items.forEach(function(it){line(it.label,'Khoản phụ cấp khác',it.amount);});
   total('TỔNG PHỤ CẤP TRÁCH NHIỆM',D.tn,'FF92400E',CREAM); row++;
   function lots(title,list,okFlag){
@@ -12430,6 +12465,7 @@ function _prSlipEmailBody(D){
   const ded=(D.hasBH?r3('BHXH','Người lao động đóng',_psMoney(D.bhxh))+r3('BHYT','Người lao động đóng',_psMoney(D.bhyt)):r3('Bảo hiểm','Không tham gia','0'))
     +r3('TỔNG KHẤU TRỪ','',_psMoney(D.tru),true,'#FEF2F2','#DC2626');
   let tn=r3('Thưởng tiến độ chứng từ',D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ',_psMoney(D.docAmount));
+  if(D.penCount>0)tn+=r3('Phạt chứng từ trễ hạn',D.penCount+' lô trễ × '+_psMoney(D.penRate)+' đ'+(D.penNominal>D.penApplied?' (TN không âm, chỉ trừ '+_psMoney(D.penApplied)+' đ)':''),'-'+_psMoney(D.penApplied));
   D.items.forEach(function(it){tn+=r3(_psE(it.label),'Khoản phụ cấp khác',_psMoney(it.amount));});
   tn+=r3('TỔNG PHỤ CẤP TRÁCH NHIỆM','',_psMoney(D.tn),true,'#FFFBEB','#92400E');
   function lotTbl(title,list,ok){
@@ -12499,7 +12535,7 @@ function _psDraw(){
         +kv('Tổng thu nhập',_psMoney(D.tong))
         +kv('Khấu trừ (BHXH + BHYT)',_psMoney(D.tru),'#DC2626')
         +'<div style="display:flex;justify-content:space-between;padding-top:7px;font-size:14px"><b>Thực nhận</b><b style="color:#0F766E;font-size:16px">'+_psMoney(D.nhan)+' VND</b></div>'
-        +'<div style="font-size:11px;color:var(--text-secondary);margin-top:6px">Phụ cấp trách nhiệm: '+D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ'+(D.items.length?' + '+D.items.length+' khoản khác':'')+(D.docLate.length?' · '+D.docLate.length+' lô không đạt':'')+'</div>'
+        +'<div style="font-size:11px;color:var(--text-secondary);margin-top:6px">Phụ cấp trách nhiệm: '+D.docCount+' lô đạt × '+_psMoney(D.rate)+' đ'+(D.penCount?' − phạt '+D.penCount+' lô × '+_psMoney(D.penRate)+' đ':'')+(D.items.length?' + '+D.items.length+' khoản khác':'')+(D.docLate.length?' · '+D.docLate.length+' lô không đạt':'')+'</div>'
       +'</div>'
       +'<div style="display:flex;gap:18px;margin:12px 0 4px;font-size:12.5px"><span style="color:var(--text-secondary);font-weight:600">Đính kèm khi gửi email:</span>'
         +'<label style="cursor:pointer"><input type="checkbox" id="psAttPdf" '+(window._psSel.pdf?'checked':'')+' onchange="window._psSel.pdf=this.checked"/> PDF</label>'
@@ -12777,7 +12813,7 @@ function _prDocBonusCalc(row,lots){
   const mine=em?lots.filter(function(l){return l.doneBy===em;}):[];
   const ok=mine.filter(function(l){return l.ok;});
   const late=mine.filter(function(l){return l.late;});
-  return {ok:ok,late:late,count:ok.length,amount:ok.length*(parseFloat(window._prRate)||0)};
+  return {ok:ok,late:late,count:ok.length,amount:ok.length*(parseFloat(window._prRate)||0),penCount:late.length,penNominal:late.length*(parseFloat(window._prPenRate)||0)};
 }
 // Tính lại TN cho mọi dòng: TN = thưởng chứng từ + tổng các khoản khác. Gọi trước mỗi lần vẽ bảng / lưu.
 function _prSyncAllTn(){
@@ -12793,7 +12829,11 @@ function _prSyncAllTn(){
     const d=_prDocBonusCalc(r,lots);
     r.tnDocCount=d.count; r.tnDocAmount=d.amount;
     const extra=r.tnItems.reduce(function(s,it){return s+(parseFloat(it.amount)||0);},0);
-    r.phuCapTrachNhiem=d.amount+extra;
+    // A 2.25: phạt trừ thẳng vào TN, TN không bị âm do phạt (phạt thực trừ <= thưởng + khoản khác)
+    const pre=d.amount+extra;
+    r.tnLateCount=d.penCount; r.tnPenalty=d.penNominal;
+    r.tnPenApplied=Math.max(0,Math.min(d.penNominal,pre));
+    r.phuCapTrachNhiem=pre-r.tnPenApplied;
   });
 }
 function _prIsAdmin(){ return currentProfile&&currentProfile.role==='admin'; }
@@ -12807,6 +12847,17 @@ function _prSetRate(v){
   toast('Đã đổi mức thưởng — nhớ bấm Lưu để ghi vào bảng lương tháng này');
 }
 window._prSetRate=_prSetRate;
+function _prSetPenRate(v){
+  if(!_prIsAdmin()){toast('Chỉ admin được chỉnh mức phạt','error');return;}
+  const n=parseFloat(v);
+  if(isNaN(n)||n<0){toast('Mức phạt không hợp lệ','error');return;}
+  window._prPenRate=n;
+  _prRenderTable();
+  if(g('prTnOv')&&g('prTnOv').classList.contains('open'))_prTnDraw();
+  if(g('prPrevOv')&&g('prPrevOv').classList.contains('open'))_prPrevDraw();
+  toast('Đã đổi mức phạt — nhớ bấm Lưu để ghi vào bảng lương tháng này');
+}
+window._prSetPenRate=_prSetPenRate;
 // Bảng tóm tắt phụ cấp trách nhiệm theo nhân viên (dưới bảng lương)
 function _prTnSummaryHTML(rows){
   const lots=window._prLots||[];
@@ -12814,6 +12865,10 @@ function _prTnSummaryHTML(rows){
   const emails=(window._prRows||[]).map(_prEmpEmail);
   const orphan=lots.filter(function(l){return l.doneBy&&emails.indexOf(l.doneBy)<0;}).length;
   const rate=parseFloat(window._prRate)||0;
+  const penRate=parseFloat(window._prPenRate)||0;
+  const penCtl=_prIsAdmin()
+    ?'<input type="number" min="0" step="1000" value="'+penRate+'" onchange="_prSetPenRate(this.value)" style="width:90px;font-size:12px;text-align:right" title="Chỉ admin chỉnh được"/>'
+    :'<b>'+_prFmt(penRate)+'</b>';
   const rateCtl=_prIsAdmin()
     ?'<input type="number" min="0" step="1000" value="'+rate+'" onchange="_prSetRate(this.value)" style="width:90px;font-size:12px;text-align:right" title="Chỉ admin chỉnh được"/>'
     :'<b>'+_prFmt(rate)+'</b>';
@@ -12824,6 +12879,7 @@ function _prTnSummaryHTML(rows){
       +'<td class="pr-td" style="text-align:center;font-size:11px;color:var(--text-secondary)">'+(i+1)+'</td>'
       +'<td class="pr-td"><b style="font-size:12.5px">'+(r.name||'—')+'</b></td>'
       +'<td class="pr-td-r">'+(r.tnDocCount||0)+' lô × '+_prFmt(rate)+' = <b>'+_prFmt(r.tnDocAmount||0)+'</b></td>'
+      +'<td class="pr-td-r" style="color:'+((r.tnLateCount||0)?'#B91C1C':'inherit')+'">'+(r.tnLateCount||0)+' lô × '+_prFmt(penRate)+' = <b>'+((r.tnPenApplied||0)?'−':'')+_prFmt(r.tnPenApplied||0)+'</b>'+(((r.tnPenalty||0)>(r.tnPenApplied||0))?'<div style="font-size:10px;color:var(--text-secondary)">phạt '+_prFmt(r.tnPenalty)+' (TN không âm)</div>':'')+'</td>'
       +'<td class="pr-td-r">'+_prFmt(extra)+'</td>'
       +'<td class="pr-td-r pr-col-allow" style="font-weight:800">'+_prFmt(r.phuCapTrachNhiem||0)+'</td>'
       +'<td class="pr-td" style="text-align:center"><button class="btn sm" onclick="_prOpenTn('+realIdx+')"><i class="ti ti-list-details"></i> Chi tiết</button></td>'
@@ -12835,12 +12891,16 @@ function _prTnSummaryHTML(rows){
       +'<b style="font-size:13px">Bảng phụ cấp trách nhiệm</b>'
       +'<span style="font-size:11.5px;color:var(--text-secondary)">đồng bộ cột TN · mốc ETD +'+_PR_DOC_DAYS+' ngày làm việc</span>'+_holBtnHTML()
       +'<div style="flex:1"></div>'
-      +'<span style="font-size:12px">Thưởng tiến độ chứng từ / lô đạt: '+rateCtl+' đ</span>'
+      +'<button class="btn sm" onclick="_prPrevOpen()" title="Xem trước tiền thưởng / phạt trong tháng tính tới một mốc ngày"><i class="ti ti-eye-search"></i> Xem trước thưởng / phạt</button>'
+      +'<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">'
+        +'<span style="font-size:12px">Thưởng tiến độ chứng từ / lô đạt: '+rateCtl+' đ</span>'
+        +'<span style="font-size:12px;color:#B91C1C">Phạt chứng từ / lô trễ hạn: '+penCtl+' đ</span>'
+      +'</div>'
     +'</div>'
     +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:640px"><thead><tr>'
       +'<th class="pr-th" style="width:36px">#</th><th class="pr-th" style="text-align:left">Nhân viên</th>'
-      +'<th class="pr-th">1 · Thưởng tiến độ chứng từ</th><th class="pr-th">Khoản khác</th><th class="pr-th">Tổng TN</th><th class="pr-th"></th>'
-    +'</tr></thead><tbody>'+(body||'<tr><td colspan="6" class="pr-td" style="text-align:center;padding:1.2rem;color:var(--text-secondary)">Chưa có nhân viên</td></tr>')+'</tbody></table></div>'
+      +'<th class="pr-th">1 · Thưởng tiến độ chứng từ</th><th class="pr-th" style="color:#FCA5A5">2 · Phạt trễ hạn</th><th class="pr-th">Khoản khác</th><th class="pr-th">Tổng TN</th><th class="pr-th"></th>'
+    +'</tr></thead><tbody>'+(body||'<tr><td colspan="7" class="pr-td" style="text-align:center;padding:1.2rem;color:var(--text-secondary)">Chưa có nhân viên</td></tr>')+'</tbody></table></div>'
     +'<div style="font-size:11px;color:var(--text-secondary);padding:.5rem 1rem"><i class="ti ti-info-circle"></i> Lô đạt = hoàn thành chứng từ trong vòng ETD +'+_PR_DOC_DAYS+' ngày làm việc (không tính thứ 7, chủ nhật và ngày lễ/nghỉ đã được Admin duyệt); tính theo tháng của ETD, cho người bấm tick hoàn thành. '
       +'Tháng này có <b>'+pending+'</b> lô đang theo dõi chưa hoàn thành (chưa tính)'+(orphan?' · <b>'+orphan+'</b> lô do người chưa có trong bảng lương hoàn thành':'')+'.</div>'
   +'</div>';
@@ -12873,8 +12933,9 @@ function _prTnDraw(){
   const st=window._prState;
   const d=_prDocBonusCalc(r,window._prLots||[]);
   const rate=parseFloat(window._prRate)||0;
+  const penRate=parseFloat(window._prPenRate)||0;
   const items=(r.tnItems||[]).map(function(it,i){
-    return '<tr><td class="pr-td" style="text-align:center;color:var(--text-secondary)">'+(i+2)+'</td>'
+    return '<tr><td class="pr-td" style="text-align:center;color:var(--text-secondary)">'+(i+3)+'</td>'
       +'<td class="pr-td"><input type="text" value="'+String(it.label||'').replace(/"/g,'&quot;')+'" placeholder="Tên khoản phụ cấp" oninput="_prTnEditLine('+i+',\'label\',this.value)" style="width:100%;font-size:12px;border:none;background:transparent"/></td>'
       +'<td class="pr-td-r"><input type="number" value="'+(parseFloat(it.amount)||0)+'" oninput="_prTnEditLine('+i+',\'amount\',this.value)" style="width:110px;font-size:12px;text-align:right;border:none;background:transparent"/></td>'
       +'<td class="pr-td" style="text-align:center"><button class="rac red" onclick="_prTnDel('+i+')"><i class="ti ti-trash"></i></button></td></tr>';
@@ -12888,16 +12949,94 @@ function _prTnDraw(){
       +'<tr style="background:rgba(201,154,60,.08)"><td class="pr-td" style="text-align:center;font-weight:700">1</td>'
         +'<td class="pr-td"><b>Thưởng tiến độ chứng từ</b><div style="font-size:11px;color:var(--text-secondary)">'+d.count+' lô đạt (≤ ETD+'+_PR_DOC_DAYS+' ngày làm việc) × '+_prFmt(rate)+' đ — tự động, không sửa tay</div></td>'
         +'<td class="pr-td-r" style="font-weight:800">'+_prFmt(d.amount)+'</td><td class="pr-td"></td></tr>'
+      +'<tr style="background:rgba(239,68,68,.07)"><td class="pr-td" style="text-align:center;font-weight:700">2</td>'
+        +'<td class="pr-td"><b style="color:#B91C1C">Phạt chứng từ trễ hạn</b><div style="font-size:11px;color:var(--text-secondary)">'+d.penCount+' lô hoàn thành > ETD+'+_PR_DOC_DAYS+' ngày làm việc × '+_prFmt(penRate)+' đ — tự động, trừ vào TN'+(((r.tnPenalty||0)>(r.tnPenApplied||0))?' · <b>TN không âm: chỉ trừ '+_prFmt(r.tnPenApplied||0)+' đ</b>':'')+'</div></td>'
+        +'<td class="pr-td-r" style="font-weight:800;color:#B91C1C">'+((r.tnPenApplied||0)?'−':'')+_prFmt(r.tnPenApplied||0)+'</td><td class="pr-td"></td></tr>'
       +items
       +'</tbody></table>'
       +'<div style="display:flex;align-items:center;gap:8px;margin-top:8px"><button class="btn sm" onclick="_prTnAdd()"><i class="ti ti-plus"></i> Thêm khoản phụ cấp</button><div style="flex:1"></div>'
         +'<span style="font-size:13px">Tổng TN: <b id="prTnTotal" style="color:#14B8A6;font-size:15px">'+_prFmt(r.phuCapTrachNhiem||0)+'</b> đ</span></div>'
       +'<div style="margin-top:14px"><div style="font-weight:700;font-size:12.5px;color:#16A34A;margin:0 0 4px"><i class="ti ti-circle-check"></i> Lô đạt — hoàn thành ≤ ETD +'+_PR_DOC_DAYS+' ngày làm việc ('+d.ok.length+')</div>'+_prTnLotTable(d.ok,true)+'</div>'
-      +'<div style="margin-top:12px"><div style="font-weight:700;font-size:12.5px;color:#DC2626;margin:0 0 4px"><i class="ti ti-alert-circle"></i> Lô không đạt — hoàn thành > ETD +'+_PR_DOC_DAYS+' ngày làm việc ('+d.late.length+')</div>'+_prTnLotTable(d.late,false)+'</div>'
+      +'<div style="margin-top:12px"><div style="font-weight:700;font-size:12.5px;color:#DC2626;margin:0 0 4px"><i class="ti ti-alert-circle"></i> Lô không đạt — hoàn thành > ETD +'+_PR_DOC_DAYS+' ngày làm việc ('+d.late.length+') · bị phạt '+_prFmt(penRate)+' đ / lô</div>'+_prTnLotTable(d.late,false)+'</div>'
     +'</div>'
     +'<div class="mftr"><span style="margin-right:auto;font-size:11px;color:var(--text-secondary)">Bấm <b>Lưu</b> ở bảng lương để ghi lại.</span><button class="btn pri" onclick="_prTnClose()">Xong</button></div>'
   +'</div>';
 }
+
+/* ═══ A 2.25: XEM TRƯỚC THƯỞNG / PHẠT CHỨNG TỪ trong tháng lương, tính tới 1 mốc ngày (chỉ xem — không ghi gì) ═══
+   Tính tới ngày D: chỉ tính các lô đã hoàn thành chứng từ NGÀY <= D (lô hoàn thành sau D coi như chưa xong tại thời điểm đó).
+   Lô ĐẠT (xong <= hạn) → thưởng; lô TRỄ (hạn < xong <= D) → phạt. Lô quá hạn mà chưa ai tick xong chỉ báo riêng (chưa có người để phạt). */
+function _prPrevMonthRange(){
+  const st=window._prState; const y=st.year,m=st.month;
+  const first=y+'-'+String(m).padStart(2,'0')+'-01';
+  const last=new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);
+  return {first:first,last:last};
+}
+function _prPrevOpen(){
+  _prSyncAllTn();
+  const rg=_prPrevMonthRange(); const today=new Date().toISOString().slice(0,10);
+  window._prPrev={asOf:(today<rg.first?rg.first:(today>rg.last?rg.last:today))};
+  let ov=g('prPrevOv');
+  if(!ov){ov=document.createElement('div');ov.id='prPrevOv';ov.className='ov';ov.style.padding='.75rem';document.body.appendChild(ov);}
+  _prPrevDraw(); openOv('prPrevOv');
+}
+function _prPrevSet(v){ if(!v)return; window._prPrev.asOf=v; _prPrevDraw(); }
+function _prAsOfCalc(asOf){
+  _prSyncAllTn();
+  const lots=window._prLots||[]; const rate=parseFloat(window._prRate)||0, pr=parseFloat(window._prPenRate)||0;
+  const rows=(window._prRows||[]).map(function(r){
+    const em=_prEmpEmail(r);
+    const mine=em?lots.filter(function(l){return l.doneBy===em&&l.doneDate&&l.doneDate<=asOf;}):[];
+    const ok=mine.filter(function(l){return l.doneDate<=l.limit;}), late=mine.filter(function(l){return l.doneDate>l.limit;});
+    const extra=(r.tnItems||[]).reduce(function(s,it){return s+(parseFloat(it.amount)||0);},0);
+    const bonus=ok.length*rate, pen=late.length*pr, pre=bonus+extra, applied=Math.max(0,Math.min(pen,pre));
+    return {name:r.name||'—',ok:ok.length,late:late.length,bonus:bonus,pen:pen,applied:applied,extra:extra,tn:pre-applied};
+  });
+  const lateLots=lots.filter(function(l){return l.doneDate&&l.doneDate<=asOf&&l.doneDate>l.limit;});
+  const overdue=lots.filter(function(l){return (!l.doneDate||l.doneDate>asOf)&&l.limit<asOf;});
+  const waiting=lots.filter(function(l){return (!l.doneDate||l.doneDate>asOf)&&l.limit>=asOf;});
+  return {rows:rows,lateLots:lateLots,overdue:overdue,waiting:waiting,rate:rate,pen:pr};
+}
+function _prPrevDraw(){
+  const ov=g('prPrevOv'); if(!ov)return;
+  const st=window._prState, rg=_prPrevMonthRange(), asOf=window._prPrev.asOf;
+  const c=_prAsOfCalc(asOf);
+  const tot=c.rows.reduce(function(a,r){a.bonus+=r.bonus;a.pen+=r.applied;a.tn+=r.tn;a.ok+=r.ok;a.late+=r.late;return a;},{bonus:0,pen:0,tn:0,ok:0,late:0});
+  const body=c.rows.map(function(r,i){
+    return '<tr class="pr-tr"><td class="pr-td" style="text-align:center;color:var(--text-secondary)">'+(i+1)+'</td><td class="pr-td"><b>'+_psE(r.name)+'</b></td>'
+      +'<td class="pr-td-r">'+r.ok+' lô</td><td class="pr-td-r" style="color:#16A34A;font-weight:700">'+_prFmt(r.bonus)+'</td>'
+      +'<td class="pr-td-r" style="color:'+(r.late?'#B91C1C':'inherit')+'">'+r.late+' lô</td>'
+      +'<td class="pr-td-r" style="color:#B91C1C;font-weight:700">'+(r.applied?'−':'')+_prFmt(r.applied)+(r.pen>r.applied?'<div style="font-size:10px;color:var(--text-secondary);font-weight:400">phạt '+_prFmt(r.pen)+' (TN không âm)</div>':'')+'</td>'
+      +'<td class="pr-td-r">'+_prFmt(r.extra)+'</td><td class="pr-td-r" style="font-weight:800">'+_prFmt(r.tn)+'</td></tr>';
+  }).join('');
+  const lateTbl=c.lateLots.length?'<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
+    +['Booking / Job','Người tick','ETD','Hạn (ETD+'+_PR_DOC_DAYS+' LV)','Hoàn thành','Trễ'].map(function(h){return '<th class="pr-th" style="font-size:9px">'+h+'</th>';}).join('')+'</tr></thead><tbody>'
+    +c.lateLots.map(function(l){const d=_prWorkDiff(l.doneDate,l.limit);
+      return '<tr><td class="pr-td">'+_psE(l.label)+'</td><td class="pr-td">'+_psE(_holUserName(l.doneBy)||l.doneBy)+'</td><td class="pr-td" style="text-align:center">'+_prDmy(l.etd)+'</td><td class="pr-td" style="text-align:center">'+_prDmy(l.limit)+'</td><td class="pr-td" style="text-align:center">'+_prDmy(l.doneDate)+'</td><td class="pr-td" style="text-align:center;font-weight:700;color:#DC2626">'+d+' ngày LV</td></tr>';}).join('')
+    +'</tbody></table>':'<div style="padding:.5rem .2rem;font-size:12px;color:var(--text-secondary)">Chưa có lô nào hoàn thành trễ hạn tính tới ngày này.</div>';
+  ov.innerHTML='<div class="modal" style="max-width:980px;max-height:92vh;overflow-y:auto">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-eye-search" style="margin-right:6px;color:#C99A3C"></i>Xem trước thưởng / phạt chứng từ — tháng '+st.month+'/'+st.year+'</div>'
+    +'<div class="msub">Chỉ xem, không ghi vào bảng lương · Thưởng '+_prFmt(c.rate)+' đ / lô đạt · Phạt '+_prFmt(c.pen)+' đ / lô trễ</div></div>'
+    +'<div class="mhdr-btns"><button class="rac" onclick="closeOv(\'prPrevOv\')"><i class="ti ti-x"></i></button></div></div>'
+    +'<div style="padding:12px 16px">'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px"><label class="lbl" style="margin:0">Tính tới ngày</label>'
+        +'<input type="date" id="prPrevDate" value="'+asOf+'" min="'+rg.first+'" onchange="_prPrevSet(this.value)" style="font-size:12.5px;width:auto;min-width:150px;flex:0 0 auto"/>'
+        +'<button class="btn sm" onclick="_prPrevSet(\''+rg.first+'\')">Đầu tháng</button>'
+        +'<button class="btn sm" onclick="_prPrevSet(new Date().toISOString().slice(0,10))">Hôm nay</button>'
+        +'<button class="btn sm" onclick="_prPrevSet(\''+rg.last+'\')">Cuối tháng</button>'
+        +'<span style="font-size:11.5px;color:var(--text-secondary)">Chỉ tính lô đã hoàn thành chứng từ trong ngày ≤ mốc đã chọn.</span></div>'
+      +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:720px"><thead><tr>'
+        +'<th class="pr-th" style="width:34px">#</th><th class="pr-th" style="text-align:left">Nhân viên</th><th class="pr-th">Lô đạt</th><th class="pr-th">Thưởng</th><th class="pr-th">Lô trễ</th><th class="pr-th" style="color:#FCA5A5">Phạt</th><th class="pr-th">Khoản khác</th><th class="pr-th">TN dự kiến</th></tr></thead><tbody>'
+        +(body||'<tr><td colspan="8" class="pr-td" style="text-align:center;padding:1rem;color:var(--text-secondary)">Chưa có nhân viên</td></tr>')
+        +'<tr><td class="pr-td"></td><td class="pr-td" style="font-weight:800">TỔNG</td><td class="pr-td-r"><b>'+tot.ok+' lô</b></td><td class="pr-td-r" style="font-weight:800;color:#16A34A">'+_prFmt(tot.bonus)+'</td><td class="pr-td-r"><b>'+tot.late+' lô</b></td><td class="pr-td-r" style="font-weight:800;color:#B91C1C">'+(tot.pen?'−':'')+_prFmt(tot.pen)+'</td><td class="pr-td-r"></td><td class="pr-td-r" style="font-weight:800">'+_prFmt(tot.tn)+'</td></tr>'
+      +'</tbody></table></div>'
+      +'<div style="margin:14px 0 4px;font-weight:700;font-size:12.5px;color:#DC2626"><i class="ti ti-alert-circle"></i> Lô hoàn thành trễ hạn tính tới '+_prDmy(asOf)+' ('+c.lateLots.length+')</div>'+lateTbl
+      +'<div style="margin-top:12px;font-size:12px;line-height:1.6;color:var(--text-secondary)"><i class="ti ti-info-circle"></i> Tại mốc này còn <b style="color:'+(c.overdue.length?'#B91C1C':'inherit')+'">'+c.overdue.length+'</b> lô đã quá hạn mà chưa hoàn thành chứng từ (chưa tính phạt vì chưa có người tick) và <b>'+c.waiting.length+'</b> lô còn trong hạn. “TN dự kiến” = thưởng − phạt + khoản phụ cấp khác (không âm).</div>'
+    +'</div>'
+    +'<div class="mftr"><button class="btn pri" onclick="closeOv(\'prPrevOv\')">Đóng</button></div>'
+  +'</div>';
+}
+window._prPrevOpen=_prPrevOpen; window._prPrevSet=_prPrevSet; window._prPrevDraw=_prPrevDraw; window._prAsOfCalc=_prAsOfCalc;
 function _prTnEditLine(i,field,val){
   const r=(window._prRows||[])[window._prTnIdx]; if(!r||!r.tnItems||!r.tnItems[i])return;
   r.tnItems[i][field]=(field==='amount')?(parseFloat(val)||0):val;
@@ -12994,6 +13133,7 @@ async function _tcPayrollAfterRender(){
   const data=await _prLoad(st.year,st.month);
   window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
   window._prRate=(data.docBonusRate!=null)?data.docBonusRate:_PR_DOC_BONUS_DEFAULT;
+  window._prPenRate=(data.docPenaltyRate!=null)?data.docPenaltyRate:_prPenDefaultFor(st.year,st.month);
   await _prLoadTabContent(window._prActiveTab||'list');
 }
 window._prLoadTabContent=async function(tab){
@@ -13005,6 +13145,7 @@ window._prLoadTabContent=async function(tab){
     const data=await _prLoad(st.year,st.month);
     window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
     window._prRate=(data.docBonusRate!=null)?data.docBonusRate:_PR_DOC_BONUS_DEFAULT;
+    window._prPenRate=(data.docPenaltyRate!=null)?data.docPenaltyRate:_prPenDefaultFor(st.year,st.month);
     el.innerHTML=_prListTabHTML();
     _prRenderKpis();
     _prRenderTable();
@@ -13452,7 +13593,7 @@ async function _prSave(){
   setLoading(true,'Đang lưu bảng lương...');
   try{
     _prSyncAllTn();
-    const data={month:st.month,year:st.year,rows:window._prRows||[],docBonusRate:parseFloat(window._prRate)||0,updatedAt:Date.now()};
+    const data={month:st.month,year:st.year,rows:window._prRows||[],docBonusRate:parseFloat(window._prRate)||0,docPenaltyRate:parseFloat(window._prPenRate)||0,updatedAt:Date.now()};
     await fsSet('payroll',id,data);
     window._prCache[id]=data;
     toast('Đã lưu bảng lương tháng '+st.month+'/'+st.year);
