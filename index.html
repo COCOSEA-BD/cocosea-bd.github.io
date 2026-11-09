@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.28';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.29';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6950,7 +6950,8 @@ window.openOcrContScan=openOcrContScan;
 
 function _ocrContModalHtml(){
   const st=window._ocrContState;
-  return '<div class="modal" style="max-width:760px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18);max-height:92vh;display:flex;flex-direction:column">'
+  return '<style>#ocrContOv input[type=number]{-moz-appearance:textfield;appearance:textfield}#ocrContOv input[type=number]::-webkit-outer-spin-button,#ocrContOv input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}</style>'
+    +'<div class="modal" style="max-width:760px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18);max-height:92vh;display:flex;flex-direction:column">'
     +'<div style="background:#C026D3;padding:12px 18px;display:flex;align-items:center;gap:10px;flex-shrink:0">'
       +'<i class="ti ti-photo" style="font-size:18px;color:#fff"></i>'
       +'<div style="flex:1"><div style="font-size:14px;font-weight:700;color:#fff">Quét ảnh Cont/Seal</div><div style="font-size:11px;color:rgba(255,255,255,.85)">Booking: '+st.bkNo+'</div></div>'
@@ -7085,6 +7086,9 @@ function _ocrContRunScan(){
       setLoading(false);
       st.engine='ai';
       st.rows=_ocrNormalizeAiRows(res&&res.data&&res.data.rows);
+      // A 2.29: trọng lượng đọc từ ảnh luôn đưa vào G.W (nếu AI chỉ trả N.W thì coi đó là G.W); N.W tính lại = G.W − mức trừ
+      st.rows.forEach(function(r){ if(r.gw===''&&r.nw!=='')r.gw=r.nw; r.nw=''; });
+      st._nwAutoDone=false;
       if(!st.rows.length){
         toast('AI không đọc được dòng cont nào trong ảnh — thử ảnh rõ hơn, hoặc nhập tay','error');
         st.rows=[{no:'',seal:'',pkg:'',nw:'',gw:'',tare:'',date:''}];
@@ -7183,37 +7187,76 @@ function _ocrNormalizeDate(s){
 
 function _ocrRowHtml(r,i){
   r=r||{};
+  const esc=function(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');};
+  const inp='font-size:13px;width:100%;box-sizing:border-box;padding:6px 8px;';
+  const numInp=inp+'text-align:right;font-variant-numeric:tabular-nums;';
   return '<tr>'
-    +'<td style="padding:3px;text-align:center;font-size:11px">'+(i+1)+'</td>'
-    +'<td style="padding:2px 4px"><input type="text" class="ocrNo" data-i="'+i+'" value="'+(r.no||'')+'" placeholder="Cont No" oninput="_ocrContNoCheck(this)" style="font-size:11.5px;width:100%;box-sizing:border-box;'+_ocrNoBorder(r.no)+'"/></td>'
-    +'<td style="padding:2px 4px"><input type="text" class="ocrSeal" data-i="'+i+'" value="'+(r.seal||'')+'" placeholder="Seal" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
-    +'<td style="padding:2px 4px"><input type="number" class="ocrPkg" data-i="'+i+'" value="'+(r.pkg||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
-    +'<td style="padding:2px 4px"><input type="number" class="ocrNw" data-i="'+i+'" value="'+(r.nw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
-    +'<td style="padding:2px 4px"><input type="number" class="ocrGw" data-i="'+i+'" value="'+(r.gw||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
-    +'<td style="padding:2px 4px"><input type="number" class="ocrTare" data-i="'+i+'" value="'+(r.tare||'')+'" placeholder="0" style="font-size:11.5px;width:100%;text-align:right;box-sizing:border-box"/></td>'
-    +'<td style="padding:2px 4px"><input type="date" class="ocrDate" data-i="'+i+'" value="'+(r.date||'')+'" style="font-size:11px;width:100%;box-sizing:border-box"/></td>'
-    +'<td style="padding:2px 4px;text-align:center"><button type="button" class="rac red" onclick="_ocrContDelRow(this)" style="font-size:11px;padding:2px 4px"><i class="ti ti-trash"></i></button></td>'
+    +'<td style="padding:3px;text-align:center;font-size:12px">'+(i+1)+'</td>'
+    +'<td style="padding:3px 4px"><input type="text" class="ocrNo" data-i="'+i+'" value="'+esc(r.no)+'" placeholder="Cont No" oninput="_ocrContNoCheck(this)" style="'+inp+'font-weight:600;letter-spacing:.3px;'+_ocrNoBorder(r.no)+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="text" class="ocrSeal" data-i="'+i+'" value="'+esc(r.seal)+'" placeholder="Seal" style="'+inp+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="number" class="ocrPkg" data-i="'+i+'" value="'+esc(r.pkg)+'" placeholder="0" style="'+numInp+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrNw" data-i="'+i+'" value="'+esc(r.nw)+'" placeholder="0" style="'+numInp+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrGw" data-i="'+i+'" value="'+esc(r.gw)+'" placeholder="0" style="'+numInp+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrTare" data-i="'+i+'" value="'+esc(r.tare)+'" placeholder="0" style="'+numInp+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="date" class="ocrDate" data-i="'+i+'" value="'+esc(r.date)+'" style="'+inp+'"/></td>'
+    +'<td style="padding:3px 4px;text-align:center"><button type="button" class="rac red" onclick="_ocrContDelRow(this)" style="font-size:12px;padding:4px 6px"><i class="ti ti-trash"></i></button></td>'
     +'</tr>';
 }
+
+/* A 2.29: G.W là số đọc từ ảnh; N.W = G.W − mức trừ (mặc định 70 kg, chỉnh được theo loại hàng, bấm Fill để áp cho mọi dòng) */
+function _ocrRoundKg(x){ return Math.round(x*1000)/1000; }
+function _ocrContFillNw(silent){
+  const st=window._ocrContState||{}; const tbody=g('ocrPreviewBody'); const dEl=g('ocrNwDeduct');
+  if(!tbody||!dEl)return;
+  const d=parseFloat(String(dEl.value).replace(',','.'));
+  if(isNaN(d)||d<0){ toast('Nhập số kg cần trừ (từ 0 trở lên)','error'); return; }
+  st.nwDeduct=d;
+  let n=0,neg=0,empty=0;
+  tbody.querySelectorAll('tr').forEach(function(tr){
+    const gwEl=tr.querySelector('.ocrGw'), nwEl=tr.querySelector('.ocrNw'); if(!gwEl||!nwEl)return;
+    const gw=parseFloat(String(gwEl.value).replace(',','.'));
+    if(isNaN(gw)){ empty++; return; }
+    if(gw-d<0){ neg++; return; }
+    nwEl.value=_ocrRoundKg(gw-d); n++;
+  });
+  if(!silent)toast('Đã fill N.W = G.W − '+d+' kg cho '+n+' dòng'+(neg?(' · '+neg+' dòng G.W nhỏ hơn mức trừ nên bỏ qua'):'')+(empty?(' · '+empty+' dòng chưa có G.W'):''), (neg||empty)?'error':'success');
+}
+window._ocrContFillNw=_ocrContFillNw;
 
 function _ocrContRenderPreviewTable(){
   const st=window._ocrContState;
   const body=g('ocrContBody'); if(!body)return;
+  if(st.nwDeduct==null)st.nwDeduct=70;
+  // Kết quả AI: số đọc được là G.W → N.W tính theo mức trừ mặc định (chỉ làm 1 lần khi vừa quét)
+  if(st.engine==='ai'&&!st._nwAutoDone){
+    st.rows.forEach(function(r){ const gw=parseFloat(r.gw); if(!isNaN(gw)&&gw-st.nwDeduct>=0)r.nw=_ocrRoundKg(gw-st.nwDeduct); });
+    st._nwAutoDone=true;
+  }
+  const modal=body.closest('.modal'); if(modal){ modal.style.maxWidth='none'; modal.style.width='min(1120px,96vw)'; }
   const rowsHtml=st.rows.map(function(r,i){ return _ocrRowHtml(r,i); }).join('');
+  const th='padding:7px 8px;font-size:11px;font-weight:700;color:var(--text-tertiary);text-align:';
   body.innerHTML=
-    '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px">Bước 2: Kiểm tra & chỉnh sửa dữ liệu đọc được ('+(st.engine==='ai'?'AI':'OCR')+' có thể đọc sai — hãy đối chiếu với ảnh gốc; ô viền đỏ là số cont chưa đúng chuẩn ISO 6346) — đọc được <b>'+st.rows.length+'</b> dòng.</div>'
-    +'<div style="max-height:320px;overflow:auto;border:1px solid var(--border-light);border-radius:8px">'
-    +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
-      +'<colgroup><col style="width:26px"/><col style="width:17%"/><col style="width:15%"/><col style="width:10%"/><col style="width:11%"/><col style="width:11%"/><col style="width:10%"/><col style="width:15%"/><col style="width:26px"/></colgroup>'
-      +'<thead><tr style="background:#F3F6FA">'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">#</th>'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Cont No</th>'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Seal</th>'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Pkg</th>'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">N.W</th>'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">G.W</th>'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Tare</th>'
-        +'<th style="padding:5px;font-size:9.5px;color:var(--text-tertiary)">Ngày</th>'
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Bước 2: Kiểm tra & chỉnh sửa dữ liệu đọc được ('+(st.engine==='ai'?'AI':'OCR')+' có thể đọc sai — hãy đối chiếu với ảnh gốc; ô viền đỏ là số cont chưa đúng chuẩn ISO 6346) — đọc được <b>'+st.rows.length+'</b> dòng.</div>'
+    +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff;border:1px solid var(--border-light);border-radius:8px;padding:8px 12px;margin-bottom:8px">'
+      +'<span style="font-size:12.5px;font-weight:700">Cách tính N.W:</span>'
+      +'<span style="font-size:12.5px">N.W = G.W −</span>'
+      +'<input type="number" step="any" min="0" id="ocrNwDeduct" value="'+st.nwDeduct+'" onkeydown="if(event.key===\'Enter\'){event.preventDefault();_ocrContFillNw();}" style="width:96px;font-size:13px;text-align:right;padding:6px 8px;box-sizing:border-box"/>'
+      +'<span style="font-size:12.5px">kg</span>'
+      +'<button type="button" class="btn sm pri" onclick="_ocrContFillNw()"><i class="ti ti-arrow-down"></i> Fill N.W</button>'
+      +'<span style="font-size:11.5px;color:var(--text-tertiary)">Mặc định trừ 70 kg. Đổi số theo loại hàng rồi bấm Fill để tính lại N.W cho tất cả dòng bên dưới.</span>'
+    +'</div>'
+    +'<div style="max-height:58vh;overflow:auto;border:1px solid var(--border-light);border-radius:8px;background:#fff">'
+    +'<table style="width:100%;min-width:900px;border-collapse:collapse;table-layout:fixed">'
+      +'<colgroup><col style="width:38px"/><col style="width:170px"/><col style="width:160px"/><col style="width:84px"/><col style="width:118px"/><col style="width:118px"/><col style="width:98px"/><col style="width:158px"/><col style="width:44px"/></colgroup>'
+      +'<thead><tr style="background:#F3F6FA;position:sticky;top:0;z-index:1">'
+        +'<th style="'+th+'center">#</th>'
+        +'<th style="'+th+'left">Cont No</th>'
+        +'<th style="'+th+'left">Seal</th>'
+        +'<th style="'+th+'right">Pkg</th>'
+        +'<th style="'+th+'right">N.W (kg)</th>'
+        +'<th style="'+th+'right">G.W (kg)</th>'
+        +'<th style="'+th+'right">Tare (kg)</th>'
+        +'<th style="'+th+'left">Ngày</th>'
         +'<th></th>'
       +'</tr></thead>'
       +'<tbody id="ocrPreviewBody">'+rowsHtml+'</tbody>'
@@ -9879,6 +9922,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.29: Quét ảnh Cont/Seal — popup rộng hơn, ô nhập đủ chỗ; trọng lượng quét được điền vào G.W, N.W = G.W − mức trừ (mặc định 70kg, chỉnh được, bấm Fill)
 // A 2.28: Bật lại nút "Quét ảnh" ở tab Cont/Seal — đọc ảnh bằng Claude Haiku 5.5 qua Firebase Function ocrContScan (tự dự phòng Tesseract nếu AI lỗi)
 // A 2.27: Bộ nhớ đệm Firestore trên máy (offline persistence) — từ lần mở thứ 2 danh sách lô hiện ngay từ bộ đệm; tự xóa bộ đệm khi đăng xuất/đổi tài khoản
 // A 2.26: Tăng tốc tải trang — 2 ảnh nền PNG nhúng (3,1MB) đổi sang WebP (~0,17MB); kiểm tra phiên bản chỉ đọc phần đầu file thay vì tải 8MB mỗi 5 phút; users + cài đặt bảo mật + giao diện tải song song; CSS icon/font không chặn hiển thị + preconnect; bỏ quét bảng responsive trên màn rộng; log thời gian tải [Perf] trong Console
