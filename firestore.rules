@@ -210,5 +210,49 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ══════════════ BỔ SUNG A 2.31 ══════════════════════
+
+    // userDevices: Quản lý thiết bị theo người dùng (Cài đặt → Người dùng & Bảo mật).
+    // docId = <uid>_<deviceId>. Admin toàn quyền; user thường chỉ đọc / đăng ký / cập nhật
+    // thiết bị CỦA MÌNH, đăng ký mới luôn ở trạng thái 'pending' và không tự đổi status được.
+    match /userDevices/{docId} {
+      allow read:   if isAdmin() || (isSignedIn() && docId.matches(request.auth.uid + '_.*'));
+      allow create: if isAdmin() || (
+        isSignedIn() && docId.matches(request.auth.uid + '_.*') &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.status == 'pending'
+      );
+      allow update: if isAdmin() || (
+        isSignedIn() && docId.matches(request.auth.uid + '_.*') &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.uid == resource.data.uid
+      );
+      allow delete: if isAdmin();
+    }
+
+    // _aiUsage: số ảnh quét AI mỗi user mỗi ngày. Chỉ Cloud Function (Admin SDK) ghi;
+    // client chỉ Admin được đọc (nút "Xem số ảnh đã quét hôm nay").
+    match /_aiUsage/{docId} {
+      allow read:  if isAdmin();
+      allow write: if false;
+    }
+
+    // holidays: ngày nghỉ / lễ dùng cấn trừ hạn chứng từ. Admin + Accountant thêm;
+    // Accountant chỉ tạo được đề xuất 'pending', Admin duyệt. Xóa: Admin, hoặc Accountant xóa đề xuất chưa duyệt.
+    match /holidays/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if isAdmin() || (canManageFinance() && request.resource.data.status == 'pending');
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || (canManageFinance() && resource.data.status == 'pending');
+    }
+
+    // booking_requests: Booking List — request lấy booking (admin, doc, cus, operator)
+    match /booking_requests/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if canEditLot();
+      allow update: if canEditLot();
+      allow delete: if canEditLot();
+    }
+
   }
 }

@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.30';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.31';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7115,6 +7115,7 @@ function _ocrContRunScan(){
       console.warn('AI OCR lỗi:',code,err&&err.message);
       if(code==='unauthenticated'||code==='permission-denied'){ toast('Cần đăng nhập lại để dùng AI','error'); return; }
       if(code==='invalid-argument'){ toast((err&&err.message)||'Ảnh không hợp lệ','error'); return; }
+      if(code==='resource-exhausted'){ toast(((err&&err.message)||'Đã hết lượt quét AI hôm nay')+' — chuyển sang quét thường','error'); _ocrContRunTesseract(); return; }
       // not-found (chưa deploy) / unavailable / deadline-exceeded / internal ... → dự phòng quét thường
       toast('AI chưa sẵn sàng ('+(code||'lỗi')+') — chuyển sang quét thường','error');
       _ocrContRunTesseract();
@@ -10012,6 +10013,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.31: Giới hạn số ảnh quét AI theo từng user (Cài đặt → Người dùng & Bảo mật); lỗi quản lý thiết bị (Rule userDevices) hiện hướng dẫn + khối Rule để copy
 // A 2.30: Quét ảnh — quy đổi Tấn→kg theo đơn vị trong ảnh; tra Tare theo số cont từ lịch sử lô; báo phiên bản mới cũng kiểm tra khi quay lại tab
 // A 2.29: Quét ảnh Cont/Seal — popup rộng hơn, ô nhập đủ chỗ; trọng lượng quét được điền vào G.W, N.W = G.W − mức trừ (mặc định 70kg, chỉnh được, bấm Fill)
 // A 2.28: Bật lại nút "Quét ảnh" ở tab Cont/Seal — đọc ảnh bằng Claude Haiku 5.5 qua Firebase Function ocrContScan (tự dự phòng Tesseract nếu AI lỗi)
@@ -24997,10 +24999,35 @@ async function renderDeviceMgmtList(){
       +'</div>';
     }).join('');
   }catch(e){
-    el.innerHTML='<div style="color:var(--red);font-size:12px">Lỗi tải danh sách: '+e.message+'</div>';
+    const perm=(e&&e.code==='permission-denied')||/permission/i.test(String(e&&e.message));
+    let html='<div style="color:var(--red);font-size:12px">Lỗi tải danh sách: '+e.message+'</div>';
+    if(perm){
+      const me=currentUser||{}, pr=currentProfile||{};
+      html+='<div style="margin-top:8px;padding:10px 12px;border:1px solid #FCA5A5;background:#FEF2F2;border-radius:8px;font-size:12px;line-height:1.55;color:#7F1D1D">'
+        +'<b>Nguyên nhân thường gặp:</b> Security Rules của Firestore đang thiếu (hoặc bị ghi đè mất) khối cho collection <code>userDevices</code>, nên tài khoản Admin cũng bị từ chối.<br>'
+        +'<b>Cách sửa:</b> Firebase Console → Firestore Database → Rules → dán khối bên dưới vào TRONG <code>match /databases/{database}/documents { … }</code> → <b>Publish</b> → bấm "Tải lại" ở đây.<br>'
+        +'<span style="color:#991B1B">Đang đăng nhập: '+(me.email||'?')+' · uid <code>'+(me.uid||'?')+'</code> · vai trò trong hồ sơ: <b>'+(pr.role||'?')+'</b> · hồ sơ lưu ở doc <code>'+(pr._docId||'?')+'</code>'+((pr._docId&&me.uid&&pr._docId!==me.uid)?' <b>(KHÁC uid → Rule dò vai trò theo uid sẽ không thấy hồ sơ này)</b>':'')+'</span>'
+        +'<div style="margin-top:8px"><button class="btn sm" onclick="_copyDeviceRules()"><i class="ti ti-copy"></i> Copy khối Rule</button></div>'
+        +'<pre id="deviceRulesPre" style="margin:8px 0 0;padding:8px;background:#fff;border:1px solid #FCA5A5;border-radius:6px;font-size:11px;white-space:pre-wrap;color:#111827;max-height:260px;overflow:auto">'+String(window._COCO_DEVICE_RULES||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</pre>'
+      +'</div>';
+    }
+    el.innerHTML=html;
   }
 }
 window.renderDeviceMgmtList=renderDeviceMgmtList;
+window._COCO_DEVICE_RULES="    // ===== COCOSEA A 2.31 \u2014 d\u00e1n v\u00e0o TRONG kh\u1ed1i: match /databases/{database}/documents { ... } =====\n    match /userDevices/{docId} {\n      function devAdmin() {\n        return request.auth != null\n          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';\n      }\n      function devOwn() {\n        return request.auth != null && docId.matches(request.auth.uid + '_.*');\n      }\n      allow read:   if devAdmin() || devOwn();\n      allow create: if devAdmin() || (devOwn() && request.resource.data.uid == request.auth.uid\n                                      && request.resource.data.status == 'pending');\n      allow update: if devAdmin() || (devOwn() && request.resource.data.status == resource.data.status\n                                      && request.resource.data.uid == resource.data.uid);\n      allow delete: if devAdmin();\n    }\n    match /_aiUsage/{docId} {\n      allow read: if request.auth != null\n        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';\n      allow write: if false;   // ch\u1ec9 Firebase Function (quy\u1ec1n admin) ghi\n    }\n";
+function _copyDeviceRules(){
+  const t=String(window._COCO_DEVICE_RULES||'');
+  const done=function(){ toast('Đã copy khối Rule — dán vào Firebase Console → Firestore → Rules'); };
+  try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(done,function(){ _copyDeviceRulesFallback(t,done); }); return; } }catch(e){}
+  _copyDeviceRulesFallback(t,done);
+}
+function _copyDeviceRulesFallback(t,done){
+  const ta=document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); done(); }catch(e){ toast('Không copy được — bôi đen khung Rule rồi bấm Ctrl+C','error'); }
+  ta.remove();
+}
+window._copyDeviceRules=_copyDeviceRules;
 
 // Admin tự đổi tên thiết bị trực tiếp — phòng khi user không tự đặt tên (chỉ có tên tự nhận diện qua
 // trình duyệt/hệ điều hành), hoặc Admin muốn chuẩn hóa cách đặt tên cho dễ quản lý.
@@ -25079,6 +25106,65 @@ async function _deviceRevoke(docId){
 }
 window._deviceRevoke=_deviceRevoke;
 
+/* A 2.31: GIỚI HẠN SỐ ẢNH QUÉT BẰNG AI THEO TỪNG USER (lưu trong _config/securitySettings.aiScan, Firebase Function đọc và áp dụng)
+   aiScan = { defaultLimit: số ảnh/người/ngày, perUser: { <uid>: số ảnh/ngày } } — ô trống = dùng mặc định, 0 = tắt AI cho người đó. */
+function _aiScanLimitsBodyHtml(){
+  const a=(_securitySettings&&_securitySettings.aiScan)||{};
+  const def=(a.defaultLimit!=null&&a.defaultLimit!=='')?a.defaultLimit:60;
+  const per=a.perUser||{};
+  const esc=function(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');};
+  const users=(cache.users||[]).filter(function(u){return u&&u.active!==false;}).slice().sort(function(x,y){return String(x.name||x.email||'').localeCompare(String(y.name||y.email||''));});
+  const th='padding:7px 10px;font-size:11px;font-weight:700;color:var(--text-tertiary);text-align:';
+  const rows=users.map(function(u){
+    const id=u.uid||u._docId||''; const v=(per[id]!=null)?per[id]:'';
+    const role=(typeof ROLES!=='undefined'&&ROLES[u.role])?ROLES[u.role].label:(u.role||'');
+    return '<tr style="border-top:1px solid var(--border-light)">'
+      +'<td style="padding:6px 10px;font-size:12.5px;font-weight:600">'+esc(u.name||u.username||u.email)+'<div style="font-size:11px;font-weight:400;color:var(--text-tertiary)">'+esc(u.email||'')+'</div></td>'
+      +'<td style="padding:6px 10px;font-size:12px">'+esc(role)+'</td>'
+      +'<td style="padding:6px 10px;text-align:right"><input type="number" min="0" max="10000" step="1" class="aiLimInp" data-uid="'+esc(id)+'" value="'+esc(v)+'" placeholder="mặc định" style="width:110px;text-align:right;font-size:13px;padding:5px 8px;box-sizing:border-box"/></td>'
+      +'<td style="padding:6px 10px;text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums" class="aiUsedCell" data-uid="'+esc(id)+'">—</td>'
+    +'</tr>';
+  }).join('');
+  return '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:.75rem">Giới hạn <b>số ảnh được quét bằng AI mỗi ngày</b> (tính theo ngày giờ Việt Nam). Hết lượt → app tự chuyển sang quét thường (không dùng AI). Ô để <b>trống</b> = dùng mức mặc định; nhập <b>0</b> = tắt AI cho người đó. Chỉ Admin được thay đổi.</div>'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-light);margin-bottom:10px">'
+      +'<div style="flex:1;min-width:200px"><div style="font-size:13px;font-weight:600">Mức mặc định cho mọi người dùng</div><div style="font-size:11.5px;color:var(--text-secondary)">Áp dụng cho người chưa được đặt giới hạn riêng</div></div>'
+      +'<input type="number" min="0" max="10000" step="1" id="ai_default_limit" value="'+esc(def)+'" style="width:90px;text-align:center;font-weight:700;font-size:13px;padding:5px 8px"/><span style="font-size:12px;color:var(--text-secondary)">ảnh / người / ngày</span>'
+    +'</div>'
+    +'<div style="overflow:auto;border:1px solid var(--border-light);border-radius:8px"><table style="width:100%;min-width:520px;border-collapse:collapse">'
+      +'<thead><tr style="background:#F3F6FA"><th style="'+th+'left">Người dùng</th><th style="'+th+'left">Vai trò</th><th style="'+th+'right">Giới hạn riêng / ngày</th><th style="'+th+'right">Đã quét hôm nay</th></tr></thead>'
+      +'<tbody>'+(rows||'<tr><td colspan="4" style="padding:14px;text-align:center;color:var(--text-tertiary);font-size:12px">Chưa có danh sách người dùng</td></tr>')+'</tbody></table></div>';
+}
+async function saveAiScanLimits(){
+  if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
+  const dv=parseInt(g('ai_default_limit')&&g('ai_default_limit').value,10);
+  if(isNaN(dv)||dv<0||dv>10000){toast('Mức mặc định phải là số từ 0 đến 10000','error');return;}
+  const perUser={}; let bad=false;
+  document.querySelectorAll('.aiLimInp').forEach(function(inp){
+    const v=String(inp.value).trim(); if(v==='')return;
+    const n=parseInt(v,10); if(isNaN(n)||n<0||n>10000){bad=true;inp.style.borderColor='#DC2626';return;}
+    inp.style.borderColor=''; perUser[inp.dataset.uid]=n;
+  });
+  if(bad){toast('Giới hạn từng người phải là số từ 0 đến 10000 (để trống = dùng mặc định)','error');return;}
+  const aiScan={defaultLimit:dv,perUser:perUser,updatedAt:Date.now(),updatedBy:currentUser.email};
+  setLoading(true,'Đang lưu...');
+  try{
+    await db.collection('_config').doc('securitySettings').set({aiScan:aiScan},{merge:true});
+    _securitySettings=Object.assign({},_securitySettings,{aiScan:aiScan});
+    toast('Đã lưu giới hạn quét ảnh AI — áp dụng ngay cho lần quét tiếp theo');
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+async function _aiLoadUsageToday(){
+  const day=new Date(Date.now()+7*3600*1000).toISOString().slice(0,10).replace(/-/g,'');
+  const cells=Array.from(document.querySelectorAll('.aiUsedCell')); let denied=false;
+  await Promise.all(cells.map(async function(cell){
+    try{ const sn=await db.collection('_aiUsage').doc(cell.dataset.uid+'_'+day).get(); cell.textContent=sn.exists?String((sn.data().count)||0):'0'; }
+    catch(e){ denied=true; cell.textContent='—'; }
+  }));
+  if(denied)toast('Chưa đọc được số lượt đã dùng — cần thêm Rule cho collection "_aiUsage" (xem HUONG_DAN.md)','error'); else toast('Đã cập nhật số ảnh đã quét hôm nay');
+}
+window.saveAiScanLimits=saveAiScanLimits; window._aiLoadUsageToday=_aiLoadUsageToday;
+
 async function saveSecuritySettings(){
   if(!can('manageUsers')){toast('Chỉ Admin','error');return;}
   const inOn=g('set_inactivity_on')?.checked||false;
@@ -25098,6 +25184,7 @@ async function saveSecuritySettings(){
     deviceApproval:{enabled:deviceOn},
     updatedAt:Date.now(),updatedBy:currentUser.email
   };
+  if(_securitySettings&&_securitySettings.aiScan)s.aiScan=_securitySettings.aiScan; // A 2.31: không làm mất giới hạn quét AI khi lưu bảo mật
   // Optimistic update trước await để re-render hiển thị đúng
   _securitySettings=s;
   setLoading(true,'Đang lưu...');
@@ -27983,7 +28070,7 @@ function renderSettings(){
     {id:'data',    icon:'ti-database',       label:'Dữ liệu & Danh mục',      badge:4},
     {id:'finance', icon:'ti-coin',           label:'Tài chính & Thanh toán',   badge:1},
     {id:'ops',     icon:'ti-ship',           label:'Vận hành Logistics',        badge:0},
-    {id:'users',   icon:'ti-shield-lock',    label:'Người dùng & Bảo mật',     badge:2},
+    {id:'users',   icon:'ti-shield-lock',    label:'Người dùng & Bảo mật',     badge:3},
     {id:'backup',  icon:'ti-database-export',label:'Dữ liệu & Sao lưu',        badge:1},
     {id:'ui',      icon:'ti-palette',        label:'Giao diện',                badge:0},
   ];
@@ -28120,6 +28207,11 @@ function renderSettings(){
         +'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600"><input type="checkbox" id="set_device_on" '+((_securitySettings.deviceApproval||{}).enabled?'checked':'')+' onchange="this.nextElementSibling.textContent=this.checked?\'Bật\':\'Tắt\'\" style="width:16px;height:16px"/><span id="set_device_label">'+((_securitySettings.deviceApproval||{}).enabled?'Bật':'Tắt')+'</span></label>'
       +'</div>'
       +'</div>'
+    )
+    +stgBox('aiscan','ti-photo','Giới hạn quét ảnh bằng AI',
+      '<button class="btn pri" onclick="saveAiScanLimits()"><i class="ti ti-check"></i> Lưu giới hạn quét AI</button>'
+      +'<button class="btn sm" onclick="_aiLoadUsageToday()"><i class="ti ti-refresh"></i> Xem số ảnh đã quét hôm nay</button>',
+      _aiScanLimitsBodyHtml()
     )
     +stgBox('devices','ti-devices','Quản lý thiết bị theo người dùng',
       '<button class="btn sm" onclick="renderDeviceMgmtList()"><i class="ti ti-refresh"></i> Tải lại</button>'
