@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.33';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.34';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1767,6 +1767,7 @@ auth.onAuthStateChanged(async (user) => {
       showApp();
       window._bootPerf.marks.app=Math.round(performance.now()-window._bootPerf.t0);
       setLoading(false);
+      try{ if(typeof _checkForcePwChange==='function')_checkForcePwChange(); }catch(_e){} // A 2.34: mật khẩu tạm do Admin reset → bắt đổi ở lần đăng nhập đầu
     }catch(e2){
       console.error('COCOFLOW: Lỗi khi tải dữ liệu sau đăng nhập:',e2);
       setLoading(false);
@@ -2157,15 +2158,17 @@ async function _checkPasswordExpiry(){
 }
 window._checkPasswordExpiry=_checkPasswordExpiry;
 
-function openPasswordChangePrompt(){
+function openPasswordChangePrompt(mode){
   _pwPromptOpen=true;
+  window._pwForcedMode=(mode==='first'); // A 2.34: lần đăng nhập đầu tiên bằng mật khẩu do Admin reset
+  const _first=window._pwForcedMode;
   const ov=g('payStatusOv'); if(!ov)return;
   ov.innerHTML=`
   <div class="modal" style="max-width:360px">
-    <div class="mhdr"><div class="mtitle"><i class="ti ti-lock" style="font-size:15px;margin-right:6px"></i>Đổi mật khẩu bắt buộc</div></div>
+    <div class="mhdr"><div class="mtitle"><i class="ti ti-lock" style="font-size:15px;margin-right:6px"></i>${_first?'Đặt mật khẩu mới cho tài khoản của bạn':'Đổi mật khẩu bắt buộc'}</div></div>
     <div class="fg" style="gap:10px">
-      <div class="fi full"><div style="font-size:12px;color:var(--text-secondary)">Mật khẩu đã hết hạn theo chính sách bảo mật. Vui lòng đổi mật khẩu mới để tiếp tục.</div></div>
-      <div class="fi full"><label class="lbl">Mật khẩu hiện tại</label><input type="password" id="pwOld" placeholder="Mật khẩu hiện tại"/></div>
+      <div class="fi full"><div style="font-size:12px;color:var(--text-secondary)">${_first?'Bạn đang dùng <b>mật khẩu tạm</b> do quản trị viên cấp. Vì lý do bảo mật, hãy tự đặt mật khẩu mới của riêng bạn để tiếp tục sử dụng.':'Mật khẩu đã hết hạn theo chính sách bảo mật. Vui lòng đổi mật khẩu mới để tiếp tục.'}</div></div>
+      <div class="fi full"><label class="lbl">${_first?'Mật khẩu tạm đang dùng':'Mật khẩu hiện tại'}</label><input type="password" id="pwOld" placeholder="Mật khẩu hiện tại"/></div>
       <div class="fi full"><label class="lbl">Mật khẩu mới</label><input type="password" id="pwNew" placeholder="Ít nhất 8 ký tự"/></div>
       <div class="fi full"><label class="lbl">Xác nhận mật khẩu mới</label><input type="password" id="pwNew2" placeholder="Nhập lại"/></div>
     </div>
@@ -2185,6 +2188,7 @@ async function doChangePassword(){
   if(!old||!nw||!nw2){toast('Vui lòng điền đầy đủ','error');return;}
   if(nw.length<8){toast('Mật khẩu mới cần ít nhất 8 ký tự','error');return;}
   if(nw!==nw2){toast('Xác nhận mật khẩu không khớp','error');return;}
+  if(window._pwForcedMode&&nw===old){toast('Mật khẩu mới phải khác mật khẩu tạm','error');return;}
   setLoading(true,'Đang đổi mật khẩu...');
   try{
     const cred=firebase.auth.EmailAuthProvider.credential(currentUser.email,old);
@@ -2195,6 +2199,8 @@ async function doChangePassword(){
     try{ localStorage.setItem('_cocoPwStart_'+currentUser.uid,String(now)); }catch(e){}
     try{ await db.collection('profiles').doc(currentUser.uid).set({lastPasswordChange:now},{merge:true}); }catch(e){} // phụ — lỗi quyền không làm hỏng việc đổi mật khẩu
     if(currentProfile)currentProfile.lastPasswordChange=now;
+    if(window._pwForcedMode&&currentProfile&&currentProfile.pwResetAt){ try{ sessionStorage.setItem('_cocoPwForced_'+currentUser.uid+'_'+(Number(currentProfile.pwResetAt)||0),'1'); }catch(e){} }
+    window._pwForcedMode=false;
     _pwPromptOpen=false;
     closeOv('payStatusOv');
     toast('Đã đổi mật khẩu thành công');
@@ -5228,7 +5234,7 @@ function renderDetailPanel(r,tt){
       sectionsHtml+='<label class="btn" style="cursor:pointer;color:#0D9488;border-color:#0D9488"><i class="ti ti-table-import"></i> Excel<input type="file" accept=".xlsx,.xls" style="display:none" data-bk="'+bkNo+'" onchange="importContFromExcelBk(this)"/></label>';
       // v4.80: Ẩn nút "Quét ảnh" (OCR) ở tab Cont/Seal theo yêu cầu — giữ nguyên hàm openOcrContScan()
       // bên dưới (không xóa) để dễ khôi phục lại nếu cần dùng lại sau này, chỉ bỏ nút kích hoạt.
-      // A 2.02: bật lại nút "Quét ảnh" — nay đọc ảnh bằng AI (Claude qua Firebase Function), tự dự phòng Tesseract.
+      // A 2.02: bật lại nút "Quét ảnh" — nay đọc ảnh bằng AI (Claude qua Firebase Function), chỉ dùng AI (A 2.34 bỏ quét thường).
       if(window.COCO_SHOW_OCR_BTN)sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="openOcrContScan(this.dataset.bk)" style="color:#C026D3;border-color:#C026D3"><i class="ti ti-photo"></i> Quét ảnh</button>';
       sectionsHtml+='<button class="btn" data-bk="'+bkNo+'" onclick="exportContSealExcel(this.dataset.bk)" style="color:#4F46E5;border-color:#4F46E5"><i class="ti ti-table-export"></i> Xuất Excel</button>';
       sectionsHtml+='<button class="btn" style="color:#7C3AED;border-color:#7C3AED" data-bk="'+bkNo+'" onclick="openDocMakerForBooking(this.dataset.bk)"><i class="ti ti-file-certificate"></i> Document Maker</button>';
@@ -6919,31 +6925,12 @@ function _smartParseContGrid(grid,XLSX){
 window._smartParseContGrid=_smartParseContGrid;
 
 /* ═══════════════════════════════════════════════════════════
-   QUÉT ẢNH CONT/SEAL (OCR) — v4.74
-   Dùng Tesseract.js (chạy NGAY trong trình duyệt của người dùng — ảnh và dữ liệu lô hàng KHÔNG được
-   gửi tới bất kỳ server/API nào khác, kể cả server của Cocosea) để đọc dữ liệu thô từ ảnh chụp bảng
-   Cont/Seal, cho xem trước (preview) để chỉnh sửa, rồi ĐIỀN vào các ô input có sẵn của bảng Cont/Seal —
-   giống hệt cách importContFromExcelBk() đang làm. KHÔNG tự ý lưu Firestore ở đây: người dùng vẫn phải
-   bấm nút "Lưu" sẵn có (saveContSealAll) để lưu — không thêm đường ghi dữ liệu mới, không đổi cấu trúc.
+   QUÉT ẢNH CONT/SEAL — CHỈ DÙNG AI (A 2.34: bỏ quét thường/Tesseract)
+   Ảnh được gửi tới Firebase Function 'ocrContScan' (Claude đọc ảnh) → cho xem trước để chỉnh sửa → ĐỐI CHIẾU với dữ
+   liệu đang có trong bảng Cont/Seal (cảnh báo chỗ khác để người dùng chọn) → rồi mới ĐIỀN vào các ô input của bảng.
+   KHÔNG tự lưu Firestore: người dùng vẫn phải bấm nút "Lưu" sẵn có (saveContSealAll).
 ═══════════════════════════════════════════════════════════ */
 window._ocrContState=null;
-
-// Lazy-load Tesseract.js (chỉ tải khi bấm "Quét ảnh" lần đầu) — cùng cách lazy-load đã dùng cho jsPDF.
-function _loadTesseract(cb){
-  if(window.Tesseract){cb();return;}
-  if(window.__tessLoading){ window.__tessQueue=window.__tessQueue||[]; window.__tessQueue.push(cb); return; }
-  window.__tessLoading=true;
-  const s=document.createElement('script');
-  s.src='https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';
-  s.onload=function(){
-    window.__tessLoading=false;
-    cb();
-    (window.__tessQueue||[]).forEach(function(f){f();});
-    window.__tessQueue=[];
-  };
-  s.onerror=function(){ window.__tessLoading=false; toast('Không tải được thư viện quét ảnh (kiểm tra kết nối mạng)','error'); };
-  document.head.appendChild(s);
-}
 
 function openOcrContScan(bkNo){
   const bkKey=bkNo.replace(/[^a-zA-Z0-9]/g,'_');
@@ -7031,7 +7018,7 @@ function _ocrContShowPreview(dataUrl){
 
 /* ── A 2.02: ĐỌC ẢNH BẰNG AI (Claude) qua Firebase Callable Function 'ocrContScan' ──
    Khóa API Anthropic nằm bí mật trên Firebase (Secret), app chỉ gọi hàm — xem HUONG_DAN.md.
-   Nếu hàm chưa deploy / lỗi mạng / AI lỗi → tự động quét bằng Tesseract (như cũ). */
+   A 2.34: chỉ dùng AI — nếu hàm chưa deploy / hết lượt / AI lỗi thì báo lỗi rõ ràng (không còn quét thường). */
 const AI_OCR_REGION='asia-southeast1', AI_OCR_FN='ocrContScan';
 
 function _ocrNoBorder(no){
@@ -7081,12 +7068,12 @@ function _ocrContPayload(dataUrl,cb){
 
 function _ocrContRunScan(){
   const st=window._ocrContState; if(!st||!st.imageDataUrl){toast('Chưa có ảnh','error');return;}
-  if(!(window.firebase&&firebase.functions)){ _ocrContRunTesseract(); return; }
+  if(!(window.firebase&&firebase.functions)){ toast('Chưa tải được Firebase Functions — tải lại trang (Ctrl+F5) rồi thử lại','error'); return; }
   setLoading(true,'AI đang đọc ảnh... (khoảng 5–20 giây)');
   _ocrContPayload(st.imageDataUrl,function(p){
     let fn;
     try{ fn=firebase.app().functions(AI_OCR_REGION).httpsCallable(AI_OCR_FN,{timeout:90000}); }
-    catch(e){ setLoading(false); _ocrContRunTesseract(); return; }
+    catch(e){ setLoading(false); toast('Không khởi tạo được kết nối AI — tải lại trang rồi thử lại','error'); return; }
     fn(p).then(function(res){
       setLoading(false);
       st.engine='ai';
@@ -7115,84 +7102,14 @@ function _ocrContRunScan(){
       console.warn('AI OCR lỗi:',code,err&&err.message);
       if(code==='unauthenticated'||code==='permission-denied'){ toast('Cần đăng nhập lại để dùng AI','error'); return; }
       if(code==='invalid-argument'){ toast((err&&err.message)||'Ảnh không hợp lệ','error'); return; }
-      if(code==='resource-exhausted'){ toast(((err&&err.message)||'Đã hết lượt quét AI hôm nay')+' — chuyển sang quét thường','error'); _ocrContRunTesseract(); return; }
-      // not-found (chưa deploy) / unavailable / deadline-exceeded / internal ... → dự phòng quét thường
-      toast('AI chưa sẵn sàng ('+(code||'lỗi')+') — chuyển sang quét thường','error');
-      _ocrContRunTesseract();
+      if(code==='resource-exhausted'){ toast((err&&err.message)||'Đã hết lượt quét AI hôm nay — liên hệ Admin để tăng hạn mức, hoặc nhập tay','error'); return; }
+      // not-found (chưa deploy) / unavailable / deadline-exceeded / internal ...
+      toast('AI chưa sẵn sàng ('+(code||'lỗi')+') — thử lại sau ít phút; nếu vẫn lỗi báo Admin kiểm tra Firebase Function ocrContScan','error');
     });
   });
 }
 
-function _ocrContRunTesseract(){
-  const st=window._ocrContState; if(!st||!st.imageDataUrl){toast('Chưa có ảnh','error');return;}
-  setLoading(true,'Đang tải công cụ quét ảnh...');
-  _loadTesseract(function(){
-    setLoading(true,'Đang quét ảnh... 0%');
-    Tesseract.recognize(st.imageDataUrl,'eng',{
-      logger:function(m){
-        if(m.status==='recognizing text'){ setLoading(true,'Đang quét ảnh... '+Math.round((m.progress||0)*100)+'%'); }
-      }
-    }).then(function(result){
-      setLoading(false);
-      st.engine='tess';
-      st.rows=_ocrParseContRows(result.data);
-      if(!st.rows.length) st.rows=[{no:'',seal:'',pkg:'',nw:'',gw:'',tare:'',date:''}];
-      _ocrContRenderPreviewTable();
-    }).catch(function(err){
-      setLoading(false);
-      toast('Lỗi khi quét ảnh: '+(err&&err.message||err),'error');
-    });
-  });
-}
 window._ocrContRunScan=_ocrContRunScan;
-
-// Nhận diện dữ liệu Cont/Seal từ kết quả OCR thô: gom các từ (words, có tọa độ bbox) theo DÒNG dựa
-// vào vị trí Y, rồi trong mỗi dòng phân loại từng token theo mẫu (Cont No chuẩn ISO 6346, ngày dd/mm/yy,
-// số). Đây là suy đoán TỐT NHẤT CÓ THỂ (best-effort) — luôn hiển thị preview để người dùng kiểm tra/sửa
-// trước khi nhập vào bảng thật, KHÔNG tự động tin tuyệt đối kết quả OCR.
-function _ocrParseContRows(data){
-  const words=(data&&data.words)||[];
-  if(!words.length)return [];
-  const items=words.map(function(w){
-    const b=w.bbox||{};
-    return {text:(w.text||'').trim(),cy:((b.y0||0)+(b.y1||0))/2,h:(b.y1||0)-(b.y0||0)||14,x:b.x0||0};
-  }).filter(function(it){return it.text;});
-  items.sort(function(a,b){return a.cy-b.cy;});
-  const lines=[];
-  items.forEach(function(it){
-    let line=lines.find(function(l){return Math.abs(l.cy-it.cy)<(Math.max(it.h,l.h)*0.6);});
-    if(!line){ line={cy:it.cy,h:it.h,items:[]}; lines.push(line); }
-    line.items.push(it);
-    line.cy=(line.cy*(line.items.length-1)+it.cy)/line.items.length;
-  });
-  lines.forEach(function(l){ l.items.sort(function(a,b){return a.x-b.x;}); });
-
-  const contRe=/^[A-Z]{4}[0-9]{6,7}$/;
-  const dateRe=/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
-  const numRe=/^-?\d+(\.\d+)?$/;
-
-  const rows=[];
-  lines.forEach(function(l){
-    const toks=l.items.map(function(it){return it.text.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9.\/\-]+$/g,'');}).filter(Boolean);
-    let no='',seal='',date='',nums=[];
-    toks.forEach(function(tk){
-      const up=tk.toUpperCase();
-      if(!no && contRe.test(up)){ no=up; return; }
-      if(!date && dateRe.test(tk)){ date=_ocrNormalizeDate(tk); return; }
-      if(numRe.test(tk)){ nums.push(parseFloat(tk)); return; }
-      if(!seal && no && /^[A-Z0-9]{6,12}$/.test(up) && up!==no){ seal=up; return; }
-    });
-    if(!no)return; // dòng không có Cont No hợp lệ theo ISO 6346 -> bỏ qua (thường là dòng tiêu đề/ghi chú)
-    // Suy đoán: số nguyên đầu tiên -> số kiện (pkg); số có phần thập phân đầu tiên -> trọng lượng (N.W)
-    let pkg='',nw='';
-    nums.forEach(function(n){
-      if(Number.isInteger(n) && pkg==='')pkg=n;
-      else if(!Number.isInteger(n) && nw==='')nw=n;
-    });
-    rows.push({no:no,seal:seal,pkg:pkg,nw:nw,gw:'',tare:'',date:date});
-  });
-  return rows;
-}
 
 function _ocrNormalizeDate(s){
   const m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
@@ -7376,6 +7293,67 @@ function _ocrContDelRow(btn){
 }
 window._ocrContDelRow=_ocrContDelRow;
 
+// ── A 2.34: Nhập kết quả quét vào bảng Cont/Seal — ĐỐI CHIẾU với dữ liệu đang có trong bảng ──
+// • Khớp theo SỐ CONT (không còn ghi đè theo thứ tự dòng).
+// • Ô đang trống → tự điền từ ảnh. Ô đã có dữ liệu và KHÁC ảnh → hiện cảnh báo để người dùng chọn (mặc định: GIỮ dữ liệu hiện có).
+// • Số cont đọc được gần giống (lệch ≤2 ký tự) một cont đang có → hỏi "là cont đó (AI đọc sai) hay cont mới".
+const OCR_FIELDS=[['seal','Seal','cseal'],['pkg','Pkg','cpkg'],['nw','N.W (kg)','cnw'],['gw','G.W (kg)','cgw'],['tare','Tare (kg)','ctare'],['date','Ngày','cdate']];
+function _ocrEsc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function _ocrNormNo(s){return String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
+function _ocrSame(f,a,b){
+  if(f==='seal')return _ocrNormNo(a)===_ocrNormNo(b);
+  if(f==='date')return String(a).trim()===String(b).trim();
+  const x=parseFloat(a), y=parseFloat(b);
+  if(isNaN(x)||isNaN(y))return String(a).trim()===String(b).trim();
+  return Math.abs(x-y)<0.01;
+}
+// Đọc các dòng đang có trong bảng Cont/Seal của booking (kể cả phần chưa bấm Lưu)
+function _ocrReadExisting(panel,bkKey){
+  const out=[];
+  panel.querySelectorAll('.cno_'+bkKey).forEach(function(el,i){
+    const row={i:i,no:_ocrNormNo(el.value)};
+    OCR_FIELDS.forEach(function(f){
+      const els=panel.querySelectorAll('.'+f[2]+'_'+bkKey);
+      row[f[0]]=els[i]?String(els[i].value||'').trim():'';
+    });
+    out.push(row);
+  });
+  return out;
+}
+function _ocrBuildPlan(rows,ex){
+  const exByNo={}; ex.forEach(function(e){ if(e.no&&!exByNo[e.no])exByNo[e.no]=e; });
+  const claimed={}, ops=new Array(rows.length), pending=[];
+  rows.forEach(function(r,idx){
+    const e=exByNo[_ocrNormNo(r.no)];
+    if(e&&!claimed[e.i]){ claimed[e.i]=1; ops[idx]={kind:'match',ex:e,row:r}; } else pending.push(idx);
+  });
+  pending.forEach(function(idx){
+    const r=rows[idx], no=_ocrNormNo(r.no);
+    let best=null, bd=99;
+    ex.forEach(function(e){
+      if(!e.no||claimed[e.i]||e.no.length!==no.length)return;
+      let d=0; for(let k=0;k<no.length;k++){ if(e.no[k]!==no[k])d++; }
+      if(d<bd){bd=d;best=e;}
+    });
+    if(best&&bd<=2){ claimed[best.i]=1; ops[idx]={kind:'similar',ex:best,row:r,dist:bd,asNew:false}; }
+    else ops[idx]={kind:'new',row:r};
+  });
+  let conflicts=0;
+  ops.forEach(function(op){
+    if(op.kind==='new')return;
+    op.fills=[]; op.conf=[]; op.choice={};
+    OCR_FIELDS.forEach(function(f){
+      const k=f[0], sv=op.row[k];
+      if(sv===''||sv==null)return;
+      const cur=op.ex[k];
+      if(cur==='')op.fills.push(k);
+      else if(!_ocrSame(k,cur,sv)){ op.conf.push(k); op.choice[k]='keep'; }
+    });
+    conflicts+=op.conf.length+(op.kind==='similar'?1:0);
+  });
+  return {ops:ops,conflicts:conflicts};
+}
+
 function _ocrContApply(){
   const st=window._ocrContState; if(!st)return;
   const tbody=g('ocrPreviewBody'); if(!tbody){toast('Không có dữ liệu để nhập','error');return;}
@@ -7388,42 +7366,138 @@ function _ocrContApply(){
     rows.push({no:no.toUpperCase(),seal:gv('ocrSeal'),pkg:gv('ocrPkg'),nw:gv('ocrNw'),gw:gv('ocrGw'),tare:gv('ocrTare'),date:gv('ocrDate')});
   });
   if(!rows.length){toast('Không có dòng nào có Cont No để nhập','error');return;}
-
+  st.rows=rows; // giữ lại để quay về bước sửa mà không mất chỉnh sửa
   const panel=_getContPanel();
-  const bkKey=st.bkKey, bkNo=st.bkNo;
+  const realTbody=panel.querySelector('.contBody_'+st.bkKey);
+  if(!realTbody){toast('Không tìm thấy bảng Cont/Seal của booking này','error');return;}
+  const plan=_ocrBuildPlan(rows,_ocrReadExisting(panel,st.bkKey));
+  st.plan=plan;
+  if(plan.conflicts>0){ _ocrShowConflicts(); return; }
+  _ocrExecutePlan();
+}
+window._ocrContApply=_ocrContApply;
+
+function _ocrShowConflicts(){
+  const st=window._ocrContState, plan=st.plan, body=g('ocrContBody'); if(!body)return;
+  const th='padding:7px 10px;font-size:11px;font-weight:700;color:var(--text-tertiary);text-align:left;background:#F3F6FA;position:sticky;top:0;z-index:1';
+  const td='padding:7px 10px;font-size:12.5px;border-bottom:1px solid var(--border-light);vertical-align:middle';
+  let rowsHtml='', newCnt=0;
+  plan.ops.forEach(function(op,idx){
+    if(op.kind==='new'){ newCnt++; return; }
+    if(!op.conf.length&&op.kind!=='similar')return;
+    const fillTxt=op.fills.length?'<span style="font-size:11px;color:var(--text-tertiary);font-weight:500"> · sẽ tự điền ô còn trống: '+op.fills.map(function(k){return OCR_FIELDS.find(function(f){return f[0]===k;})[1];}).join(', ')+'</span>':'';
+    rowsHtml+='<tr style="background:var(--bg-secondary)"><td colspan="5" style="'+td+';font-weight:800">'+_ocrEsc(op.row.no)+fillTxt+'</td></tr>';
+    if(op.kind==='similar'){
+      rowsHtml+='<tr><td style="'+td+'">Số cont</td><td style="'+td+'"><b>'+_ocrEsc(op.ex.no)+'</b><div style="font-size:10.5px;color:var(--text-tertiary)">đang có trong bảng</div></td>'
+        +'<td style="'+td+';color:#B45309"><b>'+_ocrEsc(op.row.no)+'</b><div style="font-size:10.5px">đọc từ ảnh (khác '+op.dist+' ký tự)</div></td>'
+        +'<td style="'+td+'" colspan="2"><label style="display:block;cursor:pointer"><input type="radio" style="width:auto;margin:0 6px 0 0;vertical-align:middle" name="ocrsm_'+idx+'" value="same" checked> Là cont đang có (AI đọc sai số) — giữ số cont hiện có</label>'
+        +'<label style="display:block;cursor:pointer;margin-top:3px"><input type="radio" style="width:auto;margin:0 6px 0 0;vertical-align:middle" name="ocrsm_'+idx+'" value="new"> Là cont khác — thêm thành dòng mới</label></td></tr>';
+    }
+    op.conf.forEach(function(k){
+      const lbl=OCR_FIELDS.find(function(f){return f[0]===k;})[1];
+      rowsHtml+='<tr data-op="'+idx+'" data-f="'+k+'"><td style="'+td+'">'+lbl+'</td>'
+        +'<td style="'+td+';font-weight:700">'+_ocrEsc(op.ex[k])+'</td>'
+        +'<td style="'+td+';font-weight:700;color:#B45309">'+_ocrEsc(op.row[k])+'</td>'
+        +'<td style="'+td+'" colspan="2"><label style="cursor:pointer;margin-right:14px"><input type="radio" style="width:auto;margin:0 6px 0 0;vertical-align:middle" name="ocrcf_'+idx+'_'+k+'" value="keep" checked> Giữ hiện có</label>'
+        +'<label style="cursor:pointer"><input type="radio" style="width:auto;margin:0 6px 0 0;vertical-align:middle" name="ocrcf_'+idx+'_'+k+'" value="scan"> Dùng số từ ảnh</label></td></tr>';
+    });
+  });
+  body.innerHTML=
+    '<div style="display:flex;gap:10px;align-items:flex-start;background:rgba(234,179,8,.14);color:#B45309;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12.5px;line-height:1.5">'
+      +'<i class="ti ti-alert-triangle" style="font-size:18px;margin-top:1px"></i>'
+      +'<div><b>Phát hiện '+plan.conflicts+' chỗ khác với dữ liệu đang có trong bảng Cont/Seal.</b><br>Chọn giá trị đúng cho từng chỗ bên dưới — mặc định là <b>giữ dữ liệu hiện có</b>. Chưa có gì được nhập cho tới khi bạn bấm “Xác nhận”.'
+      +(newCnt?'<br>Ngoài ra có <b>'+newCnt+' cont mới</b> chưa có trong bảng, sẽ được thêm vào.':'')+'</div></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">'
+      +'<button type="button" class="btn sm" onclick="_ocrConflictAll(\'keep\')"><i class="ti ti-lock"></i> Giữ hết dữ liệu hiện có</button>'
+      +'<button type="button" class="btn sm" onclick="_ocrConflictAll(\'scan\')"><i class="ti ti-photo"></i> Dùng hết số liệu từ ảnh</button>'
+    +'</div>'
+    +'<div style="max-height:56vh;overflow:auto;border:1px solid var(--border-light);border-radius:8px;background:#fff">'
+    +'<table style="width:100%;border-collapse:collapse"><thead><tr><th style="'+th+';width:110px">Trường</th><th style="'+th+'">Hiện có trong bảng</th><th style="'+th+'">Đọc từ ảnh</th><th style="'+th+'" colspan="2">Chọn</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>'
+    +'<div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">'
+      +'<button class="btn" onclick="_ocrBackToPreview()"><i class="ti ti-arrow-left"></i> Quay lại sửa</button>'
+      +'<button class="btn pri" onclick="_ocrConfirmPlan()"><i class="ti ti-check"></i> Xác nhận & nhập vào bảng Cont/Seal</button>'
+    +'</div>';
+  const modal=body.closest('.modal'); if(modal){ modal.style.maxWidth='none'; modal.style.width='min(980px,96vw)'; }
+}
+window._ocrShowConflicts=_ocrShowConflicts;
+
+function _ocrConflictAll(v){
+  document.querySelectorAll('#ocrContBody input[type=radio][name^="ocrcf_"][value="'+v+'"]').forEach(function(r){r.checked=true;});
+}
+window._ocrConflictAll=_ocrConflictAll;
+
+function _ocrBackToPreview(){
+  const st=window._ocrContState; if(!st)return;
+  st.plan=null;
+  _ocrContRenderPreviewTable();
+}
+window._ocrBackToPreview=_ocrBackToPreview;
+
+function _ocrConfirmPlan(){
+  const st=window._ocrContState; if(!st||!st.plan)return;
+  st.plan.ops.forEach(function(op,idx){
+    if(op.kind==='new')return;
+    if(op.kind==='similar'){
+      const r=document.querySelector('#ocrContBody input[name="ocrsm_'+idx+'"]:checked');
+      op.asNew=!!(r&&r.value==='new');
+    }
+    op.conf.forEach(function(k){
+      const r=document.querySelector('#ocrContBody input[name="ocrcf_'+idx+'_'+k+'"]:checked');
+      op.choice[k]=(r&&r.value==='scan')?'scan':'keep';
+    });
+  });
+  _ocrExecutePlan();
+}
+window._ocrConfirmPlan=_ocrConfirmPlan;
+
+function _ocrExecutePlan(){
+  const st=window._ocrContState; if(!st||!st.plan)return;
+  const panel=_getContPanel(), bkKey=st.bkKey, bkNo=st.bkNo;
   const realTbody=panel.querySelector('.contBody_'+bkKey);
   if(!realTbody){toast('Không tìm thấy bảng Cont/Seal của booking này','error');return;}
-  // Lấy Vol của booking (giới hạn số dòng tối đa — giống hệt ràng buộc sẵn có của addBkContRow)
   const addBtn=panel.querySelector('button[onclick="addBkContRow(this)"][data-bkkey="'+bkKey+'"]');
   const bkVol=addBtn?(parseInt(addBtn.dataset.bkvol)||0):0;
-
-  let existingCount=realTbody.querySelectorAll('tr').length;
-  let skipped=0;
-  rows.forEach(function(rowData,i){
-    if(i>=existingCount){
-      if(bkVol>0 && i>=bkVol){ skipped++; return; }
-      const div=document.createElement('tbody');
-      div.innerHTML=bkContRowHtml({},i,bkNo);
-      realTbody.appendChild(div.firstElementChild);
-      existingCount++;
+  const cellOf=function(cls,i){const els=panel.querySelectorAll('.'+cls+'_'+bkKey);return els[i]||null;};
+  const setV=function(cls,i,val){const el=cellOf(cls,i); if(el&&val!==''&&val!=null)el.value=val;};
+  const rowIsFree=function(i){
+    if(_ocrNormNo((cellOf('cno',i)||{}).value))return false;
+    return OCR_FIELDS.every(function(f){const el=cellOf(f[2],i);return !el||String(el.value||'').trim()==='';});
+  };
+  let updated=0, added=0, kept=0, replaced=0, skipped=0;
+  st.plan.ops.forEach(function(op){
+    const asNew=(op.kind==='new')||(op.kind==='similar'&&op.asNew);
+    if(asNew){
+      const total=realTbody.querySelectorAll('tr').length;
+      let i=-1; for(let k=0;k<total;k++){ if(rowIsFree(k)){i=k;break;} }
+      if(i<0){
+        if(bkVol>0&&total>=bkVol){ skipped++; return; }
+        const div=document.createElement('tbody');
+        div.innerHTML=bkContRowHtml({},total,bkNo);
+        realTbody.appendChild(div.firstElementChild);
+        i=total;
+      }
+      setV('cno',i,op.row.no);
+      OCR_FIELDS.forEach(function(f){ setV(f[2],i,op.row[f[0]]); });
+      added++;
+      return;
     }
-    const setV=function(cls,val){
-      const els=panel.querySelectorAll('.'+cls+'_'+bkKey);
-      if(els[i]&&val!==''&&val!=null)els[i].value=val;
-    };
-    setV('cno',rowData.no);
-    if(rowData.seal)setV('cseal',rowData.seal);
-    if(rowData.pkg!=='')setV('cpkg',rowData.pkg);
-    if(rowData.nw!=='')setV('cnw',rowData.nw);
-    if(rowData.gw!=='')setV('cgw',rowData.gw);
-    if(rowData.tare!=='')setV('ctare',rowData.tare);
-    if(rowData.date)setV('cdate',rowData.date);
+    const i=op.ex.i;
+    op.fills.forEach(function(k){ setV(OCR_FIELDS.find(function(f){return f[0]===k;})[2],i,op.row[k]); });
+    op.conf.forEach(function(k){
+      if(op.choice[k]==='scan'){ setV(OCR_FIELDS.find(function(f){return f[0]===k;})[2],i,op.row[k]); replaced++; }
+      else kept++;
+    });
+    updated++;
   });
   if(typeof checkDupContSeal==='function')checkDupContSeal();
   closeOv('ocrContOv');
-  toast('Đã nhập '+(rows.length-skipped)+' cont vào booking '+bkNo+(skipped?' ('+skipped+' dòng vượt quá Vol booking, chưa nhập)':'')+' — nhớ bấm "Lưu" để lưu lại.');
+  st.plan=null;
+  toast('Đã nhập vào booking '+bkNo+': cập nhật '+updated+' cont, thêm mới '+added+' cont'
+    +(replaced?(', thay '+replaced+' giá trị bằng số từ ảnh'):'')+(kept?(', giữ nguyên '+kept+' giá trị hiện có'):'')
+    +(skipped?(' ('+skipped+' dòng vượt quá Vol booking, chưa nhập)'):'')+' — nhớ bấm "Lưu" để lưu lại.');
 }
-window._ocrContApply=_ocrContApply;
+window._ocrExecutePlan=_ocrExecutePlan;
+
 /* ═══ END QUÉT ẢNH CONT/SEAL (OCR) ═══ */
 
 function openDocMakerForBooking(bkNo){
@@ -10015,6 +10089,7 @@ window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
 // A 2.32: email nhận hóa đơn ghi trong các email hệ thống (Đăng ký đóng bãi / Trucking...) — Kế toán. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_INV_MAIL='ketoan@cocoseavn.com';
+// A 2.34: Quét ảnh Cont/Seal chỉ dùng AI (bỏ quét thường) + ĐỐI CHIẾU với dữ liệu đang có trong bảng (khớp theo số cont, cảnh báo ô khác để chọn Giữ/Dùng số từ ảnh, cont gần giống hỏi 'AI đọc sai?'); Admin reset mật khẩu user (Settings → Người dùng: nút chìa khóa; Function adminResetPassword; copy/mở Zalo; user bắt buộc tự đổi mật khẩu ở lần đăng nhập đầu); user có thêm SĐT/Zalo
 // A 2.33: Finance → VAT Report — VAT đầu ra (Debit Note có hóa đơn) / VAT đầu vào (chi phí NCC có VAT) theo tháng/quý/năm/tùy chọn (theo ETD), KPI + biểu đồ + đối chiếu phải nộp/được khấu trừ + bảng theo khách hàng/NCC + chi tiết từng lô + xuất Excel (chỉ đọc dữ liệu)
 // A 2.32: Chữ ký email — logo cây dừa to (140px), bố cục logo | vạch | tên cty + slogan + đường kẻ + icon Hotline/Email/Địa chỉ/Web, dải màu cuối chữ ký; email nhận hóa đơn trong email hệ thống đổi thành ketoan@cocoseavn.com (COCO_INV_MAIL)
 // A 2.31: Giới hạn số ảnh quét AI theo từng user (Cài đặt → Người dùng & Bảo mật); lỗi quản lý thiết bị (Rule userDevices) hiện hướng dẫn + khối Rule để copy
@@ -21131,6 +21206,7 @@ function renderUsers(){
       +'<td style="padding:8px 10px;border-bottom:1px solid var(--border-light);text-align:center">'
         +'<div style="display:flex;gap:3px;justify-content:center">'
           +'<button class="rac grn" onclick="openUserEdit('+i+')" title="Sửa thông tin"><i class="ti ti-edit"></i></button>'
+          +(!isSelf&&currentProfile&&currentProfile.role==='admin'?'<button class="rac" onclick="openPwReset('+i+')" title="Reset mật khẩu đăng nhập" style="color:#0F4C81"><i class="ti ti-key"></i></button>':'')
           +(!isSelf?'<button class="rac" onclick="saveUserRole('+i+')" title="Lưu vai trò" style="color:#854F0B"><i class="ti ti-device-floppy"></i></button>':'')
           +(!isSelf?(u.active===false
               ?'<button class="rac" onclick="setUserActive('+i+',true)" title="Bỏ chặn (cho phép truy cập)" style="color:var(--green)"><i class="ti ti-lock-open"></i></button>'
@@ -21292,6 +21368,183 @@ async function savePermissions(){
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
 }
+// ═══ A 2.34 — ADMIN RESET MẬT KHẨU ĐĂNG NHẬP CHO USER ═══
+// • Chỉ Admin. Admin tự nhập mật khẩu mới (hoặc bấm "Tạo ngẫu nhiên") → Firebase Function 'adminResetPassword' đặt mật khẩu
+//   bằng Admin SDK + đăng xuất mọi phiên cũ + ghi mốc users/{id}.pwResetAt.
+// • Admin copy mật khẩu / tin nhắn có sẵn để gửi cho user qua Zalo (nút "Mở Zalo" nếu user có SĐT). Mật khẩu KHÔNG lưu ở đâu cả.
+// • Lần đăng nhập đầu tiên bằng mật khẩu này, app bắt user tự đổi mật khẩu (xem _checkForcePwChange).
+window._pwReset=null;
+
+function _pwGenRandom(){
+  const U='ABCDEFGHJKLMNPQRSTUVWXYZ', L='abcdefghijkmnpqrstuvwxyz', N='23456789', ALL=U+L+N;
+  const rnd=function(n){ const a=new Uint32Array(1); (window.crypto||window.msCrypto).getRandomValues(a); return a[0]%n; };
+  const pick=function(s){return s[rnd(s.length)];};
+  const out=[pick(U),pick(L),pick(N)];
+  while(out.length<10)out.push(pick(ALL));
+  for(let i=out.length-1;i>0;i--){ const j=rnd(i+1); const t=out[i]; out[i]=out[j]; out[j]=t; }
+  return out.join('');
+}
+function _pwEsc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function _pwZaloNumber(phone){
+  const d=String(phone||'').replace(/\D/g,'');
+  if(!d)return '';
+  if(d.indexOf('84')===0&&d.length>=11)return d;
+  if(d.charAt(0)==='0')return '84'+d.slice(1);
+  return d;
+}
+function _pwCopy(text,okMsg){
+  const done=function(){toast(okMsg||'Đã copy');};
+  const fb=function(){
+    try{ const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done(); }
+    catch(e){ toast('Không copy được — hãy bôi đen và copy thủ công','error'); }
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done).catch(fb); } else fb();
+}
+function _pwZaloMessage(){
+  const st=window._pwReset; if(!st)return '';
+  const u=st.u, url=location.origin+location.pathname;
+  return 'Chào '+(u.name||'bạn')+', quản trị viên đã đặt lại mật khẩu đăng nhập COCOSEA cho bạn.\n'
+    +'Trang đăng nhập: '+url+'\n'
+    +'Tài khoản: '+(u.email||'')+(u.username?(' (hoặc tên đăng nhập: '+u.username+')'):'')+'\n'
+    +'Mật khẩu tạm: '+st.pw+'\n'
+    +'Lần đăng nhập đầu tiên hệ thống sẽ yêu cầu bạn đổi sang mật khẩu của riêng mình. Vui lòng không chia sẻ mật khẩu này.';
+}
+
+function openPwReset(idx){
+  if(!currentProfile||currentProfile.role!=='admin'){toast('Chỉ Admin mới được reset mật khẩu','error');return;}
+  const u=cache.users[idx];
+  if(!u){toast('Không tìm thấy user','error');return;}
+  if(u.email===(currentUser&&currentUser.email)){toast('Không reset mật khẩu của chính mình ở đây — hãy dùng Đổi mật khẩu','error');return;}
+  window._pwReset={idx:idx,u:u,docId:u._docId||u.uid||String(u.email||'').replace(/\./g,'_'),pw:'',done:false};
+  _pwResetRender();
+  openOv('pwResetOv');
+}
+window.openPwReset=openPwReset;
+
+function _pwResetClose(){
+  window._pwReset=null;
+  const ov=g('pwResetOv'); if(ov)ov.innerHTML='';
+  closeOv('pwResetOv');
+}
+window._pwResetClose=_pwResetClose;
+
+function _pwResetRender(){
+  const st=window._pwReset, ov=g('pwResetOv'); if(!st||!ov)return;
+  const u=st.u;
+  const hdr='<div style="background:#0F4C81;padding:12px 18px;display:flex;align-items:center;gap:10px">'
+    +'<i class="ti ti-key" style="font-size:18px;color:#fff"></i>'
+    +'<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700;color:#fff">Reset mật khẩu đăng nhập</div>'
+    +'<div style="font-size:11px;color:rgba(255,255,255,.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_pwEsc(u.name||u.email)+' · '+_pwEsc(u.email)+'</div></div>'
+    +'<button onclick="_pwResetClose()" style="color:#fff;font-size:18px;background:rgba(255,255,255,.18);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button></div>';
+  let body='';
+  if(!st.done){
+    body='<div style="font-size:12.5px;color:var(--text-secondary);line-height:1.55;margin-bottom:12px">Nhập mật khẩu tạm cho user (hoặc bấm <b>Tạo ngẫu nhiên</b>). Sau khi đặt: mọi phiên đăng nhập cũ của user bị đăng xuất, và ở <b>lần đăng nhập đầu tiên</b> user bắt buộc phải tự đổi sang mật khẩu riêng.</div>'
+      +'<label class="lbl">Mật khẩu mới (tối thiểu 8 ký tự)</label>'
+      +'<div style="display:flex;gap:8px;margin-bottom:6px">'
+        +'<input type="text" id="pwr_new" autocomplete="off" spellcheck="false" value="'+_pwEsc(st.pw)+'" oninput="window._pwReset.pw=this.value" onkeydown="if(event.key===\'Enter\'){event.preventDefault();_pwResetDo();}" placeholder="VD: Coco@2026x" style="flex:1;font-family:\'JetBrains Mono\',Consolas,monospace;font-size:14px;letter-spacing:.3px"/>'
+        +'<button type="button" class="btn" onclick="_pwResetGen()"><i class="ti ti-dice-3"></i> Tạo ngẫu nhiên</button>'
+      +'</div>'
+      +'<div style="font-size:11.5px;color:var(--text-tertiary);margin-bottom:14px">Nên dùng cả chữ hoa, chữ thường và số. Mật khẩu không được lưu lại sau khi bạn đóng cửa sổ này.</div>'
+      +'<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="_pwResetClose()">Hủy</button>'
+      +'<button class="btn pri" id="pwr_btn" onclick="_pwResetDo()"><i class="ti ti-check"></i> Đặt lại mật khẩu</button></div>';
+  } else {
+    const hasPhone=!!_pwZaloNumber(u.phone);
+    body='<div style="display:flex;align-items:center;gap:10px;background:var(--green-bg);color:var(--green-dark);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;font-weight:600"><i class="ti ti-circle-check" style="font-size:20px"></i>Đã đặt lại mật khẩu. Hãy gửi cho user ngay bây giờ.</div>'
+      +'<label class="lbl">Mật khẩu tạm</label>'
+      +'<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">'
+        +'<div style="flex:1;font-family:\'JetBrains Mono\',Consolas,monospace;font-size:20px;font-weight:700;letter-spacing:1px;padding:10px 14px;border:1px dashed var(--border-light);border-radius:10px;background:var(--bg-secondary);user-select:all;word-break:break-all">'+_pwEsc(st.pw)+'</div>'
+        +'<button class="btn" onclick="_pwCopy(window._pwReset.pw,\'Đã copy mật khẩu\')"><i class="ti ti-copy"></i> Copy</button>'
+      +'</div>'
+      +'<label class="lbl">Tin nhắn gửi user (Zalo)</label>'
+      +'<textarea id="pwr_msg" rows="7" readonly style="width:100%;box-sizing:border-box;font-size:12.5px;line-height:1.5">'+_pwEsc(_pwZaloMessage())+'</textarea>'
+      +'<div style="font-size:11.5px;color:var(--text-tertiary);margin:6px 0 14px">'+(hasPhone?('Zalo của user: <b>'+_pwEsc(u.phone)+'</b>'):'<span style="color:#B45309">User chưa có SĐT/Zalo — thêm ở “Sửa thông tin” để dùng nút Mở Zalo; hiện tại hãy Copy tin nhắn rồi gửi thủ công.</span>')+'</div>'
+      +'<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
+        +'<button class="btn" onclick="_pwCopy(g(\'pwr_msg\').value,\'Đã copy tin nhắn\')"><i class="ti ti-copy"></i> Copy tin nhắn</button>'
+        +(hasPhone?'<button class="btn pri" style="background:#0068FF;border-color:#0068FF" onclick="_pwOpenZalo()"><i class="ti ti-brand-hipchat"></i> Copy & mở Zalo</button>':'')
+        +'<button class="btn" onclick="_pwResetClose()">Đóng</button>'
+      +'</div>'
+      +'<div style="font-size:11px;color:#B45309;margin-top:10px">Mật khẩu chỉ hiển thị ở cửa sổ này — đóng lại sẽ không xem được nữa (nếu quên, chỉ cần reset lại).</div>';
+  }
+  ov.innerHTML='<div class="modal" style="max-width:560px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18)">'+hdr+'<div style="padding:16px 18px;background:var(--bg-primary)">'+body+'</div></div>';
+}
+function _pwResetGen(){
+  const st=window._pwReset; if(!st)return;
+  st.pw=_pwGenRandom();
+  const el=g('pwr_new'); if(el)el.value=st.pw;
+}
+window._pwResetGen=_pwResetGen;
+
+function _pwOpenZalo(){
+  const st=window._pwReset; if(!st)return;
+  const n=_pwZaloNumber(st.u.phone); if(!n){toast('User chưa có SĐT/Zalo','error');return;}
+  _pwCopy(_pwZaloMessage(),'Đã copy tin nhắn — dán vào Zalo rồi bấm gửi');
+  window.open('https://zalo.me/'+n,'_blank','noopener');
+}
+window._pwOpenZalo=_pwOpenZalo;
+
+async function _pwResetDo(){
+  const st=window._pwReset; if(!st||st.busy)return;
+  const pw=(g('pwr_new')?g('pwr_new').value:st.pw)||'';
+  st.pw=pw;
+  if(pw.length<8){toast('Mật khẩu mới cần ít nhất 8 ký tự','error');return;}
+  if(pw.length>64){toast('Mật khẩu quá dài (tối đa 64 ký tự)','error');return;}
+  if(!confirm('Đặt lại mật khẩu cho "'+(st.u.name||st.u.email)+'"?\n\n• Mật khẩu cũ của user sẽ không còn dùng được.\n• Mọi phiên đăng nhập hiện tại của user sẽ bị đăng xuất.\n• Lần đăng nhập đầu tiên user bắt buộc đổi mật khẩu.'))return;
+  if(!(window.firebase&&firebase.functions)){toast('Thiếu thư viện Firebase Functions — tải lại trang (Ctrl+F5)','error');return;}
+  st.busy=true; setLoading(true,'Đang đặt lại mật khẩu...');
+  try{
+    const fn=firebase.app().functions('asia-southeast1').httpsCallable('adminResetPassword',{timeout:30000});
+    await fn({docId:st.docId,newPassword:pw});
+    st.done=true;
+    _pwResetRender();
+    toast('Đã đặt lại mật khẩu cho '+(st.u.name||st.u.email));
+  }catch(e){
+    const code=String((e&&e.code)||'').replace('functions/','');
+    let msg=(e&&e.message)||'Lỗi không xác định';
+    if(code==='not-found'&&/function/i.test(msg))msg='Chức năng reset chưa được cập nhật trên Firebase — cần deploy function (xem HUONG_DAN.md)';
+    else if(code==='not-found'||code==='unavailable')msg=(code==='unavailable'?'Chưa kết nối được function — kiểm tra mạng hoặc deploy function':msg);
+    else if(code==='unauthenticated')msg='Phiên đăng nhập hết hạn — đăng nhập lại';
+    toast('Không reset được: '+msg,'error');
+    console.warn('adminResetPassword lỗi:',code,e&&e.message);
+  }
+  st.busy=false; setLoading(false);
+}
+window._pwResetDo=_pwResetDo;
+
+// ── Lần đăng nhập đầu tiên sau khi admin reset: BẮT user tự đổi mật khẩu ──
+// Mốc admin reset = users/{id}.pwResetAt (ghi bởi Function). Mốc user tự đổi = profiles/{uid}.lastPasswordChange (doChangePassword ghi).
+// Nếu mốc đổi < mốc reset → còn dùng mật khẩu tạm → mở popup đổi mật khẩu bắt buộc (không đóng được, chỉ đăng xuất).
+async function _checkForcePwChange(){
+  try{
+    if(!currentUser||!currentProfile)return;
+    const at=Number(currentProfile.pwResetAt)||0;
+    if(!at)return;
+    const key='_cocoPwForced_'+currentUser.uid+'_'+at;
+    try{ if(sessionStorage.getItem(key)==='1')return; }catch(e){}
+    // Cách 1 (chính xác, dùng giờ máy chủ): thời điểm đổi mật khẩu thật trong Firebase Auth (passwordUpdatedAt).
+    // Function đặt mật khẩu ngay sau khi ghi pwResetAt (cách nhau < 1–2 giây) → nếu mốc Auth chỉ hơn pwResetAt ≤ 10 giây
+    // nghĩa là user CHƯA tự đổi. Cách 2 (dự phòng khi không tra được Auth): mốc profiles/{uid}.lastPasswordChange do app ghi.
+    let authT=0;
+    try{
+      const tok=await currentUser.getIdToken();
+      const r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key='+encodeURIComponent(firebaseConfig.apiKey),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:tok})});
+      const j=await r.json(); const u=j&&j.users&&j.users[0];
+      if(u)authT=Number(u.passwordUpdatedAt)||0;
+    }catch(e){}
+    if(authT){ if(authT-at>10000)return; }
+    else{
+      let last=0;
+      try{
+        const s=await db.collection('profiles').doc(currentUser.uid).get();
+        last=Number(s.exists&&s.data().lastPasswordChange)||0;
+      }catch(e){ console.warn('COCOFLOW: không đọc được mốc đổi mật khẩu',e&&e.message); }
+      if(last>at)return;
+    }
+    if(!currentUser)return;
+    openPasswordChangePrompt('first');
+  }catch(e){ console.warn('COCOFLOW _checkForcePwChange',e); }
+}
+window._checkForcePwChange=_checkForcePwChange;
+
 function openUserEdit(idx){
   userEditIdx=idx; const u=idx!==null?cache.users[idx]:{};
   window._userEditAvatarFile=null;
@@ -21301,6 +21554,8 @@ function openUserEdit(idx){
     <div class="fi full"><label class="lbl">Email (dùng để đăng nhập)</label><input type="email" id="uf_email" value="${u.email||''}" ${idx!==null?'readonly':''}/></div>
     <div class="fi"><label class="lbl">Tên đăng nhập (không bắt buộc)</label><input type="text" id="uf_username" value="${u.username||''}" placeholder="VD: nguyenvana" style="text-transform:lowercase"/></div>
     <div class="fi"><label class="lbl">Họ và tên</label><input type="text" id="uf_name" value="${u.name||''}"/></div>
+    <div class="fi full"><label class="lbl">SĐT / Zalo (không bắt buộc)</label><input type="tel" id="uf_phone" value="${(u.phone||'').replace(/"/g,'&quot;')}" placeholder="VD: 0909123456"/>
+      <div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">Dùng để Admin gửi mật khẩu mới qua Zalo khi reset mật khẩu cho user này.</div></div>
     <div class="fi full"><label class="lbl">Email Cty (người gửi trong file .eml)</label><input type="email" id="uf_coemail" value="${(u.companyEmail||'').replace(/"/g,'&quot;')}" placeholder="VD: tien@cocoseavn.com — để trống = ${window.COCO_MAIL}"/>
       <div style="font-size:10.5px;color:var(--text-secondary);margin-top:2px">Khi user này bấm gửi email, file .eml sẽ ghi người gửi (From) là địa chỉ này. Để trống thì dùng ${window.COCO_MAIL}.</div></div>
     <div class="fi full">
@@ -21357,6 +21612,8 @@ async function saveUser(){
   const role=g('uf_role').value; const av=g('uf_av').value.slice(0,2).toUpperCase()||name.slice(0,2).toUpperCase()||'??';
   const emailSignature=g('uf_sig')?.value||'';
   const companyEmail=(g('uf_coemail')?.value||'').trim().toLowerCase();
+  const phone=(g('uf_phone')?.value||'').trim();
+  if(phone && !/^[0-9+\s().-]{8,16}$/.test(phone)){toast('SĐT / Zalo không hợp lệ','error');return;}
   if(companyEmail && !/^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(companyEmail)){toast('Email Cty không hợp lệ','error');return;}
   if(!email){toast('Nhập email','error');return;}
   if(!name){toast('Nhập họ tên','error');return;}
@@ -21394,7 +21651,7 @@ async function saveUser(){
         const ext=(window._userEditAvatarFile.name.split('.').pop()||'jpg').toLowerCase();
         avatarUrl=await _uploadFileToStorage(window._userEditAvatarFile,'avatars/'+docId+'/avatar_'+Date.now()+'.'+ext);
       }
-      const payload={uid,email,name,username,role,avatar:av,emailSignature,companyEmail,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''};
+      const payload={uid,email,name,username,phone,role,avatar:av,emailSignature,companyEmail,active:true,createdAt:Date.now(),updatedAt:Date.now(),createdBy:currentUser?.email||''};
       if(avatarUrl)payload.avatarUrl=avatarUrl;
       await fsSet('users', docId, payload);
       if(username)await db.collection('usernameMap').doc(username).set({email:email,updatedAt:Date.now()});
@@ -21411,7 +21668,7 @@ async function saveUser(){
       } else if(window._userEditAvatarCleared){
         avatarUrl=null;
       }
-      const payload={email,name,username,role,avatar:av,emailSignature,companyEmail,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
+      const payload={email,name,username,phone,role,avatar:av,emailSignature,companyEmail,updatedAt:Date.now(),updatedBy:currentUser?.email||''};
       if(avatarUrl!==undefined)payload.avatarUrl=avatarUrl;
       await fsSet('users', docId, payload);
       // Nếu đang tự sửa hồ sơ của chính mình, cập nhật currentProfile + giao diện ngay
@@ -24263,6 +24520,7 @@ body.xuat-lotmode #xuat-lot-work .cs-main button[onclick^="addBkContRow"]{
 <div class="ov" id="tcVoucherOv" style="padding:.75rem"></div>
 <div class="ov" id="tcSupplierDetailOv" style="padding:.75rem"></div>
 <div class="ov" id="payStatusOv" style="padding:.75rem"></div>
+<div class="ov" id="pwResetOv" style="padding:.75rem"></div>
 <div class="ov" id="cnBulkPayOv" style="padding:.75rem"></div>
 
 <!-- THU CHI: CONG NO ENTRY MODAL -->
