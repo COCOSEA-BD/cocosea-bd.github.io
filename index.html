@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.29';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.30';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -1311,6 +1311,11 @@ window.APP_BUILD='A 2.29';window.COCO_SHOW_OCR_BTN=true;
   // Kiểm tra lần đầu sau 30s (tránh nhiễu lúc mới load), rồi mỗi 5 phút
   setTimeout(_check,30000);
   setInterval(_check,5*60*1000);
+  // A 2.30: quay lại tab/cửa sổ sau khi để nền → kiểm tra ngay (cách lần trước ≥ 60s) để thấy bản mới sớm hơn
+  var _lastChk=0;
+  function _checkSoon(){ var n=Date.now(); if(n-_lastChk<60000)return; _lastChk=n; _check(); }
+  document.addEventListener('visibilitychange',function(){ if(!document.hidden)_checkSoon(); });
+  window.addEventListener('focus',_checkSoon);
   // CSS animation
   var style=document.createElement('style');
   style.textContent='@keyframes _slideDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}';
@@ -7087,7 +7092,17 @@ function _ocrContRunScan(){
       st.engine='ai';
       st.rows=_ocrNormalizeAiRows(res&&res.data&&res.data.rows);
       // A 2.29: trọng lượng đọc từ ảnh luôn đưa vào G.W (nếu AI chỉ trả N.W thì coi đó là G.W); N.W tính lại = G.W − mức trừ
-      st.rows.forEach(function(r){ if(r.gw===''&&r.nw!=='')r.gw=r.nw; r.nw=''; });
+      st.rows.forEach(function(r){ if(r.gw===''&&r.nw!=='')r.gw=r.nw; r.nw=''; r.rawGw=r.gw; r.rawTare=r.tare; });
+      // A 2.30: đơn vị trong ảnh (Tấn → kg ×1000)
+      const _wu=String((res&&res.data&&res.data.weightUnit)||'').toLowerCase();
+      st.unit=(_wu==='ton'||_wu==='t'||_wu==='tons'||_wu==='tonne')?'t':(_wu==='kg'?'kg':'');
+      st.unitGuess=false;
+      if(!st.unit){
+        const _vals=[]; st.rows.forEach(function(r){ [r.rawGw,r.rawTare].forEach(function(x){ const v=parseFloat(x); if(!isNaN(v)&&v>0)_vals.push(v); }); });
+        st.unit=(_vals.length&&_vals.every(function(v){return v<=100;}))?'t':'kg'; st.unitGuess=true;
+      }
+      _ocrApplyUnit();
+      _ocrApplyTareHistory();
       st._nwAutoDone=false;
       if(!st.rows.length){
         toast('AI không đọc được dòng cont nào trong ảnh — thử ảnh rõ hơn, hoặc nhập tay','error');
@@ -7197,7 +7212,7 @@ function _ocrRowHtml(r,i){
     +'<td style="padding:3px 4px"><input type="number" class="ocrPkg" data-i="'+i+'" value="'+esc(r.pkg)+'" placeholder="0" style="'+numInp+'"/></td>'
     +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrNw" data-i="'+i+'" value="'+esc(r.nw)+'" placeholder="0" style="'+numInp+'"/></td>'
     +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrGw" data-i="'+i+'" value="'+esc(r.gw)+'" placeholder="0" style="'+numInp+'"/></td>'
-    +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrTare" data-i="'+i+'" value="'+esc(r.tare)+'" placeholder="0" style="'+numInp+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrTare" data-i="'+i+'" value="'+esc(r.tare)+'" placeholder="0" style="'+numInp+((window._ocrContState&&window._ocrContState.tareFromHist&&window._ocrContState.tareFromHist[String(r.no||'').toUpperCase().replace(/[^A-Z0-9]/g,'')])?'background:#ECFDF5;':'')+'"/></td>'
     +'<td style="padding:3px 4px"><input type="date" class="ocrDate" data-i="'+i+'" value="'+esc(r.date)+'" style="'+inp+'"/></td>'
     +'<td style="padding:3px 4px;text-align:center"><button type="button" class="rac red" onclick="_ocrContDelRow(this)" style="font-size:12px;padding:4px 6px"><i class="ti ti-trash"></i></button></td>'
     +'</tr>';
@@ -7205,6 +7220,74 @@ function _ocrRowHtml(r,i){
 
 /* A 2.29: G.W là số đọc từ ảnh; N.W = G.W − mức trừ (mặc định 70 kg, chỉnh được theo loại hàng, bấm Fill để áp cho mọi dòng) */
 function _ocrRoundKg(x){ return Math.round(x*1000)/1000; }
+/* A 2.30: ĐƠN VỊ & TARE ────────────────────────────────────────────────────────────────
+   - Ảnh ghi Tấn (T/MT/Ton/Tấn) → quy đổi ×1000 sang kg. AI trả weightUnit; nếu không rõ thì đoán: mọi số ≤ 100 → Tấn.
+   - Chọn đơn vị trên popup để quy đổi lại từ số gốc đọc được.
+   - Tare: tra theo số cont từ các lô đã lưu trong app (lô mới nhất có Tare > 0); chỉ điền khi ô Tare đang trống. */
+function _ocrApplyUnit(){
+  const st=window._ocrContState; if(!st)return;
+  const f=(st.unit==='t')?1000:1;
+  st.rows.forEach(function(r){
+    const cv=function(raw){ const v=parseFloat(raw); return (raw===''||raw==null||isNaN(v))?'':_ocrRoundKg(v*f); };
+    r.gw=cv(r.rawGw); r.tare=cv(r.rawTare);
+  });
+}
+function _ocrContSetUnit(u){
+  const st=window._ocrContState; if(!st)return;
+  // giữ lại phần người dùng đã sửa (Cont/Seal/Pkg/Ngày), chỉ tính lại các cột trọng lượng
+  const tb=g('ocrPreviewBody');
+  if(tb){ tb.querySelectorAll('tr').forEach(function(tr,i){
+    const r=st.rows[i]; if(!r)return; const gv=function(c){const el=tr.querySelector('.'+c);return el?el.value.trim():'';};
+    r.no=gv('ocrNo'); r.seal=gv('ocrSeal'); r.pkg=gv('ocrPkg'); r.date=gv('ocrDate');
+  }); }
+  st.unit=(u==='t')?'t':'kg'; st.unitGuess=false;
+  _ocrApplyUnit(); _ocrApplyTareHistory(); st._nwAutoDone=false;
+  _ocrContRenderPreviewTable();
+}
+window._ocrContSetUnit=_ocrContSetUnit;
+
+function _ocrBuildTareMap(){
+  const map={}; // no → {tare, t}
+  const take=function(c,t){
+    if(!c||!c.no)return; const tare=parseFloat(c.tare); if(!(tare>0))return;
+    const k=String(c.no).toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(!map[k]||t>map[k].t)map[k]={tare:tare,t:t};
+  };
+  [].concat(cache.xuat||[],cache.nhap||[]).forEach(function(lot){
+    const t=lot.createdAt||0;
+    (lot.containers||[]).forEach(function(c){take(c,t);});
+    Object.keys(lot.bookingConts||{}).forEach(function(k){
+      const b=lot.bookingConts[k]; const arr=Array.isArray(b)?b:((b&&(b.posContainers||b.containers))||[]);
+      arr.forEach(function(c){take(c,t);});
+    });
+  });
+  return map;
+}
+function _ocrApplyTareHistory(){
+  const st=window._ocrContState; if(!st)return 0;
+  let map; try{ map=_ocrBuildTareMap(); }catch(e){ return 0; }
+  let n=0; st.tareFromHist={};
+  st.rows.forEach(function(r){
+    if(r.tare!==''&&r.tare!=null)return;
+    const k=String(r.no||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(k&&map[k]){ r.tare=map[k].tare; st.tareFromHist[k]=true; n++; }
+  });
+  return n;
+}
+function _ocrContLookupTare(){
+  const tb=g('ocrPreviewBody'); if(!tb)return;
+  let map; try{ map=_ocrBuildTareMap(); }catch(e){ toast('Không đọc được dữ liệu lô để tra Tare','error'); return; }
+  let n=0,miss=0;
+  tb.querySelectorAll('tr').forEach(function(tr){
+    const noEl=tr.querySelector('.ocrNo'), tEl=tr.querySelector('.ocrTare'); if(!noEl||!tEl)return;
+    const k=noEl.value.toUpperCase().replace(/[^A-Z0-9]/g,''); if(!k)return;
+    if(tEl.value!==''&&parseFloat(tEl.value)>0)return;
+    if(map[k]){ tEl.value=map[k].tare; tEl.style.background='#ECFDF5'; tEl.title='Tra từ lịch sử các lô đã lưu'; n++; } else miss++;
+  });
+  toast('Tra Tare từ lịch sử: điền '+n+' dòng'+(miss?(' · '+miss+' cont chưa có trong lịch sử (nhập tay hoặc lấy từ cửa cont)'):''), miss&&!n?'error':'success');
+}
+window._ocrContLookupTare=_ocrContLookupTare;
+
 function _ocrContFillNw(silent){
   const st=window._ocrContState||{}; const tbody=g('ocrPreviewBody'); const dEl=g('ocrNwDeduct');
   if(!tbody||!dEl)return;
@@ -7229,7 +7312,7 @@ function _ocrContRenderPreviewTable(){
   if(st.nwDeduct==null)st.nwDeduct=70;
   // Kết quả AI: số đọc được là G.W → N.W tính theo mức trừ mặc định (chỉ làm 1 lần khi vừa quét)
   if(st.engine==='ai'&&!st._nwAutoDone){
-    st.rows.forEach(function(r){ const gw=parseFloat(r.gw); if(!isNaN(gw)&&gw-st.nwDeduct>=0)r.nw=_ocrRoundKg(gw-st.nwDeduct); });
+    st.rows.forEach(function(r){ const gw=parseFloat(r.gw); r.nw=(!isNaN(gw)&&gw-st.nwDeduct>=0)?_ocrRoundKg(gw-st.nwDeduct):''; });
     st._nwAutoDone=true;
   }
   const modal=body.closest('.modal'); if(modal){ modal.style.maxWidth='none'; modal.style.width='min(1120px,96vw)'; }
@@ -7244,6 +7327,13 @@ function _ocrContRenderPreviewTable(){
       +'<span style="font-size:12.5px">kg</span>'
       +'<button type="button" class="btn sm pri" onclick="_ocrContFillNw()"><i class="ti ti-arrow-down"></i> Fill N.W</button>'
       +'<span style="font-size:11.5px;color:var(--text-tertiary)">Mặc định trừ 70 kg. Đổi số theo loại hàng rồi bấm Fill để tính lại N.W cho tất cả dòng bên dưới.</span>'
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff;border:1px solid var(--border-light);border-radius:8px;padding:8px 12px;margin-bottom:8px">'
+      +(st.unit?('<span style="font-size:12.5px;font-weight:700">Đơn vị trọng lượng trong ảnh:</span>'
+        +'<select id="ocrUnitSel" onchange="_ocrContSetUnit(this.value)" style="font-size:13px;padding:5px 8px"><option value="kg"'+(st.unit==='kg'?' selected':'')+'>Kg</option><option value="t"'+(st.unit==='t'?' selected':'')+'>Tấn (×1000 → kg)</option></select>'
+        +'<span style="font-size:11.5px;color:'+(st.unitGuess?'#B45309':'var(--text-tertiary)')+'">'+(st.unit==='t'?'Đã quy đổi G.W/Tare từ Tấn sang kg. ':'Số trong ảnh được hiểu là kg. ')+(st.unitGuess?'Ảnh không ghi rõ đơn vị nên app tự đoán — hãy kiểm tra lại. ':'')+'Bảng bên dưới luôn là kg.</span>'):'<span style="font-size:11.5px;color:var(--text-tertiary)">Các cột trọng lượng tính bằng kg.</span>')
+      +'<span style="flex:1"></span>'
+      +'<button type="button" class="btn sm" onclick="_ocrContLookupTare()" title="Tra Tare theo số cont từ các lô đã lưu trong app"><i class="ti ti-search"></i> Tra Tare từ lịch sử</button>'
     +'</div>'
     +'<div style="max-height:58vh;overflow:auto;border:1px solid var(--border-light);border-radius:8px;background:#fff">'
     +'<table style="width:100%;min-width:900px;border-collapse:collapse;table-layout:fixed">'
@@ -9922,6 +10012,7 @@ function _emailContList(r){
 // "email nhận hóa đơn" trên mọi email/PDF/báo giá/hợp đồng. Muốn đổi, sửa DUY NHẤT dòng này.
 window.COCO_MAIL='info@cocoseavn.com';
 window.COCO_HOTLINE='0909 641 011'; // hotline hiển thị trên chữ ký email hệ thống
+// A 2.30: Quét ảnh — quy đổi Tấn→kg theo đơn vị trong ảnh; tra Tare theo số cont từ lịch sử lô; báo phiên bản mới cũng kiểm tra khi quay lại tab
 // A 2.29: Quét ảnh Cont/Seal — popup rộng hơn, ô nhập đủ chỗ; trọng lượng quét được điền vào G.W, N.W = G.W − mức trừ (mặc định 70kg, chỉnh được, bấm Fill)
 // A 2.28: Bật lại nút "Quét ảnh" ở tab Cont/Seal — đọc ảnh bằng Claude Haiku 5.5 qua Firebase Function ocrContScan (tự dự phòng Tesseract nếu AI lỗi)
 // A 2.27: Bộ nhớ đệm Firestore trên máy (offline persistence) — từ lần mở thứ 2 danh sách lô hiện ngay từ bộ đệm; tự xóa bộ đệm khi đăng xuất/đổi tài khoản
