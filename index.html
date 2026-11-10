@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.36';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.37';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7300,6 +7300,13 @@ window._ocrContDelRow=_ocrContDelRow;
 const OCR_FIELDS=[['seal','Seal','cseal'],['pkg','Pkg','cpkg'],['nw','N.W (kg)','cnw'],['gw','G.W (kg)','cgw'],['tare','Tare (kg)','ctare'],['date','Ngày','cdate']];
 function _ocrEsc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 function _ocrNormNo(s){return String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
+// Ô coi như "trống": rỗng, hoặc ô số đang là 0 (dòng cont mới tạo mặc định hiện 0 ở Pkg / N.W / G.W / Tare)
+function _ocrBlank(f,v){
+  v=String(v==null?'':v).trim();
+  if(v==='')return true;
+  if(f==='pkg'||f==='nw'||f==='gw'||f==='tare'){ const x=parseFloat(v); return !isNaN(x)&&x===0; }
+  return false;
+}
 function _ocrSame(f,a,b){
   if(f==='seal')return _ocrNormNo(a)===_ocrNormNo(b);
   if(f==='date')return String(a).trim()===String(b).trim();
@@ -7346,7 +7353,7 @@ function _ocrBuildPlan(rows,ex){
       const k=f[0], sv=op.row[k];
       if(sv===''||sv==null)return;
       const cur=op.ex[k];
-      if(cur==='')op.fills.push(k);
+      if(_ocrBlank(k,cur))op.fills.push(k);
       else if(!_ocrSame(k,cur,sv)){ op.conf.push(k); op.choice[k]='keep'; }
     });
     conflicts+=op.conf.length+(op.kind==='similar'?1:0);
@@ -7461,7 +7468,8 @@ function _ocrExecutePlan(){
   const setV=function(cls,i,val){const el=cellOf(cls,i); if(el&&val!==''&&val!=null)el.value=val;};
   const rowIsFree=function(i){
     if(_ocrNormNo((cellOf('cno',i)||{}).value))return false;
-    return OCR_FIELDS.every(function(f){const el=cellOf(f[2],i);return !el||String(el.value||'').trim()==='';});
+    // dòng trống = chưa có số cont; Pkg/N.W/G.W/Tare = 0 và Ngày mặc định (tự điền sẵn) không tính là đã có dữ liệu
+    return OCR_FIELDS.every(function(f){const el=cellOf(f[2],i);return !el||f[0]==='date'||_ocrBlank(f[0],el.value);});
   };
   let updated=0, added=0, kept=0, replaced=0, skipped=0;
   st.plan.ops.forEach(function(op){
