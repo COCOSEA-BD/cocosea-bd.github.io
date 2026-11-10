@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.35';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.36';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -34903,6 +34903,7 @@ function renderCOReport(){
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lô hàng</span>'
       +'<div style="display:flex;gap:6px;margin-left:auto">'
         +_svcBulkBtn('co')
+        +_svcImpBtn('co')
         +'<button class="btn sm" onclick="coReportExportExcel()" title="Xuất Excel (theo dữ liệu đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
         +'<button class="btn sm" onclick="coReportExportPDF()" title="Xuất PDF (theo dữ liệu đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
         +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Số C/O đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="coReportImportExcel(this)"/></label>'
@@ -35146,6 +35147,7 @@ function renderPhytoReport(){
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lô hàng</span>'
       +'<div style="display:flex;gap:6px;margin-left:auto">'
         +_svcBulkBtn('phyto')
+        +_svcImpBtn('phyto')
         +'<button class="btn sm" onclick="phytoReportExportExcel()" title="Xuất Excel (theo dữ liệu đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
         +'<button class="btn sm" onclick="phytoReportExportPDF()" title="Xuất PDF (theo dữ liệu đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
         +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Số Phyto/Hóa đơn KD đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="phytoReportImportExcel(this)"/></label>'
@@ -35395,6 +35397,7 @@ function renderFumiReport(){
       +'<span style="font-size:12px;color:var(--text-secondary);background:var(--bg-secondary);padding:2px 10px;border-radius:20px">'+filtered.length+' lô hàng</span>'
       +'<div style="display:flex;gap:6px;margin-left:auto">'
         +_svcBulkBtn('fumi')
+        +_svcImpBtn('fumi')
         +'<button class="btn sm" onclick="fumiReportExportExcel()" title="Xuất Excel (theo dữ liệu đang lọc)"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
         +'<button class="btn sm" onclick="fumiReportExportPDF()" title="Xuất PDF (theo dữ liệu đang lọc)"><i class="ti ti-file-type-pdf"></i> PDF</button>'
         +'<label class="btn sm" style="cursor:pointer" title="Nhập lại Số Fumi đã điền từ file Excel"><i class="ti ti-table-import"></i> Nhập Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="fumiReportImportExcel(this)"/></label>'
@@ -35937,6 +35940,877 @@ function svcBulkFinish(){
   }catch(e){}
 }
 window.svcBulkFinish=svcBulkFinish;
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// A 2.36 — NHẬP FILE NCC (C/O · Phyto · Fumi): đối chiếu theo SỐ BILL, điền số chứng thư + chi phí từng lô.
+// Nguyên tắc an toàn (liên quan công nợ NCC):
+//  (1) KHÔNG ghi gì cho tới bước cuối "Xác nhận ghi"; mọi bước trước chỉ đọc file + so khớp trong bộ nhớ.
+//  (2) Chỉ Admin / Accountant. Lô khóa / Đã Costing / NCC đã thanh toán / đã có phiếu chi → bị chặn.
+//  (3) Mỗi lô ghi trong 1 transaction: đọc lại bản mới nhất, so với bản người dùng đã thấy ở bước xem trước,
+//      nếu có người khác vừa sửa → BỎ QUA lô đó (không ghi đè).
+//  (4) Chỉ tự tick các dòng "sạch": khớp đúng 1 lô, chưa có giá/chứng thư khác, không trùng bill. Dòng còn lại
+//      mặc định KHÔNG tick, người dùng tự quyết.
+//  (5) Đối chiếu tổng file (dòng Tổng cộng / VAT) với tổng đọc được và tổng sẽ nhập; lệch → báo đỏ.
+//  (6) Không dùng AI để đọc/ghi số tiền. Quy tắc nhận dạng cột chạy cục bộ; người dùng chỉnh được từng cột.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+const SVI_CFG={
+  co:   {label:'C/O',   certLabel:'Số C/O',   roles:['bill','bill2','cert','amt','price','qty','cont','extra','note']},
+  phyto:{label:'Phyto', certLabel:'Số Phyto', roles:['bill','bill2','cert','amt','qty','hoa','extra','note']},
+  fumi: {label:'Fumi',  certLabel:'Số Fumi',  roles:['bill','bill2','cert','amt','price','qty','cont','extra','note']}
+};
+const SVI_ROLE_LBL={bill:'Số Bill (đối chiếu)',bill2:'Cột Bill/Booking phụ (nếu có)',cert:'Số chứng thư',amt:'Chi phí (Thành tiền / CP KD)',
+  price:'Đơn giá (dự phòng nếu thiếu Thành tiền)',qty:'SL Cont',cont:'Số Container (đối chiếu thêm)',hoa:'Hóa đơn kiểm dịch (→ dịch vụ HOA)',
+  extra:'Phát sinh / phí khác (→ dòng chi phí nhập tay)',note:'Ghi chú'};
+window._sviS=null;
+
+function _sviNorm(s){
+  return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/đ/g,'d').replace(/[^a-z0-9%\/ ]+/g,' ').replace(/\s+/g,' ').trim();
+}
+function _sviKey(s){ return String(s==null?'':s).toUpperCase().replace(/[^A-Z0-9]/g,''); }
+// Quy tắc OOCL: 4 chữ cái hãng tàu + ≥7 chữ số (OOLU2340889150) → chỉ cần phần SỐ trùng; bill toàn số cũng so theo phần số
+function _sviNumKey(k){ if(/^[A-Z]{4}\d{7,}$/.test(k))return k.slice(4); if(/^\d{7,}$/.test(k))return k; return null; }
+function _sviStr(v){
+  if(v==null)return '';
+  if(typeof v==='number')return Number.isFinite(v)?String(v):'';
+  if(v instanceof Date)return '';
+  return String(v).replace(/\s+/g,' ').trim();
+}
+function _sviColL(i){ return (window.XLSX&&XLSX.utils)?XLSX.utils.encode_col(i):String(i+1); }
+// Số: chỉ nhận dạng không mơ hồ. "1.500" / "1,500" (1 nhóm 3 số) → KHÔNG đoán, báo lỗi để người dùng sửa file
+function _sviNum(v){
+  if(v==null||v==='')return {n:0,empty:true,ok:true};
+  if(typeof v==='number')return Number.isFinite(v)?{n:v,empty:false,ok:true}:{n:NaN,empty:false,ok:false};
+  let s=String(v).trim().replace(/[\s₫đ]|vnd|vnđ|usd|\$/gi,'');
+  if(s==='')return {n:0,empty:true,ok:true};
+  let n=NaN;
+  if(/^-?\d+(\.\d{1,2})?$/.test(s))n=parseFloat(s);
+  else if(/^-?\d{1,3}(,\d{3}){2,}(\.\d+)?$/.test(s)||/^-?\d{1,3},\d{3}\.\d+$/.test(s))n=parseFloat(s.replace(/,/g,''));
+  else if(/^-?\d{1,3}(\.\d{3}){2,}(,\d+)?$/.test(s)||/^-?\d{1,3}\.\d{3},\d+$/.test(s))n=parseFloat(s.replace(/\./g,'').replace(',','.'));
+  return Number.isFinite(n)?{n:n,empty:false,ok:true}:{n:NaN,empty:false,ok:false};
+}
+function _sviDec(cur){ return (cur==='VND'||cur==='JPY'||cur==='KRW')?0:2; }
+function _sviRnd(n,cur){ const d=_sviDec(cur); const m=Math.pow(10,d); return Math.round((n+Number.EPSILON)*m)/m; }
+function _sviVat(total,pct,cur){ return _sviRnd((Number(total)||0)*(Number(pct)||0)/100,cur); }
+
+function _sviRoleOf(h,tab){
+  const n=_sviNorm(h); if(!n)return '';
+  if(/phat sinh|phi dong tien cang|phu phi|phi khac|chi phi khac/.test(n))return 'extra';
+  if(tab==='phyto'&&/hoa don|hd kd/.test(n))return 'hoa';
+  if(/ghi chu|^note\b|remark/.test(n))return 'note';
+  if(/container|cont no|cont #/.test(n))return 'cont';
+  if(/\bsl\b|so cont|so luong|\bqty\b|quantity/.test(n))return 'qty';
+  if(tab==='co'&&/(^| )so c\/?o( |$)|c\/o no/.test(n))return 'cert';
+  if(tab==='phyto'&&/don dk|so phyto|phyto|chung thu|dang ky/.test(n))return 'cert';
+  if(tab==='fumi'&&/fumi|chung thu|cert/.test(n))return 'cert';
+  if(/booking|\bbkg\b/.test(n))return 'bill2';
+  if(/\bbill\b|van don|\bmbl\b|\bhbl\b|\bb\/l\b/.test(n))return 'bill';
+  if(/don gia|unit price/.test(n))return 'price';
+  if(/thanh tien|cp kd|chi phi|amount|^fee/.test(n))return 'amt';
+  return '';
+}
+
+// Lưới tuyệt đối (cột 0 = A, dòng 0 = 1); điền xuống các ô gộp theo chiều dọc (IFIC gộp số Fumi / Bill / SL cont cho nhiều cont)
+function _sviGrid(ws){
+  const XLSX=window.XLSX;
+  const ref=XLSX.utils.decode_range(ws['!ref']||'A1:A1');
+  const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true,blankrows:true,range:{s:{r:0,c:0},e:{r:ref.e.r,c:ref.e.c}}});
+  (ws['!merges']||[]).forEach(function(m){
+    if(m.e.r<=m.s.r||m.e.r-m.s.r>600)return;
+    const top=(grid[m.s.r]||[])[m.s.c];
+    if(top===''||top==null)return;
+    for(let r=m.s.r+1;r<=m.e.r;r++){ if(!grid[r])grid[r]=[]; for(let c=m.s.c;c<=m.e.c;c++)grid[r][c]=top; }
+  });
+  return grid;
+}
+function _sviDetect(S){
+  const grid=S.grid, tab=S.tab, maxC=grid.reduce(function(m,r){return Math.max(m,(r||[]).length);},0);
+  let best={score:-1,hdr:0,span:1};
+  const hasNum=function(row){ return (row||[]).some(function(c){return typeof c==='number';}); };
+  const nonEmpty=function(row){ return (row||[]).filter(function(c){return _sviStr(c)!=='';}).length; };
+  for(let r=0;r<Math.min(30,grid.length);r++){
+    [1,2].forEach(function(span){
+      if(span===2){ const nx=grid[r+1]; if(!nx||hasNum(nx)||nonEmpty(nx)<2)return; }
+      const roles={}; let score=0;
+      for(let c=0;c<maxC;c++){
+        const parts=[]; for(let k=0;k<span;k++){ const t=_sviStr((grid[r+k]||[])[c]); if(t&&parts.indexOf(t)<0)parts.push(t); }
+        const role=_sviRoleOf(parts.join(' '),tab);
+        if(role&&!roles[role]){ roles[role]=c; score+=(role==='bill'?3:role==='cert'?2:1); }
+      }
+      if(score>best.score)best={score:score,hdr:r,span:span,roles:roles};
+    });
+  }
+  S.hdrRow=best.hdr; S.hdrSpan=best.span; S.detScore=best.score;
+  S.dataStart=best.score>=3?best.hdr+best.span:Math.min(grid.length,best.hdr+1);
+  S.headers=[];
+  for(let c=0;c<maxC;c++){
+    const parts=[]; for(let k=0;k<S.hdrSpan;k++){ const t=_sviStr((grid[S.hdrRow+k]||[])[c]); if(t&&parts.indexOf(t)<0)parts.push(t); }
+    S.headers[c]=parts.join(' ');
+  }
+  S.map={}; SVI_CFG[tab].roles.forEach(function(r){ S.map[r]=-1; });
+  if(best.roles)Object.keys(best.roles).forEach(function(r){ if(S.map[r]!==undefined)S.map[r]=best.roles[r]; });
+  // Mặc định VAT: nếu cuối file có dòng "Thuế GTGT (8%)" thì lấy %; cùng cách đoán loại tiền
+  let vat=0,cur='VND';
+  grid.forEach(function(row){
+    const txt=(row||[]).filter(function(c){return typeof c==='string';}).join(' ');
+    const nt=_sviNorm(txt);
+    if(/thue|gtgt|vat/.test(nt)){ const m=txt.match(/(\d+(?:[.,]\d+)?)\s*%/); if(m)vat=parseFloat(m[1].replace(',','.'))||0; }
+  });
+  if(/usd|\$/i.test(S.headers.join(' ')))cur='USD';
+  if(S.params){ S.params.vat=vat; S.params.cur=cur; }
+}
+
+// Đọc toàn bộ dòng dữ liệu + dòng tổng/thuế cuối file (chưa so khớp với lô)
+function _sviParse(S){
+  const m=S.map, grid=S.grid;
+  const cell=function(row,role){ const c=m[role]; return (c>=0&&row)?row[c]:''; };
+  const out={rows:[],footers:[]};
+  for(let ri=S.dataStart;ri<grid.length;ri++){
+    const row=grid[ri]||[];
+    if(!row.some(function(c){return _sviStr(c)!=='';}))continue;
+    const strs=row.filter(function(c){return typeof c==='string'&&_sviStr(c)!=='';});
+    const label=_sviNorm(strs.join(' '));
+    const bill=_sviStr(cell(row,'bill')), bill2=_sviStr(cell(row,'bill2')), cert=_sviStr(cell(row,'cert'));
+    const isLbl=strs.length&&/^(tong|total|sub total|thue|gtgt|vat|grand)\b|^cong( cong)?$|^cong \(/.test(_sviNorm(strs[0]));
+    const isLbl2=strs.length&&/thue gtgt|thue vat|tong cong|tong tien|tong thanh toan/.test(label);
+    if((isLbl||isLbl2)&&!bill&&!bill2){
+      const f={ri:ri,rowNo:ri+1,kind:'net',vals:{},text:strs.join(' ')};
+      if(/thue|gtgt|vat/.test(label)){ f.kind='vat'; const mm=f.text.match(/(\d+(?:[.,]\d+)?)\s*%/); if(mm)f.pct=parseFloat(mm[1].replace(',','.')); }
+      else if(/tong cong|grand|\(a\)\s*\+\s*\(b\)/.test(label))f.kind='grand';
+      const nums=row.filter(function(c){return typeof c==='number';});
+      f.last=nums.length?nums[nums.length-1]:null;
+      ['amt','hoa','extra','qty','price'].forEach(function(r){ if(m[r]>=0&&typeof row[m[r]]==='number')f.vals[r]=row[m[r]]; });
+      out.footers.push(f); continue;
+    }
+    if(!bill&&!bill2&&!cert&&!strs.length){   // dòng chỉ có số, không nhãn (VD dòng tổng cuối file C/O)
+      const f={ri:ri,rowNo:ri+1,kind:'net',vals:{},text:'(dòng tổng không nhãn)',last:null};
+      ['amt','hoa','extra','qty','price'].forEach(function(r){ if(m[r]>=0&&typeof row[m[r]]==='number')f.vals[r]=row[m[r]]; });
+      out.footers.push(f); continue;
+    }
+    const r={ri:ri,rowNo:ri+1,bill:bill,bill2:bill2,cert:cert,errs:[],
+      amt:_sviNum(cell(row,'amt')),price:_sviNum(cell(row,'price')),qty:_sviNum(cell(row,'qty')),
+      hoa:_sviNum(cell(row,'hoa')),extra:_sviNum(cell(row,'extra')),
+      cont:_sviKey(_sviStr(cell(row,'cont'))),note:_sviStr(cell(row,'note')),certRaw:cert};
+    [['amt','Chi phí'],['price','Đơn giá'],['qty','SL cont'],['hoa','Hóa đơn'],['extra','Phát sinh']].forEach(function(p){
+      if(m[p[0]]>=0&&!r[p[0]].ok)r.errs.push(p[1]+' không đọc được: "'+_sviStr(cell(row,p[0]))+'"');
+      else if(m[p[0]]>=0&&r[p[0]].n<0)r.errs.push(p[1]+' âm');
+    });
+    out.rows.push(r);
+  }
+  return out;
+}
+
+// Gom các dòng cùng Bill thành 1 mục (Fumi: nhiều cont / 1 bill; file lặp bill → gộp + cảnh báo)
+function _sviGroup(S,rows){
+  const items=[], byKey={}, tab=S.tab, cur=S.params.cur;
+  rows.forEach(function(r){
+    const k=_sviKey(r.bill)||_sviKey(r.bill2);
+    if(!k){ items.push({nobill:true,rows:[r],bill:'',bill2:'',key:''}); return; }
+    let it=byKey[k]; if(!it){ it={nobill:false,rows:[],bill:r.bill||r.bill2,bill2:r.bill2,key:k}; byKey[k]=it; items.push(it); }
+    it.rows.push(r);
+  });
+  items.forEach(function(it){
+    const uniq=function(a){ const o=[]; a.forEach(function(x){ if(x&&o.indexOf(x)<0)o.push(x); }); return o; };
+    it.certs=uniq(it.rows.map(function(r){return r.cert;}));
+    it.notes=uniq(it.rows.map(function(r){return r.note;}));
+    it.conts=uniq(it.rows.map(function(r){return r.cont;}));
+    it.errs=[]; it.rows.forEach(function(r){ r.errs.forEach(function(e){ it.errs.push('Dòng '+r.rowNo+': '+e); }); });
+    const sum=function(f){ return _sviRnd(it.rows.reduce(function(s,r){return s+(r[f].ok?r[f].n:0);},0),cur); };
+    it.total=sum('amt'); it.hoaTotal=sum('hoa'); it.extraTotal=sum('extra');
+    if(tab==='co'&&it.total===0&&S.map.price>=0)it.total=sum('price');
+    it.rowNos=it.rows.map(function(r){return r.rowNo;});
+    // SL cont: Fumi = số dòng cont có tiền; Phyto / C/O = cột SL cont (cộng các dòng cùng bill)
+    if(tab==='fumi')it.nCont=it.rows.filter(function(r){return r.amt.ok&&r.amt.n>0;}).length;
+    else it.nCont=it.rows.reduce(function(s,r){return s+(r.qty.ok?r.qty.n:0);},0);
+    it.qtyCol=null;
+    if(tab==='fumi'&&S.map.qty>=0){ const q=it.rows.find(function(r){return r.qty.ok&&r.qty.n>0;}); it.qtyCol=q?q.qty.n:null; }
+    // Tách Đơn giá × SL sao cho Đơn giá × SL = ĐÚNG tổng file; không chia đều được → ghi trọn lô (SL 1)
+    it.main={cost:it.total,qty:1,unit:'Shipment',whole:true};
+    if(tab!=='co'&&it.nCont>0&&it.total>0){
+      const c=it.total/it.nCont;
+      const ok=_sviDec(cur)===0?Number.isInteger(c):(Math.abs(Math.round(c*100)/100*it.nCont-it.total)<0.005);
+      if(ok)it.main={cost:_sviDec(cur)===0?c:Math.round(c*100)/100,qty:it.nCont,unit:'Cont',whole:false};
+    }
+  });
+  return items;
+}
+
+// ─── Chỉ mục lô theo Bill ───
+function _sviLots(tab){
+  const out=[]; (cache.xuat||[]).forEach(function(l){out.push({lot:l,tt:'xuat'});});
+  if(tab==='fumi')(cache.nhap||[]).forEach(function(l){out.push({lot:l,tt:'nhap'});});
+  return out;
+}
+function _sviLotKeys(lot){
+  const raw=[lot.bookingNo,lot.mblNo]; (lot.bookings||[]).forEach(function(b){ raw.push(b&&b.bookingNo); });
+  const set={}; raw.forEach(function(v){ String(v==null?'':v).split(/[\s,;]+/).forEach(function(p){ const k=_sviKey(p); if(k.length>=5)set[k]=1; }); });
+  return Object.keys(set);
+}
+function _sviLotConts(lot){
+  const set={};
+  const add=function(x){ const k=_sviKey(typeof x==='string'?x:(x&&(x.no||x.contNo||x.containerNo))||''); if(k.length>=7)set[k]=1; };
+  const bc=lot.bookingConts||{}; Object.keys(bc).forEach(function(k){ (bc[k]||[]).forEach(add); });
+  (lot.containers||[]).forEach(add);
+  return set;
+}
+function _sviIndex(tab){
+  const idx={full:{},num:{}};
+  _sviLots(tab).forEach(function(e){
+    _sviLotKeys(e.lot).forEach(function(k){
+      (idx.full[k]=idx.full[k]||[]).push(e);
+      const nk=_sviNumKey(k); if(nk)(idx.num[nk]=idx.num[nk]||[]).push(e);
+    });
+  });
+  return idx;
+}
+
+function _sviSnap(sv){
+  sv=sv||{};
+  return {ref:String(sv.refNo||''),cost:parseFloat(sv.cost)||0,qty:parseFloat(sv.svcQty)||1,unit:sv.svcUnit||'Cont',cur:sv.svcCur||'VND',sup:sv.svcSupplier||'',vat:parseFloat(sv.svcVatAmt)||0};
+}
+function _sviSnapSame(a,b){ return a.ref===b.ref&&a.cost===b.cost&&a.qty===b.qty&&a.unit===b.unit&&a.cur===b.cur&&a.sup===b.sup&&a.vat===b.vat; }
+function _sviTot(s){ return _sviRnd(s.cost*s.qty,s.cur); }
+
+// So khớp từng mục với lô (CHƯA ghi gì)
+function _sviMatchAll(S){
+  const tab=S.tab, cfg=SVC_BULK_CFG[tab], idx=_sviIndex(tab);
+  const items=_sviGroup(S,S.parsed.rows);
+  S.items=items;
+  S.rows=items.map(function(it,n){
+    const row={n:n,item:it,cands:[],pick:-1,status:'',msgs:[],sel:false,plan:null,multi:false};
+    if(it.nobill){ row.status='nobill'; row.msgs.push({t:'err',m:'Dòng không có số Bill — không thể đối chiếu'}); return row; }
+    if(it.errs.length){ row.status='err'; it.errs.forEach(function(e){ row.msgs.push({t:'err',m:e}); }); return row; }
+    const found={};
+    [it.bill,it.bill2].forEach(function(b){
+      const k=_sviKey(b); if(!k)return;
+      (idx.full[k]||[]).forEach(function(e){ found[e.tt+':'+e.lot._id]={e:e,type:'exact'}; });
+    });
+    if(!Object.keys(found).length){
+      [it.bill,it.bill2].forEach(function(b){
+        const nk=_sviNumKey(_sviKey(b)); if(!nk)return;
+        (idx.num[nk]||[]).forEach(function(e){ found[e.tt+':'+e.lot._id]={e:e,type:'num'}; });
+      });
+    }
+    row.cands=Object.keys(found).map(function(k){
+      const e=found[k].e, f=cfg.find(e.lot.svcs||{});
+      return {lot:e.lot,tt:e.tt,type:found[k].type,f:f,has:!!f};
+    });
+    if(!row.cands.length){ row.status='nomatch'; row.msgs.push({t:'err',m:'Không có lô nào trong app trùng số Bill này'}); return row; }
+    const withSvc=row.cands.filter(function(c){return c.has;});
+    if(!withSvc.length){ row.status='nosvc'; row.msgs.push({t:'err',m:'Tìm thấy lô '+row.cands.map(function(c){return c.lot.jobNo||c.lot.bookingNo;}).join(', ')+' nhưng lô chưa bật dịch vụ '+cfg.code}); return row; }
+    if(withSvc.length===1){ row.pick=row.cands.indexOf(withSvc[0]); row.status='ok'; if(row.cands.length>1){ row.multi=true; row.msgs.push({t:'warn',m:'Bill khớp '+row.cands.length+' lô, chỉ 1 lô có dịch vụ '+cfg.code+' — kiểm tra kỹ'}); } }
+    else { row.status='ambig'; row.msgs.push({t:'warn',m:'Bill khớp '+withSvc.length+' lô có dịch vụ — chọn đúng lô ở cột "Lô khớp"',amb:true}); }
+    return row;
+  });
+  S.rows.forEach(function(r){ _sviReplan(S,r); });
+  _sviMarkDupLots(S);
+  S.rows.forEach(_sviDefaultSel);
+}
+function _sviMarkDupLots(S){
+  const cnt={};
+  S.rows.forEach(function(r){ if(r.plan)cnt[r.plan.tt+':'+r.plan.lot._id]=(cnt[r.plan.tt+':'+r.plan.lot._id]||0)+1; });
+  S.rows.forEach(function(r){
+    r.dupLot=false; r.msgs=r.msgs.filter(function(m){return !m.dupLot;});
+    if(r.plan&&cnt[r.plan.tt+':'+r.plan.lot._id]>1){ r.dupLot=true; r.msgs.push({t:'warn',m:'Nhiều dòng file cùng khớp 1 lô này — kiểm tra trùng lặp',dupLot:true}); }
+  });
+}
+function _sviDefaultSel(r){
+  const p=r.plan;
+  r.sel=!!(p&&!p.block&&p.changed&&!p.overwrite&&!r.multi&&!r.dupLot&&r.status==='ok'&&!(r.msgs.some(function(m){return m.t==='err';})));
+}
+
+// Kế hoạch ghi cho 1 dòng (lô đã chọn): trước → sau
+function _sviReplan(S,row){
+  row.plan=null; row.msgs=row.msgs.filter(function(m){return !m.plan;});
+  const add=function(t,m){ row.msgs.push({t:t,m:m,plan:true}); };
+  const c=row.cands[row.pick]; if(!c)return;
+  const tab=S.tab, it=row.item, P=S.params, lot=c.lot, sv=c.f.sv||{}, cfg=SVC_BULK_CFG[tab];
+  const b=_sviSnap(sv), a=Object.assign({},b);
+  const hasAmt=it.total>0&&(S.map.amt>=0||(tab==='co'&&S.map.price>=0));
+  if(S.map.cert>=0&&it.certs.length)a.ref=it.certs.join(', ');
+  if(hasAmt){ a.cost=it.main.cost; a.qty=it.main.qty; a.unit=it.main.unit; a.cur=P.cur; a.vat=_sviVat(it.total,P.vat,P.cur); if(P.sup)a.sup=P.sup; }
+  const plan={tt:c.tt,lot:lot,key:c.f.key,cfgCode:cfg.code,before:b,after:a,hoa:null,extra:null,block:'',changed:false,overwrite:false,itemsLen:((lot.costing&&lot.costing.items)||[]).length};
+  if(c.f.key.indexOf('.')>=0)plan.block='Mã dịch vụ không hợp lệ';
+  if(!plan.block)plan.block=_svcBulkBlockReason(lot,sv);
+  // HOA (chỉ Phyto)
+  if(tab==='phyto'&&it.hoaTotal>0){
+    const h=_findSvcByNameOrCode(lot.svcs||{},'Hóa đơn kiểm dịch','HOA',null);
+    if(!h){ add('err','Lô chưa bật dịch vụ HOA — khoản Hóa đơn '+_svcBulkFmt(it.hoaTotal)+' CHƯA được nhập (bật dịch vụ HOA cho lô trước)'); plan.hoaMissing=true; }
+    else{
+      const hb=_sviSnap(h.sv), ha=Object.assign({},hb);
+      ha.cost=it.hoaTotal; ha.qty=1; ha.unit='Invoice'; ha.cur=P.cur; ha.vat=_sviVat(it.hoaTotal,P.vat,P.cur); if(P.sup)ha.sup=P.sup;
+      plan.hoa={key:h.key,before:hb,after:ha,changed:!_sviSnapSame(hb,ha)};
+      if(h.key.indexOf('.')>=0&&!plan.block)plan.block='HOA: mã dịch vụ không hợp lệ';
+      const hbr=_svcBulkBlockReason(lot,h.sv); if(hbr&&!plan.block)plan.block='HOA: '+hbr;
+      if(hb.cost!==0&&(hb.cost!==ha.cost||hb.qty!==ha.qty||hb.cur!==ha.cur||hb.vat!==ha.vat))plan.overwrite=true;
+    }
+  }
+  // Phát sinh → dòng chi phí nhập tay (không trùng nếu đã nhập từ cùng file trước đó)
+  if(it.extraTotal>0){
+    const impKey='svcimp|'+tab+'|'+_sviKey(it.bill)+'|'+it.certs.join('+')+'|'+it.extraTotal;
+    const exist=((lot.costing&&lot.costing.items)||[]).some(function(x){return x&&x.impKey===impKey;});
+    const lbl={co:'Phát sinh C/O',phyto:'Phát sinh Phyto',fumi:'Phí khác Fumi'}[tab];
+    plan.extra={amt:it.extraTotal,vat:_sviVat(it.extraTotal,P.vat,P.cur),impKey:impKey,dup:exist,
+      name:lbl+(it.notes.length?' — '+it.notes.join('; '):''),sup:P.sup||b.sup||''};
+    if(exist)add('warn','Khoản phát sinh này đã được nhập trước đó (cùng file/số tiền) — sẽ bỏ qua dòng chi phí');
+    if(!plan.extra.sup)add('warn','Khoản phát sinh chưa có NCC → chưa vào công nợ NCC');
+  }
+  plan.changed=!_sviSnapSame(b,a)||!!(plan.hoa&&plan.hoa.changed)||!!(plan.extra&&!plan.extra.dup);
+  if(b.cost!==0&&hasAmt&&(b.cost!==a.cost||b.qty!==a.qty||b.cur!==a.cur||b.vat!==a.vat))plan.overwrite=true;
+  if(b.sup&&a.sup!==b.sup&&hasAmt)plan.overwrite=true;
+  if(b.ref&&a.ref!==b.ref)plan.overwrite=true;
+  row.plan=plan;
+  if(plan.block)add('err',plan.block);
+  else if(!plan.changed)add('ok','Không thay đổi so với dữ liệu hiện tại');
+  if(plan.overwrite&&!plan.block){
+    const w=[]; if(b.cost!==0&&hasAmt&&(b.cost!==a.cost||b.qty!==a.qty||b.vat!==a.vat))w.push('ghi đè chi phí cũ '+_svcBulkFmt(_sviTot(b))+' '+b.cur);
+    if(b.ref&&a.ref!==b.ref)w.push('đổi số chứng thư cũ "'+b.ref+'"'); if(b.sup&&a.sup!==b.sup&&hasAmt)w.push('đổi NCC '+b.sup+' → '+a.sup);
+    if(b.cost!==0&&hasAmt&&b.cur!==a.cur)w.push('đổi loại tiền '+b.cur+' → '+a.cur);
+    if(plan.hoa&&plan.hoa.before.cost!==0&&plan.hoa.changed)w.push('ghi đè chi phí HOA cũ');
+    add('warn','⚠ '+w.join('; ')+' (mặc định không tick)');
+  }
+  if(!b.cost&&!a.sup&&hasAmt)add('warn','Chưa có NCC → chưa vào công nợ NCC (chọn NCC ở bước thiết lập)');
+  const lv=parseFloat(String(sv.svcVat||'0').replace('%',''))||0;
+  if(hasAmt&&lv&&!a.vat)add('warn','Dịch vụ còn VAT cũ '+lv+'% (vẫn được tính khi VAT Amt = 0)');
+  if(hasAmt&&it.main.whole&&tab!=='co'&&it.nCont>0)add('warn','Tổng không chia đều theo cont → ghi trọn lô (SL 1)');
+  // đối chiếu số cont / container
+  const vol=_svcBulkLotVol(lot);
+  if(tab!=='co'&&it.nCont>0&&it.nCont!==vol)add('warn','SL cont trong file ('+_svcBulkFmt(it.nCont)+') ≠ Vol lô ('+vol+')');
+  if(tab==='fumi'&&it.qtyCol&&it.qtyCol!==it.nCont)add('warn','Cột "Số cont" ghi '+it.qtyCol+' nhưng file liệt kê '+it.nCont+' cont có tiền');
+  if(it.conts.length){
+    const set=_sviLotConts(lot), have=Object.keys(set).length;
+    if(have){
+      const hit=it.conts.filter(function(x){return set[x];}).length;
+      if(!hit)add('warn','Không cont nào trong file có trong lô — kiểm tra lại số Bill');
+      else if(hit<it.conts.length)add('warn',hit+'/'+it.conts.length+' cont trong file khớp cont của lô');
+    }
+  }
+  if(it.rows.length>1&&tab!=='fumi'){ add('warn','Bill xuất hiện '+it.rows.length+' dòng trong file (dòng '+it.rowNos.join(', ')+') — đã cộng gộp, kiểm tra kỹ'); plan.dupBill=true; }
+  if(it.certs.length>1)add('warn','Có '+it.certs.length+' số chứng thư cho 1 Bill: '+it.certs.join(', '));
+  if(c.type==='num')add('warn','Khớp theo phần SỐ của bill (bỏ tiền tố hãng tàu) — file: '+it.bill);
+  if(row.cands.length>1&&row.status==='ambig')plan.ambig=true;
+}
+
+// Đối chiếu tổng file ↔ tổng đọc được ↔ tổng sẽ nhập
+function _sviRecon(S){
+  const roles=[];
+  if(S.map.amt>=0||(S.tab==='co'&&S.map.price>=0))roles.push('amt');
+  if(S.map.hoa>=0&&S.tab==='phyto')roles.push('hoa');
+  if(S.map.extra>=0)roles.push('extra');
+  if(S.map.qty>=0&&S.tab==='phyto')roles.push('qty');
+  const nets=S.parsed.footers.filter(function(f){return f.kind==='net';});
+  const net=nets.length?nets[nets.length-1]:null;
+  const cur=S.params.cur;
+  const lbl={amt:'Chi phí chính',hoa:'Hóa đơn (HOA)',extra:'Phát sinh',qty:'SL Cont'};
+  const out=[];
+  roles.forEach(function(r){
+    const parsed=_sviRnd(S.items.reduce(function(s,it){
+      return s+(r==='amt'?it.total:r==='hoa'?it.hoaTotal:r==='extra'?it.extraTotal:it.rows.reduce(function(q,rw){return q+(rw.qty.ok?rw.qty.n:0);},0));
+    },0),cur);
+    const imp=_sviRnd(S.rows.reduce(function(s,row){
+      if(!row.sel||!row.plan)return s; const p=row.plan,it=row.item;
+      if(r==='amt')return s+_sviTot(p.after);
+      if(r==='hoa')return s+(p.hoa?_sviTot(p.hoa.after):0);
+      if(r==='extra')return s+(p.extra&&!p.extra.dup?p.extra.amt:0);
+      return s+it.nCont;
+    },0),cur);
+    const fileTotal=(net&&net.vals[r]!==undefined)?net.vals[r]:null;
+    out.push({role:r,label:lbl[r],fileTotal:fileTotal,parsed:parsed,imp:imp,bad:fileTotal!==null&&Math.abs(parsed-fileTotal)>0.5});
+  });
+  // VAT theo file (nếu có) so với VAT app tính theo % đã chọn
+  const vf=S.parsed.footers.filter(function(f){return f.kind==='vat'&&f.last!=null;}).pop();
+  let vat=null;
+  if(vf){
+    const calc=_sviRnd(S.items.reduce(function(s,it){ return s+_sviVat(it.total,S.params.vat,cur)+_sviVat(it.hoaTotal,S.params.vat,cur)+_sviVat(it.extraTotal,S.params.vat,cur); },0),cur);
+    vat={file:vf.last,pct:vf.pct,calc:calc,diff:_sviRnd(calc-vf.last,cur)};
+  }
+  return {rows:out,vat:vat,hasFooter:!!net,bad:out.some(function(x){return x.bad;})};
+}
+
+// ─────────────────────────── GIAO DIỆN + GHI ───────────────────────────
+const _SVI_WARN='background:rgba(234,179,8,.13);border:1px solid rgba(234,179,8,.45);border-radius:8px;padding:9px 12px;font-size:12.5px;line-height:1.7;margin-bottom:10px';
+const _SVI_BAD='background:rgba(220,38,38,.09);border:1px solid rgba(220,38,38,.45);border-radius:8px;padding:9px 12px;font-size:12.5px;line-height:1.7;margin-bottom:10px';
+const _SVI_OK='background:rgba(21,128,61,.09);border:1px solid rgba(21,128,61,.4);border-radius:8px;padding:9px 12px;font-size:12.5px;line-height:1.7;margin-bottom:10px';
+
+function _sviBtn(tab){
+  if(!_svcBulkCanUse())return '';
+  return '<label class="btn sm" style="cursor:pointer" title="Nhập file bảng kê của NCC: đối chiếu theo số Bill, điền số chứng thư và chi phí từng lô — luôn có bước xem trước và xác nhận (chỉ Admin / Accountant)"><i class="ti ti-file-import"></i> Nhập file NCC'
+    +'<input type="file" accept=".xlsx,.xls" style="display:none" onchange="svcImpPick(\''+tab+'\',this)"/></label>';
+}
+window._svcImpBtn=_sviBtn;
+
+function svcImpPick(tab,input){
+  const file=input.files&&input.files[0]; if(!file)return;
+  input.value='';
+  if(!_svcBulkCanUse()){ toast('Chỉ Admin và Accountant được nhập file NCC','error'); return; }
+  if(!window.XLSX){ toast('Đang tải thư viện Excel, thử lại sau','error'); return; }
+  if(typeof _phase2Ready!=='undefined'&&(!_phase2Ready.xuat||(tab==='fumi'&&!_phase2Ready.nhap))){ toast('Dữ liệu lô hàng đang tải đầy đủ — chờ vài giây rồi thử lại (tránh bỏ sót lô khi đối chiếu)','error'); return; }
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{ _sviOpenWb(tab,file.name,XLSX.read(e.target.result,{type:'array',cellDates:false})); }
+    catch(err){ toast('Lỗi đọc file: '+err.message,'error'); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+window.svcImpPick=svcImpPick;
+function _sviOpenWb(tab,fileName,wb){
+  const S={tab:tab,fileName:fileName,wb:wb,sheet:'',phase:'setup',busy:false,params:{sup:'',vat:0,cur:'VND'},supSet:{}};
+  _svcBulkSupList().forEach(function(n){S.supSet[n]=1;});
+  window._sviS=S;
+  // chọn sheet đầu tiên nhận dạng được tiêu đề
+  // Sheet đầu tiên nhận dạng được cột Bill + (Số chứng thư hoặc Chi phí); không có thì lấy sheet điểm cao nhất
+  let pick=null, bestScore=-1, bestNm=wb.SheetNames[0];
+  wb.SheetNames.forEach(function(nm){
+    if(pick)return;
+    try{
+      const T={tab:tab,grid:_sviGrid(wb.Sheets[nm]),params:{}}; _sviDetect(T);
+      if(T.map.bill>=0&&(T.map.cert>=0||T.map.amt>=0))pick=nm;
+      if(T.detScore>bestScore){bestScore=T.detScore;bestNm=nm;}
+    }catch(e){}
+  });
+  if(!pick)pick=bestNm;
+  _sviLoadSheet(pick);
+  let ov=g('svcImpOv'); if(!ov){ ov=document.createElement('div'); ov.id='svcImpOv'; ov.className='ov'; document.body.appendChild(ov); }
+  _sviRender(); openOv('svcImpOv');
+  return S;
+}
+window._sviOpenWb=_sviOpenWb;
+function _sviLoadSheet(name){
+  const S=window._sviS; S.sheet=name; S.grid=_sviGrid(S.wb.Sheets[name]);
+  _sviDetect(S); S.parsed=_sviParse(S); S.rows=null; S.items=null;
+}
+function svcImpSheet(name){ const S=window._sviS; if(!S||S.busy)return; _sviLoadSheet(name); _sviRender(); }
+window.svcImpSheet=svcImpSheet;
+function svcImpMap(role,val){ const S=window._sviS; if(!S||S.busy)return; S.map[role]=parseInt(val,10); S.parsed=_sviParse(S); _sviSetupRefresh(); }
+window.svcImpMap=svcImpMap;
+function svcImpDs(val){
+  const S=window._sviS; if(!S||S.busy)return; const n=parseInt(val,10);
+  if(!(n>=1&&n<=S.grid.length)){ toast('Dòng bắt đầu dữ liệu không hợp lệ','error'); return; }
+  S.dataStart=n-1; S.parsed=_sviParse(S); _sviSetupRefresh();
+}
+window.svcImpDs=svcImpDs;
+function svcImpParam(k,v){
+  const S=window._sviS; if(!S||S.busy)return;
+  S.params[k]=(k==='vat')?(parseFloat(v)||0):v;
+  if(k==='cur'||k==='vat'){ _sviSetupRefresh(); }
+}
+window.svcImpParam=svcImpParam;
+
+function _sviEsc(s){ return _svcBulkEsc(s); }
+function _sviSetupRefresh(){
+  const S=window._sviS; if(!S||S.phase!=='setup')return;
+  const el=g('svi_prev'); if(el)el.innerHTML=_sviSetupPreviewHtml(S);
+}
+function _sviColOpts(S,sel){
+  let h='<option value="-1">— không dùng —</option>';
+  const first=S.parsed.rows[0]; const srow=first?S.grid[first.ri]:(S.grid[S.dataStart]||[]);
+  for(let c=0;c<S.headers.length;c++){
+    const sample=_sviStr((srow||[])[c]);
+    if(!S.headers[c]&&!sample)continue;
+    h+='<option value="'+c+'"'+(c===sel?' selected':'')+'>'+_sviColL(c)+' — '+_sviEsc(S.headers[c]||'(không tên)')+(sample?'  · vd: '+_sviEsc(sample.slice(0,24)):'')+'</option>';
+  }
+  return h;
+}
+function _sviSetupPreviewHtml(S){
+  const P=S.parsed, m=S.map, rows=P.rows;
+  const cell=function(v){ return '<td style="'+_SVB_TD+'">'+v+'</td>'; };
+  const nn=function(x){ return x.ok&&!x.empty?_svcBulkFmt(x.n):(x.ok?'':'<span style="color:#dc2626">?</span>'); };
+  const head=['Dòng','Bill','Số chứng thư','Chi phí']
+    .concat(m.qty>=0?['SL cont']:[]).concat(m.hoa>=0?['Hóa đơn']:[]).concat(m.extra>=0?['Phát sinh']:[]).concat(m.cont>=0?['Container']:[]).concat(['Ghi chú']);
+  const body=rows.slice(0,8).map(function(r){
+    return '<tr>'+cell(r.rowNo)+cell(_sviEsc(r.bill||r.bill2||'—'))+cell(_sviEsc(r.cert))+cell(nn(r.amt))
+      +(m.qty>=0?cell(nn(r.qty)):'')+(m.hoa>=0?cell(nn(r.hoa)):'')+(m.extra>=0?cell(nn(r.extra)):'')+(m.cont>=0?cell(_sviEsc(r.cont)):'')
+      +cell(_sviEsc(r.note)+(r.errs.length?'<div style="color:#dc2626">'+_sviEsc(r.errs.join('; '))+'</div>':''))+'</tr>';
+  }).join('');
+  const sumAmt=_sviRnd(rows.reduce(function(s,r){return s+(r.amt.ok?r.amt.n:0);},0),S.params.cur);
+  const foot=P.footers.map(function(f){ return '<div>Dòng '+f.rowNo+' ('+(f.kind==='vat'?'VAT':f.kind==='grand'?'tổng cộng':'tổng')+'): '+_sviEsc(f.text)+' → '+_sviEsc(Object.keys(f.vals).map(function(k){return k+'='+_svcBulkFmt(f.vals[k]);}).concat(f.last!=null&&f.kind!=='net'?[_svcBulkFmt(f.last)]:[]).join(', '))+'</div>'; }).join('');
+  return '<div style="font-size:12px;margin:8px 0 4px"><b>Đọc thử:</b> '+rows.length+' dòng dữ liệu · cộng cột Chi phí = <b>'+_svcBulkFmt(sumAmt)+'</b> '+_sviEsc(S.params.cur)+'</div>'
+    +(rows.length?'<div style="overflow:auto;border:1px solid var(--border-light);border-radius:10px"><table style="width:100%;border-collapse:collapse"><thead><tr>'+head.map(function(h){return '<th style="'+_SVB_TH+';position:static">'+h+'</th>';}).join('')+'</tr></thead><tbody>'+body+'</tbody></table></div>'
+      +(rows.length>8?'<div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">… và '+(rows.length-8)+' dòng nữa</div>':''):'<div style="'+_SVI_BAD+'">Không đọc được dòng dữ liệu nào — kiểm tra lại cột Bill và dòng bắt đầu dữ liệu.</div>')
+    +(foot?'<div style="font-size:11.5px;color:var(--text-secondary);margin-top:6px;line-height:1.6"><b>Dòng tổng / thuế cuối file:</b>'+foot+'</div>':'');
+}
+function _sviSetupHtml(S){
+  const cfg=SVI_CFG[S.tab];
+  const sheets=S.wb.SheetNames.length>1
+    ?'<label style="font-size:12px;font-weight:700">Sheet: <select onchange="svcImpSheet(this.value)" style="'+_SVB_IN+'min-width:150px">'+S.wb.SheetNames.map(function(n){return '<option value="'+_sviEsc(n)+'"'+(n===S.sheet?' selected':'')+'>'+_sviEsc(n)+'</option>';}).join('')+'</select></label> <span style="font-size:11.5px;color:#b45309">File có '+S.wb.SheetNames.length+' sheet — chọn đúng sheet (tháng/tuần) cần nhập</span>'
+    :'<span style="font-size:12px">Sheet: <b>'+_sviEsc(S.sheet)+'</b></span>';
+  const roleSel=cfg.roles.map(function(r){
+    const det=S.map[r]>=0;
+    return '<label style="display:block;font-size:11.5px;font-weight:600;min-width:250px;flex:1 1 250px">'+SVI_ROLE_LBL[r].replace('Số chứng thư',cfg.certLabel)+(r==='bill'?' *':'')
+      +'<select id="svi_m_'+r+'" onchange="svcImpMap(\''+r+'\',this.value)" style="'+_SVB_IN+'width:100%;margin-top:2px;'+(det?'':'background:#fff7e6')+'">'+_sviColOpts(S,S.map[r])+'</select></label>';
+  }).join('');
+  const supOpts=_svcBulkSupList().map(function(n){return '<option value="'+_sviEsc(n)+'"></option>';}).join('');
+  const nameVat=(S.detScore<3)?'<div style="'+_SVI_WARN+'">Không nhận dạng chắc chắn dòng tiêu đề — hãy kiểm tra từng ô chọn cột bên dưới và "Dòng bắt đầu dữ liệu".</div>':'';
+  return nameVat
+    +'<div style="font-size:12.5px;line-height:1.6;margin-bottom:8px">File: <b>'+_sviEsc(S.fileName)+'</b> · '+sheets+'</div>'
+    +'<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;line-height:1.55">Bước 1/3 — <b>Kiểm tra nhận dạng cột</b> và thiết lập NCC / VAT / tiền tệ. Chưa có gì được ghi vào hệ thống. Số Bill sẽ được đối chiếu với Booking / MBL của lô (hãng tàu như OOCL: <i>OOLU2340889150</i> chỉ cần trùng phần số <i>2340889150</i>).</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:8px 12px;margin-bottom:10px">'+roleSel+'</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end;background:var(--bg-secondary);border-radius:10px;padding:9px 12px">'
+      +'<label style="font-size:11.5px;font-weight:600">Dòng bắt đầu dữ liệu<br><input type="number" min="1" value="'+(S.dataStart+1)+'" onchange="svcImpDs(this.value)" style="'+_SVB_IN+'width:80px"/></label>'
+      +'<label style="font-size:11.5px;font-weight:600">NCC áp dụng cho các lô<br><input type="text" list="sviSupList" value="'+_sviEsc(S.params.sup)+'" placeholder="(trống = giữ NCC hiện có của từng lô)" oninput="svcImpParam(\'sup\',this.value)" style="'+_SVB_IN+'width:260px"/><datalist id="sviSupList">'+supOpts+'</datalist></label>'
+      +'<label style="font-size:11.5px;font-weight:600">VAT chi phí<br><select onchange="svcImpParam(\'vat\',this.value)" style="'+_SVB_IN+'width:90px">'+[0,8,10].map(function(v){return '<option value="'+v+'"'+(v===S.params.vat?' selected':'')+'>'+v+'%</option>';}).join('')+(([0,8,10].indexOf(S.params.vat)<0)?'<option value="'+S.params.vat+'" selected>'+S.params.vat+'%</option>':'')+'</select></label>'
+      +'<label style="font-size:11.5px;font-weight:600">Tiền tệ<br><select onchange="svcImpParam(\'cur\',this.value)" style="'+_SVB_IN+'width:80px">'+_svcBulkCurOpts(S.params.cur,false)+'</select></label>'
+      +'<span style="font-size:11px;color:var(--text-tertiary);max-width:330px;line-height:1.5">VAT tính riêng cho từng lô (làm tròn theo tiền tệ). Mặc định lấy từ dòng "Thuế GTGT" cuối file nếu có.</span>'
+    +'</div>'
+    +'<div id="svi_prev">'+_sviSetupPreviewHtml(S)+'</div>';
+}
+
+function svcImpAnalyze(){
+  const S=window._sviS; if(!S||S.busy)return;
+  if(!_svcBulkCanUse()){ toast('Chỉ Admin và Accountant được nhập file NCC','error'); return; }
+  if(S.map.bill<0){ _showBlockingAlert('Thiếu cột Số Bill','Hãy chọn cột chứa số Bill — đây là tham số đối chiếu với lô hàng.'); return; }
+  if(S.map.cert<0&&S.map.amt<0){ _showBlockingAlert('Thiếu dữ liệu cần nhập','Hãy chọn ít nhất cột Số chứng thư hoặc cột Chi phí.'); return; }
+  if(!S.parsed.rows.length){ _showBlockingAlert('Không có dữ liệu','Không đọc được dòng dữ liệu nào. Kiểm tra cột Bill và "Dòng bắt đầu dữ liệu".'); return; }
+  const sup=(S.params.sup||'').trim(); S.params.sup=sup;
+  if(sup&&!S.supSet[sup]){ _showBlockingAlert('NCC không hợp lệ','NCC "'+_sviEsc(sup)+'" không có trong CRM — chọn từ danh sách gợi ý hoặc để trống.'); return; }
+  const bad=S.parsed.rows.filter(function(r){return r.errs.length;});
+  if(bad.length){
+    // vẫn cho phân tích: dòng lỗi sẽ nằm ở danh sách "không nhập được" kèm lý do
+    toast(bad.length+' dòng có số liệu không đọc được — sẽ bị loại khỏi danh sách nhập','error');
+  }
+  _sviMatchAll(S); S.phase='preview'; _sviRender();
+}
+window.svcImpAnalyze=svcImpAnalyze;
+function svcImpBack(){ const S=window._sviS; if(!S||S.busy)return; S.phase=(S.phase==='confirm')?'preview':'setup'; _sviRender(); }
+window.svcImpBack=svcImpBack;
+
+function svcImpLot(n,val){
+  const S=window._sviS; if(!S||S.busy)return; const row=S.rows[n]; if(!row)return;
+  row.pick=(val===''?-1:parseInt(val,10)); row.msgs=row.msgs.filter(function(m){return !m.plan&&!m.amb;});
+  if(row.pick<0){ row.status='ambig'; row.plan=null; row.sel=false; row.msgs.push({t:'warn',m:'Chưa chọn lô',amb:true}); }
+  else { row.status='ok'; _sviReplan(S,row); row.multi=false; }
+  _sviMarkDupLots(S); S.rows.forEach(function(r){ if(r===row||r.dupLot)_sviDefaultSel(r); });
+  _sviRender(true);
+}
+window.svcImpLot=svcImpLot;
+function svcImpSel(n,on){ const S=window._sviS; if(!S||S.busy)return; const r=S.rows[n]; if(!r||!r.plan||r.plan.block||!r.plan.changed)return; r.sel=!!on; _sviPreviewRefresh(); }
+window.svcImpSel=svcImpSel;
+function svcImpSelAll(on){
+  const S=window._sviS; if(!S||S.busy)return;
+  S.rows.forEach(function(r){ if(!r.plan||r.plan.block||!r.plan.changed)return; r.sel=!!on; const el=g('svi_sel_'+r.n); if(el)el.checked=!!on; });
+  _sviPreviewRefresh();
+}
+window.svcImpSelAll=svcImpSelAll;
+
+function _sviMsgsHtml(msgs){
+  const col={err:'#dc2626',warn:'#b45309',ok:'#15803d'};
+  return msgs.length?msgs.map(function(n){ return '<div style="color:'+col[n.t]+'">'+(n.t==='err'?'✖ ':n.t==='warn'?'⚠ ':'✎ ')+_sviEsc(n.m)+'</div>'; }).join(''):'<span style="color:var(--text-tertiary)">—</span>';
+}
+function _sviSvcTxt(s){ return _svcBulkFmt(s.qty)+' × '+_svcBulkFmt(s.cost)+' '+s.cur; }
+function _sviChg(before,after,fmt){ return before===after?fmt(after):(before&&before!==''&&before!==0?'<s style="color:var(--text-tertiary)">'+fmt(before)+'</s> → ':'→ ')+'<b>'+fmt(after)+'</b>'; }
+
+function _sviRowHtml(S,row,i){
+  const p=row.plan, it=row.item, bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
+  const T='<td style="'+_SVB_TD+'">';
+  let lot='—';
+  if(p){
+    const l=p.lot;
+    lot='<button class="plink" style="font-weight:700;color:var(--blue);background:none;border:none;cursor:pointer;padding:0" onclick="openDetail(\''+l._id+'\',\''+p.tt+'\')">'+_sviEsc(l.jobNo||'—')+'</button>'
+      +'<div style="font-size:10.5px;color:var(--text-tertiary)">'+_sviEsc(l.bookingNo||'')+(l.mblNo?' / #'+_sviEsc(l.mblNo):'')+'</div>'
+      +'<div style="font-size:10.5px;color:var(--text-secondary)">'+_sviEsc(l.shipper||l.supplier||'')+' · '+(l.etd?fmtDMY(l.etd):'—')+' · '+_sviEsc(_svcBulkVolLabel(l))+'</div>';
+  }
+  const withSvc=row.cands.map(function(c,k){return {c:c,k:k};}).filter(function(x){return x.c.has;});
+  if(withSvc.length>1){
+    lot+='<select onchange="svcImpLot('+row.n+',this.value)" style="'+_SVB_IN+'width:210px;margin-top:3px'+(row.pick<0?';background:#fff3bf':'')+'"><option value="">(chọn lô…)</option>'
+      +withSvc.map(function(x){ const l=x.c.lot; return '<option value="'+x.k+'"'+(x.k===row.pick?' selected':'')+'>'+_sviEsc((l.jobNo||'—')+' · '+(l.bookingNo||'')+' · '+(l.shipper||l.supplier||'')+' · '+(l.etd?fmtDMY(l.etd):''))+'</option>'; }).join('')+'</select>';
+  }
+  const mt=p&&row.cands[row.pick]?(row.cands[row.pick].type==='exact'?'<span style="color:#15803d">khớp đủ</span>':'<span style="color:#b45309">khớp phần số</span>'):'';
+  let h='<tr style="'+bg+((p&&(p.block||!p.changed))?'opacity:.68;':'')+'">'
+    +'<td style="'+_SVB_TD+';text-align:center"><input type="checkbox" id="svi_sel_'+row.n+'" '+(row.sel?'checked':'')+((!p||p.block||!p.changed)?' disabled':'')+' onchange="svcImpSel('+row.n+',this.checked)"/></td>'
+    +T+_sviEsc(it.rowNos.join(', '))+'</td>'
+    +T+'<b>'+_sviEsc(it.bill)+'</b>'+(it.bill2?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+_sviEsc(it.bill2)+'</div>':'')+(mt?'<div style="font-size:10.5px">'+mt+'</div>':'')+(it.conts.length?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+it.conts.length+' cont</div>':'')+'</td>'
+    +T+lot+'</td>';
+  if(!p){ h+='<td colspan="'+(4+(S.tab==='phyto'?1:0)+(S.map.extra>=0?1:0))+'" style="'+_SVB_TD+';color:var(--text-tertiary);font-style:italic">— chọn lô để xem —</td>'; }
+  else{
+    const b=p.before,a=p.after, ref=_sviChg(b.ref,a.ref,function(x){return _sviEsc(x||'—');});
+    const sameCost=(b.cost===a.cost&&b.qty===a.qty&&b.cur===a.cur);
+    const costH=(b.cost===0||sameCost?'':'<div><s style="color:var(--text-tertiary)">'+_sviSvcTxt(b)+'</s></div>')+(S.map.amt>=0||S.tab==='co'?'<b>'+_sviSvcTxt(a)+'</b>'+'<div style="font-size:10.5px;color:var(--text-tertiary)">= '+_svcBulkFmt(_sviTot(a))+' '+a.cur+' · '+_sviEsc(a.unit)+'</div>':'<span style="color:var(--text-tertiary)">không đổi</span>');
+    h+=T+ref+'</td>'
+      +T+costH+'</td>'
+      +'<td style="'+_SVB_TD+';text-align:right;white-space:nowrap">'+(a.vat?_svcBulkFmt(a.vat):'—')+'</td>'
+      +'<td style="'+_SVB_TD+';text-align:right;font-weight:700;white-space:nowrap">'+_svcBulkFmt(_sviTot(a)+a.vat)+' '+a.cur+'</td>';
+    if(S.tab==='phyto'){
+      h+=T+(p.hoa?(p.hoa.before.cost!==0&&p.hoa.before.cost!==p.hoa.after.cost?'<s style="color:var(--text-tertiary)">'+_svcBulkFmt(_sviTot(p.hoa.before))+'</s> → ':'')+'<b>'+_svcBulkFmt(_sviTot(p.hoa.after))+'</b> '+p.hoa.after.cur+'<div style="font-size:10.5px;color:var(--text-tertiary)">VAT '+_svcBulkFmt(p.hoa.after.vat)+'</div>':(p.hoaMissing?'<span style="color:#dc2626">không có DV HOA</span>':'—'))+'</td>';
+    }
+    if(S.map.extra>=0){
+      h+=T+(p.extra?'<b>'+_svcBulkFmt(p.extra.amt)+'</b> '+_sviEsc(a.cur)+'<div style="font-size:10.5px;color:var(--text-tertiary)">'+_sviEsc(p.extra.name)+'</div>'+(p.extra.dup?'<div style="font-size:10.5px;color:#b45309">đã nhập trước đó</div>':'')+'</td>':'—</td>');
+    }
+  }
+  h+='<td style="'+_SVB_TD+';font-size:11px;min-width:190px">'+_sviMsgsHtml(row.msgs.filter(function(m){return m.t!=='ok'||(p&&!p.changed);}))+'</td></tr>';
+  return h;
+}
+function _sviReconHtml(S){
+  const R=_sviRecon(S);
+  const fm=function(v){ return v===null?'<span style="color:var(--text-tertiary)">không có</span>':_svcBulkFmt(v); };
+  const rows=R.rows.map(function(x){
+    return '<tr><td style="'+_SVB_TD+';font-weight:700">'+x.label+'</td><td style="'+_SVB_TD+';text-align:right">'+fm(x.fileTotal)+'</td>'
+      +'<td style="'+_SVB_TD+';text-align:right;'+(x.bad?'color:#dc2626;font-weight:700':'')+'">'+_svcBulkFmt(x.parsed)+'</td>'
+      +'<td style="'+_SVB_TD+';text-align:right;font-weight:700;color:#15803d">'+_svcBulkFmt(x.imp)+'</td>'
+      +'<td style="'+_SVB_TD+';text-align:right;color:#b45309">'+_svcBulkFmt(_sviRnd(x.parsed-x.imp,S.params.cur))+'</td></tr>';
+  }).join('');
+  const bad=R.bad;
+  let note='';
+  if(bad)note='<div style="color:#dc2626;font-weight:700;margin-bottom:4px">✖ Tổng các dòng đọc được KHÁC dòng Tổng ghi trong file — có thể file thiếu dòng / sai tổng / chọn sai cột. Kiểm tra kỹ trước khi nhập.</div>';
+  else if(R.hasFooter)note='<div style="color:#15803d;margin-bottom:4px">✔ Tổng các dòng đọc được khớp dòng Tổng trong file.</div>';
+  else note='<div style="color:#b45309;margin-bottom:4px">⚠ Không tìm thấy dòng Tổng trong file để đối chiếu — tự kiểm tra tổng.</div>';
+  if(R.vat)note+='<div>VAT theo file: <b>'+_svcBulkFmt(R.vat.file)+'</b>'+(R.vat.pct?' ('+R.vat.pct+'%)':'')+' · VAT app tính theo '+S.params.vat+'% từng lô: <b>'+_svcBulkFmt(R.vat.calc)+'</b>'
+    +(Math.abs(R.vat.diff)<=Math.max(1,S.items.length)?' <span style="color:#15803d">(chênh '+_svcBulkFmt(R.vat.diff)+' — làm tròn)</span>':' <span style="color:#dc2626;font-weight:700">(chênh '+_svcBulkFmt(R.vat.diff)+' — kiểm tra % VAT)</span>')+'</div>';
+  return '<div id="svi_recon" style="'+(bad?_SVI_BAD:_SVI_OK)+'"><b>Đối chiếu tổng</b>'+note
+    +'<table style="border-collapse:collapse;min-width:620px;margin-top:4px"><thead><tr>'+['Khoản','Tổng ghi trong file','Cộng các dòng đọc được','Sẽ nhập (đã tick)','Chưa nhập'].map(function(h,i){return '<th style="'+_SVB_TH+';position:static'+(i?';text-align:right':'')+'">'+h+'</th>';}).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+function _sviPreviewHtml(S){
+  const main=S.rows.filter(function(r){return r.status==='ok'||r.status==='ambig';});
+  const rest=S.rows.filter(function(r){return !(r.status==='ok'||r.status==='ambig');});
+  const nSel=S.rows.filter(function(r){return r.sel;}).length;
+  const heads=['','Dòng','Bill (file)','Lô khớp',S.tab==='co'?'Số C/O':SVI_CFG[S.tab].certLabel,'Chi phí','VAT','Total'].concat(S.tab==='phyto'?['Hóa đơn KD']:[]).concat(S.map.extra>=0?['Phát sinh']:[]).concat(['Cảnh báo']);
+  const mainRows=main.map(function(r,i){ return _sviRowHtml(S,r,i); }).join('');
+  const restRows=rest.map(function(r,i){
+    const it=r.item, bg='background:'+(i%2===0?'var(--zebra-a)':'var(--zebra-b)')+';';
+    return '<tr style="'+bg+'"><td style="'+_SVB_TD+'">'+_sviEsc(it.rowNos.join(', '))+'</td><td style="'+_SVB_TD+';font-weight:700">'+_sviEsc(it.bill||'(trống)')+'</td><td style="'+_SVB_TD+'">'+_sviEsc(it.certs.join(', '))+'</td>'
+      +'<td style="'+_SVB_TD+';text-align:right">'+_svcBulkFmt(it.total)+(it.hoaTotal?' + HĐ '+_svcBulkFmt(it.hoaTotal):'')+(it.extraTotal?' + PS '+_svcBulkFmt(it.extraTotal):'')+'</td><td style="'+_SVB_TD+';font-size:11.5px">'+_sviMsgsHtml(r.msgs)+'</td></tr>';
+  }).join('');
+  return '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;line-height:1.55">Bước 2/3 — <b>Xem trước &amp; kiểm chứng</b>. File: <b>'+_sviEsc(S.fileName)+'</b> · sheet <b>'+_sviEsc(S.sheet)+'</b> · NCC: <b>'+_sviEsc(S.params.sup||'(giữ NCC hiện có)')+'</b> · VAT <b>'+S.params.vat+'%</b> · '+_sviEsc(S.params.cur)
+    +'. Chỉ các dòng <b>sạch</b> (khớp đúng 1 lô, chưa có giá/chứng thư khác) được tick sẵn. <b>Chưa có gì được ghi</b> cho tới khi bạn xác nhận ở bước 3.</div>'
+    +_sviReconHtml(S)
+    +'<div style="font-weight:700;font-size:12.5px;margin:6px 0 4px">Khớp với lô trong app ('+main.length+' dòng) <span id="svi_count" style="font-weight:600;color:var(--text-secondary)">— đã tick '+nSel+'</span></div>'
+    +(main.length?'<div style="max-height:46vh;overflow:auto;border:1px solid var(--border-light);border-radius:10px"><table style="width:100%;border-collapse:collapse;min-width:1250px"><thead><tr>'
+      +heads.map(function(h,i){ return '<th style="'+_SVB_TH+'">'+(i===0?'<input type="checkbox" id="svi_selall" onchange="svcImpSelAll(this.checked)" title="Chọn / bỏ chọn tất cả"/>':h)+'</th>'; }).join('')
+      +'</tr></thead><tbody>'+mainRows+'</tbody></table></div>':'<div style="'+_SVI_BAD+'">Không có dòng nào khớp lô trong app.</div>')
+    +(rest.length?'<div style="font-weight:700;font-size:12.5px;margin:12px 0 4px;color:#dc2626">Không nhập được ('+rest.length+' dòng) — không bị ghi gì, xử lý thủ công</div>'
+      +'<div style="max-height:30vh;overflow:auto;border:1px solid var(--border-light);border-radius:10px"><table style="width:100%;border-collapse:collapse"><thead><tr>'+['Dòng','Bill (file)','Số chứng thư','Số tiền','Lý do'].map(function(h){return '<th style="'+_SVB_TH+'">'+h+'</th>';}).join('')+'</tr></thead><tbody>'+restRows+'</tbody></table></div>':'');
+}
+function _sviPreviewRefresh(){
+  const S=window._sviS; if(!S||S.phase!=='preview')return;
+  const rc=g('svi_recon'); if(rc)rc.outerHTML=_sviReconHtml(S);
+  const n=S.rows.filter(function(r){return r.sel;}).length;
+  const c=g('svi_count'); if(c)c.textContent='— đã tick '+n;
+  const b=g('sviGo'); if(b){ b.textContent=''; b.innerHTML='<i class="ti ti-checks"></i> Tiếp tục xác nhận ('+n+' lô)…'; }
+}
+
+// ── Bước 3: xác nhận ──
+function _sviPlanRows(S){ return S.rows.filter(function(r){ return r.sel&&r.plan&&!r.plan.block&&r.plan.changed; }); }
+function svcImpToConfirm(){
+  const S=window._sviS; if(!S||S.busy)return;
+  if(!_svcBulkCanUse()){ toast('Chỉ Admin và Accountant được nhập file NCC','error'); return; }
+  if(!_sviPlanRows(S).length){ toast('Chưa tick dòng nào để nhập','error'); return; }
+  S.phase='confirm'; S.ack=false; _sviRender();
+}
+window.svcImpToConfirm=svcImpToConfirm;
+function svcImpAck(on){ const S=window._sviS; if(!S)return; S.ack=!!on; const b=g('sviGo2'); if(b)b.disabled=!S.ack||S.busy; }
+window.svcImpAck=svcImpAck;
+
+function _sviChangeLines(S,p){
+  const L=[], b=p.before, a=p.after, lbl=SVI_CFG[S.tab].certLabel;
+  if(b.ref!==a.ref)L.push(lbl+': '+(b.ref||'(trống)')+' → '+a.ref);
+  if(b.cost!==a.cost||b.qty!==a.qty||b.unit!==a.unit)L.push('Chi phí '+_svcBulkFmt(b.qty)+'×'+_svcBulkFmt(b.cost)+' '+b.unit+' → '+_svcBulkFmt(a.qty)+'×'+_svcBulkFmt(a.cost)+' '+a.unit);
+  if(b.cur!==a.cur)L.push('Curr '+b.cur+' → '+a.cur);
+  if(b.vat!==a.vat)L.push('VAT '+_svcBulkFmt(b.vat)+' → '+_svcBulkFmt(a.vat));
+  if(b.sup!==a.sup)L.push('NCC '+(b.sup||'(trống)')+' → '+(a.sup||'(trống)'));
+  if(p.hoa&&p.hoa.changed){ const hb=p.hoa.before,ha=p.hoa.after;
+    L.push('HOA '+_svcBulkFmt(_sviTot(hb))+' → '+_svcBulkFmt(_sviTot(ha))+' '+ha.cur+(hb.vat!==ha.vat?' (VAT '+_svcBulkFmt(hb.vat)+' → '+_svcBulkFmt(ha.vat)+')':'')+(hb.sup!==ha.sup?' · NCC '+(hb.sup||'(trống)')+' → '+(ha.sup||'(trống)'):'')); }
+  if(p.extra&&!p.extra.dup)L.push('Thêm chi phí: '+p.extra.name+' = '+_svcBulkFmt(p.extra.amt)+' '+a.cur+(p.extra.vat?' (VAT '+_svcBulkFmt(p.extra.vat)+')':''));
+  return L;
+}
+function _sviTotals(plans){
+  const before={},after={};
+  plans.forEach(function(p){
+    const b=p.before,a=p.after;
+    before[b.cur]=(before[b.cur]||0)+_sviTot(b)+b.vat; after[a.cur]=(after[a.cur]||0)+_sviTot(a)+a.vat;
+    if(p.hoa){ before[p.hoa.before.cur]=(before[p.hoa.before.cur]||0)+_sviTot(p.hoa.before)+p.hoa.before.vat; after[p.hoa.after.cur]=(after[p.hoa.after.cur]||0)+_sviTot(p.hoa.after)+p.hoa.after.vat; }
+    if(p.extra&&!p.extra.dup)after[a.cur]=(after[a.cur]||0)+p.extra.amt+p.extra.vat;
+  });
+  return {before:before,after:after};
+}
+function _sviConfirmHtml(S){
+  const rows=_sviPlanRows(S), plans=rows.map(function(r){return r.plan;});
+  const nOver=plans.filter(function(p){return p.overwrite;}).length;
+  const nNoSup=rows.filter(function(r){ const p=r.plan; return p.after.cost!==0&&!p.after.sup; }).length;
+  const nExtra=plans.filter(function(p){return p.extra&&!p.extra.dup;}).length;
+  const nMulti=rows.filter(function(r){return r.multi||r.dupLot||r.plan.dupBill;}).length;
+  const tot=_sviTotals(plans), curs=Object.keys(Object.assign({},tot.before,tot.after)).sort();
+  const totRows=curs.map(function(c){
+    const b=tot.before[c]||0,a=tot.after[c]||0,d=a-b;
+    return '<tr><td style="'+_SVB_TD+';font-weight:700">'+c+'</td><td style="'+_SVB_TD+';text-align:right">'+_svcBulkFmt(b)+'</td><td style="'+_SVB_TD+';text-align:right;font-weight:700">'+_svcBulkFmt(a)+'</td><td style="'+_SVB_TD+';text-align:right;color:'+(d>0?'#b45309':d<0?'#15803d':'inherit')+'">'+(d>0?'+':'')+_svcBulkFmt(d)+'</td></tr>';
+  }).join('');
+  const warn=[];
+  if(nOver)warn.push('<b>'+nOver+'</b> lô <b>ghi đè</b> chi phí / chứng thư / NCC đã có (bạn đã tick thủ công).');
+  if(nMulti)warn.push('<b>'+nMulti+'</b> lô có cảnh báo khớp (bill khớp nhiều lô / lặp dòng).');
+  if(nNoSup)warn.push('<b>'+nNoSup+'</b> lô có chi phí nhưng <b>chưa có NCC</b> → chưa vào công nợ NCC.');
+  if(nExtra)warn.push('<b>'+nExtra+'</b> lô được <b>thêm dòng chi phí nhập tay</b> (phát sinh / phí khác) vào Costing.');
+  const R=_sviRecon(S);
+  const lines=rows.map(function(r){
+    const p=r.plan, L=_sviChangeLines(S,p);
+    const total=_sviTot(p.after)+p.after.vat+(p.hoa?_sviTot(p.hoa.after)+p.hoa.after.vat:0)+(p.extra&&!p.extra.dup?p.extra.amt+p.extra.vat:0);
+    return '<tr><td style="'+_SVB_TD+'"><b>'+_sviEsc(p.lot.jobNo||'—')+'</b></td><td style="'+_SVB_TD+'">'+_sviEsc(r.item.bill)+'</td><td style="'+_SVB_TD+'">'+_sviEsc(p.lot.shipper||p.lot.supplier||'—')+'</td>'
+      +'<td style="'+_SVB_TD+';font-size:11.5px">'+L.map(_sviEsc).join('<br>')+'</td><td style="'+_SVB_TD+';text-align:right;white-space:nowrap">'+_svcBulkFmt(total)+' '+p.after.cur+'</td></tr>';
+  }).join('');
+  return '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">Bước 3/3 — <b>Xác nhận ghi</b></div>'
+    +'<div style="font-size:13px;line-height:1.6;margin-bottom:10px">Sắp ghi <b>'+rows.length+'</b> lô dịch vụ <b>'+SVC_BULK_CFG[S.tab].code+'</b> từ file <b>'+_sviEsc(S.fileName)+'</b> (sheet '+_sviEsc(S.sheet)+'). Hệ thống đọc lại dữ liệu mới nhất của từng lô trước khi ghi; lô nào vừa bị người khác sửa sẽ <b>bị bỏ qua</b>, không ghi đè. Mỗi lô được ghi vào Lịch sử lô.</div>'
+    +(R.bad?'<div style="'+_SVI_BAD+'"><b>✖ Tổng file khác tổng các dòng đọc được</b> — bạn đã xem ở bước 2; chỉ tiếp tục nếu chắc chắn.</div>':'')
+    +(warn.length?'<div style="'+_SVI_WARN+'"><b>⚠ Lưu ý công nợ</b><br>'+warn.join('<br>')+'</div>':'')
+    +'<div style="font-weight:700;font-size:12px;margin:4px 0">Tổng chi phí NCC (Thành tiền + VAT) — dịch vụ chính + HOA + phát sinh</div>'
+    +'<table style="border-collapse:collapse;min-width:420px;margin-bottom:12px"><thead><tr><th style="'+_SVB_TH+';position:static">Tiền tệ</th><th style="'+_SVB_TH+';position:static;text-align:right">Trước</th><th style="'+_SVB_TH+';position:static;text-align:right">Sau</th><th style="'+_SVB_TH+';position:static;text-align:right">Chênh</th></tr></thead><tbody>'+totRows+'</tbody></table>'
+    +'<div style="max-height:36vh;overflow:auto;border:1px solid var(--border-light);border-radius:10px"><table style="width:100%;border-collapse:collapse"><thead><tr>'
+      +['Job ID','Bill (file)','Shipper','Thay đổi','Tổng mới'].map(function(h){return '<th style="'+_SVB_TH+'">'+h+'</th>';}).join('')
+    +'</tr></thead><tbody>'+lines+'</tbody></table></div>'
+    +'<div style="display:flex;gap:8px;align-items:flex-start;justify-content:flex-start;margin-top:12px"><input type="checkbox" id="svi_ack" '+(S.ack?'checked':'')+' onchange="svcImpAck(this.checked)" style="margin:3px 0 0;flex:0 0 auto;width:auto"/><label for="svi_ack" style="flex:1 1 auto;display:block;width:auto;margin:0;text-align:left;font-size:13px;font-weight:600;line-height:1.5;cursor:pointer">Tôi đã đối chiếu số Bill, số chứng thư và số tiền ở trên với file NCC, đồng ý ghi vào hệ thống.</label></div>';
+}
+
+async function svcImpConfirm(){
+  const S=window._sviS; if(!S||S.busy||S.phase!=='confirm'||!S.ack)return;
+  if(!_svcBulkCanUse()){ toast('Chỉ Admin và Accountant được nhập file NCC','error'); return; }
+  S.busy=true; _sviRender();
+  const cfg=SVC_BULK_CFG[S.tab], rows=_sviPlanRows(S), results=[], email=(currentUser&&currentUser.email)||'system';
+  for(let n=0;n<rows.length;n++){
+    const row=rows[n], p=row.plan, res={row:row,st:'',msg:''};
+    const btn=g('sviGo2'); if(btn)btn.textContent='Đang ghi '+(n+1)+' / '+rows.length+'…';
+    try{
+      const ref=db.collection(colName(p.tt)).doc(p.lot._id);
+      let applied=null;
+      const out=await db.runTransaction(async function(tx){
+        applied=null;
+        const snap=await tx.get(ref);
+        if(!snap.exists)return {st:'skip',msg:'Lô không còn tồn tại'};
+        const lot=snap.data()||{};
+        const f=cfg.find(lot.svcs||{});
+        if(!f||f.key!==p.key)return {st:'skip',msg:'Dịch vụ '+cfg.code+' đã thay đổi / không còn'};
+        const br=_svcBulkBlockReason(lot,f.sv||{}); if(br)return {st:'skip',msg:br};
+        const cur=_sviSnap(f.sv);
+        if(!_sviSnapSame(cur,p.before))return {st:'skip',msg:'Đã bị người khác sửa sau khi phân tích — phân tích lại file'};
+        let hf=null;
+        if(p.hoa){
+          hf=_findSvcByNameOrCode(lot.svcs||{},'Hóa đơn kiểm dịch','HOA',null);
+          if(!hf||hf.key!==p.hoa.key)return {st:'skip',msg:'Dịch vụ HOA đã thay đổi / không còn'};
+          const hbr=_svcBulkBlockReason(lot,hf.sv||{}); if(hbr)return {st:'skip',msg:'HOA: '+hbr};
+          if(!_sviSnapSame(_sviSnap(hf.sv),p.hoa.before))return {st:'skip',msg:'HOA đã bị người khác sửa — phân tích lại file'};
+        }
+        const items=((lot.costing&&lot.costing.items)||[]).slice();
+        let addExtra=!!(p.extra&&!p.extra.dup);
+        if(addExtra){
+          if(items.length!==p.itemsLen)return {st:'skip',msg:'Chi phí (Costing) của lô vừa thay đổi — phân tích lại file'};
+          if(items.some(function(x){return x&&x.impKey===p.extra.impKey;}))addExtra=false;
+        }
+        const upd={}, chg={}, hchg={}, pre='svcs.'+p.key+'.', a=p.after;
+        if(cur.ref!==a.ref){ upd[pre+'refNo']=a.ref; chg.refNo=a.ref; }
+        if(cur.cost!==a.cost){ upd[pre+'cost']=a.cost; chg.cost=a.cost; }
+        if(cur.qty!==a.qty){ upd[pre+'svcQty']=a.qty; chg.svcQty=a.qty; }
+        if(cur.unit!==a.unit){ upd[pre+'svcUnit']=a.unit; chg.svcUnit=a.unit; }
+        if(cur.cur!==a.cur){ upd[pre+'svcCur']=a.cur; chg.svcCur=a.cur; }
+        if(cur.sup!==a.sup){ upd[pre+'svcSupplier']=a.sup; chg.svcSupplier=a.sup; }
+        if(cur.vat!==a.vat){ upd[pre+'svcVatAmt']=a.vat; chg.svcVatAmt=a.vat; }
+        if(p.hoa){
+          const hb=p.hoa.before, ha=p.hoa.after, hp='svcs.'+p.hoa.key+'.';
+          if(hb.cost!==ha.cost){ upd[hp+'cost']=ha.cost; hchg.cost=ha.cost; }
+          if(hb.qty!==ha.qty){ upd[hp+'svcQty']=ha.qty; hchg.svcQty=ha.qty; }
+          if(hb.unit!==ha.unit){ upd[hp+'svcUnit']=ha.unit; hchg.svcUnit=ha.unit; }
+          if(hb.cur!==ha.cur){ upd[hp+'svcCur']=ha.cur; hchg.svcCur=ha.cur; }
+          if(hb.sup!==ha.sup){ upd[hp+'svcSupplier']=ha.sup; hchg.svcSupplier=ha.sup; }
+          if(hb.vat!==ha.vat){ upd[hp+'svcVatAmt']=ha.vat; hchg.svcVatAmt=ha.vat; }
+        }
+        let newItem=null;
+        if(addExtra){
+          newItem={id:'ci_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),name:p.extra.name,price:p.extra.amt,qty:1,amt:p.extra.amt,unit:'Shipment',cur:a.cur,
+            vatAmt:p.extra.vat,partnerRef:p.extra.sup||'',apPaidStatus:'unpaid',remark:'Nhập từ file NCC '+S.fileName+' (dòng '+row.item.rowNos.join(', ')+')',impKey:p.extra.impKey};
+          items.push(newItem); upd['costing.items']=items; upd['costing.updatedAt']=Date.now(); upd['costing.updatedBy']=email;
+        }
+        if(!Object.keys(upd).length)return {st:'skip',msg:'Không có thay đổi so với dữ liệu hiện tại'};
+        const lines=_sviChangeLines(S,p);
+        const entry={ts:Date.now(),user:email,type:'svc',action:'Nhập file NCC — '+cfg.code,detail:lines.join('\n')+'\n(từ Service Report — nhập file NCC "'+S.fileName+'", sheet '+S.sheet+', dòng '+row.item.rowNos.join(', ')+')'};
+        upd.updatedAt=Date.now(); upd.updatedBy=email;
+        upd.eventLog=firebase.firestore.FieldValue.arrayUnion(entry);
+        tx.update(ref,upd);
+        applied={chg:chg,hchg:hchg,hkey:p.hoa&&p.hoa.key,newItem:newItem,entry:entry,at:upd.updatedAt};
+        return {st:'ok',msg:lines.join('; ')};
+      });
+      res.st=out.st; res.msg=out.msg;
+      if(out.st==='ok'&&applied){
+        const lot=(cache[p.tt]||[]).find(function(x){return x._id===p.lot._id;});
+        if(lot){
+          lot.svcs=lot.svcs||{}; lot.svcs[p.key]=Object.assign(lot.svcs[p.key]||{},applied.chg);
+          if(applied.hkey)lot.svcs[applied.hkey]=Object.assign(lot.svcs[applied.hkey]||{},applied.hchg);
+          if(applied.newItem){ lot.costing=lot.costing||{items:[]}; lot.costing.items=(lot.costing.items||[]).concat([applied.newItem]); }
+          lot.eventLog=(lot.eventLog||[]).concat([applied.entry]); lot.updatedAt=applied.at;
+        }
+      }
+    }catch(e){ res.st='fail'; res.msg=(e&&e.message)||String(e); }
+    results.push(res);
+  }
+  S.results=results; S.busy=false; S.phase='result'; _sviRender();
+}
+window.svcImpConfirm=svcImpConfirm;
+
+function _sviResultHtml(S){
+  const R=S.results||[];
+  const ok=R.filter(function(x){return x.st==='ok';}).length, skip=R.filter(function(x){return x.st==='skip';}).length, fail=R.filter(function(x){return x.st==='fail';}).length;
+  const rowsH=R.map(function(x){
+    const col=x.st==='ok'?'#15803d':x.st==='skip'?'#b45309':'#dc2626';
+    const lab=x.st==='ok'?'✔ Đã ghi':x.st==='skip'?'⚠ Bỏ qua':'✖ Lỗi';
+    return '<tr><td style="'+_SVB_TD+'"><b>'+_sviEsc(x.row.plan.lot.jobNo||'—')+'</b></td><td style="'+_SVB_TD+'">'+_sviEsc(x.row.item.bill)+'</td><td style="'+_SVB_TD+';color:'+col+';font-weight:700;white-space:nowrap">'+lab+'</td><td style="'+_SVB_TD+';font-size:11.5px">'+_sviEsc(x.msg).replace(/; /g,'<br>')+'</td></tr>';
+  }).join('');
+  return '<div style="font-size:13.5px;line-height:1.6;margin-bottom:10px"><b style="color:#15803d">'+ok+'</b> lô đã ghi'+(skip?' · <b style="color:#b45309">'+skip+'</b> lô bị bỏ qua':'')+(fail?' · <b style="color:#dc2626">'+fail+'</b> lô lỗi':'')
+    +'. Dữ liệu đã đồng bộ sang tab Dịch vụ / Costing của từng lô và được ghi vào Lịch sử lô.'
+    +((skip||fail)?'<br><span style="font-size:12px;color:var(--text-secondary)">Lô bị bỏ qua/lỗi chưa được ghi gì — xem lý do bên dưới, nhập lại file để làm riêng các lô đó.</span>':'')+'</div>'
+    +'<div style="max-height:56vh;overflow:auto;border:1px solid var(--border-light);border-radius:10px"><table style="width:100%;border-collapse:collapse"><thead><tr>'
+    +['Job ID','Bill (file)','Kết quả','Chi tiết'].map(function(h){return '<th style="'+_SVB_TH+'">'+h+'</th>';}).join('')+'</tr></thead><tbody>'+rowsH+'</tbody></table></div>';
+}
+
+// Xuất Excel đối chiếu (mọi dòng file + trạng thái) để lưu chứng từ
+function svcImpExport(){
+  const S=window._sviS; if(!S||!S.rows||!window.XLSX)return;
+  const resMap={}; (S.results||[]).forEach(function(x){ resMap[x.row.n]=x; });
+  const aoa=[['Dòng file','Bill (file)','Số chứng thư','Chi phí','Hóa đơn','Phát sinh','Trạng thái đối chiếu','Job ID khớp','Booking','Tick nhập','Kết quả ghi','Ghi chú / cảnh báo']];
+  S.rows.forEach(function(r){
+    const it=r.item, p=r.plan, rs=resMap[r.n];
+    const st=r.status==='ok'?(p&&p.block?'Bị chặn':p&&!p.changed?'Không thay đổi':'Khớp lô'):({ambig:'Nhiều lô — chưa chọn',nomatch:'Không khớp lô',nosvc:'Lô chưa có dịch vụ',nobill:'Thiếu số Bill',err:'Lỗi dữ liệu'}[r.status]||r.status);
+    aoa.push([it.rowNos.join(', '),it.bill,it.certs.join(', '),it.total,it.hoaTotal,it.extraTotal,st,p?(p.lot.jobNo||''):'',p?(p.lot.bookingNo||''):'',r.sel?'Có':'Không',rs?(rs.st==='ok'?'Đã ghi':rs.st==='skip'?'Bỏ qua: '+rs.msg:'Lỗi: '+rs.msg):'',r.msgs.map(function(m){return m.m;}).join(' | ')]);
+  });
+  const ws=XLSX.utils.aoa_to_sheet(aoa), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Đối chiếu');
+  XLSX.writeFile(wb,'doi_chieu_NCC_'+SVI_CFG[S.tab].label.replace('/','')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+window.svcImpExport=svcImpExport;
+
+function svcImpClose(){
+  const S=window._sviS;
+  if(S&&S.busy){ toast('Đang ghi dữ liệu — vui lòng chờ xong','error'); return; }
+  if(S&&(S.phase==='preview'||S.phase==='confirm')&&!confirm('Đóng và bỏ kết quả phân tích? Chưa có dữ liệu nào được ghi vào hệ thống.'))return;
+  closeOv('svcImpOv'); window._sviS=null;
+}
+window.svcImpClose=svcImpClose;
+function svcImpFinish(){
+  const S=window._sviS; const tab=S&&S.tab;
+  closeOv('svcImpOv'); window._sviS=null;
+  try{ if(tab==='co')renderCOReport(); else if(tab==='phyto')renderPhytoReport(); else if(tab==='fumi')renderFumiReport(); }catch(e){}
+}
+window.svcImpFinish=svcImpFinish;
+
+function _sviRender(keepScroll){
+  const S=window._sviS; if(!S)return;
+  const ov=g('svcImpOv'); if(!ov)return;
+  const cfg=SVC_BULK_CFG[S.tab];
+  let body='',footer='';
+  if(S.phase==='setup'){
+    body=_sviSetupHtml(S);
+    footer='<button class="btn" onclick="svcImpClose()">Đóng</button><button class="btn pri" onclick="svcImpAnalyze()"><i class="ti ti-search"></i> Phân tích &amp; đối chiếu →</button>';
+  }else if(S.phase==='preview'){
+    body=_sviPreviewHtml(S);
+    const n=S.rows.filter(function(r){return r.sel;}).length;
+    footer='<button class="btn" onclick="svcImpBack()"><i class="ti ti-arrow-left"></i> Quay lại thiết lập</button><button class="btn" onclick="svcImpExport()"><i class="ti ti-download"></i> Xuất Excel đối chiếu</button>'
+      +'<button class="btn pri" id="sviGo" onclick="svcImpToConfirm()"><i class="ti ti-checks"></i> Tiếp tục xác nhận ('+n+' lô)…</button>';
+  }else if(S.phase==='confirm'){
+    body=_sviConfirmHtml(S);
+    footer='<button class="btn" onclick="svcImpBack()" '+(S.busy?'disabled':'')+'><i class="ti ti-arrow-left"></i> Quay lại xem trước</button>'
+      +'<button class="btn pri" id="sviGo2" onclick="svcImpConfirm()" '+((!S.ack||S.busy)?'disabled':'')+'><i class="ti ti-device-floppy"></i> Xác nhận ghi '+_sviPlanRows(S).length+' lô</button>';
+  }else{
+    body=_sviResultHtml(S);
+    footer='<button class="btn" onclick="svcImpExport()"><i class="ti ti-download"></i> Xuất Excel kết quả</button><button class="btn pri" onclick="svcImpFinish()">Đóng</button>';
+  }
+  const prevScroll=keepScroll&&ov.querySelector('[data-sviscroll]')?ov.querySelector('[data-sviscroll]').scrollTop:0;
+  ov.innerHTML='<div class="modal" style="max-width:1500px;width:97vw;padding:1.1rem 1.25rem">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-file-import" style="margin-right:6px;color:#1d4ed8"></i>Nhập file NCC — '+cfg.label+' ('+cfg.code+')</div></div>'
+    +'<div class="mhdr-btns"><button class="rac" onclick="'+(S.phase==='result'?'svcImpFinish()':'svcImpClose()')+'"><i class="ti ti-x"></i></button></div></div>'
+    +'<div data-sviscroll style="max-height:74vh;overflow:auto">'+body+'</div>'
+    +'<div class="mftr">'+footer+'</div></div>';
+  if(prevScroll){ const el=ov.querySelector('[data-sviscroll]'); if(el)el.scrollTop=prevScroll; }
+}
 
 async function fumiReportExportExcel(){
   const ExcelJS=window.ExcelJS;
