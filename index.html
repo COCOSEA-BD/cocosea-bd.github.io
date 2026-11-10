@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.41';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.42';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -13379,7 +13379,25 @@ function _prAsOfCalc(asOf){
     const ok=mine.filter(function(l){return l.doneDate<=l.limit;}), late=mine.filter(function(l){return l.doneDate>l.limit;});
     const extra=(r.tnItems||[]).reduce(function(s,it){return s+(parseFloat(it.amount)||0);},0);
     const bonus=ok.length*rate, pen=late.length*pr, pre=bonus+extra, applied=Math.max(0,Math.min(pen,pre));
-    return {i:i,email:em,name:r.name||'—',ok:ok.length,late:late.length,okList:ok,lateList:late,bonus:bonus,pen:pen,applied:applied,extra:extra,tn:pre-applied};
+    return {i:i,inTable:true,email:em,name:r.name||'—',ok:ok.length,late:late.length,okList:ok,lateList:late,bonus:bonus,pen:pen,applied:applied,extra:extra,tn:pre-applied};
+  });
+  // A 2.42: danh sách nhân viên KHÔNG chỉ lấy từ bảng lương tháng (bảng tháng mới có thể chưa có dòng nào) —
+  // bổ sung mọi tài khoản đang hoạt động + người đã tick hoàn thành lô trong tháng nhưng chưa có trong bảng.
+  const have={}; rows.forEach(function(x){ if(x.email)have[x.email]=1; });
+  const extraPeople=[];
+  (cache.users||[]).forEach(function(u){
+    const em=String(u.email||'').toLowerCase(); if(!em||have[em]||u.active===false)return;
+    have[em]=1; extraPeople.push({email:em,name:u.name||u.username||em});
+  });
+  lots.forEach(function(l){
+    const em=String(l.doneBy||'').toLowerCase(); if(!em||have[em])return;
+    have[em]=1; extraPeople.push({email:em,name:_holUserName(em)});
+  });
+  extraPeople.forEach(function(pp){
+    const mine=lots.filter(function(l){return String(l.doneBy||'').toLowerCase()===pp.email&&l.doneDate&&l.doneDate<=asOf;});
+    const ok=mine.filter(function(l){return l.doneDate<=l.limit;}), late=mine.filter(function(l){return l.doneDate>l.limit;});
+    const bonus=ok.length*rate, pen=late.length*pr, applied=Math.max(0,Math.min(pen,bonus));
+    rows.push({i:'e:'+pp.email,inTable:false,email:pp.email,name:pp.name,ok:ok.length,late:late.length,okList:ok,lateList:late,bonus:bonus,pen:pen,applied:applied,extra:0,tn:bonus-applied});
   });
   const lateLots=lots.filter(function(l){return l.doneDate&&l.doneDate<=asOf&&l.doneDate>l.limit;});
   const overdue=lots.filter(function(l){return (!l.doneDate||l.doneDate>asOf)&&l.limit<asOf;});
@@ -13403,6 +13421,7 @@ function _prPrevResHtml(){
   const c=_prAsOfCalc(q.asOf), asOf=q.asOf;
   const head=function(t){ return '<div style="margin:0 0 8px;font-size:12px;color:var(--text-secondary)">'+t+'</div>'; };
   if(q.emp==='all'){
+    c.rows=c.rows.filter(function(r){return r.inTable||(r.ok+r.late)>0;});
     const tot=c.rows.reduce(function(a,r){a.bonus+=r.bonus;a.pen+=r.applied;a.tn+=r.tn;a.ok+=r.ok;a.late+=r.late;return a;},{bonus:0,pen:0,tn:0,ok:0,late:0});
     const body=c.rows.map(function(r,i){
       return '<tr class="pr-tr"><td class="pr-td" style="text-align:center;color:var(--text-secondary)">'+(i+1)+'</td><td class="pr-td"><b>'+_psE(r.name)+'</b></td>'
@@ -13425,7 +13444,7 @@ function _prPrevResHtml(){
       +'<div style="margin:14px 0 4px;font-weight:700;font-size:12.5px;color:#DC2626"><i class="ti ti-alert-circle"></i> Lô hoàn thành trễ hạn tính tới '+_prDmy(asOf)+' ('+c.lateLots.length+')</div>'+lateTbl
       +'<div style="margin-top:12px;font-size:12px;line-height:1.6;color:var(--text-secondary)"><i class="ti ti-info-circle"></i> Tại mốc này còn <b style="color:'+(c.overdue.length?'#B91C1C':'inherit')+'">'+c.overdue.length+'</b> lô đã quá hạn mà chưa hoàn thành chứng từ (chưa tính phạt vì chưa có người tick) và <b>'+c.waiting.length+'</b> lô còn trong hạn. “TN dự kiến” = thưởng − phạt + khoản phụ cấp khác (không âm).</div>';
   }
-  const r=c.rows[parseInt(q.emp,10)];
+  const r=c.rows.find(function(x){return String(x.i)===String(q.emp);});
   if(!r)return '<div style="padding:1rem;color:var(--text-secondary)">Không tìm thấy nhân viên đã chọn.</div>';
   const noMail=!r.email;
   return head('Nhân viên <b>'+_psE(r.name)+'</b> · tính tới <b>'+_prDmy(asOf)+'</b> · tháng '+window._prState.month+'/'+window._prState.year)
@@ -13447,7 +13466,8 @@ function _prPrevDraw(){
   const st=window._prState, rg=_prPrevMonthRange(), P=window._prPrev;
   const c=_prAsOfCalc(P.asOf);
   const opts='<option value="">— Chọn nhân viên —</option><option value="all"'+(P.emp==='all'?' selected':'')+'>Tất cả nhân viên</option>'
-    +c.rows.map(function(r){ return '<option value="'+r.i+'"'+(String(P.emp)===String(r.i)?' selected':'')+'>'+_psE(r.name)+'</option>'; }).join('');
+    +c.rows.slice().sort(function(a,b){ return ((b.ok+b.late)>0)-((a.ok+a.late)>0)||(b.inTable-a.inTable)||String(a.name).localeCompare(String(b.name),'vi'); })
+      .map(function(r){ return '<option value="'+_psE(String(r.i))+'"'+(String(P.emp)===String(r.i)?' selected':'')+'>'+_psE(r.name)+((r.ok+r.late)?' ('+(r.ok+r.late)+' lô)':'')+((r.inTable||!c.rows.some(function(x){return x.inTable;}))?'':' · chưa có trong bảng lương')+'</option>'; }).join('');
   ov.innerHTML='<div class="modal" style="max-width:980px;max-height:92vh;overflow-y:auto">'
     +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-eye-search" style="margin-right:6px;color:#C99A3C"></i>Xem trước thưởng / phạt chứng từ — tháng '+st.month+'/'+st.year+'</div>'
     +'<div class="msub">Chỉ xem, không ghi vào bảng lương · Thưởng '+_prFmt(c.rate)+' đ / lô đạt · Phạt '+_prFmt(c.pen)+' đ / lô trễ</div></div>'
