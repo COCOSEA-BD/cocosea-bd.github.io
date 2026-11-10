@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.37';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.38';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -35964,7 +35964,7 @@ window.svcBulkFinish=svcBulkFinish;
 const SVI_CFG={
   co:   {label:'C/O',   certLabel:'Số C/O',   roles:['bill','bill2','cert','amt','price','qty','cont','extra','note']},
   phyto:{label:'Phyto', certLabel:'Số Phyto', roles:['bill','bill2','cert','amt','qty','hoa','extra','note']},
-  fumi: {label:'Fumi',  certLabel:'Số Fumi',  roles:['bill','bill2','cert','amt','price','qty','cont','extra','note']}
+  fumi: {label:'Fumi',  certLabel:'Số Fumi',  roles:['bill','bill2','cert','amt','price','qty','extra','note']}
 };
 const SVI_ROLE_LBL={bill:'Số Bill (đối chiếu)',bill2:'Cột Bill/Booking phụ (nếu có)',cert:'Số chứng thư',amt:'Chi phí (Thành tiền / CP KD)',
   price:'Đơn giá (dự phòng nếu thiếu Thành tiền)',qty:'SL Cont',cont:'Số Container (đối chiếu thêm)',hoa:'Hóa đơn kiểm dịch (→ dịch vụ HOA)',
@@ -36020,8 +36020,15 @@ function _sviRoleOf(h,tab){
 // Lưới tuyệt đối (cột 0 = A, dòng 0 = 1); điền xuống các ô gộp theo chiều dọc (IFIC gộp số Fumi / Bill / SL cont cho nhiều cont)
 function _sviGrid(ws){
   const XLSX=window.XLSX;
-  const ref=XLSX.utils.decode_range(ws['!ref']||'A1:A1');
-  const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true,blankrows:true,range:{s:{r:0,c:0},e:{r:ref.e.r,c:ref.e.c}}});
+  // Vùng dữ liệu THẬT = ô có giá trị (không tin '!ref': file Excel hay khai báo vùng cực lớn do định dạng cả cột/dòng → treo trình duyệt)
+  let maxR=0,maxC=0;
+  Object.keys(ws).forEach(function(k){
+    if(k.charAt(0)==='!')return;
+    const c=ws[k]; if(!c||c.v===undefined||c.v===null||c.v==='')return;
+    const a=XLSX.utils.decode_cell(k); if(a.r>maxR)maxR=a.r; if(a.c>maxC)maxC=a.c;
+  });
+  maxR=Math.min(maxR,30000); maxC=Math.min(maxC,80);
+  const grid=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true,blankrows:true,range:{s:{r:0,c:0},e:{r:maxR,c:maxC}}});
   (ws['!merges']||[]).forEach(function(m){
     if(m.e.r<=m.s.r||m.e.r-m.s.r>600)return;
     const top=(grid[m.s.r]||[])[m.s.c];
@@ -36352,11 +36359,16 @@ function svcImpPick(tab,input){
   if(!_svcBulkCanUse()){ toast('Chỉ Admin và Accountant được nhập file NCC','error'); return; }
   if(!window.XLSX){ toast('Đang tải thư viện Excel, thử lại sau','error'); return; }
   if(typeof _phase2Ready!=='undefined'&&(!_phase2Ready.xuat||(tab==='fumi'&&!_phase2Ready.nhap))){ toast('Dữ liệu lô hàng đang tải đầy đủ — chờ vài giây rồi thử lại (tránh bỏ sót lô khi đối chiếu)','error'); return; }
+  try{ setLoading(true,'Đang đọc file…'); }catch(e){}
   const reader=new FileReader();
   reader.onload=function(e){
-    try{ _sviOpenWb(tab,file.name,XLSX.read(e.target.result,{type:'array',cellDates:false})); }
-    catch(err){ toast('Lỗi đọc file: '+err.message,'error'); }
+    setTimeout(function(){
+      try{ _sviOpenWb(tab,file.name,XLSX.read(e.target.result,{type:'array',cellDates:false,dense:false})); }
+      catch(err){ console.error('[SVI] read',err); toast('Lỗi đọc file: '+((err&&err.message)||err),'error'); }
+      try{ setLoading(false); }catch(e2){}
+    },30);
   };
+  reader.onerror=function(){ try{ setLoading(false); }catch(e){} toast('Không đọc được file','error'); };
   reader.readAsArrayBuffer(file);
 }
 window.svcImpPick=svcImpPick;
@@ -36462,6 +36474,16 @@ function _sviSetupHtml(S){
     +'<div id="svi_prev">'+_sviSetupPreviewHtml(S)+'</div>';
 }
 
+function svcImpAnalyzeUI(){
+  const S=window._sviS; if(!S||S.busy)return;
+  try{ setLoading(true,'Đang đối chiếu…'); }catch(e){}
+  setTimeout(function(){
+    try{ svcImpAnalyze(); }
+    catch(e){ console.error('[SVI] analyze',e); toast('Lỗi khi đối chiếu: '+((e&&e.message)||e),'error'); }
+    try{ setLoading(false); }catch(e){}
+  },30);
+}
+window.svcImpAnalyzeUI=svcImpAnalyzeUI;
 function svcImpAnalyze(){
   const S=window._sviS; if(!S||S.busy)return;
   if(!_svcBulkCanUse()){ toast('Chỉ Admin và Accountant được nhập file NCC','error'); return; }
@@ -36525,7 +36547,7 @@ function _sviRowHtml(S,row,i){
   let h='<tr style="'+bg+((p&&(p.block||!p.changed))?'opacity:.68;':'')+'">'
     +'<td style="'+_SVB_TD+';text-align:center"><input type="checkbox" id="svi_sel_'+row.n+'" '+(row.sel?'checked':'')+((!p||p.block||!p.changed)?' disabled':'')+' onchange="svcImpSel('+row.n+',this.checked)"/></td>'
     +T+_sviEsc(it.rowNos.join(', '))+'</td>'
-    +T+'<b>'+_sviEsc(it.bill)+'</b>'+(it.bill2?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+_sviEsc(it.bill2)+'</div>':'')+(mt?'<div style="font-size:10.5px">'+mt+'</div>':'')+(it.conts.length?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+it.conts.length+' cont</div>':'')+'</td>'
+    +T+'<b>'+_sviEsc(it.bill)+'</b>'+(it.bill2?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+_sviEsc(it.bill2)+'</div>':'')+(mt?'<div style="font-size:10.5px">'+mt+'</div>':'')+(it.nCont>0&&S.tab!=='co'?'<div style="font-size:10.5px;color:var(--text-tertiary)">'+_svcBulkFmt(it.nCont)+' cont</div>':'')+'</td>'
     +T+lot+'</td>';
   if(!p){ h+='<td colspan="'+(4+(S.tab==='phyto'?1:0)+(S.map.extra>=0?1:0))+'" style="'+_SVB_TD+';color:var(--text-tertiary);font-style:italic">— chọn lô để xem —</td>'; }
   else{
@@ -36797,7 +36819,7 @@ function _sviRender(keepScroll){
   let body='',footer='';
   if(S.phase==='setup'){
     body=_sviSetupHtml(S);
-    footer='<button class="btn" onclick="svcImpClose()">Đóng</button><button class="btn pri" onclick="svcImpAnalyze()"><i class="ti ti-search"></i> Phân tích &amp; đối chiếu →</button>';
+    footer='<button class="btn" onclick="svcImpClose()">Đóng</button><button class="btn pri" onclick="svcImpAnalyzeUI()"><i class="ti ti-search"></i> Phân tích &amp; đối chiếu →</button>';
   }else if(S.phase==='preview'){
     body=_sviPreviewHtml(S);
     const n=S.rows.filter(function(r){return r.sel;}).length;
