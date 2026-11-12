@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.42';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.43';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2471,6 +2471,12 @@ function startListeners(){
       if(typeof _holOnData==='function')_holOnData();
     },function(){ cache.holidays=cache.holidays||[]; });
     listeners.push(uHol);
+    // A 2.43: Bảng tỷ giá USD/VND (Vietcombank bán ra) theo ngày — áp dụng cho lô ETD từ 11/11/2026
+    const uFx = db.collection('fxRates').onSnapshot(snap => {
+      cache.fxRates = snap.docs.map(d=>({_id:d.id,...d.data()}));
+      if(typeof _fxOnData==='function')_fxOnData();
+    },function(){ cache.fxRates=cache.fxRates||[]; });
+    listeners.push(uFx);
 
     // Quản lý thu chi: giao dịch sổ quỹ (realtime)
     const uCashTx = db.collection('cashTransactions').onSnapshot(snap => {
@@ -3877,6 +3883,7 @@ function _wsSidebarHTML(tt){
     </div>
 
     ${_wsTodoCardHTML(tt)}
+    ${_fxSideCardHtml()}
     <!-- Giữ id cũ (ẩn) để computeShipmentKpis()/renderVstWarning() không lỗi -->
     <div style="display:none"><span id="kpiTotal_${tt}"></span><span id="kpiPending_${tt}"></span><div id="kpiVst_${tt}"></div><div id="vstWarnBar_${tt}"></div></div>
 
@@ -5452,7 +5459,7 @@ function renderDetailPanel(r,tt){
       });
       // ROE + per-column revenue totals (costingROE phải khai báo TRƯỚC khi dùng)
       // v4.54: ưu tiên invRoeInput (tab Invoice) → roeInput → r.roe → 26390
-      const costingROE=parseFloat(g('invRoeInput')?.value)||parseFloat(g('roeInput')?.value)||r.roe||26390;
+      const costingROE=_fxOverride(r)||parseFloat(g('invRoeInput')?.value)||parseFloat(g('roeInput')?.value)||(_fxOverride(r)||r.roe||26390);
       let totalRevAmtVND=0, totalRevVatAmtVND=0, totalRevTotalVND=0;
       revenueRows.forEach(function(row){
         const rv=row.cur==='VND'?1:costingROE;
@@ -5509,7 +5516,7 @@ function renderDetailPanel(r,tt){
       let totalComKbVND=0;
       comKbAll.forEach(function(row){
         const tt=_comKbThanhTien(row.amount,row.vol);
-        totalComKbVND+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||26390);
+        totalComKbVND+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',(_fxOverride(r)||r.roe||26390));
       });
       totalCostVND+=totalComKbVND;
       totalCostPreVatVND+=totalComKbVND; // hoa hồng không có khái niệm VAT riêng — tính thẳng vào chi phí trước VAT
@@ -5686,7 +5693,7 @@ function renderDetailPanel(r,tt){
               ((r.comKb&&r.comKb.kb)||[]).map(function(row){return Object.assign({},row,{_kind:'KB'});})
             ).map(function(row){
               const tt=_comKbThanhTien(row.amount,row.vol);
-              const tc=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||26390);
+              const tc=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',(_fxOverride(r)||r.roe||26390));
               return '<tr>'
                 +'<td style="'+tdS+'"><span class="bdg bdg-purple" style="font-size:10px">'+row._kind+'</span></td>'
                 +'<td style="'+tdS+'">'+(row.recipient||'—')+(row.recipientPartner?' <span style="color:var(--text-tertiary);font-size:10.5px">('+row.recipientPartner+')</span>':'')
@@ -5733,7 +5740,7 @@ function renderDetailPanel(r,tt){
       } else {
                 const tdS='padding:6px 9px;border-bottom:1px solid var(--border-light);vertical-align:middle;font-size:12px';
         const thS='padding:8px 9px;background:linear-gradient(135deg,#1a4b8c 0%,#103A6F 100%);font-size:10px;font-weight:700;color:#fff;border-bottom:none;text-transform:uppercase;letter-spacing:.4px;text-align:center;white-space:nowrap';
-        const roe2=parseFloat(r.roe)||window._roe||26390;
+        const roe2=_fxOverride(r)||parseFloat(r.roe)||window._roe||26390;
         const truckRows2=r.truckings||[];
         const truckNos2=truckRows2.map(function(t){return t.truckNo;}).filter(Boolean).join(', ');
         const truckRoute2=truckRows2.length&&truckRows2[0].route?truckRows2[0].route:'từ Vĩnh Long đến Hồ Chí Minh';
@@ -5776,13 +5783,13 @@ function renderDetailPanel(r,tt){
             +'<td style="'+tdS+';font-size:11px;color:var(--blue);font-weight:600">'+(sv.party||'—')+'</td>'
             +'</tr>';
         }).join('');
-bodyHtml='<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85rem;background:var(--blue-bg);border:1px solid var(--border-light);border-radius:8px;margin-bottom:.85rem">'
+bodyHtml=(_fxIsNewLot(r)?_fxInvBoxHtml(r):('<div style="display:flex;align-items:center;gap:10px;padding:.6rem .85rem;background:var(--blue-bg);border:1px solid var(--border-light);border-radius:8px;margin-bottom:.85rem">'
           +'<i class="ti ti-currency-dollar" style="font-size:16px;color:var(--blue)"></i>'
           +'<span style="font-size:12px;font-weight:600;color:var(--blue-text)">Tỷ giá USD/VND:</span>'
-          +'<input type="number" id="invRoeInput" value="'+(r.roe||26390)+'" min="1" style="width:110px;font-size:13px;font-weight:700;color:var(--blue-text)" oninput="saveInvRoe(this.value)"/>'
+          +'<input type="number" id="invRoeInput" value="'+((_fxOverride(r)||r.roe||26390))+'" min="1" style="width:110px;font-size:13px;font-weight:700;color:var(--blue-text)" oninput="saveInvRoe(this.value)"/>'
           +'<span style="font-size:11.5px;color:var(--blue-text)">VND/USD</span>'
           +'<span id="invRoeSaved" style="font-size:10.5px;color:var(--green);margin-left:4px"></span>'
-          +'</div>'
+          +'</div>'))
           +'<div style="margin-bottom:.75rem;font-size:11px;color:var(--text-secondary)"><i class="ti ti-info-circle" style="font-size:12px;vertical-align:-1px"></i> Chọn VAT và trạng thái Invoice cho từng dịch vụ. Waived = không hiện trong Debit Note.</div>'
           +'<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-bottom:1rem;box-shadow:0 2px 8px rgba(16,58,111,.12)">'
           +'<table style="width:100%;border-collapse:collapse"><thead><tr>'
@@ -8048,7 +8055,7 @@ window._filterCneeOpts=_filterCneeOpts;
 // Data model trên lô: r.comKb = {com:[{recipient,recipientPartner,amount,vol,cur,method,remark}], kb:[...]}
 // "Thành tiền" và "Số tiền thực chi" luôn TÍNH LẠI (không lưu trùng lặp) từ amount/vol/cur/method + r.roe.
 function _comKbBoxHtml(r){
-  const roe=r.roe||26390;
+  const roe=(_fxOverride(r)||r.roe||26390);
   const comContacts=_comKbContactsFor('com',r);
   const kbContacts=_comKbContactsFor('kb',r);
   const comRows=(r.comKb&&r.comKb.com)||[];
@@ -8129,7 +8136,7 @@ function _comKbRowHtml(kind,row,i,contacts,roe){
 // Cập nhật live Thành tiền + Số tiền thực chi khi sửa 1 dòng (không cần lưu mới thấy)
 function updComKbRow(kind,i){
   const r=cache[detailTt].find(function(x){return x._id===detailId;})||{};
-  const roe=r.roe||26390;
+  const roe=(_fxOverride(r)||r.roe||26390);
   const amt=parseFloat(g('cmb_'+kind+'_amt_'+i)?.value)||0;
   const vol=parseFloat(g('cmb_'+kind+'_vol_'+i)?.value)||0;
   const cur=g('cmb_'+kind+'_cur_'+i)?.value||'USD';
@@ -8152,7 +8159,7 @@ function addComKbRow(kind){
   if(tbody.querySelector('td[colspan]'))tbody.innerHTML='';
   const tr=document.createElement('tr');
   tr.setAttribute('data-comkb-row','');
-  tr.innerHTML=_comKbRowHtml(kind,{vol:lotVol,cur:'USD',method:'20pct'},idx,contacts,r.roe||26390).replace(/^<tr[^>]*>/,'').replace(/<\/tr>$/,'');
+  tr.innerHTML=_comKbRowHtml(kind,{vol:lotVol,cur:'USD',method:'20pct'},idx,contacts,(_fxOverride(r)||r.roe||26390)).replace(/^<tr[^>]*>/,'').replace(/<\/tr>$/,'');
   tbody.appendChild(tr);
 }
 window.addComKbRow=addComKbRow;
@@ -8206,7 +8213,7 @@ async function saveComKb(){
   let _paidChanged=0;
   [com,kb].forEach(function(arr){arr.forEach(function(row){
     if(row.apPaidStatus==='paid'&&row._paidTc!=null){
-      const now=_comKbThucChi(_comKbThanhTien(row.amount,row.vol),row.cur||'USD',row.method||'20pct',rChk.roe||26390);
+      const now=_comKbThucChi(_comKbThanhTien(row.amount,row.vol),row.cur||'USD',row.method||'20pct',(_fxOverride(rChk)||rChk.roe||26390));
       if(Math.round(now)!==Math.round(parseFloat(row._paidTc)||0))_paidChanged++;
     }
     delete row._paidTc;
@@ -9392,6 +9399,8 @@ async function saveFillPrice(){
 /* MODULE: INVOICE / DEBIT NOTE */
 function openInvoice(id, tt, tempR){
   if(!can('viewInvoice')){ toast('Không có quyền xem Invoice','error'); return; }
+  // A 2.43: lô ETD từ 11/11/2026 chưa có tỷ giá (Bảng tỷ giá) → KHÔNG cho ra Debit Note
+  if(!_fxGuardDn((cache[tt]||[]).find(x=>x._id===id)||{}))return;
   svcIdx=id; currentTab=tt;
   const r=cache[tt].find(x=>x._id===id)||{};
 
@@ -9426,7 +9435,7 @@ function openInvoice(id, tt, tempR){
 
   // Build charges grouped by VAT rate for subtotals
   // ROE = exchange rate (default 26390)
-  const defaultROE=parseFloat(g('invRoeInput')?.value)||r.roe||26390;
+  const defaultROE=_fxOverride(r)||parseFloat(g('invRoeInput')?.value)||(_fxOverride(r)||r.roe||26390);
 
   // Group by party
   const allParties=[...new Set(activeSvcs.map(s=>(svcs[s.key]?.party||'').trim()).filter(Boolean))];
@@ -9467,7 +9476,7 @@ function openInvoice(id, tt, tempR){
   </div>`;
 
   // Sync roeInput (hidden, for compat) from invRoeInput in invoice tab
-  const liveRoe=parseFloat(g('invRoeInput')?.value)||26390;
+  const liveRoe=_fxOverride(r)||parseFloat(g('invRoeInput')?.value)||26390;
   const ri=g('roeInput');if(ri)ri.value=liveRoe;
   openOv('invOv');
 
@@ -9516,7 +9525,7 @@ function rebuildInvoicePreview(){
   const svcsNo=allActiveSvcs.filter(s=>svcs[s.key]?.on&&svcs[s.key]?.invoice==='No'&&svcMatchParty(s));
   const activeSvcs=[...svcsYes,...svcsNo];
   // Ưu tiên lấy tỷ giá từ ô invRoeInput (tab Invoice), fallback về roeInput ẩn
-  const roe=parseFloat(g('invRoeInput')?.value)||parseFloat(g('roeInput')?.value)||26390;
+  const roe=_fxOverride(r)||parseFloat(g('invRoeInput')?.value)||parseFloat(g('roeInput')?.value)||26390;
   // Đồng bộ lại roeInput để các hàm khác (printDN, exportDnExcel...) dùng đúng giá trị
   try{const _ri=g('roeInput');if(_ri)_ri.value=roe;}catch(e){}
 
@@ -11722,6 +11731,7 @@ function printDN(){
   const d=window._dnData;
   if(!d){ toast('Không có dữ liệu Debit Note để xuất PDF','error'); return; }
   const r=d.r, svcs=d.svcs;
+  if(!_fxGuardDn(r))return; _fxFreezeLot(d.tt||currentTab,r._id);   // A 2.43: chặn khi thiếu tỷ giá + chốt tỷ giá khi xuất DN
   const allParties=d.allParties&&d.allParties.length?d.allParties:[''];
   const currentParty=allParties[d.currentPartyIdx||0]||'';
   const dnMap=r.dnByParty||{};
@@ -11764,6 +11774,7 @@ async function exportDnExcel(){
   const d=window._dnData;
   if(!d){ toast('Không có dữ liệu Debit Note để xuất Excel','error'); return; }
   const r=d.r, svcs=d.svcs;
+  if(!_fxGuardDn(r))return; _fxFreezeLot(d.tt||currentTab,r._id);   // A 2.43
   const allParties=d.allParties&&d.allParties.length?d.allParties:[''];
   const currentParty=allParties[d.currentPartyIdx||0]||'';
   const dnMap=r.dnByParty||{};
@@ -11777,7 +11788,7 @@ async function exportDnExcel(){
   if(!ExcelJS){ toast('Đang tải thư viện Excel, thử lại sau','error'); return; }
   setLoading(true,'Đang tạo file Excel Debit Note...');
   try{
-    const roe=parseFloat(g('roeInput')?.value)||r.roe||26390;
+    const roe=_fxOverride(r)||parseFloat(g('roeInput')?.value)||(_fxOverride(r)||r.roe||26390);
     const allActiveSvcs=_applySvcOrder(SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;}),r.svcOrder);
     function svcMatchParty(s){ const p=(svcs[s.key]&&svcs[s.key].party||'').trim(); if(!currentParty)return true; return p===currentParty; }
     const svcsYes=allActiveSvcs.filter(function(s){return (svcs[s.key].invoice||'Yes')==='Yes'&&svcMatchParty(s);});
@@ -12150,7 +12161,7 @@ function runDebtReport(){
   function _amtVND(sv,r){
     const amt=sv.amount||(sv.price||0)*(sv.qty||1);
     if((sv.cur||'USD')==='VND')return amt;
-    return Math.round(amt*(r.roe||26390));
+    return Math.round(amt*((_fxOverride(r)||r.roe||26390)));
   }
 
   // Group by shipper
@@ -15268,7 +15279,7 @@ function _debtV3ComputeAR(){
     return matchSh&&(!from||!r.etd||r.etd>=from)&&(!to||!r.etd||r.etd<=to);
   });
 
-  function _amtVND(sv,r){ const amt=sv.amount||(sv.price||0)*(sv.qty||1); if((sv.cur||'USD')==='VND')return amt; return Math.round(amt*(r.roe||26390)); }
+  function _amtVND(sv,r){ const amt=sv.amount||(sv.price||0)*(sv.qty||1); if((sv.cur||'USD')==='VND')return amt; return Math.round(amt*((_fxOverride(r)||r.roe||26390))); }
 
   const byShipper={};
   const rows=[]; // dùng cho bảng "Chi tiết phải thu" (theo từng lô)
@@ -16148,7 +16159,7 @@ function _tcSupplierBreakdown(filterOpts){
         if(!row.recipient)return;
         if(fo.supplier&&row.recipient!==fo.supplier)return;
         const tt=_comKbThanhTien(row.amount,row.vol);
-        const amt=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||26390);
+        const amt=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',(_fxOverride(r)||r.roe||26390));
         if(!amt)return;
         const recipientKey=row.recipient;
         if(!byPartner[recipientKey])byPartner[recipientKey]={partner:recipientKey,lots:[],total:{}};
@@ -17352,6 +17363,294 @@ async function saveTcDebt(){
 }
 window.saveTcDebt=saveTcDebt;
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   A 2.43 — BẢNG TỶ GIÁ USD/VND (tỷ giá BÁN RA Vietcombank, nhập tay theo ngày)
+   • Collection `fxRates` (docId = yyyy-mm-dd): {date,usdVnd,note,updatedBy,updatedAt,hist:[{rate,by,at}]}
+   • CHỈ áp dụng cho lô có ETD >= FX_CUTOFF (11/11/2026). Lô ETD trước đó (hoặc chưa có ETD): _fxOverride() luôn
+     trả null → mọi công thức cũ chạy y nguyên (r.roe || 26390 ...), không đổi bất kỳ con số nào.
+   • Lô mới: tỷ giá = (1) tỷ giá RIÊNG của lô (roeSrc='manual') → (2) tỷ giá ĐÃ CHỐT khi xuất Debit Note
+     (roeFrozen) → (3) dòng bảng tỷ giá ĐÚNG ngày ETD (bắt buộc đúng ngày) → (4) thiếu → CHẶN Debit Note.
+═══════════════════════════════════════════════════════════════════════════ */
+const FX_CUTOFF='2026-11-11';
+const FX_MIN=10000, FX_MAX=50000;   // chặn gõ nhầm (VD 2639 hoặc 263900)
+const _FX_DOW=['CN','T2','T3','T4','T5','T6','T7'];
+function _fxPad(n){ return String(n).padStart(2,'0'); }
+function _fxFmtDate(d){ return d.getFullYear()+'-'+_fxPad(d.getMonth()+1)+'-'+_fxPad(d.getDate()); }
+function _fxToday(){ return _fxFmtDate(new Date()); }                      // ngày LOCAL (không dùng UTC)
+function _fxAddDays(ds,n){ const d=new Date(ds+'T00:00:00'); d.setDate(d.getDate()+n); return _fxFmtDate(d); }
+function _fxDmy(ds){ const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(ds||''); return m?(m[3]+'/'+m[2]+'/'+m[1]):(ds||''); }
+function _fxDow(ds){ const d=new Date(ds+'T00:00:00'); return isNaN(d)?'':_FX_DOW[d.getDay()]; }
+function _fxNum(v){ return Math.round(v).toLocaleString('en-US'); }
+function _fxList(){ return Array.isArray(cache.fxRates)?cache.fxRates:[]; }
+function _fxMap(){ const m={}; _fxList().forEach(function(x){ const v=parseFloat(x.usdVnd); if(x.date&&v>0)m[x.date]=x; }); return m; }
+function _fxRateOn(ds){ const x=_fxMap()[ds]; return x?parseFloat(x.usdVnd):null; }
+function _fxCanEdit(){ const r=currentProfile&&currentProfile.role; return r==='admin'||r==='accountant'; }
+function _fxIsNewLot(r){ return !!(r&&r.etd&&String(r.etd).slice(0,10)>=FX_CUTOFF); }
+
+// Kết quả tra tỷ giá của 1 lô: null = lô cũ (không áp dụng bảng) | {rate,src:'manual'|'frozen'|'table'|'missing',date}
+function _fxResolve(r){
+  if(!_fxIsNewLot(r))return null;
+  const etd=String(r.etd).slice(0,10);
+  const stored=parseFloat(r.roe);
+  if(r.roeSrc==='manual'&&stored>0)return {rate:stored,src:'manual',date:etd};
+  if(r.roeFrozen&&r.roeSrc==='table'&&stored>0)return {rate:stored,src:'frozen',date:r.roeDate||etd};
+  const v=_fxRateOn(etd);
+  return v?{rate:v,src:'table',date:etd}:{rate:null,src:'missing',date:etd};
+}
+// Dùng ở mọi công thức: `(_fxOverride(r)||<biểu thức cũ>)` — null với lô cũ ⇒ biểu thức cũ chạy y nguyên
+function _fxOverride(r){ const x=_fxResolve(r); return x&&x.rate?x.rate:null; }
+window._fxOverride=_fxOverride; window._fxResolve=_fxResolve;
+
+function _fxLotsNew(){ return (cache.xuat||[]).map(function(r){return [r,'xuat'];}).concat((cache.nhap||[]).map(function(r){return [r,'nhap'];})).filter(function(p){return _fxIsNewLot(p[0]);}); }
+// Các ngày ETD (>= cutoff) đang có lô nhưng CHƯA có tỷ giá (không tính lô đã có tỷ giá riêng / đã chốt)
+function _fxMissingDates(){
+  const mp=_fxMap(), out={};
+  _fxLotsNew().forEach(function(p){
+    const r=p[0], x=_fxResolve(r);
+    if(x&&x.src==='missing'){ const d=String(r.etd).slice(0,10); (out[d]=out[d]||[]).push(r); }
+  });
+  return Object.keys(out).sort().map(function(d){return {date:d,lots:out[d]};});
+}
+
+// ── Chặn Debit Note khi thiếu tỷ giá ──
+function _fxOpenTable(date){
+  window._fxPrefDate=date||'';
+  try{ goTab('thu-chi'); }catch(e){}
+  try{ switchTcTab('danhmuc'); }catch(e){}
+}
+function _fxGuardDn(r){
+  const x=_fxResolve(r);
+  if(!x||x.rate)return true;
+  const msg='Chưa có tỷ giá USD/VND cho ngày ETD '+_fxDmy(x.date)+'.\nKhông thể xuất Debit Note — cần cập nhật tại Finance → Categories → Bảng tỷ giá.';
+  if(can('manageFinance')){ if(confirm(msg+'\n\nMở Bảng tỷ giá ngay?'))_fxOpenTable(x.date); }
+  else toast('Chưa có tỷ giá ngày ETD '+_fxDmy(x.date)+' — nhờ Admin/Accountant cập nhật Bảng tỷ giá (Finance)','error');
+  return false;
+}
+// Chốt tỷ giá của lô khi xuất Debit Note (PDF/Excel/Email): sau đó đổi bảng tỷ giá không làm đổi số tiền của lô này
+function _fxFreezeLot(tt,id){
+  try{
+    const lot=(cache[tt]||[]).find(function(x){return x._id===id;}); if(!lot)return;
+    const x=_fxResolve(lot); if(!x||!x.rate||x.src!=='table')return;
+    lot.roe=x.rate; lot.roeSrc='table'; lot.roeFrozen=true; lot.roeDate=x.date; lot.roeFrozenAt=Date.now();
+    fsSet(colName(tt),id,{roe:x.rate,roeSrc:'table',roeFrozen:true,roeDate:x.date,roeFrozenAt:lot.roeFrozenAt,roeFrozenBy:(currentUser&&currentUser.email)||''}).catch(function(e){console.warn('Chốt tỷ giá lỗi',e);});
+  }catch(e){ console.warn('Chốt tỷ giá lỗi',e); }
+}
+window._fxGuardDn=_fxGuardDn; window._fxFreezeLot=_fxFreezeLot; window._fxOpenTable=_fxOpenTable;
+
+// ── Tab Invoice: ô tỷ giá của lô ──
+function _fxInvBoxHtml(r){
+  const x=_fxResolve(r), canEdit=_fxCanEdit();
+  const lbl='<span style="font-size:12px;font-weight:700;color:var(--blue-text)">Tỷ giá USD/VND</span><span style="font-size:10.5px;color:var(--text-secondary)">Vietcombank bán ra</span>';
+  const refreshBtn='<button type="button" class="btn sm" onclick="_fxLotRefresh()" title="Tải lại tỷ giá mới nhất từ Bảng tỷ giá" style="padding:4px 9px"><i class="ti ti-refresh"></i> Làm mới</button>';
+  const hid='<input type="hidden" id="invRoeInput" value="'+(x&&x.rate?x.rate:'')+'"/>';
+  if(x.src==='missing'){
+    return '<div id="fxInvBox" style="padding:.7rem .9rem;background:rgba(220,38,38,.07);border:1px solid rgba(220,38,38,.35);border-radius:10px;margin-bottom:.85rem">'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><i class="ti ti-alert-triangle" style="font-size:18px;color:#DC2626"></i>'+lbl
+        +'<span style="font-size:13px;font-weight:800;color:#DC2626">Chưa có tỷ giá ngày ETD '+_fxDmy(x.date)+'</span><span style="flex:1"></span>'+refreshBtn+'</div>'
+      +'<div style="font-size:11.5px;color:var(--text-secondary);margin-top:6px">Chưa thể xuất Debit Note cho lô này. '
+        +(can('manageFinance')?'<a href="javascript:void(0)" onclick="_fxOpenTable(\''+x.date+'\')" style="color:var(--blue);font-weight:700">Cập nhật tại Finance → Categories → Bảng tỷ giá</a>':'Nhờ Admin/Accountant cập nhật Bảng tỷ giá (Finance → Categories).')
+        +'. Sau đó bấm <b>Làm mới</b>. Hoặc đặt tỷ giá riêng cho lô này.</div>'
+      +(canEdit?_fxManualRowHtml(r):'')+hid+'</div>';
+  }
+  const badge=x.src==='manual'?'<span style="display:inline-flex;align-items:center;gap:4px;background:#FEF3C7;color:#92400E;font-size:10.5px;padding:2px 8px;border-radius:20px;font-weight:700"><i class="ti ti-user-edit"></i> Tỷ giá riêng của lô</span>'
+    :(x.src==='frozen'?'<span style="display:inline-flex;align-items:center;gap:4px;background:#E0E7FF;color:#3730A3;font-size:10.5px;padding:2px 8px;border-radius:20px;font-weight:700"><i class="ti ti-lock"></i> Đã chốt khi xuất Debit Note</span>'
+    :'<span style="display:inline-flex;align-items:center;gap:4px;background:#DCFCE7;color:#166534;font-size:10.5px;padding:2px 8px;border-radius:20px;font-weight:700"><i class="ti ti-calendar-check"></i> Theo ETD '+_fxDmy(x.date)+'</span>');
+  return '<div id="fxInvBox" style="padding:.7rem .9rem;background:var(--blue-bg);border:1px solid var(--border-light);border-radius:10px;margin-bottom:.85rem">'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><i class="ti ti-currency-dollar" style="font-size:18px;color:var(--blue)"></i>'+lbl
+      +'<span style="font-size:20px;font-weight:800;color:var(--blue-text);font-variant-numeric:tabular-nums">'+_fxNum(x.rate)+'</span><span style="font-size:11.5px;color:var(--blue-text)">VND/USD</span>'+badge
+      +'<span style="flex:1"></span>'+refreshBtn+'</div>'
+    +(canEdit?_fxManualRowHtml(r,x):'')+hid+'</div>';
+}
+function _fxManualRowHtml(r,x){
+  const manual=x&&x.src==='manual';
+  return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-light)">'
+    +'<span style="font-size:11.5px;color:var(--text-secondary)">Tỷ giá riêng (chỉ áp dụng cho lô này):</span>'
+    +'<input type="number" id="fxManualInput" min="'+FX_MIN+'" max="'+FX_MAX+'" step="1" value="'+(manual?x.rate:'')+'" placeholder="VD 26,100" style="width:120px;font-size:12.5px;font-weight:700" onkeydown="if(event.key===\'Enter\')_fxLotSetManual()"/>'
+    +'<button type="button" class="btn sm pri" onclick="_fxLotSetManual()"><i class="ti ti-check"></i> Áp dụng cho lô</button>'
+    +(manual?'<button type="button" class="btn sm" onclick="_fxLotClearManual()"><i class="ti ti-arrow-back-up"></i> Dùng lại tỷ giá bảng</button>':'')
+  +'</div>';
+}
+function _fxCurLot(){ return (cache[detailTt]||[]).find(function(x){return x._id===detailId;}); }
+// Vẽ lại tab mà KHÔNG làm mất lựa chọn VAT/Invoice đang chỉnh dở
+function _fxRerenderKeep(){
+  const keep={}; document.querySelectorAll('[id^="invvat_"],[id^="invinv_"]').forEach(function(el){ keep[el.id]=el.value; });
+  const lot=_fxCurLot(); if(lot)renderDetailPanel(lot,detailTt);
+  Object.keys(keep).forEach(function(id){ const el=document.getElementById(id); if(el)el.value=keep[id]; });
+}
+async function _fxLotRefresh(){
+  const lot=_fxCurLot(); if(!lot)return;
+  try{
+    const snap=await db.collection('fxRates').get();
+    cache.fxRates=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+  }catch(e){ /* dùng dữ liệu realtime sẵn có */ }
+  if(lot.roeFrozen&&lot.roeSrc==='table'){
+    const cur=_fxRateOn(String(lot.etd).slice(0,10));
+    if(cur&&Math.round(cur)!==Math.round(lot.roe)){
+      if(!(currentProfile&&currentProfile.role==='admin')){ toast('Lô đã chốt tỷ giá '+_fxNum(lot.roe)+' khi xuất Debit Note — chỉ Admin được đổi sang '+_fxNum(cur),'error'); _fxRerenderKeep(); return; }
+      if(!confirm('Lô này đã xuất Debit Note với tỷ giá '+_fxNum(lot.roe)+'.\nBảng tỷ giá hiện là '+_fxNum(cur)+'.\n\nCập nhật lô sang '+_fxNum(cur)+'? (số tiền VND của lô sẽ đổi theo)')){ _fxRerenderKeep(); return; }
+      lot.roeFrozen=false; lot.roeFrozenAt=null;
+      try{ await fsSet(colName(detailTt),detailId,{roeFrozen:false,roeFrozenAt:null}); }catch(e){ toast('Lỗi: '+e.message,'error'); return; }
+    }
+  }
+  _fxRerenderKeep(); toast('Đã tải lại tỷ giá');
+}
+async function _fxLotSetManual(){
+  if(!_fxCanEdit()){ toast('Chỉ Admin/Accountant được đặt tỷ giá riêng','error'); return; }
+  const lot=_fxCurLot(); if(!lot)return;
+  const v=parseFloat((g('fxManualInput')||{}).value);
+  if(!(v>=FX_MIN&&v<=FX_MAX)){ toast('Tỷ giá không hợp lệ — nhập số từ '+_fxNum(FX_MIN)+' đến '+_fxNum(FX_MAX),'error'); return; }
+  if(lot.roeFrozen&&Math.round(lot.roe)!==Math.round(v)&&!confirm('Lô đã xuất Debit Note với tỷ giá '+_fxNum(lot.roe)+'. Đổi sang tỷ giá riêng '+_fxNum(v)+'?'))return;
+  lot.roe=v; lot.roeSrc='manual'; lot.roeFrozen=false; lot.roeDate=String(lot.etd).slice(0,10);
+  try{ await fsSet(colName(detailTt),detailId,{roe:v,roeSrc:'manual',roeFrozen:false,roeDate:lot.roeDate,roeManualBy:(currentUser&&currentUser.email)||'',roeManualAt:Date.now()}); }
+  catch(e){ toast('Lỗi: '+e.message,'error'); return; }
+  _fxRerenderKeep(); toast('Đã đặt tỷ giá riêng '+_fxNum(v)+' cho lô này');
+}
+async function _fxLotClearManual(){
+  if(!_fxCanEdit())return; const lot=_fxCurLot(); if(!lot)return;
+  if(!confirm('Bỏ tỷ giá riêng và dùng lại tỷ giá trong Bảng tỷ giá (theo ETD)?'))return;
+  const tv=_fxRateOn(String(lot.etd).slice(0,10));
+  lot.roeSrc='table'; lot.roeFrozen=false; lot.roe=tv||lot.roe;
+  try{ await fsSet(colName(detailTt),detailId,{roeSrc:'table',roeFrozen:false,roe:lot.roe}); }catch(e){ toast('Lỗi: '+e.message,'error'); return; }
+  _fxRerenderKeep(); toast('Đã dùng lại tỷ giá theo bảng');
+}
+window._fxInvBoxHtml=_fxInvBoxHtml; window._fxLotRefresh=_fxLotRefresh; window._fxLotSetManual=_fxLotSetManual; window._fxLotClearManual=_fxLotClearManual;
+
+// ── Finance → Categories → Bảng tỷ giá ──
+window._fxPrefDate=window._fxPrefDate||'';
+function _fxLotCountByDate(){ const m={}; _fxLotsNew().forEach(function(p){ const d=String(p[0].etd).slice(0,10); m[d]=(m[d]||0)+1; }); return m; }
+function renderFxTable(){
+  const canEdit=_fxCanEdit(), today=_fxToday(), mp=_fxMap(), counts=_fxLotCountByDate();
+  const missing=_fxMissingDates();
+  const rows=Object.keys(mp).sort().reverse();
+  const todayRate=mp[today]?parseFloat(mp[today].usdVnd):null;
+  let defDate=window._fxPrefDate||today; if(defDate<FX_CUTOFF)defDate=FX_CUTOFF;
+  // Gợi ý: nếu hôm nay đã có thì gợi ý ngày kế tiếp chưa có
+  if(!window._fxPrefDate&&mp[defDate]){ let d=defDate; for(let i=0;i<60&&mp[d];i++)d=_fxAddDays(d,1); defDate=d; }
+  const cell='padding:9px 12px;border-bottom:1px solid var(--border-light);font-size:12.5px;vertical-align:middle';
+  const th='padding:8px 12px;background:var(--bg-secondary);font-size:10px;font-weight:700;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap';
+  const statusChip=todayRate
+    ?'<span style="display:inline-flex;align-items:center;gap:5px;background:#DCFCE7;color:#166534;border-radius:20px;padding:4px 11px;font-size:12px;font-weight:700"><i class="ti ti-circle-check"></i> Hôm nay '+_fxDmy(today)+': '+_fxNum(todayRate)+'</span>'
+    :'<span style="display:inline-flex;align-items:center;gap:5px;background:#FEE2E2;color:#991B1B;border-radius:20px;padding:4px 11px;font-size:12px;font-weight:700"><i class="ti ti-alert-circle"></i> Chưa nhập tỷ giá hôm nay '+_fxDmy(today)+'</span>';
+  const missBox=missing.length?'<div style="margin-bottom:12px;padding:10px 14px;background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.3);border-radius:10px">'
+    +'<div style="font-size:12.5px;font-weight:800;color:#B91C1C;margin-bottom:6px"><i class="ti ti-alert-triangle"></i> '+missing.reduce(function(s,m){return s+m.lots.length;},0)+' lô ETD chưa có tỷ giá — chưa xuất được Debit Note</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap">'+missing.map(function(m){
+      return '<button type="button" class="btn sm" '+(canEdit?'onclick="_fxPick(\''+m.date+'\')"':'disabled')+' title="'+(canEdit?'Nhập tỷ giá cho ngày này':'Chỉ Admin/Accountant nhập')+'" style="border-color:#FCA5A5;color:#B91C1C;background:var(--bg-primary)"><b>'+_fxDmy(m.date).slice(0,5)+'</b> ('+_fxDow(m.date)+') · '+m.lots.length+' lô</button>';
+    }).join('')+'</div></div>':'';
+  const entry=canEdit
+    ?'<div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:12px 14px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:12px;margin-bottom:12px">'
+      +'<div><label class="lbl" style="display:block;margin:0 0 3px">Ngày áp dụng (theo ETD lô)</label><input type="date" id="fxDate" value="'+defDate+'" min="'+FX_CUTOFF+'" style="font-size:13px;width:auto" onchange="_fxOnDate()"/></div>'
+      +'<div><label class="lbl" style="display:block;margin:0 0 3px">Tỷ giá USD → VND (bán ra Vietcombank) *</label><input type="number" id="fxRate" min="'+FX_MIN+'" max="'+FX_MAX+'" step="1" placeholder="VD 26,350" style="font-size:16px;font-weight:800;width:170px;color:var(--blue-text)" onkeydown="if(event.key===\'Enter\')_fxSave()"/></div>'
+      +'<div style="flex:1;min-width:160px"><label class="lbl" style="display:block;margin:0 0 3px">Ghi chú</label><input type="text" id="fxNote" placeholder="Tuỳ chọn" style="font-size:12.5px;width:100%;box-sizing:border-box" onkeydown="if(event.key===\'Enter\')_fxSave()"/></div>'
+      +'<button type="button" class="btn pri" onclick="_fxSave()" style="height:36px"><i class="ti ti-device-floppy"></i> Lưu tỷ giá</button>'
+      +'<div id="fxEntryHint" style="flex-basis:100%;font-size:11.5px;color:var(--text-secondary)"></div>'
+    +'</div>'
+    :'<div style="padding:10px 14px;background:var(--bg-secondary);border-radius:10px;font-size:12px;color:var(--text-secondary);margin-bottom:12px"><i class="ti ti-lock"></i> Chỉ Admin / Accountant được nhập hoặc sửa tỷ giá.</div>';
+  const body=rows.length?rows.map(function(d,i){
+    const x=mp[d], v=parseFloat(x.usdVnd), prevD=rows[i+1], pv=prevD?parseFloat(mp[prevD].usdVnd):null;
+    const diff=pv?v-pv:null;
+    const dc=diff==null?'':(diff>0?'#16A34A':(diff<0?'#DC2626':'var(--text-secondary)'));
+    const n=counts[d]||0;
+    return '<tr id="fxRow_'+d+'">'
+      +'<td style="'+cell+'"><b>'+_fxDmy(d)+'</b> <span style="color:var(--text-tertiary);font-size:11px">'+_fxDow(d)+'</span>'+(d===today?' <span style="background:#DBEAFE;color:#1D4ED8;border-radius:20px;padding:1px 8px;font-size:10px;font-weight:700">Hôm nay</span>':'')+'</td>'
+      +'<td style="'+cell+';text-align:right;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--blue-text)">'+_fxNum(v)+'</td>'
+      +'<td style="'+cell+';text-align:right;font-variant-numeric:tabular-nums;color:'+dc+';font-weight:600">'+(diff==null?'—':((diff>0?'▲ +':(diff<0?'▼ −':'= '))+_fxNum(Math.abs(diff))))+'</td>'
+      +'<td style="'+cell+';text-align:center">'+(n?'<span style="background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;padding:2px 9px;font-size:11.5px;font-weight:700">'+n+' lô</span>':'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
+      +'<td style="'+cell+';color:var(--text-secondary);font-size:11.5px">'+_fxEsc(x.note||'')+'</td>'
+      +'<td style="'+cell+';color:var(--text-secondary);font-size:11px">'+_fxEsc((x.updatedBy||'').split('@')[0])+(x.updatedAt?'<div style="color:var(--text-tertiary)">'+new Date(x.updatedAt).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'</div>':'')+'</td>'
+      +'<td style="'+cell+';text-align:center;white-space:nowrap">'+(canEdit?'<button class="rac" title="Sửa" onclick="_fxPick(\''+d+'\')"><i class="ti ti-pencil"></i></button>'+(currentProfile.role==='admin'?'<button class="rac red" title="Xóa" onclick="_fxDelete(\''+d+'\')"><i class="ti ti-trash"></i></button>':''):'')+'</td>'
+    +'</tr>';
+  }).join(''):'<tr><td colspan="7" style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-currency-dollar" style="font-size:30px;color:#C99A3C;display:block;margin-bottom:6px"></i><div style="font-weight:700;color:var(--text-primary)">Chưa có tỷ giá nào</div><div style="font-size:12px;margin-top:3px">Nhập tỷ giá từ ngày '+_fxDmy(FX_CUTOFF)+' ở ô phía trên.</div></td></tr>';
+  return '<div style="margin-bottom:1.75rem" id="fxTableWrap">'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px"><div style="font-size:14px;font-weight:800;display:flex;align-items:center;gap:7px"><i class="ti ti-currency-dollar" style="color:#C99A3C;font-size:19px"></i>Bảng tỷ giá USD / VND</div>'+statusChip+'</div>'
+    +'<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:12px">Tỷ giá <b>bán ra</b> của Vietcombank, nhập tay theo ngày. Áp dụng cho <b>mọi Debit Note</b> của lô có <b>ETD từ '+_fxDmy(FX_CUTOFF)+'</b> (theo đúng ngày ETD). Lô ETD trước ngày này giữ tỷ giá cũ. Lô đã xuất Debit Note giữ nguyên tỷ giá đã chốt khi bảng được sửa.</div>'
+    +missBox+entry
+    +'<div class="table-card"><div class="table-wrap"><table style="width:100%;border-collapse:collapse"><thead><tr>'
+      +'<th style="'+th+';text-align:left">Ngày (ETD)</th><th style="'+th+';text-align:right">Tỷ giá bán ra</th><th style="'+th+';text-align:right">So với ngày trước</th><th style="'+th+';text-align:center">Lô ETD ngày này</th><th style="'+th+';text-align:left">Ghi chú</th><th style="'+th+';text-align:left">Cập nhật</th><th style="'+th+'"></th>'
+    +'</tr></thead><tbody>'+body+'</tbody></table></div></div>'
+  +'</div>';
+}
+function _fxEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function _fxOnDate(){
+  const d=(g('fxDate')||{}).value, h=g('fxEntryHint'); if(!h)return;
+  const mp=_fxMap(), x=mp[d], n=_fxLotCountByDate()[d]||0;
+  h.innerHTML=!d?'':(d<FX_CUTOFF?'<span style="color:#DC2626">Bảng tỷ giá chỉ áp dụng từ '+_fxDmy(FX_CUTOFF)+'.</span>'
+    :(x?'<span style="color:#B45309"><i class="ti ti-info-circle"></i> Ngày '+_fxDmy(d)+' đã có tỷ giá <b>'+_fxNum(x.usdVnd)+'</b> — lưu sẽ ghi đè'+(n?' (có '+n+' lô ETD ngày này, chỉ lô CHƯA xuất Debit Note đổi theo)':'')+'.</span>'
+      :(n?'<i class="ti ti-package"></i> Có <b>'+n+' lô</b> ETD ngày '+_fxDmy(d)+' đang chờ tỷ giá này.':'')));
+  const ri=g('fxRate'); if(ri&&x&&!ri.value)ri.placeholder=_fxNum(x.usdVnd);
+}
+function _fxPick(d){
+  window._fxPrefDate=d;
+  const di=g('fxDate'); if(di){ di.value=d; _fxOnDate(); const x=_fxMap()[d]; const ri=g('fxRate'); if(ri){ ri.value=x?parseFloat(x.usdVnd):''; ri.focus(); ri.select(); const ni=g('fxNote'); if(ni)ni.value=x?(x.note||''):''; } const w=g('fxTableWrap'); if(w&&w.scrollIntoView)w.scrollIntoView({block:'start',behavior:'smooth'}); }
+}
+async function _fxSave(){
+  if(!_fxCanEdit()){ toast('Chỉ Admin/Accountant được nhập tỷ giá','error'); return; }
+  const d=(g('fxDate')||{}).value, v=parseFloat((g('fxRate')||{}).value), note=((g('fxNote')||{}).value||'').trim();
+  if(!d){ toast('Chọn ngày áp dụng','error'); return; }
+  if(d<FX_CUTOFF){ toast('Bảng tỷ giá chỉ áp dụng từ '+_fxDmy(FX_CUTOFF)+' (lô ETD trước đó dùng tỷ giá cũ)','error'); return; }
+  if(!(v>0)){ toast('Bắt buộc nhập tỷ giá USD → VND','error'); const ri=g('fxRate'); if(ri)ri.focus(); return; }
+  if(v<FX_MIN||v>FX_MAX){ toast('Tỷ giá không hợp lệ — nhập số từ '+_fxNum(FX_MIN)+' đến '+_fxNum(FX_MAX)+' (VD 26350)','error'); return; }
+  const old=_fxMap()[d]; const prev=old?parseFloat(old.usdVnd):null;
+  // Cảnh báo lệch lớn so với ngày gần nhất đã có (gõ nhầm số)
+  const near=Object.keys(_fxMap()).filter(function(k){return k!==d;}).sort(function(a,b){return Math.abs(new Date(a)-new Date(d))-Math.abs(new Date(b)-new Date(d));})[0];
+  if(near){ const nv=parseFloat(_fxMap()[near].usdVnd); if(Math.abs(v-nv)/nv>0.01&&!confirm('Tỷ giá '+_fxNum(v)+' lệch '+(Math.abs(v-nv)/nv*100).toFixed(1)+'% so với ngày '+_fxDmy(near)+' ('+_fxNum(nv)+').\nXác nhận lưu?'))return; }
+  if(prev&&Math.round(prev)!==Math.round(v)){
+    const n=_fxLotCountByDate()[d]||0;
+    if(!confirm('Ngày '+_fxDmy(d)+' đã có tỷ giá '+_fxNum(prev)+'. Đổi thành '+_fxNum(v)+'?'+(n?'\n\nCó '+n+' lô ETD ngày này: lô CHƯA xuất Debit Note sẽ đổi theo, lô ĐÃ xuất Debit Note giữ tỷ giá đã chốt.':'')))return;
+  }
+  const hist=((old&&old.hist)||[]).concat([{rate:v,by:(currentUser&&currentUser.email)||'',at:Date.now()}]).slice(-20);
+  const rec={date:d,usdVnd:v,note:note,updatedBy:(currentUser&&currentUser.email)||'',updatedAt:Date.now(),hist:hist};
+  setLoading(true,'Đang lưu tỷ giá...');
+  try{
+    await fsSet('fxRates',d,rec);
+    if(!Array.isArray(cache.fxRates))cache.fxRates=[];
+    cache.fxRates=cache.fxRates.filter(function(x){return x.date!==d;}).concat([Object.assign({_id:d},rec)]);
+    window._fxPrefDate='';
+    toast('Đã lưu tỷ giá '+_fxDmy(d)+': '+_fxNum(v));
+    if(currentTab==='thu-chi'&&tcTab==='danhmuc')renderTcBody();
+    _fxSideRefresh();
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+async function _fxDelete(d){
+  if(!(currentProfile&&currentProfile.role==='admin')){ toast('Chỉ Admin được xóa tỷ giá','error'); return; }
+  const n=_fxLotCountByDate()[d]||0;
+  if(!confirm('Xóa tỷ giá ngày '+_fxDmy(d)+'?'+(n?'\n\nCó '+n+' lô ETD ngày này: lô chưa xuất Debit Note sẽ bị chặn xuất DN cho tới khi nhập lại tỷ giá.':'')))return;
+  try{
+    await fsDel('fxRates',d);
+    cache.fxRates=_fxList().filter(function(x){return x.date!==d;});
+    toast('Đã xóa tỷ giá '+_fxDmy(d));
+    if(currentTab==='thu-chi'&&tcTab==='danhmuc')renderTcBody();
+    _fxSideRefresh();
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+}
+function _fxOnData(){
+  try{ if(currentTab==='thu-chi'&&tcTab==='danhmuc'&&!(document.activeElement&&/^fx/.test(document.activeElement.id||'')))renderTcBody(); }catch(e){}
+  try{ _fxSideRefresh(); }catch(e){}
+}
+window.renderFxTable=renderFxTable; window._fxSave=_fxSave; window._fxPick=_fxPick; window._fxDelete=_fxDelete; window._fxOnDate=_fxOnDate; window._fxOnData=_fxOnData;
+
+// ── Sidebar Shipment List: thẻ "Tỷ giá USD/VND" (dưới To do list, thu gọn được) ──
+function _fxSideBodyHtml(){
+  const today=_fxToday(), tm=_fxAddDays(today,1), mp=_fxMap();
+  const line=function(lb,d){ const x=mp[d]; return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px dashed var(--border-light)">'
+    +'<span style="font-size:11.5px;color:var(--text-secondary)">'+lb+' <span style="color:var(--text-tertiary)">'+_fxDmy(d).slice(0,5)+'</span></span>'
+    +(x?'<b style="font-size:14px;font-variant-numeric:tabular-nums;color:var(--text-primary)">'+_fxNum(x.usdVnd)+'</b>':'<span style="font-size:11px;font-weight:700;color:#DC2626">Chưa nhập</span>')+'</div>'; };
+  const miss=_fxMissingDates(), nMiss=miss.reduce(function(s,m){return s+m.lots.length;},0);
+  const link=can('manageFinance')?'<button type="button" class="btn sm" onclick="_fxOpenTable()" style="width:100%;margin-top:8px;justify-content:center"><i class="ti ti-table-options"></i> Mở Bảng tỷ giá</button>':'';
+  return line('Hôm nay',today)+line('Ngày mai',tm)
+    +(nMiss?'<div style="margin-top:7px;font-size:11px;font-weight:700;color:#B91C1C;background:rgba(220,38,38,.07);border-radius:8px;padding:6px 8px"><i class="ti ti-alert-triangle"></i> '+nMiss+' lô ETD chưa có tỷ giá ('+miss.slice(0,3).map(function(m){return _fxDmy(m.date).slice(0,5);}).join(', ')+(miss.length>3?'…':'')+')</div>':'')
+    +link
+    +'<div style="margin-top:6px;font-size:10px;color:var(--text-tertiary)">Vietcombank bán ra · áp dụng cho lô ETD từ '+_fxDmy(FX_CUTOFF).slice(0,5)+'</div>';
+}
+function _fxSideCardHtml(){
+  const open=!(window._wsExpand&&window._wsExpand.fx===false);
+  return '<div class="ws-side-card ws-coll'+(open?' open':'')+'" data-k="fx" id="wsFxCard">'
+    +'<div class="ws-side-hdr ws-coll-hdr" onclick="_wsCollToggle(this,event)"><i class="ti ti-currency-dollar" style="color:#C99A3C"></i> Tỷ giá USD/VND<button type="button" class="ws-coll-btn" title="Mở rộng / thu gọn"><i class="ti ti-chevron-down"></i></button></div>'
+    +'<div class="ws-coll-body" id="wsFxBody">'+_fxSideBodyHtml()+'</div></div>';
+}
+function _fxSideRefresh(){ const b=g('wsFxBody'); if(b)b.innerHTML=_fxSideBodyHtml(); }
+window._fxSideCardHtml=_fxSideCardHtml; window._fxSideRefresh=_fxSideRefresh;
+
 /* ── TAB: Danh mục thu/chi ── */
 function renderTcDanhMuc(){
   const thu=(window._thuChiCategories||{}).thu||[];
@@ -17368,7 +17667,9 @@ function renderTcDanhMuc(){
       </div>
     </div>`;
   }
-  return `<div style="display:flex;gap:24px;flex-wrap:wrap">${colHtml('thu',thu,'var(--green)','Thu')}${colHtml('chi',chi,'var(--red)','Chi')}</div>`;
+  return renderFxTable()
+    +`<div style="font-size:14px;font-weight:800;display:flex;align-items:center;gap:7px;margin:0 0 .8rem;padding-top:1rem;border-top:1px solid var(--border-light)"><i class="ti ti-category" style="color:var(--text-secondary);font-size:18px"></i>Danh mục thu / chi</div>`
+    +`<div style="display:flex;gap:24px;flex-wrap:wrap">${colHtml('thu',thu,'var(--green)','Thu')}${colHtml('chi',chi,'var(--red)','Chi')}</div>`;
 }
 function _tcCatRowHtml(type,i,val){
   // Không gắn onchange riêng — mọi thao tác thêm/xóa/lưu đều đọc trực tiếp giá trị hiện có
@@ -17420,7 +17721,7 @@ let tcRptShipper='';
 function _tcAmtVND(sv,r){
   const amt=sv.amount||(sv.price||0)*(sv.qty||1);
   if((sv.cur||'USD')==='VND')return amt;
-  return Math.round(amt*(r.roe||26390));
+  return Math.round(amt*((_fxOverride(r)||r.roe||26390)));
 }
 function _tcLotRevenueVND(r){
   const svcs=r.svcs||{};
@@ -17437,7 +17738,7 @@ function _tcLotRevenueVND(r){
 }
 function _tcLotCostVND(r){
   const svcs=r.svcs||{};
-  const roe=r.roe||26390;
+  const roe=(_fxOverride(r)||r.roe||26390);
   let cost=0;
   Object.values(svcs).forEach(function(sv){
     if(!sv.on||!sv.cost)return;
@@ -17595,7 +17896,7 @@ function _tcLotCostByStatus(from,to){
     const comKbAll=[].concat((r.comKb&&r.comKb.com)||[],(r.comKb&&r.comKb.kb)||[]);
     comKbAll.forEach(function(row){
       const tt=_comKbThanhTien(row.amount,row.vol);
-      unpaid+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||roe);
+      unpaid+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',(_fxOverride(r)||r.roe||roe));
     });
   });
   return {paid:paid,unpaid:unpaid,total:paid+unpaid};
@@ -18059,7 +18360,7 @@ function _qtComputeRevenue(from,to){
     Object.values(svcs).forEach(function(sv){
       if(!sv||!sv.on||sv.invoice==='Waived')return;
       const amt=sv.amount||(sv.price||0)*(sv.qty||1);
-      const amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*roe);
+      const amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*(_fxOverride(r)||roe));
       if(sv.invoice==='No'){ noVND+=amtVND; return; }
       const vr=parseFloat((sv.vat||'0%').replace('%',''))||0;
       hasVND+=Math.round(amtVND*(1+vr/100));
@@ -18836,7 +19137,7 @@ function _vrCompute(from,to){
   allR.forEach(function(pair){
     const r=pair[0], tt=pair[1];
     if(!r||!r.etd||r.etd<from||r.etd>to)return;
-    const roe=parseFloat(r.roe)||window._roe||26390;
+    const roe=_fxOverride(r)||parseFloat(r.roe)||window._roe||26390;
     const svcs=r.svcs||{};
     const job=r.jobNo||r.bookingNo||'';
     const shipper=r.shipper||r.supplier||'';
@@ -20675,12 +20976,12 @@ function _crmPartnerFinance(lots,partnerKey){
       // Doanh thu: CHỈ tính khi đối tác là Shipper (đối tác phía chi phí không phát sinh doanh thu)
       if(isShipperOfThisLot&&sv.invoice!=='No'){
         const amt=(parseFloat(sv.price)||0)*(parseFloat(sv.qty)||1);
-        revVND+=(sv.cur==='VND'?amt:Math.round(amt*roe));
+        revVND+=(sv.cur==='VND'?amt:Math.round(amt*(_fxOverride(r)||roe)));
       }
       // Chi phí: theo Costing (cost*svcQty)
       if(sv.cost){
         const camt=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
-        costVND+=(sv.svcCur==='VND'?camt:Math.round(camt*roe));
+        costVND+=(sv.svcCur==='VND'?camt:Math.round(camt*(_fxOverride(r)||roe)));
       }
     });
     // Chi phí thủ công (Costing tab - các dòng tự thêm ngoài dịch vụ) — CHỈ tính vào lô mà đối tác là
@@ -20688,7 +20989,7 @@ function _crmPartnerFinance(lots,partnerKey){
     if(isShipperOfThisLot){
       ((r.costing&&r.costing.items)||[]).forEach(function(it){
         const amt=(parseFloat(it.price)||0)*(parseFloat(it.qty)||1)+(parseFloat(it.vatAmt)||0);
-        costVND+=(it.cur==='VND'?amt:Math.round(amt*roe));
+        costVND+=(it.cur==='VND'?amt:Math.round(amt*(_fxOverride(r)||roe)));
       });
     }
   });
@@ -20720,7 +21021,7 @@ function _crmOverviewAfterRender(){
     Object.values(r.svcs||{}).forEach(function(sv){
       if(!sv||!sv.on||sv.invoice==='No')return;
       const amt=(parseFloat(sv.price)||0)*(parseFloat(sv.qty)||1);
-      revByMonth[mk]+=(sv.cur==='VND'?amt:Math.round(amt*roe));
+      revByMonth[mk]+=(sv.cur==='VND'?amt:Math.round(amt*(_fxOverride(r)||roe)));
     });
   });
   const maxRev=Math.max.apply(null,months.map(function(m){return revByMonth[m];}).concat([1]));
@@ -24889,7 +25190,8 @@ function _jobReportCompareData(){
   const to=g('jrc_to')?.value||'';
   const loai=g('jrc_loai')?.value||'all';
   const roe=26390;
-  function cvVND(amt,cur){return cur==='VND'?amt:Math.round((amt||0)*roe);}
+  let _lr=roe; // A 2.43: tỷ giá theo từng lô (lô ETD từ 11/11/2026 dùng Bảng tỷ giá; lô cũ giữ nguyên 26390)
+  function cvVND(amt,cur){return cur==='VND'?amt:Math.round((amt||0)*_lr);}
   let lots=[];
   if(loai==='all'||loai==='xuat')lots=lots.concat((cache.xuat||[]).map(function(r){return Object.assign({},r,{_tt:'xuat'});}));
   if(loai==='all'||loai==='nhap')lots=lots.concat((cache.nhap||[]).map(function(r){return Object.assign({},r,{_tt:'nhap'});}));
@@ -24900,6 +25202,7 @@ function _jobReportCompareData(){
   });
   const byShipper={};
   lots.forEach(function(r){
+    _lr=_fxOverride(r)||roe;
     const sh=r.shipper||r.supplier||'(Không rõ)';
     if(!byShipper[sh])byShipper[sh]={shipper:sh,lotCount:0,contUnits:{},contTotal:0,revVND:0,costVND:0};
     const s=byShipper[sh];
@@ -25687,7 +25990,7 @@ function _buildDnPdfBlobLegacy(r,svcs,currentParty,dnNo,sp,cp,shipperKey,cneeKey
     y+=infoH+5;
 
     // CHARGE DETAIL — cùng 8 cột & cùng khối tổng hợp VAT/Grand Total với form HTML
-    const roe=parseFloat(g('roeInput')?.value)||26390;
+    const roe=_fxOverride(r)||parseFloat(g('roeInput')?.value)||26390;
     const allActiveSvcs=_applySvcOrder(SVCS.filter(function(s){return svcs[s.key]&&svcs[s.key].on;}),r.svcOrder);
     function svcMatchParty(s){ const p=(svcs[s.key]&&svcs[s.key].party||'').trim(); if(!currentParty)return true; return p===currentParty; }
     const svcsYes=allActiveSvcs.filter(function(s){return (svcs[s.key].invoice||'Yes')==='Yes'&&svcMatchParty(s);});
@@ -25886,6 +26189,7 @@ window._buildDnPdfBlob=_buildDnPdfBlob;
 
 function sendEmailDN(id, tt){
   const r=cache[tt||currentTab].find(x=>x._id===(id||svcIdx))||{};
+  if(!_fxGuardDn(r))return; _fxFreezeLot(tt||currentTab,r._id);   // A 2.43: chặn khi thiếu tỷ giá + chốt tỷ giá khi gửi DN
   const svcs=r.svcs||{};
   // Xác định Booking Party hiện tại (theo tab đang xem trong popup Invoice/DN)
   const d=window._dnData;
@@ -31317,7 +31621,7 @@ window.autoFillQtyByUnit=autoFillQtyByUnit;
 window.calcSvcAmt=calcSvcAmt;
 
 function buildDnPartyRows(r,svcs){
-  const roe=parseFloat(g('invRoeInput')?.value)||r.roe||window._roe||26390;
+  const roe=_fxOverride(r)||parseFloat(g('invRoeInput')?.value)||r.roe||window._roe||26390;
   const activeSvcs=Object.keys(svcs).filter(function(k){return svcs[k]&&svcs[k].on;});
   // Group by party → split by invoice type (Yes/No)
   const parties={};
@@ -31696,7 +32000,7 @@ function updateCostingTotal(){
   let totalVND=0;
   let totalVatAmtVND=0;
   let totalVNDPreVat=0; // Chi phí trước VAT (dùng cho lợi nhuận)
-  const roe=26390;
+  const roe=_fxOverride(r)||26390;
   // Giới hạn phạm vi đọc/ghi DOM CHỈ trong container chi tiết lô hàng đang hiển thị — tránh đọc/ghi
   // nhầm phần tử của lô khác nếu trùng id (cùng nguyên nhân đã phát hiện ở saveDetailSvc()).
   const _dc=_getDetailContainer();
@@ -34192,9 +34496,11 @@ function runCostingReport(){
   // đổi phần XUẤT KẾT QUẢ (từ bảng 1 cột sang mảng dữ liệu cho sidebar + KPI card).
   let grandRev={},grandCost={};
   const roe=26390;
-  function cvVND(amt,cur){return cur==='VND'?amt:Math.round((amt||0)*roe);}
+  let _lr=roe; // A 2.43: tỷ giá theo từng lô (lô ETD từ 11/11/2026 dùng Bảng tỷ giá; lô cũ giữ nguyên 26390)
+  function cvVND(amt,cur){return cur==='VND'?amt:Math.round((amt||0)*_lr);}
 
   const lotData=filtered.map(r=>{
+    _lr=_fxOverride(r)||roe;
     const svcs=r.svcs||{};
     const costing=r.costing||{};
     const costItems=costing.items||[];
@@ -34246,7 +34552,7 @@ function runCostingReport(){
     let totalComKbVND=0;
     comKbAll.forEach(function(row){
       const tt=_comKbThanhTien(row.amount,row.vol);
-      totalComKbVND+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',r.roe||roe);
+      totalComKbVND+=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',(_fxOverride(r)||r.roe||roe));
     });
     totalCostVND+=totalComKbVND;
     totalCostPreVatVND+=totalComKbVND;
@@ -34429,9 +34735,11 @@ function _costingReportData(){
   }).sort((a,b)=>(a.etd||'').localeCompare(b.etd||''));
 
   const roe=26390;
-  const cv=(amt,cur)=>cur==='VND'?amt:Math.round((amt||0)*roe);
+  let _lr2=roe;
+  const cv=(amt,cur)=>cur==='VND'?amt:Math.round((amt||0)*_lr2);
 
   const lots=filtered.map(r=>{
+    _lr2=_fxOverride(r)||roe;
     const svcs=r.svcs||{};
     const costItems=(r.costing||{}).items||[];
     // Doanh thu chưa VAT + danh sách chi tiết (từ debit note — các dịch vụ có bán)
@@ -46320,7 +46628,7 @@ function exportExcel(tt){
     activeSvcs.forEach(s=>{
       const v=sv[s.key]; if(v.invoice==='Waived')return;
       const a=v.amount||(v.price||0)*(v.qty||1);
-      revVND+=(v.cur||'USD')==='VND'?a:Math.round(a*roe);
+      revVND+=(v.cur||'USD')==='VND'?a:Math.round(a*(_fxOverride(r)||roe));
     });
     const contStr=(r.vol||'')+'×'+(r.typeCont||'');
     rowsHtml+=`<tr>
@@ -46348,7 +46656,7 @@ function exportExcel(tt){
     const sv=r.svcs||{};
     SVCS.filter(s=>sv[s.key]?.on&&sv[s.key]?.invoice!=='Waived').forEach(s=>{
       const v=sv[s.key];const a=v.amount||(v.price||0)*(v.qty||1);
-      r0+=(v.cur||'USD')==='VND'?a:Math.round(a*roe);
+      r0+=(v.cur||'USD')==='VND'?a:Math.round(a*(_fxOverride(r)||roe));
     });return r0;
   },0);
 
@@ -46491,7 +46799,7 @@ function exportSOA(){
     var svcs=r.svcs||{};
     var sh3=filterShipper;
     var sp4=sp;
-    var lotRoe=parseFloat(r.roe)||roe; // Tỷ giá RIÊNG của lô này (đã lưu lúc Fill giá) — không dùng chung 1 tỷ giá cho mọi lô
+    var lotRoe=_fxOverride(r)||parseFloat(r.roe)||roe; // Tỷ giá RIÊNG của lô này (đã lưu lúc Fill giá) — không dùng chung 1 tỷ giá cho mọi lô
     var preYes=0,vatYes=0,preNo=0,vatNo=0;
     var lineItems=[];
     SVCS.forEach(function(s){
@@ -47556,7 +47864,7 @@ async function exportExcelDebt(){
           }
           var amt=sv.amount||(sv.price||0)*(sv.qty||1);
           // v4.55: dùng r.roe của từng lô (giống tab invoice) thay vì hardcode 26390
-          var _lotRoe=parseFloat(r.roe)||26390;
+          var _lotRoe=_fxOverride(r)||parseFloat(r.roe)||26390;
           var amtVND=(sv.cur||'USD')==='VND'?amt:Math.round(amt*_lotRoe);
           // v4.55: áp dụng smart VAT default giống tab invoice
           // (non-freight + invoice=Yes + sv.vat='0%' → tự nâng lên 8%)
