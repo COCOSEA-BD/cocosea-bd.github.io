@@ -1261,7 +1261,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.45';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.46';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2331,7 +2331,7 @@ function startListeners(){
     .get().then(function(snap){
       if(_phase2Ready.xuat)return; // Phase 2 đã xong, bỏ qua Phase 1
       if(snap.empty)return;
-      cache.xuat=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+      cache.xuat=_svcNormalizeLots(snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());}));
       cache.xuat.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
       try{ if(window._bootPerf){ window._bootPerf.marks.lotsWindow=Math.round(performance.now()-window._bootPerf.t0); window._bootPerf.nWindow=cache.xuat.length; } }catch(e){}
       if(currentTab==='xuat'){clearTimeout(_xRenderTimer);_xRenderTimer=setTimeout(function(){renderLotTable('xuat');},0);}
@@ -2344,7 +2344,7 @@ function startListeners(){
         if(!_fc)_cfMarkLotsSynced();
         else if(!_lotsSynced&&!_phase2Ready.xuat)return; // bộ đệm chưa từng đủ → chờ bản server, tránh hiện thiếu lô
         _phase2Ready.xuat=true;
-        cache.xuat = snap.docs.map(d=>({_id:d.id,...d.data()}));
+        cache.xuat = _svcNormalizeLots(snap.docs.map(d=>({_id:d.id,...d.data()})));
         cache.xuat.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
         window._homeDataLoaded=true;
         try{ const bp=window._bootPerf; if(bp){ const t=Math.round(performance.now()-bp.t0);
@@ -2390,7 +2390,7 @@ function startListeners(){
       .get().then(function(snap){
         if(_phase2Ready.nhap)return;
         if(snap.empty)return;
-        cache.nhap=snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());});
+        cache.nhap=_svcNormalizeLots(snap.docs.map(function(d){return Object.assign({_id:d.id},d.data());}));
         cache.nhap.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
         if(currentTab==='nhap'){clearTimeout(_nRenderTimer);_nRenderTimer=setTimeout(function(){renderLotTable('nhap');},0);}
         updateSidebar();
@@ -2399,7 +2399,7 @@ function startListeners(){
     // PHASE 2 — lots_nhap
     const u2 = db.collection('lots_nhap').onSnapshot(snap => {
       _phase2Ready.nhap=true;
-      cache.nhap = snap.docs.map(d=>({_id:d.id,...d.data()}));
+      cache.nhap = _svcNormalizeLots(snap.docs.map(d=>({_id:d.id,...d.data()})));
       cache.nhap.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
       if(currentTab==='nhap'){
         clearTimeout(_nRenderTimer);
@@ -4983,11 +4983,19 @@ function _switchDetailTabNow(tab){
 
 // Làm mới tab Invoice: lấy dữ liệu mới nhất từ cache (đã đồng bộ realtime từ Firestore)
 // và vẽ lại panel — để thấy ngay thay đổi từ tab Dịch vụ/Fill giá mà không cần đóng/mở lại lô.
-function refreshInvoiceTab(){
-  const r=cache[detailTt]&&cache[detailTt].find(function(x){return x._id===detailId;});
+async function refreshInvoiceTab(){
+  const _tt=detailTt, _id=detailId;
+  const r=cache[_tt]&&cache[_tt].find(function(x){return x._id===_id;});
   if(!r){toast('Không tìm thấy lô hàng','error');return;}
-  renderDetailPanel(r,detailTt);
-  toast('Đã làm mới dữ liệu Invoice');
+  // A 2.46: tải lại tên dịch vụ theo thực tế lô (tàu/chuyến, tuyến đường, biển số xe) rồi lưu để Debit Note/Export dùng đúng
+  const n=_svcRefreshAutoNames(r,true);
+  let saved=false;
+  if(n&&!r.locked){
+    try{ await fsSet(colName(_tt),_id,{svcs:r.svcs,updatedAt:Date.now(),updatedBy:(currentUser&&currentUser.email)||''}); saved=true; }
+    catch(e){ toast('Đã làm mới tên dịch vụ nhưng chưa lưu được: '+e.message,'error'); }
+  }
+  if(detailId===_id&&detailTt===_tt)renderDetailPanel(r,_tt);
+  toast(n?('Đã làm mới '+n+' tên dịch vụ theo tàu/tuyến/biển số xe thực tế của lô'+(saved?'':(r.locked?' (lô đang khóa — chưa lưu)':''))):'Đã làm mới dữ liệu Invoice — tên tàu/tuyến/biển số xe đã đúng với lô');
 }
 window.refreshInvoiceTab=refreshInvoiceTab;
 
@@ -5376,7 +5384,7 @@ function renderDetailPanel(r,tt){
       else {
         const thStyle='padding:9px 10px;text-align:center;font-size:10px;font-weight:700;color:#fff;border-bottom:none;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;background:linear-gradient(135deg,#1a4b8c 0%,#103A6F 100%)';
         const thRStyle=thStyle;
-        const refreshBtn='<div style="margin-bottom:8px;display:flex;justify-content:flex-end"><button class="rac" onclick="_priceTabRefresh()" title="Tải lại Vol theo Vol mới nhất từ tab Chi tiết" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button></div>';
+        const refreshBtn='<div style="margin-bottom:8px;display:flex;justify-content:flex-end"><button class="rac" onclick="_priceTabRefresh()" title="Tải lại Vol + tên tàu/chuyến, tuyến đường, biển số xe theo đúng thực tế lô hàng" style="width:34px;height:34px"><i class="ti ti-refresh"></i></button></div>';
         const hdr=refreshBtn+'<div style="border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(16,58,111,.12);border:1px solid var(--border-light)"><table id="fpTable" style="width:100%;border-collapse:collapse;font-size:12px">'
           +'<thead><tr>'
           +'<th style="'+thStyle+'">Service</th>'
@@ -5810,7 +5818,7 @@ bodyHtml=(_fxIsNewLot(r)?_fxInvBoxHtml(r):('<div style="display:flex;align-items
             +buildDnPartyRows(r,svcs)
           +'</div>'
           +'<div style="display:flex;justify-content:flex-end;gap:8px">'
-            +'<button class="btn" onclick="refreshInvoiceTab()" title="Tải lại dữ liệu mới nhất từ các tab khác (Dịch vụ, Fill giá...)"><i class="ti ti-refresh"></i> Refresh</button>'
+            +'<button class="btn" onclick="refreshInvoiceTab()" title="Tải lại dữ liệu mới nhất từ các tab khác, và tên tàu/chuyến, tuyến đường, biển số xe theo đúng thực tế lô hàng"><i class="ti ti-refresh"></i> Refresh</button>'
             +'<button class="btn pri" onclick="saveInvoiceSettings()"><i class="ti ti-device-floppy"></i> Lưu</button>'
           +'</div>';
       }
@@ -6044,6 +6052,15 @@ function _priceTabRefresh(){
   const newVol=parseInt(r.vol)||(r.bookings&&r.bookings.length?r.bookings.reduce(function(s,b){return s+(parseInt(b.vol)||0);},0):0)||1;
   const table=g('fpTable');
   if(!table)return;
+  // A 2.46: tải lại TÊN dịch vụ theo thực tế lô (tàu/chuyến, tuyến đường, biển số xe) — tên người dùng tự đặt được giữ nguyên
+  let nameN=0;
+  table.querySelectorAll('input[id^="fpname_"]').forEach(function(inp){
+    const key=inp.id.slice(7), s=SVCS.find(function(e){return e.key===key;}); if(!s)return;
+    const a=_svcAutoNameFor(r,s); if(!a)return;
+    const cur=(inp.value||'').trim();
+    if(cur!==a&&(!cur||cur===s.name||_svcIsAutoName(cur,s))){ inp.value=a; nameN++; }
+  });
+  if(nameN)toast('Đã tải lại tên '+nameN+' dịch vụ theo tàu/tuyến/biển số xe thực tế của lô — nhớ bấm "Lưu giá"');
   const qtyInputs=table.querySelectorAll('input[id^="fpq_"]');
   if(!qtyInputs.length){toast('Chưa có dịch vụ nào để cập nhật','error');return;}
   if(!confirm('Cập nhật Vol của TẤT CẢ dịch vụ đang hiển thị về đúng Vol hiện tại của lô ('+newVol+')?\n\nLưu ý: dịch vụ nào đã cố ý để Vol khác Vol lô cũng sẽ bị ghi đè về '+newVol+'. Sau khi kiểm tra, bấm "Lưu giá" để lưu lại — nếu chưa bấm Lưu, thay đổi này chưa được ghi vào hệ thống.'))return;
@@ -6199,6 +6216,52 @@ async function _applyQuoteToLot(quoteId){
 }
 window._applyQuoteToLot=_applyQuoteToLot;
 
+// ═══════════════ A 2.46 — Tên dịch vụ "tự sinh" theo lô (tàu/chuyến, tuyến + biển số xe) ═══════════════
+// Cước vận tải biển: "<tên> (Số hiệu tàu: TÀU/CHUYẾN)"; Trucking: "<tên> <tuyến>, số xe <biển số>".
+// Các tên này từng bị LƯU CỨNG vào customName (khi bấm Lưu ở tab Invoice) nên khi đổi tàu / Load before sang lô khác,
+// tên cũ (tàu của lô khác) vẫn bị giữ lại. Nay: nhận diện tên tự sinh và luôn dựng lại theo dữ liệu THỰC TẾ của lô.
+function _svcAutoNameFor(r,s){
+  if(!r||!s)return '';
+  if(_svcKeyBase(s.key)==='freight'&&r.vessel) return s.name+' (Số hiệu tàu: '+r.vessel+(r.voy?'/'+r.voy:'')+')';
+  if(_isTruckingLikeSvc(s.key)){
+    const rows=r.truckings||[];
+    const nos=rows.map(function(t){return t&&t.truckNo;}).filter(Boolean).join(', ');
+    const route=rows.length&&rows[0]&&rows[0].route?rows[0].route:'từ Vĩnh Long đến Hồ Chí Minh';
+    return s.name+(route?' '+route:'')+(nos?', số xe '+nos:'');
+  }
+  return '';
+}
+function _svcIsAutoName(cn,s,strict){
+  if(!cn||!s)return false;
+  if(_svcKeyBase(s.key)==='freight') return /\(Số hiệu tàu:[^)]*\)\s*$/.test(cn);
+  if(_isTruckingLikeSvc(s.key)){
+    if(cn.indexOf(s.name+' ')!==0)return false;
+    const rest=cn.slice(s.name.length+1);
+    return /, số xe /.test(rest)||(!strict&&/^từ .+ đến .+$/.test(rest));   // strict (tự động chạy ngầm): chỉ nhận dạng khi có ", số xe"
+  }
+  return false;
+}
+// Dựng lại tên tự sinh theo dữ liệu hiện tại của lô (chỉ đụng tên tự sinh/rỗng — tên người dùng tự đặt được giữ nguyên).
+// Trả về số dịch vụ đã đổi tên. includeEmpty=true: dịch vụ chưa có customName cũng được gán tên tự sinh.
+function _svcRefreshAutoNames(r,includeEmpty){
+  let n=0;
+  try{
+    const sv=r&&r.svcs; if(!sv)return 0;
+    Object.keys(sv).forEach(function(k){
+      const x=sv[k]; if(!x||!x.on)return;
+      const s=SVCS.find(function(e){return e.key===k;}); if(!s)return;
+      const a=_svcAutoNameFor(r,s); if(!a)return;
+      const cur=x.customName||'';
+      if(cur===a)return;
+      if(_svcIsAutoName(cur,s,!includeEmpty)||(includeEmpty&&(!cur||cur===s.name))){ x.customName=a; n++; }
+    });
+  }catch(e){}
+  return n;
+}
+function _svcNormalizeLots(list){
+  try{ (list||[]).forEach(function(r){ _svcRefreshAutoNames(r,false); }); }catch(e){}
+  return list;
+}
 // ═══════════════ LOAD BEFORE (v4.94) — tải dịch vụ + giá Fill giá từ 1 lô trước đó ═══════════════
 // Danh sách: tối đa 5 lô gần nhất, cùng loại (xuất/nhập) với lô đang mở và GIỐNG Shipper + Type cont + POD.
 // Khi Load, COPY (sao chép giá trị, không tham chiếu) vào svcs của lô hiện tại:
@@ -6288,7 +6351,12 @@ async function _applyBeforeLot(srcId){
       t.price=price; t.cur=sv.cur||'USD'; t.unit=sv.unit||sv.svcUnit||'Cont';
       t.invoice=sv.invoice||'Yes'; t.vat=sv.vat||'0%'; t.party=sv.party||'';
       t.qty=fpQty; t.amount=price*fpQty;
-      if(sv.customName)t.customName=sv.customName;
+      // A 2.46: KHÔNG copy tên tự sinh (tàu/chuyến, tuyến + biển số xe) của lô nguồn — sẽ dựng theo lô hiện tại
+      const _sm=SVCS.find(function(e){return e.key===key;});
+      if(sv.customName){
+        if(!_svcIsAutoName(sv.customName,_sm))t.customName=sv.customName;
+        else{ const _an=_svcAutoNameFor(r,_sm); if(_an)t.customName=_an; }   // tên tự sinh → dựng theo tàu/tuyến/biển số xe của lô HIỆN TẠI
+      }
     };
     const cur=existing[key];
     if(cur){
@@ -6525,7 +6593,9 @@ async function saveInvoiceSettings(){
     if(vatEl)svcs[s.key].vat=vatEl.value||'0%';
     if(invEl)svcs[s.key].invoice=invEl.value||'Yes';
     const customName=gC('invname_'+s.key)?.value||'';
-    if(customName&&customName!==s.name) svcs[s.key].customName=customName;
+    // A 2.46: tên tự sinh (tàu/chuyến, tuyến + biển số xe) luôn dựng lại theo lô hiện tại, không giữ tên cũ
+    const _auto=_svcAutoNameFor(r,s);
+    if(customName&&customName!==s.name) svcs[s.key].customName=(_auto&&_svcIsAutoName(customName,s))?_auto:customName;
   });
   // Tự sinh Số DN cho các Party chưa có số (ô Số DN đang trống trong bảng "Debit Note theo Party")
   const dnByParty=Object.assign({},r.dnByParty||{});
