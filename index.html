@@ -31,6 +31,19 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 <script>
+/* A 2.48: ĐỊNH DẠNG SỐ CHUNG TOÀN APP — dấu "," ngăn cách hàng nghìn, dấu "." ngăn cách thập phân (1,234,567.89).
+   Trước đây số hiển thị theo ngôn ngữ trình duyệt/'vi-VN' (1.234.567,89). Chỉ ảnh hưởng Number.toLocaleString (không có locale
+   hoặc 'vi-VN'); ngày giờ (Date.toLocaleString) và các chỗ đã chỉ định locale khác ('en-US'...) giữ nguyên.
+   Số lưu trong dữ liệu không đổi; các hàm đọc lại số từ ô nhập đều bỏ ký tự phân cách nên không bị ảnh hưởng. */
+(function(){
+  try{
+    var _o=Number.prototype.toLocaleString;
+    Number.prototype.toLocaleString=function(l,opt){
+      if(l==null||/^vi(\b|-|_)/i.test(String(l)))l='en-US';
+      return _o.call(this,l,opt);
+    };
+  }catch(e){}
+})();
 // Load XLSX with multiple CDN fallbacks
 (function(){
   var cdns=[
@@ -1261,7 +1274,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.47';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.48';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -14073,6 +14086,293 @@ function _prTnDel(i){ const r=(window._prRows||[])[window._prTnIdx]; if(!r||!r.t
 function _prTnClose(){ closeOv('prTnOv'); _prRenderTable(); }
 window._prTnEditLine=_prTnEditLine; window._prTnAdd=_prTnAdd; window._prTnDel=_prTnDel; window._prTnClose=_prTnClose;
 
+/* ═══════════════ A 2.48 — Bảng lương › THANG LƯƠNG (hệ thống thang lương, bảng lương) ═══════════════
+   • Tab "Thang lương" (bên phải "Danh sách lương"): 5 nhóm chức danh × 7 bậc, Admin / Kế toán sửa được.
+   • Lưu ở payroll/payScale (cùng collection bảng lương → dùng đúng quyền hiện có, không cần sửa Rules).
+   • Gán Nhóm + Bậc cho từng nhân viên → tick → "Áp dụng vào Lương cơ bản" của tháng đang chọn.
+   • Xuất Excel mẫu "HỆ THỐNG THANG LƯƠNG, BẢNG LƯƠNG" theo thông tin công ty (Bên A). */
+const _PSC_LEVELS=['I','II','III','IV','V','VI','VII'];
+function _pscEsc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function _pscDefaultScale(){
+  return {
+    industry:'Dịch vụ logistics, giao nhận vận tải',
+    stepPct:5,
+    groups:[
+      {id:'g1',name:'Giám đốc',levels:[8000000,8400000,8820000,9261000,9724050,10210253,10720765]},
+      {id:'g2',name:'Phó Giám đốc, Kế toán trưởng',levels:[6500000,6825000,7166250,7524563,7900791,8295830,8710622]},
+      {id:'g3',name:'Trưởng Phòng kinh doanh, Trưởng Phòng Hành chính nhân sự',levels:[5500000,5775000,6063750,6366938,6685284,7019549,7370526]},
+      {id:'g4',name:'Nhân viên Kế toán, Nhân viên Kinh doanh, Nhân viên Kỹ thuật, Nhân viên Văn phòng',levels:[5007600,5257980,5520879,5796923,6086769,6391108,6710663]},
+      {id:'g5',name:'Nhân viên tạp vụ, Nhân viên bảo vệ',levels:[4680000,4914000,5159700,5417685,5688569,5972998,6271648]}
+    ],
+    assign:{}
+  };
+}
+function _pscNormalize(d){
+  const def=_pscDefaultScale(); if(!d||!Array.isArray(d.groups)||!d.groups.length)return def;
+  const out={industry:(d.industry!=null?d.industry:def.industry),stepPct:(d.stepPct!=null?d.stepPct:5),groups:[],assign:(d.assign&&typeof d.assign==='object')?d.assign:{}};
+  d.groups.forEach(function(gp,i){
+    const lv=(gp.levels||[]).slice(0,7).map(function(x){return parseFloat(x)||0;}); while(lv.length<7)lv.push(0);
+    out.groups.push({id:gp.id||('g'+(i+1)+'_'+Date.now().toString(36)),name:String(gp.name||'').replace(/^\s*\d+\s*[\.\)]\s*/,''),levels:lv});
+  });
+  out.updatedAt=d.updatedAt; out.updatedBy=d.updatedBy;
+  return out;
+}
+function _pscCanEdit(){ return !!(currentProfile&&(currentProfile.role==='admin'||currentProfile.role==='accountant')); }
+function _pscGroupById(id){ return ((window._pscScale||{}).groups||[]).find(function(x){return x.id===id;}); }
+function _pscAmount(gid,b){ const gp=_pscGroupById(gid); if(!gp||b===''||b==null)return null; const v=gp.levels[parseInt(b)]; return v==null?null:v; }
+
+async function _pscLoadScaleTab(){
+  const el=g('prTabContent'); if(!el)return;
+  el.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-loader" style="font-size:24px"></i><div style="margin-top:6px">Đang tải thang lương...</div></div>';
+  const st=window._prState;
+  try{
+    const snap=await db.collection('payroll').doc('payScale').get();
+    window._pscScaleSaved=snap.exists;
+    window._pscScale=_pscNormalize(snap.exists?snap.data():null);
+  }catch(e){ console.warn('payScale load',e); window._pscScaleSaved=false; window._pscScale=_pscDefaultScale(); }
+  const data=await _prLoad(st.year,st.month);
+  window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
+  window._prRate=(data.docBonusRate!=null)?data.docBonusRate:_PR_DOC_BONUS_DEFAULT;
+  window._prPenRate=(data.docPenaltyRate!=null)?data.docPenaltyRate:_prPenDefaultFor(st.year,st.month);
+  window._pscTick={};
+  _pscRender();
+}
+window._pscLoadScaleTab=_pscLoadScaleTab;
+
+function _pscRender(){
+  const el=g('prTabContent'); if(!el)return;
+  const S=window._pscScale, can=_pscCanEdit(), dis=can?'':' disabled';
+  const co=(typeof _coInfo==='function')?_coInfo():{name:'CÔNG TY TNHH COCO SEA',addr:'',mst:''};
+  const inp='font-size:12px;border:1px solid var(--border-light);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);padding:6px 7px;box-sizing:border-box;';
+  const head='<tr><th class="pr-th" rowspan="2" style="text-align:left;min-width:300px">Nhóm chức danh, vị trí công việc</th><th class="pr-th-grp" colspan="7">Bậc lương</th>'+(can?'<th class="pr-th" rowspan="2" style="width:44px"></th>':'')+'</tr>'
+    +'<tr>'+_PSC_LEVELS.map(function(l){return '<th class="pr-th" style="min-width:104px">'+l+'</th>';}).join('')+'</tr>';
+  const body=S.groups.map(function(gp,gi){
+    return '<tr class="pr-tr">'
+      +'<td class="pr-td" style="vertical-align:middle"><div style="display:flex;gap:8px;align-items:flex-start"><span style="flex:0 0 22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#0D2137,#1A3E6B);color:#E8C874;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;margin-top:3px">'+(gi+1)+'</span>'
+      +'<textarea rows="'+(gp.name.length>70?3:2)+'"'+dis+' onchange="_pscSetName('+gi+',this.value)" style="'+inp+'width:100%;resize:vertical;font-weight:700;font-family:inherit;line-height:1.35">'+_pscEsc(gp.name)+'</textarea></div></td>'
+      +gp.levels.map(function(v,li){
+        return '<td class="pr-td-r" style="padding:6px 5px"><input type="text" inputmode="numeric" value="'+(v?_prFmt(v):'')+'"'+dis+' onfocus="this.value=this.value.replace(/[^\\d.]/g,\'\')" onchange="_pscSetLevel('+gi+','+li+',this.value)" onblur="this.value=this.value?_prFmt(this.value.replace(/[^\\d.]/g,\'\')):\'\'" style="'+inp+'width:100%;text-align:right;font-variant-numeric:tabular-nums;'+(li===0?'font-weight:700;background:rgba(201,154,60,.08)':'')+'"/></td>';
+      }).join('')
+      +(can?'<td class="pr-td" style="text-align:center;padding:4px"><button class="rac red" onclick="_pscDelGroup('+gi+')" title="Xóa nhóm này"><i class="ti ti-trash"></i></button></td>':'')
+    +'</tr>';
+  }).join('');
+  const saved=window._pscScaleSaved;
+  el.innerHTML='<div class="pr-filter-bar">'
+      +'<div style="font-size:13px;font-weight:800;color:var(--text-primary)"><i class="ti ti-stairs-up" style="color:#C99A3C;margin-right:5px"></i>Hệ thống thang lương, bảng lương</div>'
+      +(saved?'':'<span style="font-size:10.5px;font-weight:700;background:#FEF3C7;color:#92400E;border-radius:20px;padding:2px 9px">Mẫu mặc định — chưa lưu</span>')
+      +'<div style="flex:1"></div>'
+      +(can?'<button class="btn sm" onclick="_pscAddGroup()"><i class="ti ti-plus"></i> Thêm nhóm</button><button class="btn sm" onclick="_pscResetDefault()"><i class="ti ti-restore"></i> Mẫu mặc định</button><button class="btn sm pri" onclick="_pscSaveScale()"><i class="ti ti-device-floppy"></i> Lưu thang lương</button>':'')
+      +'<button class="btn sm" onclick="_pscExportXlsx()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
+    +'</div>'
+    +'<div style="padding:.9rem 1rem">'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-bottom:12px;font-size:12px">'
+        +'<div><div class="pr-kpi-lbl">Tên công ty</div><div style="font-weight:700">'+_pscEsc(co.name)+'</div></div>'
+        +'<div><div class="pr-kpi-lbl">Mã số thuế</div><div style="font-weight:700">'+_pscEsc(co.mst||'—')+'</div></div>'
+        +'<div style="grid-column:span 2"><div class="pr-kpi-lbl">Địa chỉ</div><div style="font-weight:600">'+_pscEsc(co.addr||'—')+'</div></div>'
+        +'<div><div class="pr-kpi-lbl">Ngành nghề (in trên file Excel)</div><input type="text" id="psIndustry" value="'+_pscEsc(S.industry)+'"'+dis+' onchange="_pscSetIndustry(this.value)" style="'+inp+'width:100%"/></div>'
+      +'</div>'
+      +'<div class="pr-table-wrap" style="border:1px solid var(--border-light);border-radius:10px"><table class="pr-table" style="width:100%;border-collapse:collapse;min-width:1100px"><thead>'+head+'</thead><tbody>'+body+'</tbody></table></div>'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--text-secondary)">'
+        +'<span><i class="ti ti-info-circle"></i> Đơn vị tính: Việt Nam Đồng. Sửa trực tiếp các ô rồi bấm <b>Lưu thang lương</b>.'+(can?'':' (Chỉ Admin / Kế toán được sửa.)')+'</span>'
+        +(can?'<span style="flex:1"></span><label>Mỗi bậc tăng</label><input type="number" id="psStepPct" value="'+_pscEsc(S.stepPct)+'" min="0" step="0.5" style="'+inp+'width:64px;text-align:right"/><label>% so với bậc trước</label><button class="btn sm" onclick="_pscRecalc()"><i class="ti ti-calculator"></i> Tính lại bậc II–VII từ bậc I</button>':'')
+      +'</div>'
+      +'<div id="psApplyBox" style="margin-top:1.1rem"></div>'
+    +'</div>';
+  _pscRenderApply();
+}
+window._pscRender=_pscRender;
+
+function _pscSetName(gi,v){ if(!_pscCanEdit())return; window._pscScale.groups[gi].name=String(v||'').trim(); _pscRenderApply(); }
+function _pscSetLevel(gi,li,v){ if(!_pscCanEdit())return; window._pscScale.groups[gi].levels[li]=Math.max(0,parseFloat(String(v).replace(/[^\d.]/g,''))||0); _pscRenderApply(); }
+function _pscSetIndustry(v){ if(!_pscCanEdit())return; window._pscScale.industry=String(v||'').trim(); }
+function _pscAddGroup(){
+  if(!_pscCanEdit())return;
+  window._pscScale.groups.push({id:'g'+Date.now().toString(36),name:'',levels:[0,0,0,0,0,0,0]});
+  _pscRender();
+  const ta=document.querySelectorAll('#prTabContent textarea'); if(ta.length)ta[ta.length-1].focus();
+}
+function _pscDelGroup(gi){
+  if(!_pscCanEdit())return;
+  const gp=window._pscScale.groups[gi]; if(!gp)return;
+  const used=Object.keys(window._pscScale.assign||{}).filter(function(u){return (window._pscScale.assign[u]||{}).g===gp.id;}).length;
+  if(!confirm('Xóa nhóm "'+(gp.name||('số '+(gi+1)))+'"?'+(used?'\n\n'+used+' nhân viên đang được gán nhóm này sẽ mất gán (lương cơ bản đã áp dụng trước đó không bị đổi).':'')))return;
+  window._pscScale.groups.splice(gi,1);
+  Object.keys(window._pscScale.assign||{}).forEach(function(u){ if((window._pscScale.assign[u]||{}).g===gp.id)delete window._pscScale.assign[u]; });
+  _pscRender();
+}
+function _pscResetDefault(){
+  if(!_pscCanEdit())return;
+  if(!confirm('Đặt lại toàn bộ thang lương về MẪU MẶC ĐỊNH (5 nhóm × 7 bậc)? Các chỉnh sửa chưa lưu sẽ mất; bấm "Lưu thang lương" mới ghi đè bản đã lưu.'))return;
+  const keep=window._pscScale.assign||{}, def=_pscDefaultScale(); def.assign=keep; window._pscScale=def; _pscRender();
+}
+function _pscRecalc(){
+  if(!_pscCanEdit())return;
+  const pct=parseFloat((g('psStepPct')||{}).value); if(isNaN(pct)||pct<0){toast('Nhập % tăng hợp lệ','error');return;}
+  if(!confirm('Tính lại bậc II → VII của MỌI nhóm = bậc I × (1 + '+pct+'%)^(số bậc), giữ nguyên bậc I?\nCác số bậc II–VII đã sửa tay sẽ bị thay.'))return;
+  window._pscScale.stepPct=pct;
+  window._pscScale.groups.forEach(function(gp){ for(let i=1;i<7;i++)gp.levels[i]=Math.round((gp.levels[0]||0)*Math.pow(1+pct/100,i)+1e-6); /* lũy tiến từ bậc I, làm tròn 1 lần ở cuối (khớp mẫu) */ });
+  _pscRender(); toast('Đã tính lại các bậc — nhớ bấm Lưu thang lương');
+}
+async function _pscSaveScale(){
+  if(!_pscCanEdit()){toast('Chỉ Admin / Kế toán được sửa thang lương','error');return;}
+  const S=window._pscScale;
+  const bad=S.groups.findIndex(function(gp){return !gp.name;});
+  if(bad>=0){toast('Nhóm số '+(bad+1)+' chưa có tên chức danh','error');return;}
+  setLoading(true,'Đang lưu thang lương...');
+  try{
+    const data={industry:S.industry||'',stepPct:parseFloat(S.stepPct)||0,groups:S.groups,assign:S.assign||{},updatedAt:Date.now(),updatedBy:(currentUser&&currentUser.email)||''};
+    await db.collection('payroll').doc('payScale').set(data);
+    S.updatedAt=data.updatedAt; window._pscScaleSaved=true;
+    toast('Đã lưu thang lương'); _pscRender();
+  }catch(e){ toast('Lỗi: '+e.message,'error'); }
+  setLoading(false);
+}
+
+/* ── Áp dụng thang lương vào Lương cơ bản (bảng lương tháng đang chọn) ── */
+function _pscRenderApply(){
+  const box=g('psApplyBox'); if(!box)return;
+  const S=window._pscScale, st=window._prState, can=_pscCanEdit();
+  const rows=window._prRows||[];
+  const monthOpts=Array.from({length:12},function(_,i){return '<option value="'+(i+1)+'"'+((i+1)===st.month?' selected':'')+'>Tháng '+(i+1)+'</option>';}).join('');
+  const curY=new Date().getFullYear();
+  const yearOpts=Array.from({length:6},function(_,i){const y=curY-3+i;return '<option value="'+y+'"'+(y===st.year?' selected':'')+'>'+y+'</option>';}).join('');
+  const sel='font-size:12px;border:1px solid var(--border-light);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);padding:5px 6px;';
+  const groupOpts=function(cur){return '<option value="">— Chọn nhóm —</option>'+S.groups.map(function(gp,i){return '<option value="'+_pscEsc(gp.id)+'"'+(gp.id===cur?' selected':'')+'>'+(i+1)+'. '+_pscEsc(gp.name.length>46?gp.name.slice(0,46)+'…':gp.name)+'</option>';}).join('');};
+  const levelOpts=function(cur){return '<option value="">— Bậc —</option>'+_PSC_LEVELS.map(function(l,i){return '<option value="'+i+'"'+(String(cur)===String(i)?' selected':'')+'>Bậc '+l+'</option>';}).join('');};
+  const body=rows.map(function(r,ri){
+    const a=(S.assign||{})[r.uid]||{};
+    const amt=_pscAmount(a.g,a.b);
+    const cur=parseFloat(r.luongCoBan)||0;
+    const diff=amt==null?null:amt-cur;
+    const tick=!!(window._pscTick||{})[r.uid]&&amt!=null;
+    const manual=(r.realManual!=null&&r.realManual!=='');
+    return '<tr class="pr-tr">'
+      +'<td class="pr-td" style="text-align:center;width:38px"><input type="checkbox" '+(tick?'checked ':'')+(amt==null||!can?'disabled ':'')+'onchange="_pscTickRow(\''+_pscEsc(r.uid)+'\',this.checked)" style="cursor:pointer"/></td>'
+      +'<td class="pr-td"><div style="display:flex;align-items:center;gap:8px"><div class="pr-avatar">'+_prInitials(r.name)+'</div><span style="font-weight:700">'+_pscEsc(r.name||'—')+'</span></div></td>'
+      +'<td class="pr-td" style="color:var(--text-secondary)">'+_pscEsc(r.position||'')+'</td>'
+      +'<td class="pr-td" style="min-width:250px"><select'+(can?'':' disabled')+' onchange="_pscAssign(\''+_pscEsc(r.uid)+'\',\'g\',this.value)" style="'+sel+'width:100%">'+groupOpts(a.g)+'</select></td>'
+      +'<td class="pr-td" style="width:96px"><select'+(can?'':' disabled')+' onchange="_pscAssign(\''+_pscEsc(r.uid)+'\',\'b\',this.value)" style="'+sel+'width:100%">'+levelOpts(a.b)+'</select></td>'
+      +'<td class="pr-td-r" style="font-weight:700;color:#14B8A6">'+(amt==null?'—':_prFmt(amt))+'</td>'
+      +'<td class="pr-td-r">'+_prFmt(cur)+(manual?'<div style="font-size:9.5px;color:#B45309" title="Lương thực tế đang nhập tay nên không tự đổi theo lương cơ bản">LTT nhập tay</div>':'')+'</td>'
+      +'<td class="pr-td-r" style="font-weight:700;color:'+(diff==null||diff===0?'var(--text-secondary)':(diff>0?'#16A34A':'#DC2626'))+'">'+(diff==null?'—':(diff===0?'Bằng nhau':((diff>0?'+':'')+_prFmt(diff))))+'</td>'
+    +'</tr>';
+  }).join('');
+  box.innerHTML='<div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden">'
+    +'<div class="pr-filter-bar" style="border-bottom:1px solid var(--border-light)">'
+      +'<div style="font-size:13px;font-weight:800"><i class="ti ti-arrow-big-right-lines" style="color:#14B8A6;margin-right:5px"></i>Áp dụng thang lương vào Lương cơ bản</div>'
+      +'<select onchange="window._prState.month=parseInt(this.value);_pscLoadScaleTab()" style="'+sel+'width:104px">'+monthOpts+'</select>'
+      +'<select onchange="window._prState.year=parseInt(this.value);_pscLoadScaleTab()" style="'+sel+'width:84px">'+yearOpts+'</select>'
+      +'<div style="flex:1"></div>'
+      +(can&&rows.length?'<button class="btn sm" onclick="_pscTickAll(true)"><i class="ti ti-checks"></i> Tick tất cả đã gán</button><button class="btn sm" onclick="_pscTickAll(false)">Bỏ tick</button><button class="btn sm pri" onclick="_pscApply()"><i class="ti ti-check"></i> Áp dụng đã tick vào Lương cơ bản</button>':'')
+    +'</div>'
+    +(rows.length?'<div class="pr-table-wrap"><table class="pr-table" style="width:100%;border-collapse:collapse;min-width:900px"><thead><tr><th class="pr-th" style="width:38px">Áp dụng</th><th class="pr-th" style="text-align:left">Nhân viên</th><th class="pr-th">Chức vụ</th><th class="pr-th">Nhóm chức danh</th><th class="pr-th">Bậc</th><th class="pr-th" style="color:#2DD4BF">Mức theo thang</th><th class="pr-th">Lương CB hiện tại</th><th class="pr-th">Chênh lệch</th></tr></thead><tbody>'+body+'</tbody></table></div>'
+      :'<div style="padding:1.6rem;text-align:center;color:var(--text-secondary);font-size:12.5px">Bảng lương tháng '+st.month+'/'+st.year+' chưa có nhân viên — thêm nhân viên ở tab Danh sách lương trước.</div>')
+    +'<div style="font-size:11px;color:var(--text-secondary);padding:.55rem 1rem;border-top:1px solid var(--border-light)"><i class="ti ti-info-circle"></i> Chọn Nhóm + Bậc cho từng người (nhớ bấm <b>Lưu thang lương</b> để giữ cách gán), tick rồi bấm Áp dụng: Lương cơ bản của bảng lương tháng '+st.month+'/'+st.year+' được cập nhật và lưu ngay. Lương thực tế vẫn tính theo ngày công; ô đang nhập tay thì giữ nguyên.</div>'
+  +'</div>';
+}
+function _pscAssign(uid,k,v){
+  if(!_pscCanEdit())return;
+  const A=(window._pscScale.assign=window._pscScale.assign||{}); const a=(A[uid]=A[uid]||{});
+  if(k==='g')a.g=v||''; else a.b=(v===''?'':parseInt(v));
+  if(a.g===''&&(a.b===''||a.b==null))delete A[uid];
+  if(_pscAmount((A[uid]||{}).g,(A[uid]||{}).b)==null)delete window._pscTick[uid];
+  _pscRenderApply();
+}
+function _pscTickRow(uid,on){ window._pscTick=window._pscTick||{}; if(on)window._pscTick[uid]=true; else delete window._pscTick[uid]; }
+function _pscTickAll(on){
+  window._pscTick={};
+  if(on)(window._prRows||[]).forEach(function(r){const a=(window._pscScale.assign||{})[r.uid]||{}; if(_pscAmount(a.g,a.b)!=null)window._pscTick[r.uid]=true;});
+  _pscRenderApply();
+}
+async function _pscApply(){
+  if(!_pscCanEdit()){toast('Chỉ Admin / Kế toán được áp dụng','error');return;}
+  const st=window._prState, S=window._pscScale;
+  const todo=[];
+  (window._prRows||[]).forEach(function(r){
+    if(!(window._pscTick||{})[r.uid])return;
+    const a=(S.assign||{})[r.uid]||{}; const amt=_pscAmount(a.g,a.b); if(amt==null)return;
+    todo.push({r:r,amt:amt,old:parseFloat(r.luongCoBan)||0,gp:_pscGroupById(a.g),b:a.b});
+  });
+  if(!todo.length){toast('Chưa tick nhân viên nào đã gán Nhóm + Bậc','error');return;}
+  const lines=todo.map(function(t){return '• '+t.r.name+' ('+(t.gp?t.gp.name.slice(0,30):'')+' – Bậc '+_PSC_LEVELS[t.b]+'): '+_prFmt(t.old)+' → '+_prFmt(t.amt);}).join('\n');
+  if(!confirm('Áp dụng thang lương vào Lương cơ bản tháng '+st.month+'/'+st.year+' cho '+todo.length+' nhân viên?\n\n'+lines+'\n\nBảng lương tháng này sẽ được lưu ngay.'))return;
+  todo.forEach(function(t){ t.r.luongCoBan=t.amt; t.r.scaleRef={g:t.gp.id,b:t.b,amount:t.amt,at:Date.now()}; });
+  await _pscPersistAssign();
+  await _prSave();
+  window._pscTick={};
+  _pscRenderApply();
+}
+// lưu riêng cách gán (không đụng nhóm/bậc đang sửa dở nếu người dùng chưa bấm Lưu thang lương → vẫn lưu cả thang đang hiển thị)
+async function _pscPersistAssign(){
+  try{
+    const S=window._pscScale;
+    if(!window._pscScaleSaved){ return; } // thang chưa lưu lần nào: để người dùng bấm "Lưu thang lương"
+    await db.collection('payroll').doc('payScale').set({assign:S.assign||{},updatedAt:Date.now(),updatedBy:(currentUser&&currentUser.email)||''},{merge:true});
+  }catch(e){ console.warn('persist assign',e); }
+}
+
+/* ── Xuất Excel ── */
+function _pscVnDate(d){ d=d||new Date(); return 'ngày '+d.getDate()+' tháng '+(d.getMonth()+1)+' năm '+d.getFullYear(); }
+async function _pscExportXlsx(){
+  const ExcelJS=window.ExcelJS; if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau giây lát','error');return;}
+  const S=window._pscScale; if(!S||!S.groups.length){toast('Chưa có thang lương','error');return;}
+  const co=(typeof _coInfo==='function')?_coInfo():{name:'CÔNG TY TNHH COCO SEA',addr:'',mst:'',rep:''};
+  const NAVY='FF103A6F',TEAL='FF0F766E',GOLD='FFC99A3C',GREY='FF64748B',LB='FFEAF1F8',LG='FFF7F8FA',INK='FF1A2E2A';
+  const thin={style:'thin',color:{argb:'FFB8C2CC'}}; const BD={top:thin,left:thin,bottom:thin,right:thin};
+  const F=function(sz,bold,col,it,ul){return {name:'Arial',size:sz,bold:!!bold,italic:!!it,underline:!!ul,color:{argb:col||INK}};};
+  const fill=function(c){return {type:'pattern',pattern:'solid',fgColor:{argb:c}};};
+  const wb=new ExcelJS.Workbook(); wb.creator='CocoSea ERP'; wb.created=new Date();
+  const ws=wb.addWorksheet('Thang luong',{views:[{showGridLines:false}],pageSetup:{paperSize:9,orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,horizontalCentered:true,margins:{left:.4,right:.4,top:.5,bottom:.5,header:.2,footer:.2}}});
+  ws.columns=[{width:50},{width:15.5},{width:15.5},{width:15.5},{width:15.5},{width:15.5},{width:15.5},{width:15.5}];
+  const LAST=8;
+  const mg=function(r1,c1,r2,c2){ws.mergeCells(r1,c1,r2,c2);};
+  const put=function(r,c,v,font,al,fl,bd,nf){const x=ws.getCell(r,c);x.value=v;if(font)x.font=font;if(al)x.alignment=al;if(fl)x.fill=fl;if(bd)x.border=bd;if(nf)x.numFmt=nf;return x;};
+  const nm=String(co.name||'CÔNG TY TNHH COCO SEA');
+  let r=1;
+  // ── Khối thông tin công ty (trái) + quốc hiệu (phải) ──
+  put(r,1,'Tên công ty:',F(10,true),{vertical:'middle'}); mg(r,2,r,5); put(r,2,nm.toUpperCase(),F(10.5,true,NAVY),{vertical:'middle',wrapText:true});
+  mg(r,6,r,LAST); put(r,6,'CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM',F(11,true),{horizontal:'center',vertical:'middle'}); ws.getRow(r).height=20; r++;
+  put(r,1,'Ngành nghề:',F(10,true),{vertical:'middle'}); mg(r,2,r,5); put(r,2,S.industry||'',F(10),{vertical:'middle',wrapText:true});
+  mg(r,6,r,LAST); put(r,6,'Độc lập - Tự do - Hạnh phúc',F(10.5,true,INK,false,true),{horizontal:'center',vertical:'middle'}); ws.getRow(r).height=20; r++;
+  put(r,1,'Địa chỉ:',F(10,true),{vertical:'middle'}); mg(r,2,r,5); put(r,2,co.addr||'',F(10),{vertical:'middle',wrapText:true}); ws.getRow(r).height=((co.addr||'').length>58?30:20); r++;
+  put(r,1,'Mã số thuế:',F(10,true),{vertical:'middle'}); mg(r,2,r,5); put(r,2,String(co.mst||''),F(10),{vertical:'middle',horizontal:'left'}); ws.getRow(r).height=20;
+  r++;
+  // đường kẻ trang trí
+  for(let c=1;c<=LAST;c++)ws.getCell(r,c).border={bottom:{style:'medium',color:{argb:GOLD}}}; ws.getRow(r).height=6; r+=2;
+  // ── Tiêu đề ──
+  mg(r,1,r,LAST); put(r,1,'HỆ THỐNG THANG LƯƠNG, BẢNG LƯƠNG',F(17,true,NAVY),{horizontal:'center',vertical:'middle'}); ws.getRow(r).height=32; r++;
+  mg(r,1,r,LAST); put(r,1,'Đơn vị tính: Việt Nam Đồng',F(10,false,GREY,true),{horizontal:'right',vertical:'middle'}); ws.getRow(r).height=18; r++;
+  // ── Đầu bảng ──
+  const h1=r;
+  mg(h1,1,h1+1,1); put(h1,1,'NHÓM CHỨC DANH,\nVỊ TRÍ CÔNG VIỆC',F(10.5,true,'FFFFFFFF'),{horizontal:'center',vertical:'middle',wrapText:true},fill(NAVY),BD);
+  mg(h1,2,h1,LAST); put(h1,2,'BẬC LƯƠNG',F(10.5,true,'FFFFFFFF'),{horizontal:'center',vertical:'middle'},fill(NAVY),BD);
+  _PSC_LEVELS.forEach(function(l,i){put(h1+1,2+i,l,F(10.5,true,'FFFFFFFF'),{horizontal:'center',vertical:'middle'},fill(NAVY),BD);});
+  for(let c=1;c<=LAST;c++){ws.getCell(h1,c).border=BD;ws.getCell(h1+1,c).border=BD;ws.getCell(h1,c).fill=fill(NAVY);ws.getCell(h1+1,c).fill=fill(NAVY);}
+  ws.getRow(h1).height=22; ws.getRow(h1+1).height=22; r=h1+2;
+  // ── Các nhóm ──
+  S.groups.forEach(function(gp,gi){
+    mg(r,1,r,LAST); put(r,1,(gi+1)+'. '+gp.name,F(10.5,true,NAVY),{vertical:'middle',wrapText:true,indent:1},fill(LB),BD);
+    for(let c=1;c<=LAST;c++){ws.getCell(r,c).border=BD;ws.getCell(r,c).fill=fill(LB);}
+    ws.getRow(r).height=(gp.name.length>110?34:22); r++;
+    put(r,1,'Mức lương',F(10,false,GREY,true),{vertical:'middle',indent:2},null,BD);
+    gp.levels.forEach(function(v,i){put(r,2+i,Number(v)||0,F(10.5,i===0,INK),{horizontal:'right',vertical:'middle',indent:1},null,BD,'#,##0');});
+    ws.getRow(r).height=21; r++;
+  });
+  r++;
+  // ── Chân trang: ngày + người đại diện pháp luật ──
+  const rep=String(co.rep||'').replace(/^\s*(Ông|Bà)\s+/i,'').trim();
+  mg(r,5,r,LAST); put(r,5,'TP. Hồ Chí Minh, '+_pscVnDate(),F(10,false,INK,true),{horizontal:'center'}); r++;
+  mg(r,5,r,LAST); put(r,5,'Người đại diện pháp luật',F(11,true,NAVY),{horizontal:'center'}); r++;
+  mg(r,5,r,LAST); put(r,5,'(Ký, ghi rõ họ tên và đóng dấu)',F(9.5,false,GREY,true),{horizontal:'center'}); r++;
+  for(let i=0;i<3;i++){ws.getRow(r).height=22;r++;}
+  mg(r,5,r,LAST); put(r,5,rep,F(11,true,INK),{horizontal:'center'}); r++;
+  ws.pageSetup.printArea='A1:'+String.fromCharCode(64+LAST)+r;
+  const buf=await wb.xlsx.writeBuffer();
+  _psSave(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'Thang_luong_COCO_SEA.xlsx');
+  toast('Đã xuất Excel thang lương');
+}
+Object.assign(window,{_pscSetName,_pscSetLevel,_pscSetIndustry,_pscAddGroup,_pscDelGroup,_pscResetDefault,_pscRecalc,_pscSaveScale,_pscAssign,_pscTickRow,_pscTickAll,_pscApply,_pscExportXlsx,_pscRenderApply});
+
 function renderTcPayroll(){
   window._prActiveTab=window._prActiveTab||'list';
   // Reset active tab nếu đang ở tab cũ không còn tồn tại
@@ -14080,6 +14380,7 @@ function renderTcPayroll(){
   const activeTab=window._prActiveTab;
   const tabs=[
     {k:'list',icon:'ti-list-details',label:'Danh sách lương'},
+    {k:'scale',icon:'ti-stairs-up',label:'Thang lương'},
     {k:'report',icon:'ti-chart-bar',label:'Báo cáo'}
   ];
   const tabNav=tabs.map(function(t){
@@ -14174,6 +14475,8 @@ window._prLoadTabContent=async function(tab){
     el.innerHTML=_prListTabHTML();
     _prRenderKpis();
     _prRenderTable();
+  } else if(tab==='scale'){
+    await _pscLoadScaleTab();
   } else if(tab==='report'){
     await _prRenderReport();
   }
