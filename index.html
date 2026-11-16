@@ -1274,7 +1274,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.53';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.54';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -7191,8 +7191,9 @@ function _ocrContShowPreview(dataUrl){
    A 2.34: chỉ dùng AI — nếu hàm chưa deploy / hết lượt / AI lỗi thì báo lỗi rõ ràng (không còn quét thường). */
 const AI_OCR_REGION='asia-southeast1', AI_OCR_FN='ocrContScan';
 
-function _ocrNoBorder(no){
-  if(!no||typeof checkContNoValid!=='function')return '';
+function _ocrNoBorder(no,r){
+  if(!no)return (r&&(r.seal||(r.pkg!==''&&r.pkg!=null)||(r.gw!==''&&r.gw!=null)))?'border-color:#DC2626;background:#FEF2F2':'';   // A 2.54: dòng có dữ liệu nhưng chưa có số cont → tô đỏ
+  if(typeof checkContNoValid!=='function')return '';
   const v=checkContNoValid(no);
   return v&&v.valid===false?'border-color:#DC2626;background:#FEF2F2':'';
 }
@@ -7212,7 +7213,8 @@ function _ocrNormalizeAiRows(arr){
   arr.forEach(function(r){
     if(!r)return;
     const no=String(r.no||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
-    if(!no)return;
+    // A 2.54: KHÔNG bỏ dòng AI để trống số cont (số in sai chuẩn / mờ) nếu dòng còn seal, pkg hoặc trọng lượng — giữ lại để người dùng đối chiếu ảnh & sửa
+    if(!no&&!String(r.seal||'').trim()&&num(r.pkg)===''&&num(r.nw)===''&&num(r.gw)===''&&num(r.tare)==='')return;
     let d=String(r.date||'').trim();
     if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) d=_ocrNormalizeDate(d)||'';
     out.push({no:no,seal:String(r.seal||'').replace(/[^A-Za-z0-9\-]/g,'').toUpperCase(),pkg:num(r.pkg),nw:num(r.nw),gw:num(r.gw),tare:num(r.tare),date:d});
@@ -7248,6 +7250,7 @@ function _ocrContRunScan(){
       setLoading(false);
       st.engine='ai';
       st.rows=_ocrNormalizeAiRows(res&&res.data&&res.data.rows);
+      { const tp=parseInt(res&&res.data&&res.data.totalContainers,10); st.totalPrinted=(isNaN(tp)||tp<=0)?null:tp; }   // A 2.54: "TỔNG CONT" in trên ảnh (nếu có)
       // A 2.29: trọng lượng đọc từ ảnh luôn đưa vào G.W (nếu AI chỉ trả N.W thì coi đó là G.W); N.W tính lại = G.W − mức trừ
       st.rows.forEach(function(r){ if(r.gw===''&&r.nw!=='')r.gw=r.nw; r.nw=''; r.rawGw=r.gw; r.rawTare=r.tare; });
       // A 2.30: đơn vị trong ảnh (Tấn → kg ×1000)
@@ -7295,7 +7298,7 @@ function _ocrRowHtml(r,i){
   const numInp=inp+'text-align:right;font-variant-numeric:tabular-nums;';
   return '<tr>'
     +'<td style="padding:3px;text-align:center;font-size:12px">'+(i+1)+'</td>'
-    +'<td style="padding:3px 4px"><input type="text" class="ocrNo" data-i="'+i+'" value="'+esc(r.no)+'" placeholder="Cont No" oninput="_ocrContNoCheck(this)" style="'+inp+'font-weight:600;letter-spacing:.3px;'+_ocrNoBorder(r.no)+'"/></td>'
+    +'<td style="padding:3px 4px"><input type="text" class="ocrNo" data-i="'+i+'" value="'+esc(r.no)+'" placeholder="Cont No" oninput="_ocrContNoCheck(this)" style="'+inp+'font-weight:600;letter-spacing:.3px;'+_ocrNoBorder(r.no,r)+'"/></td>'
     +'<td style="padding:3px 4px"><input type="text" class="ocrSeal" data-i="'+i+'" value="'+esc(r.seal)+'" placeholder="Seal" style="'+inp+'"/></td>'
     +'<td style="padding:3px 4px"><input type="number" class="ocrPkg" data-i="'+i+'" value="'+esc(r.pkg)+'" placeholder="0" style="'+numInp+'"/></td>'
     +'<td style="padding:3px 4px"><input type="number" step="any" class="ocrNw" data-i="'+i+'" value="'+esc(r.nw)+'" placeholder="0" style="'+numInp+'"/></td>'
@@ -7394,6 +7397,19 @@ function _ocrContFillNw(silent){
 }
 window._ocrContFillNw=_ocrContFillNw;
 
+// A 2.54: cảnh báo đối chiếu số dòng đọc được ↔ TỔNG CONT trên ảnh, và dòng thiếu / sai số cont
+function _ocrWarnHtml(st){
+  const rows=st.rows||[]; const msgs=[];
+  const cnt=rows.filter(function(r){return r&&(r.no||r.seal||r.pkg!==''||r.gw!=='');}).length;
+  if(st.engine==='ai'&&st.totalPrinted&&st.totalPrinted!==cnt)
+    msgs.push('Ảnh ghi <b>TỔNG CONT = '+st.totalPrinted+'</b> nhưng chỉ đọc được <b>'+cnt+' dòng</b> — hãy đối chiếu ảnh, bấm "Thêm dòng" nếu thiếu.');
+  const blank=rows.filter(function(r){return r&&!r.no&&(r.seal||r.pkg!==''||r.gw!=='');}).length;
+  if(blank)msgs.push('<b>'+blank+' dòng chưa có số cont</b> (viền đỏ) — số trong ảnh có thể in sai chuẩn hoặc mờ; nhập số cont vào ô đỏ, nếu để trống dòng đó sẽ không được nhập.');
+  const bad=rows.filter(function(r){return r&&r.no&&typeof checkContNoValid==='function'&&checkContNoValid(r.no).valid===false;}).length;
+  if(bad)msgs.push('<b>'+bad+' số cont sai chuẩn ISO 6346</b> (viền đỏ) — đối chiếu ảnh gốc (có thể ảnh/file gốc ghi sai).');
+  if(!msgs.length)return '';
+  return '<div style="display:flex;gap:10px;align-items:flex-start;background:rgba(234,179,8,.14);color:#B45309;border-radius:8px;padding:9px 12px;margin-bottom:8px;font-size:12.5px;line-height:1.5"><i class="ti ti-alert-triangle" style="font-size:18px;margin-top:1px"></i><div>'+msgs.join('<br>')+'</div></div>';
+}
 function _ocrContRenderPreviewTable(){
   const st=window._ocrContState;
   const body=g('ocrContBody'); if(!body)return;
@@ -7406,7 +7422,7 @@ function _ocrContRenderPreviewTable(){
   const modal=body.closest('.modal'); if(modal){ modal.style.maxWidth='none'; modal.style.width='min(1120px,96vw)'; }
   const rowsHtml=st.rows.map(function(r,i){ return _ocrRowHtml(r,i); }).join('');
   const th='padding:7px 8px;font-size:11px;font-weight:700;color:var(--text-tertiary);text-align:';
-  body.innerHTML=
+  body.innerHTML=_ocrWarnHtml(st)+
     '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Bước 2: Kiểm tra & chỉnh sửa dữ liệu đọc được ('+(st.engine==='ai'?'AI':'OCR')+' có thể đọc sai — hãy đối chiếu với ảnh gốc; ô viền đỏ là số cont chưa đúng chuẩn ISO 6346) — đọc được <b>'+st.rows.length+'</b> dòng.</div>'
     +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff;border:1px solid var(--border-light);border-radius:8px;padding:8px 12px;margin-bottom:8px">'
       +'<span style="font-size:12.5px;font-weight:700">Cách tính N.W:</span>'
@@ -7535,14 +7551,15 @@ function _ocrContApply(){
   const st=window._ocrContState; if(!st)return;
   const tbody=g('ocrPreviewBody'); if(!tbody){toast('Không có dữ liệu để nhập','error');return;}
   // Đọc dữ liệu hiện tại từ preview (đã qua chỉnh sửa của người dùng nếu có)
-  const rows=[];
+  const rows=[]; let skipped=0;
   tbody.querySelectorAll('tr').forEach(function(tr){
     const gv=function(cls){const el=tr.querySelector('.'+cls);return el?el.value.trim():'';};
     const no=gv('ocrNo');
-    if(!no)return; // bỏ dòng trống
+    if(!no){ if(gv('ocrSeal')||gv('ocrPkg')||gv('ocrGw')||gv('ocrNw'))skipped++; return; } // bỏ dòng trống
     rows.push({no:no.toUpperCase(),seal:gv('ocrSeal'),pkg:gv('ocrPkg'),nw:gv('ocrNw'),gw:gv('ocrGw'),tare:gv('ocrTare'),date:gv('ocrDate')});
   });
   if(!rows.length){toast('Không có dòng nào có Cont No để nhập','error');return;}
+  if(skipped&&!confirm('Còn '+skipped+' dòng có dữ liệu nhưng CHƯA có số cont (viền đỏ) — các dòng này sẽ KHÔNG được nhập.\n\nBấm Hủy để quay lại điền số cont, hoặc OK để bỏ qua các dòng đó.'))return;
   st.rows=rows; // giữ lại để quay về bước sửa mà không mất chỉnh sửa
   const panel=_getContPanel();
   const realTbody=panel.querySelector('.contBody_'+st.bkKey);
