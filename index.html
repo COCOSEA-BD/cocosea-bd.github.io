@@ -1274,7 +1274,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.50';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.51';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -3747,10 +3747,10 @@ window.computeShipmentKpis=computeShipmentKpis;
 
 /* ═══ A 2.04: To do list (thay khối "Cảnh báo") — hiển thị theo vai trò ═══
    Doc (và các vai trò khác): lô cần VST / cần gửi chứng từ / chưa thông quan (đúng các điều kiện của khối Cảnh báo cũ)
-   Accountant: lô còn khoản phải trả NCC chưa thanh toán (ETD từ 01/09/2026)
-   Admin: 2 tab Doc + Accountant */
+   Acct (Accountant): lô còn khoản phải trả NCC chưa thanh toán (ETD từ 01/09/2026) + (A 2.51) lô chưa lên Debit Note khi đã đến ETD
+   Admin: 2 tab Doc + Acct */
 const WS_TODO_ACC_FROM='2026-09-01';
-window._wsTodoState=window._wsTodoState||{tab:'doc',doc:'all'};
+window._wsTodoState=window._wsTodoState||{tab:'doc',doc:'all',acc:'all'};
 window._wsExpand=window._wsExpand||{cal:false,notes:false};
 
 function _wsTodoEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
@@ -3847,31 +3847,81 @@ function _wsTodoDocBody(tt,items){
     return _wsTodoRowHtml(it.r,tt,tg,it.urgent,'');
   }).join('')+'</div>';
 }
+/* A 2.51: Acct — thêm các lô CHƯA LÊN DEBIT NOTE (chưa được cấp số DN). Quy tắc: phải lên Debit Note vào ngày tàu chạy (ETD)
+   → lô có ETD ≤ hôm nay (từ 01/09/2026), có dịch vụ đang bật (không Waived), chưa có số DN nào, trừ lô Cancel/Standby/Booking request. */
+function _wsTodoToday(){ const d=new Date(), p=function(n){return String(n).padStart(2,'0');}; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function _lotHasDn(r){
+  if(String(r.dnNo||'').trim())return true;
+  return Object.values(r.dnByParty||{}).some(function(v){return String(v||'').trim();});
+}
+function _wsTodoDnItems(tt){
+  const today=_wsTodoToday(), out=[];
+  (cache[tt]||[]).forEach(function(r){
+    const etd=String(r.etd||'').slice(0,10);
+    if(!etd||etd>today||etd<WS_TODO_ACC_FROM)return;
+    if(r.status==='Cancel'||r.status==='Standby'||r.status==='Booking request')return;
+    const hasSvc=Object.values(r.svcs||{}).some(function(sv){return sv&&sv.on&&sv.invoice!=='Waived';});
+    if(!hasSvc)return;
+    if(_lotHasDn(r))return;
+    const days=Math.floor((new Date(today+'T00:00:00')-new Date(etd+'T00:00:00'))/86400000);
+    out.push({r:r,dn:{days:days}});
+  });
+  return out;
+}
+function _wsTodoAccAll(tt){
+  const pay=_wsTodoAccItems(tt), dn=_wsTodoDnItems(tt), map={}, out=[];
+  pay.forEach(function(it){ const o={r:it.r,acc:it.acc,dn:null}; map[it.r._id]=o; out.push(o); });
+  dn.forEach(function(it){ let o=map[it.r._id]; if(!o){ o={r:it.r,acc:null,dn:it.dn}; map[it.r._id]=o; out.push(o); } else o.dn=it.dn; });
+  out.sort(function(a,b){
+    const ua=a.dn&&a.dn.days>0?0:1, ub=b.dn&&b.dn.days>0?0:1;
+    if(ua!==ub)return ua-ub;
+    return (a.r.etd||'9999').localeCompare(b.r.etd||'9999');
+  });
+  return out;
+}
 function _wsTodoAccBody(tt,items){
-  if(!items.length)return '<div class="ws-td-empty"><i class="ti ti-circle-check"></i> Không có lô nào còn khoản chưa thanh toán (từ 09/2026)</div>';
-  return '<div class="ws-td-note">Lô có ETD từ 01/09/2026 còn khoản phải trả NCC chưa thanh toán</div><div class="ws-td-list">'+items.map(function(it){
-    const tg='<span class="ws-td-tag unp">'+it.acc.n+' khoản chưa TT</span><span class="ws-td-amt">'+_wsTodoMoney(it.acc.sums)+'</span>'+(it.acc.ocf?'<span class="ws-td-tag cfm" title="Có dịch vụ OCF đã Confirm, chờ thanh toán">OCF đã confirm</span>':'');
-    // A 2.41: liệt kê rõ từng khoản chưa TT (tên · NCC/người nhận · số tiền) và mở đúng tab chứa khoản đó
-    // (COM/KB + chi phí nhập tay nằm ở tab Costing, KHÔNG có ở tab Service)
-    const kindLbl={svc:'Dịch vụ',cost:'Chi phí nhập tay',comkb:'Hoa hồng'};
-    const det='<div class="ws-td-det" style="margin-top:3px;font-size:10.5px;color:var(--text-secondary);line-height:1.35">'
-      +it.acc.det.map(function(d){return '• '+_wsTodoEsc((d.kind==='comkb'?'':'')+(d.name||kindLbl[d.kind]))+(d.partner?' — '+_wsTodoEsc(d.partner):'')+': <b>'+_wsTodoMoney(((function(){const o={};o[d.cur||'VND']=d.amt;return o;})()))+'</b>';}).join('<br>')
-      +'</div>';
-    return _wsTodoRowHtml(it.r,tt,tg,false,it.acc.nonSvc?'costing':'svc',det);
+  const st=window._wsTodoState; const f=st.acc||'all';
+  const nDn=items.filter(function(it){return it.dn;}).length, nPay=items.filter(function(it){return it.acc;}).length;
+  const chip=function(k,l,n){return '<button type="button" class="ws-td-chip'+(f===k?' on':'')+'" onclick="_wsTodoAccFilter(\''+k+'\',\''+tt+'\')">'+l+' <b>'+n+'</b></button>';};
+  const chips='<div class="ws-td-chips">'+chip('all','Tất cả',items.length)+chip('dn','Chưa lên DN',nDn)+chip('pay','Chưa TT NCC',nPay)+'</div>';
+  const list=f==='dn'?items.filter(function(it){return it.dn;}):(f==='pay'?items.filter(function(it){return it.acc;}):items);
+  if(!list.length)return chips+'<div class="ws-td-empty"><i class="ti ti-circle-check"></i> '+(f==='dn'?'Không có lô nào chưa lên Debit Note':(f==='pay'?'Không có lô nào còn khoản chưa thanh toán (từ 09/2026)':'Không có việc cần xử lý'))+'</div>';
+  const note=(f==='dn'?'Lô đã đến ETD nhưng chưa có số Debit Note (phải lên DN vào ngày ETD)':(f==='pay'?'Lô có ETD từ 01/09/2026 còn khoản phải trả NCC chưa thanh toán':'Chưa lên Debit Note (đến ETD) · khoản phải trả NCC chưa thanh toán (ETD từ 01/09/2026)'));
+  return chips+'<div class="ws-td-note">'+note+'</div><div class="ws-td-list">'+list.map(function(it){
+    let tg='', det='', urgent=false;
+    if(it.dn&&f!=='pay'){
+      const late=it.dn.days>0;
+      urgent=late;
+      tg+='<span class="ws-td-tag dn'+(late?' u':'')+'" title="Chưa được cấp số Debit Note — phải lên DN vào ngày ETD">Chưa lên DN · '+(late?('trễ '+it.dn.days+' ngày'):'hôm nay')+'</span>';
+    }
+    if(it.acc&&f!=='dn'){
+      tg+='<span class="ws-td-tag unp">'+it.acc.n+' khoản chưa TT</span><span class="ws-td-amt">'+_wsTodoMoney(it.acc.sums)+'</span>'+(it.acc.ocf?'<span class="ws-td-tag cfm" title="Có dịch vụ OCF đã Confirm, chờ thanh toán">OCF đã confirm</span>':'');
+      // A 2.41: liệt kê rõ từng khoản chưa TT (tên · NCC/người nhận · số tiền) và mở đúng tab chứa khoản đó
+      // (COM/KB + chi phí nhập tay nằm ở tab Costing, KHÔNG có ở tab Service)
+      const kindLbl={svc:'Dịch vụ',cost:'Chi phí nhập tay',comkb:'Hoa hồng'};
+      det='<div class="ws-td-det" style="margin-top:3px;font-size:10.5px;color:var(--text-secondary);line-height:1.35">'
+        +it.acc.det.map(function(d){return '• '+_wsTodoEsc((d.kind==='comkb'?'':'')+(d.name||kindLbl[d.kind]))+(d.partner?' — '+_wsTodoEsc(d.partner):'')+': <b>'+_wsTodoMoney(((function(){const o={};o[d.cur||'VND']=d.amt;return o;})()))+'</b>';}).join('<br>')
+        +'</div>';
+    }
+    // Mở đúng tab: chỉ DN → tab Invoice (nơi cấp số DN); có khoản NCC → Costing/Service như trước
+    const open3=(it.acc&&f!=='dn')?(it.acc.nonSvc?'costing':'svc'):'invoice';
+    return _wsTodoRowHtml(it.r,tt,tg,urgent,open3,det);
   }).join('')+'</div>';
 }
+function _wsTodoAccFilter(f,tt){ window._wsTodoState.acc=f; _wsTodoRender(tt); }
+window._wsTodoAccFilter=_wsTodoAccFilter;
 
 function _wsTodoBodyHTML(tt){
   const role=_wsTodoRole(), st=window._wsTodoState;
   try{
-    if(role==='accountant')return _wsTodoAccBody(tt,_wsTodoAccItems(tt));
+    if(role==='accountant')return _wsTodoAccBody(tt,_wsTodoAccAll(tt));
     const docItems=_wsTodoDocItems(tt);
     if(role==='doc')return _wsTodoDocBody(tt,docItems);
     // admin: 2 tab
-    const accItems=_wsTodoAccItems(tt);
+    const accItems=_wsTodoAccAll(tt);
     const tab=st.tab==='acc'?'acc':'doc';
     const tabs='<div class="ws-td-tabs"><button type="button" class="'+(tab==='doc'?'on':'')+'" onclick="_wsTodoTab(\'doc\',\''+tt+'\')">Doc <b>'+docItems.length+'</b></button>'
-      +'<button type="button" class="'+(tab==='acc'?'on':'')+'" onclick="_wsTodoTab(\'acc\',\''+tt+'\')">Accountant <b>'+accItems.length+'</b></button></div>';
+      +'<button type="button" class="'+(tab==='acc'?'on':'')+'" onclick="_wsTodoTab(\'acc\',\''+tt+'\')">Acct <b>'+accItems.length+'</b></button></div>';
     return tabs+(tab==='doc'?_wsTodoDocBody(tt,docItems):_wsTodoAccBody(tt,accItems));
   }catch(e){
     console.warn('To do list lỗi',e);
@@ -4596,6 +4646,7 @@ function renderLotTable(tt,S){ S=S||tt;
         +(isPinnedRow?`<span title="Luôn hiển thị dù ngoài khoảng ETD lọc — do chưa hoàn tất TQ/VST/gửi chứng từ" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:rgba(124,58,237,.12);color:#7C3AED;font-size:12px;margin-right:2px;vertical-align:middle"><i class="ti ti-pin"></i></span>`:'')
         +`<button class="btn sm" onclick="openDetail('${r._id}','${tt}')" title="${r.locked?'Đã khóa — Xem chi tiết':'Chưa khóa — Xem chi tiết'}" style="color:${r.locked?'var(--coral)':'var(--green)'}"><i class="ti ${r.locked?'ti-lock':'ti-lock-open'}"></i></button>`
         +` <button class="rac" onclick="event.stopPropagation();showLoadingConfirm('${r._id}','${tt}')" title="Loading Confirm — Thông báo hàng lên tàu" style="color:#059669;font-size:14px"><i class="ti ti-circle-check"></i></button>`
+        +_rvRowBtnHtml(r,tt)
         +(canDelete?` <button class="rac red" onclick="delLot('${r._id}','${tt}')" title="Xóa lô"><i class="ti ti-trash"></i></button>`:'')
         +_picShortLineHtml(r)
       +`</td></tr>`;
@@ -5183,6 +5234,7 @@ function renderDetailPanel(r,tt){
           <i class="ti ti-bookmark"></i>2. Booking Numbers
           <span style="margin-left:auto;display:inline-flex;gap:6px;align-items:center">
           ${_bookingUploadBtnHtml(r,tt)}
+          ${_rvDetailBtnHtml(r,tt)}
           ${r.status==='Booking request'
             ?`<button class="btn sm" onclick="sendBookingRequestEmail('${r._id}','${tt}')" style="text-transform:none;letter-spacing:0;font-weight:600;color:#e07000;border-color:#e07000"><i class="ti ti-send"></i> Email: Booking Request</button>`
             :`<button class="btn sm blu" onclick="openBookingEmail('${r._id}','${tt}')" style="text-transform:none;letter-spacing:0;font-weight:600"><i class="ti ti-mail"></i> Email Booking</button>`}
@@ -16191,7 +16243,12 @@ function _debtV3ComputeAR(){
       if(pmd&&pmd.inv&&pmd.inv.remark)remarksSet.add(pmd.inv.remark);
       if(pmd&&pmd.noInv&&pmd.noInv.remark)remarksSet.add(pmd.noInv.remark);
     });
+    // A 2.51: TT Debit — lô đã được cấp số Debit Note (theo party của dòng này) = Đã debit
+    const dnMapR=r.dnByParty||{}; const dnList=[];
+    remarkKeys.forEach(function(pk){ const v=String(dnMapR[pk]||'').trim(); if(v&&dnList.indexOf(v)<0)dnList.push(v); });
+    if(!dnList.length&&String(r.dnNo||'').trim())dnList.push(String(r.dnNo).trim());
     rows.push({
+      dnNo:dnList.join(', '),debited:dnList.length>0,
       id:r._id,tt:r._tt,bookingNo:r.bookingNo||r.jobNo||'',mbl:r.mblNo||'',etd:r.etd||'',
       route:(r.pol||'—')+' → '+(r.pod||'—'),shipper:sh,total:rowAll,paid:rowPaid,remain:Math.max(0,rowAll-rowPaid),
       remark:[...remarksSet].join('; '),
@@ -16487,6 +16544,7 @@ function _dv3DetailTable(data,isAR,limit){
       +'<td style="text-align:right;color:#059669">'+_dv3Money(r.paid)+'</td>'
       +'<td style="text-align:right;font-weight:700;color:'+(r.remain>0.01?'#DC2626':'#94A3B8')+'">'+_dv3Money(r.remain)+'</td>'
       +'<td><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;background:'+status.bg+';color:'+status.c+';white-space:nowrap">'+status.l+'</span></td>'
+      +(isAR?'<td><span title="'+(r.debited?('Số DN: '+_bkE(r.dnNo)):'Chưa được cấp số Debit Note')+'" style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;white-space:nowrap;background:'+(r.debited?'#2563EB15':'#D9770615')+';color:'+(r.debited?'#2563EB':'#D97706')+'">'+(r.debited?'Đã debit':'Chưa debit')+'</span></td>':'')
       +'<td style="color:#64748B;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(r.remark||'').replace(/"/g,'&quot;')+'">'+(r.remark||'—')+'</td>'
     +'</tr>';
   }).join('');
@@ -16501,14 +16559,14 @@ function _dv3DetailTable(data,isAR,limit){
       +'</span>'
     +'</div>'
     +'<div class="debt-report-v3__table-wrap"><table class="debt-report-v3__table debt-report-v3__table--dense">'
-      +'<thead><tr><th style="width:30px;text-align:center"><input type="checkbox" title="Chọn tất cả (đang hiển thị)" onchange="_dv3ToggleAllVisible(this,'+isAR+')" style="cursor:pointer"/></th><th>#</th><th>BOOKING NO</th><th>'+partnerLbl+'</th><th>MBL</th><th>ETD</th><th>HÀNH TRÌNH</th><th style="text-align:right">'+totalLbl+'</th>'+(isAR?'<th style="text-align:right;color:#2563EB;font-size:9px">TT CTY</th><th style="text-align:right;color:#D97706;font-size:9px">TT CÁ NHÂN</th>':'')+'<th style="text-align:right">'+paidLbl+'</th><th style="text-align:right">'+remainLbl+'</th><th>TRẠNG THÁI</th><th>REMARK</th></tr></thead>'
+      +'<thead><tr><th style="width:30px;text-align:center"><input type="checkbox" title="Chọn tất cả (đang hiển thị)" onchange="_dv3ToggleAllVisible(this,'+isAR+')" style="cursor:pointer"/></th><th>#</th><th>BOOKING NO</th><th>'+partnerLbl+'</th><th>MBL</th><th>ETD</th><th>HÀNH TRÌNH</th><th style="text-align:right">'+totalLbl+'</th>'+(isAR?'<th style="text-align:right;color:#2563EB;font-size:9px">TT CTY</th><th style="text-align:right;color:#D97706;font-size:9px">TT CÁ NHÂN</th>':'')+'<th style="text-align:right">'+paidLbl+'</th><th style="text-align:right">'+remainLbl+'</th><th>TRẠNG THÁI</th>'+(isAR?'<th title="Trạng thái Debit Note: đã được cấp số DN hay chưa">TT DEBIT</th>':'')+'<th>REMARK</th></tr></thead>'
       +'<tbody>'
         +(isAR
           ?'<tr id="dv3-ar-detail-tot" style="background:var(--bg-secondary);font-weight:700;border-bottom:2px solid var(--border-light)">'
             +'<td colspan="8" style="padding:5px 9px;font-size:11px;color:var(--text-secondary)"><i class="ti ti-calculator" style="font-size:11px"></i> Tổng cộng (đã chọn)</td>'
             +'<td style="padding:5px 9px;font-size:12px;color:#2563EB;text-align:right" id="dv3-ar-tot-yes">—</td>'
             +'<td style="padding:5px 9px;font-size:12px;color:#D97706;text-align:right" id="dv3-ar-tot-no">—</td>'
-            +'<td colspan="4" style="padding:5px 9px"></td>'
+            +'<td colspan="5" style="padding:5px 9px"></td>'
           +'</tr>'
           // v4.10: dòng tổng cho AP (CHI TIẾT PHẢI TRẢ NHÀ CUNG CẤP) — tương tự AR
           :'<tr id="dv3-ap-detail-tot" style="background:var(--bg-secondary);font-weight:700;border-bottom:2px solid var(--border-light)">'
@@ -16518,7 +16576,7 @@ function _dv3DetailTable(data,isAR,limit){
             +'<td style="padding:5px 9px;font-size:12px;color:#D97706;text-align:right" id="dv3-ap-tot-remain">—</td>'
             +'<td colspan="2" style="padding:5px 9px"></td>'
           +'</tr>')
-        +(rows||(isAR?'<tr><td colspan="14" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>':'<tr><td colspan="12" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>'))
+        +(rows||(isAR?'<tr><td colspan="15" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>':'<tr><td colspan="12" style="text-align:center;padding:1.5rem;color:#94A3B8">Không có dữ liệu</td></tr>'))
       +'</tbody>'
     +'</table></div>'
   +'</div>';
@@ -18438,8 +18496,10 @@ function renderFxTable(){
     +'</tr>';
   }).join(''):'<tr><td colspan="6" style="padding:2rem;text-align:center;color:var(--text-secondary)"><i class="ti ti-currency-dollar" style="font-size:30px;color:#C99A3C;display:block;margin-bottom:6px"></i><div style="font-weight:700;color:var(--text-primary)">Chưa có tỷ giá nào</div><div style="font-size:12px;margin-top:3px">Nhập tỷ giá từ ngày '+_fxDmy(FX_CUTOFF)+' ở ô bên trái.</div></td></tr>';
   const css='<style>'
-    +'.fxl-wrap{max-width:1120px}'
-    +'.fxl-grid{display:grid;grid-template-columns:minmax(270px,320px) minmax(0,1fr);gap:16px;align-items:start}'
+    +'.fxl-wrap{width:100%;max-width:none}'
+    +'.fxl-grid{display:grid;grid-template-columns:minmax(300px,360px) minmax(0,1fr);gap:16px;align-items:start}'
+    +'.fxl-tbl{width:100%;border-collapse:collapse;table-layout:fixed}'
+    +'.fxl-tbl td,.fxl-tbl th{overflow-wrap:anywhere}'
     +'.fxl-left{display:flex;flex-direction:column;gap:12px}'
     +'.fxl-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:12px;overflow:hidden}'
     +'.fxl-card-h{padding:9px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-light);font-size:12.5px;font-weight:800;display:flex;align-items:center;gap:7px}'
@@ -18453,7 +18513,7 @@ function renderFxTable(){
     +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px"><div style="font-size:14px;font-weight:800;display:flex;align-items:center;gap:7px"><i class="ti ti-currency-dollar" style="color:#C99A3C;font-size:19px"></i>Bảng tỷ giá USD / VND</div>'+statusChip+'</div>'
     +'<div class="fxl-grid">'
       +'<div class="fxl-left">'+entry+missBox+infoBox+'</div>'
-      +'<div class="fxl-card"><div class="table-wrap" style="margin:0"><table style="width:100%;border-collapse:collapse"><thead><tr>'
+      +'<div class="fxl-card"><div class="table-wrap" style="margin:0"><table class="fxl-tbl"><colgroup><col style="width:17%"><col style="width:15%"><col style="width:15%"><col style="width:13%"><col style="width:32%"><col style="width:8%"></colgroup><thead><tr>'
         +'<th style="'+th+';text-align:left">Ngày (ETD)</th><th style="'+th+';text-align:right">Tỷ giá bán ra</th><th style="'+th+';text-align:right">So với ngày trước</th><th style="'+th+';text-align:center">Lô ETD ngày này</th><th style="'+th+';text-align:left">Ghi chú · Cập nhật</th><th style="'+th+'"></th>'
       +'</tr></thead><tbody>'+body+'</tbody></table></div></div>'
     +'</div>'
@@ -25287,6 +25347,7 @@ body.xuat-lotmode #xuat-list-view{display:none!important;}
 .ws-td-tag.tq{background:rgba(234,88,12,.12);color:#9A3412}
 .ws-td-tag.unp{background:rgba(220,53,69,.1);color:#b02a37}
 .ws-td-tag.cfm{background:rgba(37,99,235,.1);color:#2563eb}
+.ws-td-tag.dn{background:rgba(29,78,216,.1);color:#1d4ed8}
 .ws-td-tag.u{box-shadow:inset 0 0 0 1px currentColor}
 /* A 2.19: lô khẩn (quá ETD +4 ngày chưa gửi Ctừ / còn ≤4 giờ tới Cut Off CY chưa VST) → cả dòng đỏ lên */
 .ws-td-row.urg{background:rgba(220,53,69,.11);border-color:rgba(220,53,69,.55);border-left-color:#dc3545}
@@ -25948,6 +26009,7 @@ body.xuat-lotmode #xuat-lot-work .cs-main button[onclick^="addBkContRow"]{
 </div>
 
 <div class="ov" id="planScanOv" style="padding:1.5rem 1rem"></div>
+<div class="ov" id="rvOv" style="padding:1rem"></div>
 
 <div class="ov" id="svcOv">
   <div class="modal" style="max-width:580px">
@@ -43105,6 +43167,8 @@ function _bkReqRows(){
   (cache.bkreq||[]).forEach(function(q){ if((q.stage==='request'||q.stage==='booking')&&_picShipperOk(q.shipper))out.push({kind:'req',q:q}); }); // A 2.23: PIC | All
   // Lô CŨ đang ở trạng thái "Booking request" trong lots_xuat → gom về tab này
   (cache.xuat||[]).forEach(function(r){ if(r.status==='Booking request'&&_bkIsXK(r)&&_picLotOk(r))out.push({kind:'lot',r:r}); });
+  // A 2.51: Revise đang mở của lô XK (mỗi yêu cầu 1 dòng) — biến mất khi bấm Done
+  (cache.xuat||[]).forEach(function(r){ if(!_rvIsXK(r)||!_picLotOk(r))return; _rvOpenList(r).forEach(function(v){ out.push({kind:'rev',r:r,rv:v}); }); });
   return out;
 }
 function _bkStandbyRows(){ return (cache.xuat||[]).filter(function(r){return r.status==='Standby'&&_bkIsXK(r)&&_picLotOk(r);}); }
@@ -43141,7 +43205,7 @@ function renderBookingList(){
   pg.innerHTML='<div class="bk-wrap">'+head
     +'<div class="toolbar bk-tool">'
       +'<div class="search-wrap" style="flex:1;min-width:220px"><i class="ti ti-search"></i><input type="text" id="bkQ" value="'+_bkE(window._bkQ)+'" placeholder="Tìm tàu, chuyến, số booking, Booking Party, Shipper, Carrier, POD..." oninput="window._bkQ=this.value;_bkRenderTable()"/></div>'
-      +(tab==='req'?'<select id="bkChip" onchange="window._bkChip=this.value;_bkRenderTable()" style="width:170px"><option value="">Tất cả trạng thái</option><option value="request"'+(window._bkChip==='request'?' selected':'')+'>Chưa lấy booking</option><option value="booking"'+(window._bkChip==='booking'?' selected':'')+'>Booking request</option></select>':'')
+      +(tab==='req'?'<select id="bkChip" onchange="window._bkChip=this.value;_bkRenderTable()" style="width:170px"><option value="">Tất cả trạng thái</option><option value="request"'+(window._bkChip==='request'?' selected':'')+'>Chưa lấy booking</option><option value="booking"'+(window._bkChip==='booking'?' selected':'')+'>Booking request</option><option value="revise"'+(window._bkChip==='revise'?' selected':'')+'>Revise</option></select>':'')
       +'<label class="bk-dl">ETD từ <input type="date" id="bkFrom" value="'+_bkE(window._bkFrom)+'" onchange="window._bkFrom=this.value||\'\';_bkRenderTable()"/></label>'
       +'<label class="bk-dl">đến <input type="date" id="bkTo" value="'+_bkE(window._bkTo)+'" onchange="window._bkTo=this.value;_bkRenderTable()"/></label>'
     +'</div>'
@@ -43229,6 +43293,146 @@ window._bkRenderTable=_bkRenderTable;
 
 function _bkEmpty(msg,ic){ return '<div class="bk-empty"><i class="ti '+(ic||'ti-inbox')+'"></i><div>'+msg+'</div></div>'; }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   A 2.51 — REVISE lô XK (Job ID bắt đầu bằng XK)
+   • Nút Revise: box 2 (Booking Numbers) tab Chi tiết + cột Thao tác (cạnh Loading Confirm).
+   • Bấm → popup nhập/ xem nội dung revise. Lưu NGAY TRÊN LÔ (lot.revises[]), không cần collection/Rules mới.
+   • Revise đang mở hiện ở Booking List → tab Booking request (chip "Revise"). Doc/Cus/Admin cập nhật vào Job ID
+     (nút "Mở lô"), bấm Done → revise chuyển sang Đã xong và biến mất khỏi tab.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function _rvIsXK(r){ return !!r && String(r.jobNo||'').toUpperCase().indexOf('XK')===0; }
+function _rvList(r){ return (r&&Array.isArray(r.revises))?r.revises:[]; }
+function _rvOpenList(r){ return _rvList(r).filter(function(v){return v&&v.status!=='done';}); }
+function _rvCanReq(){ return can('editLot')||_bkCanProcess(); }
+function _rvCanDone(){ return _bkCanProcess(); }
+function _rvFmt(ts){
+  if(!ts)return '—'; const d=new Date(ts); if(isNaN(d))return '—';
+  const p=function(n){return String(n).padStart(2,'0');};
+  return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function _rvWho(e){ return String(e||'').split('@')[0]||'—'; }
+// Nút Revise trong cột Thao tác của bảng lô (chỉ lô XK, bảng xuất)
+function _rvRowBtnHtml(r,tt){
+  if(tt!=='xuat'||!_rvIsXK(r)||!_rvCanReq())return '';
+  const n=_rvOpenList(r).length;
+  const st=n?'color:#fff;background:#EA580C;border-radius:6px;padding:1px 6px;font-size:12px':'color:#7C3AED;font-size:14px';
+  return ' <button class="rac" onclick="event.stopPropagation();openRevise(\''+r._id+'\',\''+tt+'\')" title="'+(n?('Revise — đang có '+n+' yêu cầu chưa xong'):'Revise lô hàng')+'" style="'+st+'"><i class="ti ti-edit-circle"></i>'+(n?'<b style="font-size:10px;margin-left:2px">'+n+'</b>':'')+'</button>';
+}
+// Nút Revise trong box 2 tab Chi tiết
+function _rvDetailBtnHtml(r,tt){
+  if(tt!=='xuat'||!_rvIsXK(r)||!_rvCanReq())return '';
+  const n=_rvOpenList(r).length;
+  return '<button class="btn sm" onclick="openRevise(\''+r._id+'\',\''+tt+'\')" style="text-transform:none;letter-spacing:0;font-weight:600;color:#EA580C;border-color:#EA580C"><i class="ti ti-edit-circle"></i> Revise'+(n?' <span style="background:#EA580C;color:#fff;border-radius:99px;padding:0 6px;font-size:10px;font-weight:700">'+n+'</span>':'')+'</button>';
+}
+function _rvRefresh(){
+  try{
+    if(g('bkTblWrap')&&window._bkTab==='req')renderBookingList();
+    else if(g('bkTblWrap'))_bkRenderTable();
+    if(typeof detailId!=='undefined'&&detailId&&typeof detailTt!=='undefined'){
+      const r=(cache[detailTt]||[]).find(function(x){return x._id===detailId;});
+      if(r&&typeof renderDetailPanel==='function')renderDetailPanel(r,detailTt);
+    }
+  }catch(e){}
+}
+function _rvCard(r,tt,v,canDone){
+  const o=v.status!=='done';
+  let h='<div style="border:1px solid '+(o?'#FDBA74':'var(--border-light)')+';background:'+(o?'#FFF7ED':'var(--bg-secondary)')+';border-radius:10px;padding:10px 12px;margin-bottom:8px">'
+    +'<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-secondary);margin-bottom:5px">'
+      +'<span class="bk-chip" style="background:'+(o?'#FFEDD5':'#DCFCE7')+';color:'+(o?'#C2410C':'#15803D')+'">'+(o?'Chưa xong':'Đã xong')+'</span>'
+      +'<span>'+_bkE(_rvWho(v.by))+' · '+_rvFmt(v.ts)+'</span></div>'
+    +'<div style="font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text-primary)">'+_bkE(v.note)+'</div>';
+  if(!o){
+    h+='<div style="font-size:11px;color:#15803D;margin-top:6px"><i class="ti ti-check"></i> Done bởi '+_bkE(_rvWho(v.doneBy))+' · '+_rvFmt(v.doneTs)+(v.doneNote?' — '+_bkE(v.doneNote):'')+'</div>';
+  } else if(canDone){
+    h+='<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">'
+      +'<input type="text" id="rvDoneNote_'+_bkE(v.id)+'" placeholder="Ghi chú khi xong (không bắt buộc)" style="flex:1;min-width:180px;font-size:12px;padding:6px 9px;border:1px solid var(--border-light);border-radius:8px;background:var(--bg-primary);color:var(--text-primary)"/>'
+      +'<button class="btn sm" onclick="_rvGoLot(\''+_bkJs(r._id)+'\',\''+_bkJs(tt)+'\')" title="Mở lô để cập nhật nội dung revise vào Job ID"><i class="ti ti-external-link"></i> Mở lô</button>'
+      +'<button class="btn sm pri" style="background:#16A34A;border-color:#16A34A" onclick="_rvDone(\''+_bkJs(r._id)+'\',\''+_bkJs(tt)+'\',\''+_bkJs(v.id)+'\')"><i class="ti ti-check"></i> Done</button>'
+      +'</div>';
+  }
+  return h+'</div>';
+}
+function openRevise(id,tt){
+  tt=tt||'xuat';
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;});
+  if(!r){ toast('Không tìm thấy lô','error'); return; }
+  if(!g('rvOv')){ toast('Thiếu khung popup Revise','error'); return; }
+  const list=_rvList(r).slice().sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+  const open=list.filter(function(v){return v.status!=='done';}), done=list.filter(function(v){return v.status==='done';});
+  const canReq=_rvCanReq(), canDone=_rvCanDone();
+  const ref=function(l,v){return '<div><div style="font-size:10px;color:var(--text-tertiary)">'+l+'</div><div style="font-weight:700;color:var(--text-primary);overflow-wrap:anywhere">'+(_bkE(v)||'—')+'</div></div>';};
+  const chips=['Đổi POD','Đổi Vol / Type cont','Đổi tàu / chuyến','Đổi Shipper / Cnee','Đổi Booking No','Đổi ngày ETD'].map(function(t){
+    return '<button type="button" class="btn sm" style="font-size:11px;padding:3px 9px;text-transform:none;letter-spacing:0" onclick="_rvChip(\''+t+'\')">'+t+'</button>';
+  }).join('');
+  g('rvOv').innerHTML='<div class="modal" style="max-width:640px;border-radius:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.2)">'
+    +'<div style="background:linear-gradient(135deg,#9A3412,#EA580C);padding:12px 18px;display:flex;align-items:center;gap:10px">'
+      +'<i class="ti ti-edit-circle" style="font-size:20px;color:#FED7AA"></i>'
+      +'<div style="font-size:14px;font-weight:700;color:#fff;flex:1">Revise — '+_bkE(r.jobNo||id)+'</div>'
+      +'<button onclick="closeOv(\'rvOv\')" style="color:#FED7AA;font-size:18px;background:rgba(255,255,255,.15);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-x"></i></button>'
+    +'</div>'
+    +'<div style="padding:14px 18px;max-height:72vh;overflow:auto">'
+      +'<div style="background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;padding:8px 14px;margin-bottom:12px;font-size:12px"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px">'
+        +ref('Job ID',r.jobNo)+ref('Booking No',_bkLotBkNo(r))+ref('Shipper',r.shipper)
+        +ref('Tàu / Chuyến',_bkVoyLabel(r))+ref('ETD',_bkFd(r.etd))+ref('POD',r.pod)
+      +'</div></div>'
+      +(open.length?'<div style="font-size:11px;font-weight:700;color:#C2410C;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Nội dung revise chưa xong ('+open.length+')</div>'+open.map(function(v){return _rvCard(r,tt,v,canDone);}).join(''):'<div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px"><i class="ti ti-circle-check" style="color:#16A34A"></i> Hiện không có revise nào đang chờ xử lý.</div>')
+      +(canReq?'<div style="margin-top:10px"><div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Tạo revise mới</div>'
+        +'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px">'+chips+'</div>'
+        +'<textarea id="rvNote" rows="4" placeholder="Nội dung cần revise (VD: đổi POD từ … sang …, đổi Vol 2x40HC → 3x40HC …)" style="width:100%;box-sizing:border-box;font-size:13px;padding:8px 10px;border:1px solid var(--border-light);border-radius:8px;background:var(--bg-primary);color:var(--text-primary);resize:vertical"></textarea>'
+        +'<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Revise sẽ hiện ở Booking List → Booking request cho Doc / Cus xử lý.</div></div>':'')
+      +(done.length?'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text-secondary)">Lịch sử revise đã xong ('+done.length+')</summary><div style="margin-top:8px">'+done.map(function(v){return _rvCard(r,tt,v,false);}).join('')+'</div></details>':'')
+    +'</div>'
+    +'<div style="padding:10px 18px;border-top:1px solid var(--border-light);display:flex;gap:8px;justify-content:flex-end">'
+      +'<button class="btn" onclick="closeOv(\'rvOv\')">Đóng</button>'
+      +(canReq?'<button class="btn pri" id="rvSend" style="background:#EA580C;border-color:#EA580C" onclick="_rvSend(\''+_bkJs(id)+'\',\''+_bkJs(tt)+'\')"><i class="ti ti-send"></i> Gửi revise</button>':'')
+    +'</div></div>';
+  openOv('rvOv');
+}
+function _rvChip(t){
+  const ta=g('rvNote'); if(!ta)return;
+  ta.value=(ta.value?ta.value.replace(/\s+$/,'')+'\n':'')+t+': ';
+  ta.focus();
+}
+async function _rvSend(id,tt){
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;}); if(!r)return;
+  const ta=g('rvNote'); const note=(ta&&ta.value||'').trim();
+  if(!note){ toast('Nhập nội dung revise','error'); if(ta)ta.focus(); return; }
+  const btn=g('rvSend'); if(btn)btn.disabled=true;
+  const rec={id:Date.now().toString(36)+Math.random().toString(36).slice(2,5),ts:Date.now(),by:(currentUser&&currentUser.email)||'',note:note,status:'open'};
+  const next=_rvList(r).concat([rec]);
+  try{
+    await db.collection(colName(tt)).doc(id).update({revises:next,reviseOpen:next.filter(function(v){return v.status!=='done';}).length});
+    r.revises=next; r.reviseOpen=next.filter(function(v){return v.status!=='done';}).length;
+    logLotEvent(id,tt,'revise','Revise',note);
+    toast('Đã gửi revise — hiện ở Booking List › Booking request');
+    openRevise(id,tt); _rvRefresh();
+  }catch(e){
+    if(btn)btn.disabled=false;
+    toast('Lỗi gửi revise: '+(/permission/i.test(e.message)?'không có quyền ghi lô này':e.message),'error');
+  }
+}
+async function _rvDone(id,tt,vid){
+  if(!_rvCanDone()){ toast('Chỉ Doc / Cus / Admin được bấm Done','error'); return; }
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;}); if(!r)return;
+  const inp=g('rvDoneNote_'+vid); const dn=(inp&&inp.value||'').trim();
+  const next=_rvList(r).map(function(v){
+    return v.id===vid?Object.assign({},v,{status:'done',doneTs:Date.now(),doneBy:(currentUser&&currentUser.email)||'',doneNote:dn}):v;
+  });
+  const openN=next.filter(function(v){return v.status!=='done';}).length;
+  try{
+    await db.collection(colName(tt)).doc(id).update({revises:next,reviseOpen:openN});
+    r.revises=next; r.reviseOpen=openN;
+    const v=next.find(function(x){return x.id===vid;})||{};
+    logLotEvent(id,tt,'revise','Revise Done',(v.note||'')+(dn?' — '+dn:''));
+    toast('Đã Done revise');
+    openRevise(id,tt); _rvRefresh();
+  }catch(e){
+    toast('Lỗi: '+(/permission/i.test(e.message)?'không có quyền ghi lô này':e.message),'error');
+  }
+}
+function _rvGoLot(id,tt){ closeOv('rvOv'); _bkOpenLot(id); }
+Object.assign(window,{openRevise,_rvChip,_rvSend,_rvDone,_rvGoLot,_rvIsXK,_rvOpenList});
+
 /* ── Tab 1: Booking request ── */
 function _bkStageChip(q){
   if(q.stage==='booking')return '<span class="bk-chip bkq">Booking request</span>';
@@ -43238,6 +43442,12 @@ function _bkIntentChip(it){ return it==='Confirm'?'<span class="bk-chip cf">Conf
 function _bkTblReq(q,from,to){
   const chip=window._bkChip||'';
   let rows=_bkReqRows().filter(function(x){
+    if(chip==='revise'&&x.kind!=='rev')return false;
+    if(x.kind==='rev'){
+      if(chip&&chip!=='revise')return false;
+      if(!_bkInRange(x.r.etd,from,to))return false;
+      return _bkMatch([x.r.jobNo,x.r.vessel,x.r.voy,x.r.pod,x.r.carrier,x.r.bookingParty,x.r.shipper,_bkLotBkNo(x.r),x.rv.note,x.rv.by,'revise'].join(' '),q);
+    }
     if(x.kind==='req'){
       const r=x.q;
       if(chip&&r.stage!==chip)return false;
@@ -43254,6 +43464,19 @@ function _bkTblReq(q,from,to){
   const canP=_bkCanProcess();
   let h='<div class="bk-tw"><table class="bk-tbl"><thead><tr><th>#</th><th>Job ID</th><th>Trạng thái</th><th>Tàu / Chuyến</th><th>ETD</th><th>Route</th><th>Carrier</th><th>Booking Party</th><th>Shipper</th><th>Booking No</th><th>Pre-booking</th><th>Vol</th><th>Lấy ở</th><th>Tạo bởi</th><th></th></tr></thead><tbody>';
   rows.forEach(function(x,i){
+    if(x.kind==='rev'){
+      const l=x.r, v=x.rv;
+      h+='<tr class="bk-row" onclick="openRevise(\''+l._id+'\',\'xuat\')">'
+        +'<td class="c">'+(i+1)+'</td><td class="nw mono"><b>'+_bkE(l.jobNo||'—')+'</b></td><td><span class="bk-chip" style="background:#FFEDD5;color:#C2410C">Revise</span></td>'
+        +'<td><b>'+_bkE(l.vessel)+'</b><div class="s">'+_bkE(l.voy)+'</div></td><td class="nw">'+_bkFd(l.etd)+'</td>'
+        +'<td class="nw">'+_bkE(l.pol||'')+' <i class="ti ti-arrow-right"></i> '+_bkE(l.pod||'')+'</td>'
+        +'<td>'+_bkE(l.carrier)+'</td><td>'+_bkE(l.bookingParty)+'</td><td>'+_bkE(l.shipper||l.supplier)+'</td>'
+        +'<td class="nw mono">'+(_bkE(_bkLotBkNo(l))||'<span class="mut">—</span>')+'</td>'
+        +'<td colspan="3" style="white-space:pre-wrap;overflow-wrap:anywhere;min-width:200px;color:#9A3412;font-weight:600" title="'+_bkE(v.note)+'">'+_bkE(String(v.note||'').length>160?String(v.note).slice(0,160)+'…':v.note)+'<div class="s">'+_rvFmt(v.ts)+'</div></td>'
+        +'<td class="s2">'+_bkE(_rvWho(v.by))+'</td>'
+        +'<td class="act" onclick="event.stopPropagation()"><button class="btn sm'+(canP?' pri':'')+'" style="'+(canP?'background:#EA580C;border-color:#EA580C':'')+'" onclick="openRevise(\''+l._id+'\',\'xuat\')">'+(canP?'<i class="ti ti-player-play"></i> Xử lý':'<i class="ti ti-eye"></i> Xem')+'</button></td></tr>';
+      return;
+    }
     if(x.kind==='req'){
       const r=x.q;
       h+='<tr class="bk-row" onclick="_bkOpenReq(\''+r._id+'\')">'
