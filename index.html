@@ -1274,7 +1274,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.55';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.56';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -10573,7 +10573,9 @@ function calcSvcAmt(key){
 //   'Confirmed' (đồng ý) HOẶC 'Need Revise' (yêu cầu sửa lại, kèm ghi chú) → 'Payment Done' (đã TT + đã confirm)
 function _ocfStatusInfo(sv){
   sv=sv||{};
-  if(sv.ocfConfirmed&&sv.apPaidStatus==='paid')return{label:'Payment Done',bg:'rgba(40,167,69,.13)',color:'var(--green)',key:'done'};
+  // A 2.56: OCF đã thanh toán NCC (kể cả thanh toán hàng loạt / popup / Finance) → luôn hiện Payment Done, không còn kẹt ở Request Payment.
+  // Chỉ là trạng thái hiển thị suy ra từ apPaidStatus — không ghi đè ocfConfirmed/reqPayment, nên hủy thanh toán thì trở về đúng trạng thái trước đó.
+  if(sv.apPaidStatus==='paid')return{label:'Payment Done',bg:'rgba(40,167,69,.13)',color:'var(--green)',key:'done'};
   if(sv.ocfConfirmed)return{label:'Confirmed',bg:'rgba(37,99,235,.1)',color:'#2563eb',key:'confirmed'};
   if(sv.ocfRevise)return{label:'Need Revise',bg:'rgba(193,85,62,.12)',color:'var(--coral-dark, #C1553E)',key:'revise'};
   if(sv.reqPayment)return{label:'Request Payment',bg:'rgba(234,179,8,.15)',color:'#b45309',key:'requested'};
@@ -10710,7 +10712,7 @@ function svcRowHTML(s, sv){
   if(isOcfSvc){
     const ocfSt=_ocfStatusInfo(sv);
     const isAdminUser=(currentProfile?.role==='admin');
-    const ocfClickable=isAdminUser&&sv.reqPayment&&!sv.ocfConfirmed;
+    const ocfClickable=isAdminUser&&sv.reqPayment&&!sv.ocfConfirmed&&sv.apPaidStatus!=='paid';
     const amtNum=cost&&qty?parseFloat(cost)*parseFloat(qty):0;
     const svcVatAmt=sv.svcVatAmt||0;
     const totalWithVat=amtNum>0?(amtNum+svcVatAmt):0;
@@ -32401,7 +32403,7 @@ function _dnRvRenderSide(){
     const canReq=!!(rq&&!rq.disabled&&!locked&&!sv.ocfConfirmed);
     h+='<button type="button" class="dnrv-btn req'+(reqOn?' on':'')+'" '+(canReq?'':'disabled')+' onclick="_dnRvReq()" title="'+(sv.ocfConfirmed?'Đã Confirm — không đổi được':'Tick / bỏ tick Req.Pay ở dòng dịch vụ và lưu')+'"><i class="ti '+(reqOn?'ti-circle-check':'ti-send')+'"></i> '+(reqOn?'Đã Request Payment — bấm để hủy':'Request Payment')+'</button>';
     if(reqUnsaved)h+='<div class="dnrv-sm" style="margin:-3px 0 4px;color:#B45309">Req.Pay ở dòng ngoài đã đổi nhưng chưa lưu — bấm "Lưu dịch vụ".</div>';
-    const canReview=isAdmin&&sv.reqPayment&&!sv.ocfConfirmed&&!locked;
+    const canReview=isAdmin&&sv.reqPayment&&!sv.ocfConfirmed&&!locked&&sv.apPaidStatus!=='paid';
     // Hoàn tác Confirm (chỉ Admin): đưa dòng về trạng thái chờ duyệt để chỉnh sửa; không cho hoàn tác khi đã thanh toán / lô đã khóa
     const canUndo=isAdmin&&!!sv.ocfConfirmed&&!locked&&sv.apPaidStatus!=='paid';
     let why='';
@@ -32409,6 +32411,7 @@ function _dnRvRenderSide(){
     else if(sv.ocfConfirmed&&canUndo)why='Bấm để hoàn tác Confirm (đưa về trạng thái trước khi Confirm để chỉnh sửa)';
     else if(sv.ocfConfirmed&&sv.apPaidStatus==='paid')why='Đã thanh toán — không hoàn tác Confirm được';
     else if(sv.ocfConfirmed)why='Đã Confirm';
+    else if(sv.apPaidStatus==='paid')why='Đã thanh toán — trạng thái OCF: Payment Done';
     else if(!sv.reqPayment)why=sv.ocfRevise?'Chờ Doc/Cus sửa và tick lại Req.Pay':'Chờ Doc/Cus Request Payment';
     h+='<div class="dnrv-btnrow">'
       +'<button type="button" class="dnrv-btn rev'+(sv.ocfRevise?' on':'')+'" '+(canReview?'':'disabled')+' onclick="_dnRvReviseOpen()" title="'+_dnEsc(why)+'"><i class="ti ti-edit"></i> Need revise</button>'
