@@ -554,6 +554,304 @@ window._comKbContactsFor=_comKbContactsFor;
 window._comKbThanhTien=_comKbThanhTien;
 window._comKbThucChi=_comKbThucChi;
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   A 2.58 — REFUND DATA (Finance): COM/KB của các lô XK + Non-RF + chặn khóa lô + báo cáo theo người nhận
+   • Dữ liệu COM/KB vẫn nằm ở r.comKb (không đổi). Thêm r.nonRf (+nonRfBy/nonRfAt) = "lô này không có hoàn hoa hồng".
+   • Lô XK (Job ID bắt đầu "XK", ETD >= mốc, không Cancel/Xóa CB) phải có COM/KB (số tiền > 0) HOẶC tick Non-RF mới khóa được.
+   • Mốc áp dụng lưu ở _config/refundSettings.cutoff (mặc định 2026-11-01, chỉ Admin sửa).
+═══════════════════════════════════════════════════════════════════════════ */
+const RF_CUTOFF_DEFAULT='2026-11-01';
+window._rfSettings=window._rfSettings||{cutoff:RF_CUTOFF_DEFAULT,loaded:false,tried:false};
+async function _rfLoadSettings(force){
+  const S=window._rfSettings;
+  if(S.loaded&&!force)return S;
+  S.tried=true;
+  try{
+    const s=await db.collection('_config').doc('refundSettings').get();
+    if(s.exists&&s.data().cutoff)S.cutoff=s.data().cutoff;
+    S.loaded=true;
+  }catch(e){console.warn('[Refund] không đọc được cấu hình mốc, dùng mặc định',e);}
+  return S;
+}
+function _rfE(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _rfN(n){return Math.round(n||0).toLocaleString();}
+function _rfDate(s){const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(s||'');return m?(m[3]+'/'+m[2]+'/'+m[1]):(s||'');}
+function _rfIsXK(r){return !!r&&String(r.jobNo||'').toUpperCase().indexOf('XK')===0;}
+function _rfIsCancelled(r){return r.status==='Cancel'||r.status==='Xóa CB';}
+// Lô thuộc diện BẮT BUỘC có COM/KB hoặc Non-RF trước khi khóa
+function _rfApplies(r){
+  if(!_rfIsXK(r)||_rfIsCancelled(r))return false;
+  const c=window._rfSettings.cutoff;
+  return !r.etd||!c||r.etd>=c;
+}
+// Danh sách dòng COM/KB (có người nhận) kèm số tiền thực chi VND
+function _rfRowsOf(r){
+  const out=[]; const roe=(_fxOverride(r)||r.roe||26390);
+  ['com','kb'].forEach(function(kind){
+    ((r.comKb&&r.comKb[kind])||[]).forEach(function(row,idx){
+      if(!row||!row.recipient)return;
+      const tt=_comKbThanhTien(row.amount,row.vol);
+      const vnd=_comKbThucChi(tt,row.cur||'USD',row.method||'20pct',roe);
+      out.push({kind:kind,idx:idx,row:row,tt:tt,cur:row.cur||'USD',vnd:vnd,paid:row.apPaidStatus==='paid'});
+    });
+  });
+  return out;
+}
+// "Đã fill" = có ít nhất 1 dòng có người nhận VÀ số tiền > 0
+function _rfFilled(r){return _rfRowsOf(r).some(function(x){return (parseFloat(x.row.amount)||0)>0;});}
+function _rfStatus(r){ if(_rfFilled(r))return 'filled'; if(r.nonRf)return 'nonrf'; return _rfApplies(r)?'missing':'optional'; }
+function _rfMissingMsg(r){
+  return 'Lô XK '+(r.jobNo||r.bookingNo||'')+' chưa có dữ liệu COM/KB'+(_rfRowsOf(r).length?' (các dòng đang để số tiền 0)':'')+'. Vào Fill giá → COM/KB để nhập, hoặc tick "Non-RF" nếu lô không có hoa hồng.';
+}
+
+// Tick / bỏ tick Non-RF (Admin + Accountant)
+async function rfSetNonRf(id,tt,on){
+  const role=currentProfile&&currentProfile.role;
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;});
+  function refresh(){_rfRefreshViews(id,tt);}
+  if(role!=='admin'&&role!=='accountant'){toast('Chỉ Admin hoặc Accountant được tick Non-RF','error');refresh();return;}
+  if(!r){toast('Không tìm thấy lô hàng','error');return;}
+  if(r.locked){toast('Lô đã khóa — mở khóa trước khi đổi Non-RF','error');refresh();return;}
+  if(on&&_rfFilled(r)){toast('Lô đã có COM/KB — không cần tick Non-RF (xóa dòng COM/KB trước nếu muốn đổi)','error');refresh();return;}
+  const data={nonRf:!!on,nonRfBy:currentUser.email,nonRfAt:Date.now()};
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet(colName(tt),id,Object.assign({updatedAt:Date.now(),updatedBy:currentUser.email},data));
+    Object.assign(r,data);
+    try{logLotEvent(id,tt,'update',on?'Tick Non-RF':'Bỏ tick Non-RF',on?'Lô không có hoàn hoa hồng COM/KB':'');}catch(e){}
+    toast((on?'Đã tick Non-RF: ':'Đã bỏ Non-RF: ')+(r.jobNo||r.bookingNo||''));
+  }catch(e){toast('Lỗi lưu Non-RF: '+e.message+(/permission/i.test(e.message||'')?' — cần cập nhật Firestore Rules (xem HUONG_DAN)':''),'error');}
+  setLoading(false);
+  refresh();
+}
+function _rfRefreshViews(id,tt){
+  try{ if(typeof currentTab!=='undefined'&&currentTab==='thu-chi'&&tcTab==='refund')renderTcBody(); }catch(e){}
+  try{ if(detailId===id&&detailTt===tt){const rr=(cache[tt]||[]).find(function(x){return x._id===id;}); if(rr)renderDetailPanel(rr,tt);} }catch(e){}
+}
+window.rfSetNonRf=rfSetNonRf;
+
+// Ô Non-RF trong hộp COM/KB của lô (chỉ lô XK)
+function _rfLotBoxHtml(r){
+  if(!_rfIsXK(r))return '';
+  const role=currentProfile&&currentProfile.role;
+  const filled=_rfFilled(r);
+  const canTick=(role==='admin'||role==='accountant')&&!r.locked&&!filled;
+  const st=_rfStatus(r);
+  const chip=st==='filled'?'<span class="rf-chip ok">Đã fill COM/KB</span>'
+    :st==='nonrf'?'<span class="rf-chip gray">Non-RF</span>'
+    :st==='missing'?'<span class="rf-chip bad">Thiếu data — chưa khóa được lô</span>'
+    :'<span class="rf-chip gray">Chưa fill (lô trước mốc, không bắt buộc)</span>';
+  return '<div class="rf-lotbox">'
+    +'<label class="rf-nrf"><input type="checkbox" id="rfNonRfChk" '+(r.nonRf&&!filled?'checked ':'')+(canTick?'':'disabled ')+'onchange="rfSetNonRf(detailId,detailTt,this.checked)"/> <b>Non-RF</b> — lô này không có hoa hồng (không COM, không KB)</label>'
+    +chip
+    +(_rfApplies(r)?'<span style="font-size:11px;color:var(--text-tertiary)">Bắt buộc fill COM/KB hoặc tick Non-RF trước khi khóa lô.</span>':'')
+    +((role==='admin'||role==='accountant')?'':'<span style="font-size:11px;color:var(--text-tertiary)">Chỉ Admin/Accountant tick Non-RF.</span>')
+  +'</div>';
+}
+
+/* ── TAB Finance → Refund data ── */
+window._rfState=window._rfState||{view:'list',from:null,to:'',recipient:'',carrier:'',shipper:'',status:'all',kind:'all',paid:'all',lock:'all',q:'',open:{}};
+function _rfSet(k,v){window._rfState[k]=v;renderTcBody();}
+function _rfReset(){const c=window._rfSettings.cutoff;window._rfState=Object.assign(window._rfState,{from:c,to:'',recipient:'',carrier:'',shipper:'',status:'all',kind:'all',paid:'all',lock:'all',q:''});renderTcBody();}
+function _rfToggleOpen(el){const k=el.dataset.k;const o=window._rfState.open;o[k]=!o[k];renderTcBody();}
+async function _rfSaveCutoff(){
+  if((currentProfile&&currentProfile.role)!=='admin'){toast('Chỉ Admin được đổi mốc áp dụng','error');return;}
+  const v=(g('rfCutoff')||{}).value||'';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){toast('Chọn ngày mốc hợp lệ','error');return;}
+  if(!confirm('Đặt mốc bắt buộc COM/KB / Non-RF = ETD từ '+_rfDate(v)+'?\nLô XK có ETD từ ngày này trở đi phải có COM/KB hoặc tick Non-RF mới khóa được.'))return;
+  setLoading(true,'Đang lưu...');
+  try{
+    await fsSet('_config','refundSettings',{cutoff:v,updatedAt:Date.now(),updatedBy:currentUser.email});
+    window._rfSettings.cutoff=v;window._rfSettings.loaded=true;
+    toast('Đã lưu mốc áp dụng: '+_rfDate(v));
+  }catch(e){toast('Lỗi: '+e.message,'error');}
+  setLoading(false);
+  renderTcBody();
+}
+
+function _rfCompute(){
+  const S=window._rfState;
+  const opt={recip:{},carrier:{},shipper:{}};
+  const lots=[];
+  (cache.xuat||[]).forEach(function(r){
+    if(!_rfIsXK(r)||_rfIsCancelled(r))return;
+    const all=_rfRowsOf(r);
+    all.forEach(function(x){opt.recip[x.row.recipient]=1;});
+    if(r.carrier)opt.carrier[r.carrier]=1;
+    const shp=r.shipper||r.supplier||''; if(shp)opt.shipper[shp]=1;
+    if(S.from&&(r.etd||'')<S.from)return;
+    if(S.to&&(r.etd||'')>S.to)return;
+    if(S.carrier&&r.carrier!==S.carrier)return;
+    if(S.shipper&&shp!==S.shipper)return;
+    if(S.lock==='locked'&&!r.locked)return;
+    if(S.lock==='open'&&r.locked)return;
+    if(S.q){
+      const hay=[r.jobNo,r.bookingNo,r.mblNo,shp,r.carrier,r.pod].join(' ').toLowerCase();
+      if(hay.indexOf(S.q.toLowerCase())<0)return;
+    }
+    const rows=all.filter(function(x){
+      if(S.kind!=='all'&&x.kind!==S.kind)return false;
+      if(S.recipient&&x.row.recipient!==S.recipient)return false;
+      if(S.paid==='paid'&&!x.paid)return false;
+      if(S.paid==='unpaid'&&x.paid)return false;
+      return true;
+    });
+    const rowFilter=S.kind!=='all'||S.recipient||S.paid!=='all';
+    if(rowFilter&&!rows.length)return;
+    const st=_rfStatus(r);
+    if(S.status!=='all'&&st!==S.status)return;
+    lots.push({r:r,st:st,rows:rows,shipper:shp});
+  });
+  lots.sort(function(a,b){return String(b.r.etd||'').localeCompare(String(a.r.etd||''))||String(b.r.jobNo||'').localeCompare(String(a.r.jobNo||''));});
+  return {lots:lots,opt:opt};
+}
+
+function _rfSelect(label,key,list,cur,w){
+  return '<label class="rf-f"><span>'+label+'</span><select onchange="_rfSet(\''+key+'\',this.value)" style="min-width:'+(w||130)+'px">'+list.map(function(o){return '<option value="'+_rfE(o[0])+'"'+(String(o[0])===String(cur)?' selected':'')+'>'+_rfE(o[1])+'</option>';}).join('')+'</select></label>';
+}
+function _rfPaidMark(x){return x.paid?'<i class="ti ti-circle-check" style="color:var(--green)" title="Đã thanh toán'+(x.row.apPaidDate?' '+_rfE(x.row.apPaidDate):'')+'"></i>':'<i class="ti ti-clock" style="color:var(--amber-text,#B45309)" title="Chưa thanh toán"></i>';}
+
+function renderTcRefund(){
+  const SS=window._rfSettings, S=window._rfState;
+  if(!SS.tried&&!window._rfLoading){
+    window._rfLoading=true;
+    _rfLoadSettings().then(function(){window._rfLoading=false; if(S.from==null)S.from=SS.cutoff; try{ if(currentTab==='thu-chi'&&tcTab==='refund')renderTcBody(); }catch(e){} });
+  }
+  if(S.from==null)S.from=SS.cutoff;
+  const D=_rfCompute(), lots=D.lots;
+  const isAdmin=(currentProfile&&currentProfile.role)==='admin';
+
+  // KPI
+  let nMissing=0,nFilled=0,nNon=0,total=0,unpaid=0,nOpt=0;
+  lots.forEach(function(L){
+    if(L.st==='missing')nMissing++; else if(L.st==='filled')nFilled++; else if(L.st==='nonrf')nNon++; else nOpt++;
+    L.rows.forEach(function(x){total+=x.vnd; if(!x.paid)unpaid+=x.vnd;});
+  });
+  const kpi='<div class="rf-kpis">'
+    +'<div class="rf-kpi"><div class="l">Lô XK trong bộ lọc</div><div class="v">'+lots.length+'</div></div>'
+    +'<div class="rf-kpi bad"><div class="l">Thiếu data (bắt buộc)</div><div class="v">'+nMissing+'</div></div>'
+    +'<div class="rf-kpi ok"><div class="l">Đã fill COM/KB</div><div class="v">'+nFilled+'</div></div>'
+    +'<div class="rf-kpi"><div class="l">Non-RF</div><div class="v">'+nNon+'</div></div>'
+    +'<div class="rf-kpi"><div class="l">Tổng thực chi (VND)</div><div class="v">'+_rfN(total)+'</div></div>'
+    +'<div class="rf-kpi warn"><div class="l">Chưa thanh toán (VND)</div><div class="v">'+_rfN(unpaid)+'</div></div>'
+  +'</div>';
+
+  const recipOpts=[['','Tất cả']].concat(Object.keys(D.opt.recip).sort().map(function(k){return [k,k];}));
+  const carrOpts=[['','Tất cả']].concat(Object.keys(D.opt.carrier).sort().map(function(k){return [k,k];}));
+  const shipOpts=[['','Tất cả']].concat(Object.keys(D.opt.shipper).sort().map(function(k){return [k,k];}));
+  const filters='<div class="rf-filter">'
+    +'<label class="rf-f"><span>ETD từ</span><input type="date" value="'+_rfE(S.from||'')+'" onchange="_rfSet(\'from\',this.value)"/></label>'
+    +'<label class="rf-f"><span>đến</span><input type="date" value="'+_rfE(S.to||'')+'" onchange="_rfSet(\'to\',this.value)"/></label>'
+    +_rfSelect('Người nhận','recipient',recipOpts,S.recipient,150)
+    +_rfSelect('Carrier','carrier',carrOpts,S.carrier,130)
+    +_rfSelect('Shipper','shipper',shipOpts,S.shipper,150)
+    +_rfSelect('Loại','kind',[['all','COM + KB'],['com','Chỉ COM'],['kb','Chỉ KB']],S.kind,100)
+    +_rfSelect('Thanh toán','paid',[['all','Tất cả'],['paid','Đã thanh toán'],['unpaid','Chưa thanh toán']],S.paid,120)
+    +_rfSelect('Trạng thái','status',[['all','Tất cả'],['missing','Thiếu data'],['filled','Đã fill'],['nonrf','Non-RF'],['optional','Trước mốc / chưa fill']],S.status,130)
+    +_rfSelect('Khóa lô','lock',[['all','Tất cả'],['open','Chưa khóa'],['locked','Đã khóa']],S.lock,100)
+    +'<label class="rf-f"><span>Tìm</span><input type="text" value="'+_rfE(S.q)+'" placeholder="Job / Booking / MBL…" onchange="_rfSet(\'q\',this.value.trim())" style="width:150px"/></label>'
+    +'<button class="btn sm" onclick="_rfReset()" title="Về bộ lọc mặc định"><i class="ti ti-filter-off"></i> Đặt lại</button>'
+  +'</div>';
+
+  const settingsBar='<div class="rf-cut"><i class="ti ti-info-circle"></i> Bắt buộc fill COM/KB hoặc tick Non-RF trước khi khóa lô: <b>lô XK có ETD từ '+_rfE(_rfDate(SS.cutoff))+'</b>'
+    +(isAdmin?' &nbsp;·&nbsp; Đổi mốc: <input type="date" id="rfCutoff" value="'+_rfE(SS.cutoff)+'"/> <button class="btn sm" onclick="_rfSaveCutoff()">Lưu mốc</button>':'')+'</div>';
+
+  const tabs='<div class="vr-tabs">'
+    +'<button class="vr-tab'+(S.view==='list'?' on':'')+'" onclick="_rfSet(\'view\',\'list\')"><i class="ti ti-list-details"></i>Danh sách lô XK<span class="cnt">'+lots.length+'</span></button>'
+    +'<button class="vr-tab'+(S.view==='report'?' on':'')+'" onclick="_rfSet(\'view\',\'report\')"><i class="ti ti-report-money"></i>Báo cáo theo người nhận</button>'
+  +'</div>';
+
+  const head='<div style="font-size:15px;font-weight:800;color:var(--text-primary);margin:1.1rem 0 .25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-gift" style="color:#7c3aed"></i> Refund data — COM / KB của lô XK</div>'
+    +'<div style="font-size:11.5px;color:var(--text-tertiary);margin-bottom:.8rem;line-height:1.5">Liệt kê COM (hoa hồng Sale line theo Carrier) và KB (hoa hồng Booking Party/Shipper) của mọi lô có Job ID bắt đầu bằng <b>XK</b>. Số tiền = “Số tiền thực chi” (VND) đã tính trong từng lô. Nhập/sửa COM/KB ở tab Fill giá của lô (bấm Job ID để mở).</div>';
+
+  const body=S.view==='report'?_rfReportHtml(lots):_rfListHtml(lots);
+  return head+settingsBar+kpi+filters+tabs+body;
+}
+
+function _rfListHtml(lots){
+  if(!lots.length)return '<div class="rf-empty">Không có lô XK nào khớp bộ lọc</div>';
+  const canTickRole=(currentProfile&&currentProfile.role)==='admin'||(currentProfile&&currentProfile.role)==='accountant';
+  function cell(L,kind){
+    const rs=L.rows.filter(function(x){return x.kind===kind;});
+    if(!rs.length)return '<span style="color:var(--text-tertiary)">—</span>';
+    return rs.map(function(x){return '<div class="rf-rc">'+_rfPaidMark(x)+'<span class="nm">'+_rfE(x.row.recipient)+'</span><b>'+_rfN(x.vnd)+'</b></div>';}).join('');
+  }
+  const chips={filled:'<span class="rf-chip ok">Đã fill</span>',nonrf:'<span class="rf-chip gray">Non-RF</span>',missing:'<span class="rf-chip bad">Thiếu data</span>',optional:'<span class="rf-chip gray" title="ETD trước mốc áp dụng — không bắt buộc">Chưa fill</span>'};
+  const trs=lots.map(function(L){
+    const r=L.r, sum=L.rows.reduce(function(s,x){return s+x.vnd;},0), np=L.rows.filter(function(x){return x.paid;}).length;
+    const filled=_rfFilled(r);
+    const chk='<input type="checkbox" '+(r.nonRf&&!filled?'checked ':'')+((canTickRole&&!r.locked&&!filled)?'':'disabled ')+'onchange="rfSetNonRf(\''+r._id+'\',\'xuat\',this.checked)" title="'+(filled?'Lô đã có COM/KB':(r.locked?'Lô đã khóa':'Tick nếu lô không có COM/KB'))+'"/>';
+    return '<tr class="'+(L.st==='missing'?'rf-miss':'')+'">'
+      +'<td><a class="rf-job" onclick="openDetail(\''+r._id+'\',\'xuat\',\'price\')">'+_rfE(r.jobNo||r.bookingNo||'—')+'</a><div class="rf-sub">'+_rfE(r.bookingNo||'')+'</div></td>'
+      +'<td>'+_rfE(_rfDate(r.etd))+'</td>'
+      +'<td>'+_rfE(r.carrier||'—')+'</td>'
+      +'<td>'+_rfE(L.shipper||'—')+'</td>'
+      +'<td>'+_rfE(r.pod||'')+'<div class="rf-sub">'+_rfE(r.vol||'')+' '+_rfE(r.typeCont||'')+'</div></td>'
+      +'<td>'+cell(L,'com')+'</td>'
+      +'<td>'+cell(L,'kb')+'</td>'
+      +'<td style="text-align:right;font-weight:700;color:var(--red)">'+(L.rows.length?_rfN(sum):'—')+(L.rows.length?'<div class="rf-sub">'+np+'/'+L.rows.length+' đã TT</div>':'')+'</td>'
+      +'<td style="text-align:center">'+chips[L.st]+'</td>'
+      +'<td style="text-align:center">'+chk+'</td>'
+      +'<td style="text-align:center">'+(r.locked?'<i class="ti ti-lock" style="color:var(--text-secondary)" title="Đã khóa"></i>':'<i class="ti ti-lock-open" style="color:var(--text-tertiary)" title="Chưa khóa"></i>')+'</td>'
+    +'</tr>';
+  }).join('');
+  return '<div class="rf-wrap"><table class="rf-tbl"><thead><tr>'
+    +'<th>Job ID</th><th>ETD</th><th>Carrier</th><th>Shipper</th><th>POD / Vol</th><th>COM (VND)</th><th>KB (VND)</th><th style="text-align:right">Tổng thực chi</th><th style="text-align:center">Trạng thái</th><th style="text-align:center" title="Lô không có hoa hồng COM/KB">Non-RF</th><th style="text-align:center">Khóa</th>'
+    +'</tr></thead><tbody>'+trs+'</tbody></table></div>'
+    +'<div class="rf-note"><i class="ti ti-clock"></i> = chưa thanh toán · <i class="ti ti-circle-check" style="color:var(--green)"></i> = đã thanh toán. Thanh toán hoa hồng thực hiện ở Debts (công nợ NCC).</div>';
+}
+
+function _rfReport(lots){
+  const map={};
+  lots.forEach(function(L){
+    L.rows.forEach(function(x){
+      if(!(x.vnd>0))return; // dòng chưa có số tiền không đưa vào báo cáo
+      const k=x.row.recipient;
+      const G=map[k]||(map[k]={name:k,partners:{},lots:{},com:0,kb:0,paid:0,unpaid:0,items:[]});
+      if(x.row.recipientPartner)G.partners[x.row.recipientPartner]=1;
+      G.lots[L.r._id]=1;
+      G[x.kind]+=x.vnd; if(x.paid)G.paid+=x.vnd; else G.unpaid+=x.vnd;
+      G.items.push({r:L.r,x:x});
+    });
+  });
+  return Object.keys(map).map(function(k){return map[k];}).sort(function(a,b){return (b.com+b.kb)-(a.com+a.kb);});
+}
+function _rfReportHtml(lots){
+  const S=window._rfState, G=_rfReport(lots);
+  if(!G.length)return '<div class="rf-empty">Chưa có dòng COM/KB nào khớp bộ lọc</div>';
+  const T={lots:{},com:0,kb:0,paid:0,unpaid:0};
+  const rowsHtml=G.map(function(g0){
+    Object.keys(g0.lots).forEach(function(id){T.lots[id]=1;}); T.com+=g0.com;T.kb+=g0.kb;T.paid+=g0.paid;T.unpaid+=g0.unpaid;
+    const open=!!S.open[g0.name];
+    let html='<tr class="rf-grp" data-k="'+_rfE(g0.name)+'" onclick="_rfToggleOpen(this)">'
+      +'<td><i class="ti '+(open?'ti-chevron-down':'ti-chevron-right')+'"></i> <b>'+_rfE(g0.name)+'</b><div class="rf-sub">'+_rfE(Object.keys(g0.partners).join(', '))+'</div></td>'
+      +'<td style="text-align:right">'+Object.keys(g0.lots).length+'</td>'
+      +'<td style="text-align:right">'+_rfN(g0.com)+'</td>'
+      +'<td style="text-align:right">'+_rfN(g0.kb)+'</td>'
+      +'<td style="text-align:right;font-weight:800;color:var(--red)">'+_rfN(g0.com+g0.kb)+'</td>'
+      +'<td style="text-align:right;color:var(--green-dark,#0F6E56)">'+_rfN(g0.paid)+'</td>'
+      +'<td style="text-align:right;color:var(--amber-text,#B45309);font-weight:700">'+_rfN(g0.unpaid)+'</td>'
+    +'</tr>';
+    if(open){
+      const its=g0.items.slice().sort(function(a,b){return String(b.r.etd||'').localeCompare(String(a.r.etd||''));});
+      html+='<tr class="rf-det"><td colspan="7"><table class="rf-sub-tbl"><thead><tr><th>Job ID</th><th>ETD</th><th>Carrier</th><th>Shipper</th><th>Loại</th><th style="text-align:right">Thành tiền</th><th style="text-align:right">Thực chi (VND)</th><th>Thanh toán</th></tr></thead><tbody>'
+        +its.map(function(it){const x=it.x;
+          return '<tr><td><a class="rf-job" onclick="event.stopPropagation();openDetail(\''+it.r._id+'\',\'xuat\',\'price\')">'+_rfE(it.r.jobNo||it.r.bookingNo||'')+'</a></td>'
+            +'<td>'+_rfE(_rfDate(it.r.etd))+'</td><td>'+_rfE(it.r.carrier||'')+'</td><td>'+_rfE(it.r.shipper||it.r.supplier||'')+'</td>'
+            +'<td><span class="rf-chip '+(x.kind==='com'?'blue':'purple')+'">'+x.kind.toUpperCase()+'</span></td>'
+            +'<td style="text-align:right">'+_rfN(x.tt)+' '+_rfE(x.cur)+'</td>'
+            +'<td style="text-align:right;font-weight:700">'+_rfN(x.vnd)+'</td>'
+            +'<td>'+(x.paid?'<span class="rf-chip ok">Đã TT'+(x.row.apPaidDate?' '+_rfE(x.row.apPaidDate):'')+'</span>':'<span class="rf-chip warn">Chưa TT</span>')+'</td></tr>';
+        }).join('')+'</tbody></table></td></tr>';
+    }
+    return html;
+  }).join('');
+  const foot='<tr class="rf-tot"><td><b>TỔNG ('+G.length+' người nhận)</b></td><td style="text-align:right">'+Object.keys(T.lots).length+'</td><td style="text-align:right">'+_rfN(T.com)+'</td><td style="text-align:right">'+_rfN(T.kb)+'</td><td style="text-align:right;color:var(--red)">'+_rfN(T.com+T.kb)+'</td><td style="text-align:right">'+_rfN(T.paid)+'</td><td style="text-align:right">'+_rfN(T.unpaid)+'</td></tr>';
+  return '<div class="rf-wrap"><table class="rf-tbl"><thead><tr><th>Người nhận</th><th style="text-align:right">Số lô</th><th style="text-align:right">COM (VND)</th><th style="text-align:right">KB (VND)</th><th style="text-align:right">Tổng thực chi (VND)</th><th style="text-align:right">Đã thanh toán</th><th style="text-align:right">Chưa thanh toán</th></tr></thead><tbody>'+rowsHtml+foot+'</tbody></table></div>'
+    +'<div class="rf-note">Bấm vào từng người nhận để xem chi tiết các lô. Báo cáo theo đúng bộ lọc ở trên (ETD, Carrier, Shipper, Loại, Thanh toán…).</div>';
+}
+Object.assign(window,{renderTcRefund,_rfSet,_rfReset,_rfToggleOpen,_rfSaveCutoff,_rfLoadSettings,_rfApplies,_rfStatus,_rfFilled});
+
 // Persist the current SVCS catalog to Firestore
 async function saveServices(){
   // QUAN TRỌNG: loại bỏ entry lotScoped (dịch vụ tạo tạm từ trong 1 lô hàng cụ thể — thêm dịch vụ
@@ -1274,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.57';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.58';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -8270,6 +8568,7 @@ function _comKbBoxHtml(r){
   }
   return '<div style="margin-top:1.75rem;padding-top:1.25rem;border-top:2px dashed var(--border-light)">'
     +'<div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;display:flex;align-items:center;gap:6px"><i class="ti ti-gift" style="font-size:13px;color:#7c3aed"></i>COM / KB — Hoa hồng</div>'
+    +_rfLotBoxHtml(r)
     +section('com','COM','hoa hồng Sale line — theo Carrier '+(r.carrier?('«'+r.carrier+'»'):'(lô chưa có Carrier)'),comContacts,comRows)
     +section('kb','KB','hoa hồng Booking Party/Shipper — theo '+([r.bookingParty,r.shipper||r.supplier].filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;}).map(function(v){return '«'+v+'»';}).join(', ')||'(lô chưa có Booking Party/Shipper)'),kbContacts,kbRows)
     +'<div style="display:flex;justify-content:flex-end"><button class="btn pri" onclick="saveComKb()" style="background:#7c3aed;border-color:#7c3aed"><i class="ti ti-check"></i> Lưu COM/KB</button></div>'
@@ -8400,10 +8699,14 @@ async function saveComKb(){
   });});
   setLoading(true,'Đang lưu COM/KB...');
   try{
-    await fsSet(colName(_ckTt),_ckId,{comKb:{com:com,kb:kb},updatedAt:Date.now(),updatedBy:currentUser.email});
+    const _ckData={comKb:{com:com,kb:kb},updatedAt:Date.now(),updatedBy:currentUser.email};
+    // A 2.58: đã có dòng COM/KB có số tiền thì bỏ cờ Non-RF (2 trạng thái loại trừ nhau)
+    const _ckFilled=com.concat(kb).some(function(x){return x.recipient&&(parseFloat(x.amount)||0)>0;});
+    if(_ckFilled&&rChk.nonRf)_ckData.nonRf=false;
+    await fsSet(colName(_ckTt),_ckId,_ckData);
     toast('Đã lưu COM/KB — '+(com.length+kb.length)+' người nhận'+(_paidChanged?' · LƯU Ý: '+_paidChanged+' dòng đã thanh toán bị đổi số tiền — kiểm tra lại Sổ quỹ':''),_paidChanged?'error':undefined);
     const fresh=cache[_ckTt].find(function(x){return x._id===_ckId;});
-    if(fresh){fresh.comKb={com:com,kb:kb};}
+    if(fresh){fresh.comKb={com:com,kb:kb}; if(_ckData.nonRf===false)fresh.nonRf=false;}
     if(detailId===_ckId && detailTt===_ckTt){
       renderDetailPanel(cache[_ckTt].find(function(x){return x._id===_ckId;})||{},_ckTt);
     }
@@ -13132,6 +13435,7 @@ function renderThuChi(){
   const tabs=[
     {k:'soquy',label:'Cash Book',icon:'ti-cash-banknote'},
     {k:'congno',label:'Debts',icon:'ti-receipt'},
+    {k:'refund',label:'Refund data',icon:'ti-gift'},
     {k:'luong',label:'Payroll',icon:'ti-users-group'},
     {k:'danhmuc',label:'Categories',icon:'ti-category'},
     {k:'baocao',label:'Financial Report',icon:'ti-chart-line'},
@@ -15076,6 +15380,7 @@ function renderTcBody(){
       body.innerHTML=renderDebtReportV3();
       if(window._debtV3&&window._debtV3.drawerOpen)_dv3RenderDrawer();
     }
+    else if(tcTab==='refund') body.innerHTML=renderTcRefund();
     else if(tcTab==='danhmuc') body.innerHTML=renderTcDanhMuc();
     else if(tcTab==='baocao') body.innerHTML=renderTcBaoCao();
     else if(tcTab==='vat') body.innerHTML=renderTcVat();
@@ -24741,6 +25046,47 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .tcbc-catbar-track{background:var(--bg-secondary);border-radius:10px;height:7px;overflow:hidden}
 .tcbc-catbar-fill{display:block;height:100%;border-radius:10px}
 
+/* ═══ REFUND DATA (A 2.58) ═══ */
+.rf-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.rf-kpi{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:10px;padding:10px 12px}
+.rf-kpi .l{font-size:10.5px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.3px}
+.rf-kpi .v{font-size:20px;font-weight:800;color:var(--text-primary);margin-top:3px;font-variant-numeric:tabular-nums}
+.rf-kpi.bad .v{color:var(--red)} .rf-kpi.ok .v{color:var(--green-dark,#0F6E56)} .rf-kpi.warn .v{color:var(--amber-text,#B45309)}
+.rf-filter{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;margin-bottom:12px}
+.rf-f{display:flex;flex-direction:column;gap:3px;font-size:10.5px;font-weight:600;color:var(--text-secondary)}
+.rf-f select,.rf-f input{font-size:12px;padding:5px 7px}
+.rf-f input[type=date]{width:142px}
+.rf-cut{font-size:11.5px;color:var(--text-secondary);background:rgba(124,58,237,.07);border:1px solid rgba(124,58,237,.2);border-radius:8px;padding:7px 11px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.rf-cut input{font-size:12px;padding:3px 6px;width:150px;flex:0 0 150px}
+.rf-wrap{overflow-x:auto;border:1px solid var(--border-light);border-radius:10px;background:var(--bg-primary)}
+.rf-tbl{width:100%;border-collapse:collapse;min-width:980px;font-size:12px}
+.rf-tbl th{padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--text-secondary);background:var(--bg-secondary);border-bottom:1px solid var(--border-light);white-space:nowrap}
+.rf-tbl td{padding:7px 10px;border-bottom:1px solid var(--border-light);vertical-align:top}
+.rf-tbl tr.rf-miss td{background:rgba(220,38,38,.045)}
+.rf-job{font-weight:700;color:var(--blue);cursor:pointer}
+.rf-job:hover{text-decoration:underline}
+.rf-sub{font-size:10.5px;color:var(--text-tertiary);margin-top:1px}
+.rf-rc{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.rf-rc .nm{max-width:130px;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)}
+.rf-rc b{margin-left:auto;font-variant-numeric:tabular-nums;padding-left:8px}
+.rf-chip{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:20px;white-space:nowrap}
+.rf-chip.ok{background:var(--green-bg);color:var(--green-dark)}
+.rf-chip.bad{background:rgba(220,38,38,.12);color:var(--red)}
+.rf-chip.warn{background:rgba(234,179,8,.16);color:var(--amber-text,#B45309)}
+.rf-chip.gray{background:rgba(127,127,127,.16);color:var(--text-secondary)}
+.rf-chip.blue{background:rgba(37,99,235,.12);color:var(--blue)}
+.rf-chip.purple{background:rgba(124,58,237,.12);color:#7c3aed}
+.rf-grp{cursor:pointer} .rf-grp:hover td{background:var(--bg-secondary)}
+.rf-tot td{font-weight:700;background:var(--bg-secondary)}
+.rf-det>td{padding:0 0 0 26px;background:var(--bg-secondary)}
+.rf-sub-tbl{width:100%;border-collapse:collapse;font-size:11.5px}
+.rf-sub-tbl th{padding:6px 10px;text-align:left;font-size:9.5px;text-transform:uppercase;color:var(--text-tertiary);border-bottom:1px solid var(--border-light)}
+.rf-sub-tbl td{padding:5px 10px;border-bottom:1px dashed var(--border-light)}
+.rf-empty{text-align:center;padding:2.5rem 1rem;color:var(--text-tertiary);font-size:12.5px;border:1px dashed var(--border-light);border-radius:10px}
+.rf-note{font-size:11px;color:var(--text-tertiary);margin-top:8px}
+.rf-lotbox{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:8px 12px;margin-bottom:12px;border:1px solid rgba(124,58,237,.25);background:rgba(124,58,237,.06);border-radius:8px}
+.rf-nrf{display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer}
+
 /* ═══ VAT REPORT (A 2.33) ═══ */
 .vr-main{display:grid;grid-template-columns:1.7fr 1fr;gap:14px;margin-bottom:14px}
 .vr-two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
@@ -31571,6 +31917,9 @@ async function toggleLotLock(id, tt){
     if(activeKeys.length===0){toast('Lô hàng chưa có dịch vụ nào được bật','error');return;}
     const unfinished=activeKeys.filter(function(k){return !svcs[k].finish;});
     if(unfinished.length>0){toast('Còn '+unfinished.length+' dịch vụ chưa tick Finish','error');return;}
+    // A 2.58: lô XK (ETD từ mốc) phải có COM/KB hoặc tick Non-RF mới khóa được
+    try{ await _rfLoadSettings(); }catch(e){}
+    if(_rfApplies(r)&&_rfStatus(r)==='missing'){toast(_rfMissingMsg(r),'error');return;}
   }
   setLoading(true,newLocked?'Đang khóa...':'Đang mở khóa...');
   try{
