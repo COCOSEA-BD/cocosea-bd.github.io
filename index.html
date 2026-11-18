@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.58';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.59';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -40720,14 +40720,14 @@ function showDelayNotice(id,tt){
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-        <div><label style="${lbS}">ETD mới (delay)</label><input type="date" id="dnNewEtd" value="${r.etd||''}" style="${iS}"/></div>
-        <div><label style="${lbS}">ETA mới</label><input type="date" id="dnNewEta" value="${r.eta||''}" style="${iS}"/></div>
+        <div><label style="${lbS}">ETD mới (delay)</label><input type="date" id="dnNewEtd" value="${r.etd||''}" onchange="_dnEtdChanged()" style="${iS}"/></div>
+        <div><label style="${lbS}">ETA mới <span id="dnEtaHint" style="font-weight:500;color:var(--text-tertiary)"></span></label><input type="date" id="dnNewEta" value="${r.eta||''}" onchange="_dnEtaManual()" style="${iS}"/></div>
       </div>
       <div style="margin-bottom:10px"><label style="${lbS}">Lý do delay</label>
         <input type="text" id="dnReason" placeholder="VD: Tàu trễ lịch, thời tiết xấu, cảng tắc nghẽn..." style="${iS}"/>
       </div>
       <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-        <button class="btn sm" onclick="_dnGenText()" style="background:#D97706;border-color:#D97706;color:#fff;font-size:12px"><i class="ti ti-refresh"></i> Cập nhật nội dung</button>
+        <button class="btn sm" onclick="_dnRefresh()" style="background:#D97706;border-color:#D97706;color:#fff;font-size:12px"><i class="ti ti-refresh"></i> Cập nhật nội dung</button>
       </div>
     </div>
     <!-- Tab bar -->
@@ -40751,6 +40751,32 @@ function showDelayNotice(id,tt){
   openOv('dnOv');
 }
 window.showDelayNotice=showDelayNotice;
+
+// A 2.59: ETD mới ⇒ tự tính lại ETA mới (ETD mới + T/T của POD lô, Leg 2 = T/T leg 1 + leg 2) rồi cập nhật nội dung thông báo
+function _dnCalcEta(r,newEtd){
+  if(!newEtd)return {eta:'',tt:null};
+  const v=_vesselFindForLot(r);
+  let eta='';
+  if(v){ eta=_vesselLotEtaFromDoc(_vesselRecalcEtaDoc(v,newEtd),r,r.etd||v.etd||'',newEtd); }
+  else if(r.eta&&r.etd){ eta=_dnShiftDate(r.eta,_dnDayDiff(r.etd,newEtd)); }
+  return {eta:eta,tt:eta?_dnDayDiff(newEtd,eta):null};
+}
+function _dnApplyEta(force){
+  const id=window._dnId; const tt=window._dnTt;
+  const r=(cache[tt]||[]).find(function(x){return x._id===id;})||{};
+  const etdEl=g('dnNewEtd'), etaEl=g('dnNewEta'); if(!etdEl||!etaEl)return;
+  if(!force&&etaEl.dataset.manual==='1')return;
+  const c=_dnCalcEta(r,etdEl.value);
+  const hint=g('dnEtaHint');
+  if(c.eta){
+    etaEl.value=c.eta; etaEl.dataset.manual='';
+    if(hint)hint.textContent='(tự tính = ETD mới + '+c.tt+' ngày)';
+  } else if(hint){ hint.textContent='(chưa có T/T để tự tính — nhập tay)'; }
+}
+function _dnEtdChanged(){ _dnApplyEta(true); _dnGenText(); }
+function _dnEtaManual(){ const e=g('dnNewEta'); if(e)e.dataset.manual='1'; const h=g('dnEtaHint'); if(h)h.textContent='(nhập tay)'; _dnGenText(); }
+function _dnRefresh(){ _dnApplyEta(false); _dnGenText(); }
+Object.assign(window,{_dnCalcEta,_dnApplyEta,_dnEtdChanged,_dnEtaManual,_dnRefresh});
 
 function _dnGenText(){
   const id=window._dnId; const tt=window._dnTt;
@@ -40904,45 +40930,60 @@ async function _dnSyncVessel(){
   setLoading(true,'Đang cập nhật Vessel Tool...');
   try{
     const vesUpdate={updatedAt:Date.now(),updatedBy:(currentUser&&currentUser.email)||''};
+    const _oldEtd=v.etd||'';
     if(newEtd) vesUpdate.etd=newEtd;
 
-    // Cập nhật ETA trong pods[] — tìm pod trùng r.pod, fallback: pod đầu tiên
+    // A 2.59: ETD đổi ⇒ tính lại ETA mọi cảng của tàu (ETD mới + T/T); ETA người dùng nhập tay cho cảng của lô này được ưu tiên.
+    // Không đổi ETD ⇒ chỉ ghi ETA nhập tay cho cảng của lô này (như trước, nay cập nhật cả Leg 1/Leg 2).
+    const _etdChanged=!!newEtd&&newEtd!==_oldEtd;
+    const _doc=_etdChanged?_vesselRecalcEtaDoc(v,newEtd):{
+      leg1:Array.isArray(v.leg1)&&v.leg1.length?JSON.parse(JSON.stringify(v.leg1)):null,
+      pods:JSON.parse(JSON.stringify(v.pods||[])),
+      transships:JSON.parse(JSON.stringify(v.transships||[]))
+    };
     if(newEta){
-      const pods=JSON.parse(JSON.stringify(v.pods||[]));
-      const podTarget=(r.pod||'').trim().toUpperCase();
-      let matched=false;
-      pods.forEach(function(p){
-        if((p.pod||'').trim().toUpperCase()===podTarget){p.eta=newEta;matched=true;}
-      });
-      if(!matched&&pods.length) pods[0].eta=newEta;
-      if(pods.length) vesUpdate.pods=pods;
+      const hit=_vesselSetPodEta(_doc,r.pod,newEta);
+      if(!hit&&_doc.pods.length)_doc.pods[0].eta=newEta;
+    }
+    if(_etdChanged||newEta){
+      if(_doc.pods.length)vesUpdate.pods=_doc.pods;
+      if(_doc.leg1)vesUpdate.leg1=_doc.leg1;
+      if(_doc.transships.length)vesUpdate.transships=_doc.transships;
     }
 
     await db.collection('vessels').doc(v._id).update(vesUpdate);
 
-    // Sync ETD (và ETA nếu có) sang tất cả lô hàng cùng tàu + chuyến
+    // Sync ETD + ETA (theo POD từng lô) sang tất cả lô hàng cùng tàu + chuyến
     const lotUpdate={updatedAt:Date.now(),updatedBy:(currentUser&&currentUser.email)||''};
     if(newEtd) lotUpdate.etd=newEtd;
-    if(newEta) lotUpdate.eta=newEta;
 
     const toBatch=[];
     (cache.xuat||[]).forEach(function(l){
       if((l.vessel||'').trim().toUpperCase()===vesName&&(l.voy||'').trim()===voy)
-        toBatch.push({col:'lots_xuat',id:l._id});
+        toBatch.push({col:'lots_xuat',id:l._id,lot:l});
     });
     (cache.nhap||[]).forEach(function(l){
       if((l.vessel||'').trim().toUpperCase()===vesName&&(l.voy||'').trim()===voy)
-        toBatch.push({col:'lots_nhap',id:l._id});
+        toBatch.push({col:'lots_nhap',id:l._id,lot:l});
+    });
+    toBatch.forEach(function(x){
+      const u=Object.assign({},lotUpdate);
+      let e=(_etdChanged||newEta)?_vesselLotEtaFromDoc(_doc,x.lot,_oldEtd,newEtd||_oldEtd):'';
+      if(!e&&newEta&&String(x.lot.pod||'').trim().toUpperCase()===String(r.pod||'').trim().toUpperCase())e=newEta;
+      if(e)u.eta=e;
+      if(_etdChanged&&(x.lot.transships||[]).length)u.transships=_vesselLotTsFromDoc(_doc,x.lot,newEtd);
+      x.upd=u;
     });
 
     if(toBatch.length){
       for(var i=0;i<toBatch.length;i+=400){
         var bt=db.batch();
         toBatch.slice(i,i+400).forEach(function(x){
-          bt.update(db.collection(x.col).doc(x.id),lotUpdate);
+          bt.update(db.collection(x.col).doc(x.id),x.upd);
         });
         await bt.commit();
       }
+      toBatch.forEach(function(x){ try{Object.assign(x.lot,x.upd);}catch(e){} });
       toast('Đã cập nhật Vessel Tool + '+toBatch.length+' lô hàng','success');
     } else {
       toast('Đã cập nhật Vessel Tool','success');
@@ -45433,10 +45474,11 @@ function _vtDnBuildFormHtml(voyId,v,lots,podFirst,fmtDate,title){
       +'</div>'
       // New values inputs
       +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">'
-        +'<div><label style="'+lbS+'">ETD mới</label><input type="date" id="vtDnEtd" value="'+(v.etd||'')+'" style="'+iS+'"/></div>'
+        +'<div><label style="'+lbS+'">ETD mới</label><input type="date" id="vtDnEtd" value="'+(v.etd||'')+'" oninput="_vtDnEtaPreview(\''+voyId+'\')" onchange="_vtDnEtaPreview(\''+voyId+'\')" style="'+iS+'"/></div>'
         +'<div><label style="'+lbS+'">CY Cutoff mới</label><input type="datetime-local" id="vtDnCy" value="'+toDatetimeLocal(v.cutoffCY||'')+'" style="'+iS+'"/></div>'
         +'<div><label style="'+lbS+'">SI Cutoff mới</label><input type="datetime-local" id="vtDnSi" value="'+toDatetimeLocal(v.cutoffSI||'')+'" style="'+iS+'"/></div>'
       +'</div>'
+      +'<div id="vtDnEtaPrev" style="margin-bottom:12px">'+_vtDnEtaPreviewHtml(v,v.etd||'')+'</div>'
       +'<div style="margin-bottom:16px"><label style="'+lbS+'">Lý do delay (tuỳ chọn)</label>'
         +'<input type="text" id="vtDnReason" placeholder="VD: Tàu trễ lịch, thời tiết xấu..." style="'+iS+'"/>'
       +'</div>'
@@ -45448,6 +45490,30 @@ function _vtDnBuildFormHtml(voyId,v,lots,podFirst,fmtDate,title){
   +'</div>';
 }
 window._vtDnBuildFormHtml=_vtDnBuildFormHtml;
+
+// A 2.59: xem trước ETA tự tính lại (ETD mới + T/T từng cảng) ngay trong form Delay Notice theo tàu
+function _vtDnEtaPreviewHtml(v,newEtd){
+  const fmt=function(x){return x?x.split('-').reverse().join('/'):'—';};
+  if(!newEtd)return '';
+  const doc=_vesselRecalcEtaDoc(v,newEtd);
+  const oldMap={}; (v.pods||[]).forEach(function(p){oldMap[String(p.pod||'').toLowerCase()]=p.eta||'';});
+  const changed=newEtd!==(v.etd||'');
+  const rows=(doc.pods||[]).filter(function(p){return p.pod;}).map(function(p){
+    const old=oldMap[String(p.pod).toLowerCase()]||'';
+    const tt=(p.tt!==''&&p.tt!=null)?(' <span style="color:var(--text-tertiary)">· T/T '+p.tt+' ngày</span>'):'';
+    return '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:2px 0"><b style="min-width:120px">'+(p.pod||'')+(p.via?' <span style="font-weight:400;color:#C2410C">(via '+p.via+')</span>':'')+'</b>'
+      +'<span>ETA: '+(changed&&old&&old!==p.eta?'<span style="color:var(--text-tertiary);text-decoration:line-through">'+fmt(old)+'</span> → ':'')+'<b style="color:var(--blue)">'+fmt(p.eta)+'</b>'+tt+'</span></div>';
+  }).join('');
+  if(!rows)return '';
+  return '<div style="background:rgba(26,75,140,.06);border:1px solid rgba(26,75,140,.2);border-radius:10px;padding:8px 12px;font-size:12px">'
+    +'<div style="font-weight:700;color:var(--text-secondary);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px"><i class="ti ti-calendar-event"></i> ETA tự tính lại theo ETD mới + T/T (sẽ cập nhật vào tàu, các lô và thông báo)</div>'+rows+'</div>';
+}
+function _vtDnEtaPreview(voyId){
+  const v=(cache.vessels||[]).find(function(x){return x._id===voyId;}); if(!v)return;
+  const el=document.getElementById('vtDnEtaPrev'); if(!el)return;
+  el.innerHTML=_vtDnEtaPreviewHtml(v,(document.getElementById('vtDnEtd')||{}).value||'');
+}
+window._vtDnEtaPreviewHtml=_vtDnEtaPreviewHtml; window._vtDnEtaPreview=_vtDnEtaPreview;
 
 async function _vtDnSave(voyId){
   const v=(cache.vessels||[]).find(function(x){return x._id===voyId;});
@@ -45477,6 +45543,15 @@ async function _vtDnSave(voyId){
       etdOld,etdNew,cyOld,cyNew:cyNew||cyOld,siOld,siNew:siNew||siOld,reason
     }]);
     upd.delayHistory=delayHistory;
+    // A 2.59: ETD đổi ⇒ tính lại ETA từng cảng (ETD mới + T/T) cho tàu; sẽ dùng tiếp cho các lô + nội dung thông báo
+    let _etaDoc=null;
+    if(etdNew&&etdNew!==etdOld){
+      _etaDoc=_vesselRecalcEtaDoc(v,etdNew);
+      if(_etaDoc.pods.length)upd.pods=_etaDoc.pods;
+      if(_etaDoc.leg1)upd.leg1=_etaDoc.leg1;
+      if(_etaDoc.transships.length)upd.transships=_etaDoc.transships;
+      delayHistory[delayHistory.length-1].etaRecalc=true;
+    }
     await fsSet('vessels',voyId,upd);
     // Đồng bộ ETD / CY Cutoff / SI Cutoff xuống tất cả lô hàng trên tàu này
     const _dvLots=_findLotsForVessel(v.vessel,v.voy);
@@ -45488,11 +45563,20 @@ async function _vtDnSave(voyId){
       if(Object.keys(_dvUpd).length>2){
         for(let _di=0;_di<_dvLots.length;_di++){
           const _do=_dvLots[_di];
-          await fsSet(_do.tt==='xuat'?'lots_xuat':'lots_nhap',_do.r._id,_dvUpd);
+          const _lu=Object.assign({},_dvUpd);
+          // A 2.59: ETA của lô theo POD của lô (+ ETA cảng chuyển tải của lô)
+          if(_etaDoc){
+            const _le=_vesselLotEtaFromDoc(_etaDoc,_do.r,etdOld,etdNew);
+            if(_le)_lu.eta=_le;
+            if((_do.r.transships||[]).length)_lu.transships=_vesselLotTsFromDoc(_etaDoc,_do.r,etdNew);
+          }
+          await fsSet(_do.tt==='xuat'?'lots_xuat':'lots_nhap',_do.r._id,_lu);
           // Cập nhật cache ngay, không cần reload
           if(etdNew)_do.r.etd=etdNew;
           if(cyNew)_do.r.cutoffCY=cyNew;
           if(siNew)_do.r.cutoffSI=siNew;
+          if(_lu.eta)_do.r.eta=_lu.eta;
+          if(_lu.transships)_do.r.transships=_lu.transships;
         }
         toast('Đã cập nhật lịch tàu + '+_dvLots.length+' lô hàng');
       } else {
@@ -45856,6 +45940,90 @@ window._vtDropOnVoyage=_vtDropOnVoyage;
      kèm via/tt1/tt2) và v.transships (các cảng chuyển tải) để mọi chức năng cũ đọc v.pods / v.transships chạy y nguyên.
    ═══════════════════════════════════════════════════════════════════════════ */
 function _vlNum(x){ if(x===''||x==null)return null; const n=parseFloat(x); return isNaN(n)?null:n; }
+/* ═══════════════════════════════════════════════════════════════════════════
+   A 2.59 — Delay Notice: ETD mới ⇒ TÍNH LẠI ETA (ETD mới + T/T của từng cảng, Leg 2 = T/T leg 1 + leg 2)
+   _vesselRecalcEtaDoc(v,newEtd) → {leg1,pods,transships} đã tính lại ETA (không ghi gì). Cảng thiếu T/T: dời ETA cũ theo số ngày ETD đổi.
+═══════════════════════════════════════════════════════════════════════════ */
+function _dnShiftDate(str,days){
+  if(!str||!days)return str||'';
+  const d=new Date(String(str).slice(0,10)+'T00:00:00'); if(isNaN(d))return str;
+  d.setDate(d.getDate()+Math.round(days));
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _dnDayDiff(a,b){
+  if(!a||!b)return 0;
+  const x=new Date(String(a).slice(0,10)+'T00:00:00'), y=new Date(String(b).slice(0,10)+'T00:00:00');
+  if(isNaN(x)||isNaN(y))return 0;
+  return Math.round((y-x)/86400000);
+}
+function _vesselRecalcEtaDoc(v,newEtd){
+  const clone=function(o){return JSON.parse(JSON.stringify(o||[]));};
+  const out={leg1:null,pods:[],transships:[]};
+  if(!v)return out;
+  const delta=_dnDayDiff(v.etd,newEtd);
+  const calc=function(tt,oldEta){
+    if(_vlNum(tt)!=null&&newEtd){const e=_vesselCalcEta(newEtd,tt); if(e)return e;}
+    return oldEta?_dnShiftDate(oldEta,delta):(oldEta||'');
+  };
+  const recalcT=function(t){ t.eta=calc(t.tt,t.eta); return t; };
+  if(Array.isArray(v.leg1)&&v.leg1.length){
+    const leg1=clone(v.leg1);
+    leg1.forEach(function(row){
+      row.eta=calc(row.tt,row.eta);
+      (row.legs2||[]).forEach(function(x){
+        const tot=_vesselLegTotal(row.tt,x.tt);
+        x.eta=calc(tot,x.eta);
+      });
+    });
+    const flat=_vesselDeriveFlat({leg1:leg1,legacyTs:[]});
+    out.leg1=leg1; out.pods=flat.pods; out.transships=flat.transships;
+    if(!out.transships.length&&(v.transships||[]).length)out.transships=clone(v.transships).map(recalcT);
+  } else {
+    out.pods=clone(v.pods).map(function(p){ p.eta=calc(p.tt,p.eta); return p; });
+    out.transships=clone(v.transships).map(recalcT);
+  }
+  return out;
+}
+// Ghi đè ETA của 1 cảng đến (POD) trong doc đã tính lại (người dùng nhập tay ETA riêng cho cảng đó)
+function _vesselSetPodEta(doc,pod,eta){
+  const k=String(pod||'').trim().toLowerCase(); if(!doc||!k||!eta)return false;
+  let hit=false;
+  (doc.pods||[]).forEach(function(p){ if(String(p.pod||'').trim().toLowerCase()===k){p.eta=eta;hit=true;} });
+  (doc.leg1||[]).forEach(function(row){
+    const l2=(row.legs2||[]);
+    l2.forEach(function(x){ if(String(x.pod||'').trim().toLowerCase()===k)x.eta=eta; });
+    if(String(row.pod||'').trim().toLowerCase()===k){ row.eta=eta; hit=true; (doc.transships||[]).forEach(function(t){ if(String(t.port||'').trim().toLowerCase()===k)t.eta=eta; }); }
+  });
+  return hit;
+}
+// ETA của 1 lô theo doc (POD đích → cảng chuyển tải nếu POD là hub → dời theo số ngày ETD đổi)
+function _vesselLotEtaFromDoc(doc,lot,oldEtd,newEtd){
+  const k=String((lot&&lot.pod)||'').trim().toLowerCase();
+  if(k){
+    const p=(doc.pods||[]).find(function(x){return String(x.pod||'').trim().toLowerCase()===k;});
+    if(p&&p.eta)return p.eta;
+    const h=(doc.transships||[]).find(function(t){return String(t.port||'').trim().toLowerCase()===k;});
+    if(h&&h.eta)return h.eta;
+  }
+  if(lot&&lot.eta&&oldEtd&&newEtd)return _dnShiftDate(lot.eta,_dnDayDiff(oldEtd,newEtd));
+  return '';
+}
+// Cảng chuyển tải của lô (r.transships) theo doc/T/T
+function _vesselLotTsFromDoc(doc,lot,newEtd){
+  return (lot.transships||[]).map(function(t){
+    const o=Object.assign({},t); const k=String(t.port||'').trim().toLowerCase();
+    const h=(doc.transships||[]).find(function(x){return String(x.port||'').trim().toLowerCase()===k;});
+    if(h&&h.eta)o.eta=h.eta;
+    else if(_vlNum(t.tt)!=null&&newEtd){const e=_vesselCalcEta(newEtd,t.tt); if(e)o.eta=e;}
+    return o;
+  });
+}
+function _vesselFindForLot(r){
+  const vn=String((r&&r.vessel)||'').trim().toUpperCase(), vy=String((r&&r.voy)||'').trim();
+  if(!vn)return null;
+  return (cache.vessels||[]).find(function(x){return String(x.vessel||'').trim().toUpperCase()===vn&&String(x.voy||'').trim()===vy;})||null;
+}
+Object.assign(window,{_vesselRecalcEtaDoc,_vesselSetPodEta,_vesselLotEtaFromDoc,_vesselLotTsFromDoc,_vesselFindForLot,_dnShiftDate,_dnDayDiff});
 function _vesselLegTotal(tt1,tt2){
   const a=_vlNum(tt1), b=_vlNum(tt2);
   if(a==null&&b==null)return '';
@@ -45995,8 +46163,29 @@ function _vesselLegCountry(el){
 window._vesselLegCountry=_vesselLegCountry;
 function _vesselAddLeg1(){ _vesselSyncLegs(); _vesselCaptureBasics(); _vesselDraft.leg1.push(_vesselLegBlank()); renderVesselEditor(); }
 function _vesselDelLeg1(i){ _vesselSyncLegs(); _vesselCaptureBasics(); _vesselDraft.leg1.splice(i,1); if(!_vesselDraft.leg1.length)_vesselDraft.leg1=[_vesselLegBlank()]; renderVesselEditor(); }
+// A 2.59: tàu direct (không chuyển tải) → chỉ Leg 1 (POD = cảng ở Leg 1). Tick "Có cảng chuyển tải" mới hiện Leg 2.
+function _vesselHasTs(d){
+  if(d&&typeof d.hasTs==='boolean')return d.hasTs;
+  return !!(d&&(((d.leg1||[]).some(function(r){return (r.legs2||[]).length>0;}))||((d.legacyTs||[]).length>0)));
+}
+function _vesselToggleTs(on){
+  _vesselSyncLegs(); _vesselCaptureBasics();
+  const d=_vesselDraft;
+  if(!on){
+    const n=(d.leg1||[]).reduce(function(s,r){return s+(r.legs2||[]).filter(function(x){return (x.pod||'').trim();}).length;},0);
+    if((n||(d.legacyTs||[]).length)&&!confirm('Bỏ tick "Có cảng chuyển tải" sẽ XÓA toàn bộ Leg 2'+(n?' ('+n+' cảng đến)':'')+' của tàu này.\nCác cảng ở Leg 1 sẽ trở thành POD trực tiếp (tàu direct).\n\nTiếp tục?')){
+      renderVesselEditor(); return;
+    }
+    (d.leg1||[]).forEach(function(r){r.legs2=[];});
+    d.legacyTs=[];
+  }
+  d.hasTs=!!on;
+  renderVesselEditor();
+}
+window._vesselHasTs=_vesselHasTs; window._vesselToggleTs=_vesselToggleTs;
 function _vesselAddLeg2(i){
   _vesselSyncLegs(); _vesselCaptureBasics();
+  if(!_vesselHasTs(_vesselDraft)){ toast('Tick "Có cảng chuyển tải" trước khi thêm Leg 2','error'); return; }
   const row=_vesselDraft.leg1[i]; if(!row)return;
   if(!(row.pod||'').trim()){ toast('Chọn cảng của Leg 1 trước (cảng này sẽ là cảng chuyển tải)','error'); return; }
   row.legs2.push(_vesselLeg2Blank()); renderVesselEditor();
@@ -46018,6 +46207,7 @@ function _vesselLegsHtml(d){
   const hdr='<div style="display:flex;gap:6px;margin-bottom:4px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase"><div style="width:120px;flex-shrink:0">Quốc gia</div><div style="flex:1">Cảng</div><div style="width:62px;flex-shrink:0;text-align:center" title="Transit time (ngày)">T/T</div><div style="width:132px;flex-shrink:0">ETA</div><div style="width:74px;flex-shrink:0"></div><div style="width:26px;flex-shrink:0"></div></div>';
   const rows=(d.leg1||[]).map(function(row,i){
     const has2=(row.legs2||[]).length>0;
+    const hasTsOn=_vesselHasTs(d);
     let h='<div class="vl1" data-i="'+i+'" style="margin-bottom:10px">'
       +'<div class="vl1h" style="display:flex;gap:6px;align-items:center">'
         +'<select data-f="country" onchange="_vesselLegCountry(this)" style="width:120px;flex-shrink:0;'+inS+'">'+cOpts(row.country)+'</select>'
@@ -46025,7 +46215,8 @@ function _vesselLegsHtml(d){
         +'<input type="number" data-f="tt" value="'+_bkE(row.tt)+'" min="0" placeholder="T/T" title="Transit time Leg 1 (ngày)" oninput="_vesselLegTt(this)" style="width:62px;flex-shrink:0;text-align:center;'+inS+'"/>'
         +'<input type="date" data-f="eta" value="'+_bkE(row.eta)+'" onchange="_vesselSyncLegs()" style="width:132px;flex-shrink:0;'+inS+'"/>'
         +(has2?'<span title="Cảng này là cảng chuyển tải (có Leg 2)" style="width:74px;flex-shrink:0;text-align:center;font-size:10px;font-weight:700;color:#C2410C;background:#FFEDD5;border-radius:6px;padding:4px 0">Chuyển tải</span>'
-              :'<button class="btn sm" type="button" onclick="_vesselAddLeg2('+i+')" title="Thêm Leg 2: giao tiếp về cảng khác — cảng này sẽ thành cảng chuyển tải" style="width:74px;flex-shrink:0;padding:4px 0;justify-content:center;font-size:11px;color:#C2410C;border-color:#FDBA74"><i class="ti ti-plus"></i> Leg 2</button>')
+              :(hasTsOn?'<button class="btn sm" type="button" onclick="_vesselAddLeg2('+i+')" title="Thêm Leg 2: giao tiếp về cảng khác — cảng này sẽ thành cảng chuyển tải" style="width:74px;flex-shrink:0;padding:4px 0;justify-content:center;font-size:11px;color:#C2410C;border-color:#FDBA74"><i class="ti ti-plus"></i> Leg 2</button>'
+                :'<span style="width:74px;flex-shrink:0"></span>'))
         +'<button class="rac red" type="button" onclick="_vesselDelLeg1('+i+')" title="Xóa cảng" style="width:26px;flex-shrink:0'+((d.leg1||[]).length<=1?';visibility:hidden':'')+'"><i class="ti ti-x"></i></button>'
       +'</div>';
     if(has2){
@@ -46066,7 +46257,10 @@ function _vesselLegsHtml(d){
       +'<label style="font-size:12px;font-weight:700;color:var(--text-secondary)"><i class="ti ti-route" style="font-size:13px;color:var(--blue)"></i> Leg 1 — POL → POD <span style="font-weight:400;color:var(--text-tertiary)">(có thể nhiều POD)</span></label>'
       +'<button class="btn sm" type="button" onclick="_vesselAddLeg1()"><i class="ti ti-plus"></i> Thêm POD</button>'
     +'</div>'
-    +'<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">Muốn giao về cảng khác: bấm <b>+ Leg 2</b> ở POD tương ứng — POD đó sẽ thành <b>cảng chuyển tải</b>, Tổng T/T = T/T leg 1 + T/T leg 2.</div>'
+    +'<label style="display:flex;align-items:center;justify-content:flex-start;gap:7px;font-size:12.5px;font-weight:600;color:#C2410C;cursor:pointer;margin:2px 0 4px;width:fit-content"><input type="checkbox" id="vesHasTs" style="width:auto;flex:0 0 auto;margin:0" '+(_vesselHasTs(d)?'checked ':'')+'onchange="_vesselToggleTs(this.checked)"/> <i class="ti ti-transfer" style="font-size:13px"></i> Có cảng chuyển tải</label>'
+    +'<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">'+(_vesselHasTs(d)
+      ?'Bấm <b>+ Leg 2</b> ở POD tương ứng — POD đó sẽ thành <b>cảng chuyển tải</b>, Tổng T/T = T/T leg 1 + T/T leg 2.'
+      :'Tàu <b>direct</b> (không chuyển tải): POD chính là cảng ở Leg 1. Tick “Có cảng chuyển tải” nếu hàng phải chuyển tải rồi mới về cảng đến cuối.')+'</div>'
     +hdr+'<div id="vesLegList">'+rows+'</div>'+legacy
   +'</div>';
 }
