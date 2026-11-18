@@ -1447,8 +1447,7 @@ function _xuatLotSummaryHTML(r,tt){
   const pt=r.shipper&&cache.partners[r.shipper];
   const shipperName=(pt&&(pt.shortname||pt.name))||r.shipper||'—';
   const cneeName=r.cnee||r.consignee||'—';
-  const ves=(cache.vessels||[]).find(function(v){return v.vessel===r.vessel&&(!r.voy||v.voy===r.voy);});
-  const transships=(ves&&ves.transships)||[];
+  const transships=(r.transships||[]).filter(function(p){return p&&p.port;});   // A 2.60: cảng chuyển tải của lô, không phải của tàu
   const row=function(icon,label,value,color){
     return '<div class="xls-row"><div class="xls-row-ic" style="background:'+(color||'var(--green)')+'"><i class="ti '+icon+'"></i></div><div class="xls-row-body"><div class="xls-row-label">'+label+'</div><div class="xls-row-value">'+(value||'—')+'</div></div></div>';
   };
@@ -1572,7 +1571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.59';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.60';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5487,14 +5486,24 @@ function renderDetailPanel(r,tt){
       +'</div>';
     }).join('')+(r.mblNo?'<div class="detail-field" style="margin-top:8px"><div class="detail-label">MBL No</div><div class="detail-val">'+r.mblNo+'</div></div>':'');
     // Cảng chuyển tải — lấy từ vessel record, giữ nguyên logic cũ
-    const vesForTs=(cache.vessels||[]).find(function(v){return v.vessel===r.vessel&&(!r.voy||v.voy===r.voy);});
-    const tsList=(vesForTs&&vesForTs.transships)||[];
+    // A 2.60: lấy cảng chuyển tải CỦA LÔ (r.transships) — không lấy toàn bộ cảng chuyển tải của tàu (lô POD khác vẫn bị hiện nhầm)
+    const tsList=(r.transships||[]).filter(function(p){return p&&p.port;});
     const tsHtml=tsList.length?('<div style="margin-bottom:8px"><div class="detail-label" style="margin-bottom:5px"><i class="ti ti-transfer" style="font-size:11px"></i> Cảng chuyển tải</div>'
       +tsList.map(function(p){return '<div style="display:flex;align-items:center;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px dashed var(--border-light)">'
         +'<span style="font-weight:600;color:#b05a00">'+(p.port||'—')+'</span>'
         +(p.tt!=null&&p.tt!==''?'<span style="font-size:11px;color:var(--text-secondary)">T/T: <b>'+p.tt+' ngày</b></span>':'')
         +(p.eta?'<span style="font-size:11px;color:var(--text-secondary)">ETA: <b>'+fmtDMY(p.eta)+'</b></span>':'')
-      +'</div>';}).join('')+'</div>'):'<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px">Tàu direct (không chuyển tải)</div>';
+      +'</div>';}).join('')
+      +(function(){
+        // A 2.60: cảnh báo nếu cảng chuyển tải lưu trên lô không khớp hành trình tàu (POD của lô là cảng giao trực tiếp theo Vessel tool)
+        const vs=(cache.vessels||[]).find(function(v){return v.vessel===r.vessel&&(!r.voy||v.voy===r.voy);});
+        if(!vs||!Array.isArray(vs.leg1)||!vs.leg1.length)return '';
+        const k=String(r.pod||'').trim().toLowerCase();
+        const pp=(vs.pods||[]).find(function(x){return String(x.pod||'').trim().toLowerCase()===k;});
+        if(!pp||pp.via)return '';
+        return '<div style="font-size:11px;color:#92400E;background:rgba(245,158,11,.12);border-radius:6px;padding:5px 8px;margin-top:6px"><i class="ti ti-alert-triangle"></i> Theo Vessel tool, POD '+(r.pod||'')+' giao trực tiếp (không chuyển tải). Nếu cảng chuyển tải trên là sai: Sửa lô → bỏ tick “Có cảng chuyển tải” → Lưu.</div>';
+      })()
+      +'</div>'):'<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px">Tàu direct (không chuyển tải)</div>';
 
     bodyHtml=`
     <!-- Toolbar hành động — đưa lên đầu để thao tác nhanh không cần cuộn -->
@@ -8833,14 +8842,18 @@ function _lotFieldHtml(c, r, ctx){
     }
     const rowsHtml=ts.map(function(p,i){return tsRowHtml(p,i);}).join('');
     const hdRow=ts.length?'<div style="display:flex;gap:5px;margin-bottom:3px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase"><div style="flex:1">Quốc gia</div><div style="flex:1.5">Cảng chuyển tải</div><div style="width:50px;text-align:center">T/T</div><div style="width:130px">ETA</div><div style="width:32px"></div></div>':'';
-    const emptyMsg=ts.length?'':'<div style="font-size:12px;color:var(--text-tertiary);padding:4px 0">Tàu direct (không chuyển tải)</div>';
+    // A 2.60: tick "Có cảng chuyển tải" theo từng lô — không tick = giao thẳng (direct) tại POD, không có cảng chuyển tải
+    const hasTsOn=ts.length>0;
     return '<div class="fi full" style="grid-column:1/-1">'
-      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
-        +'<label class="lbl" style="color:#e07000;font-weight:700"><i class="ti ti-transfer" style="font-size:12px"></i> Cảng chuyển tải <span style="font-weight:400;color:var(--text-tertiary)">(optional)</span></label>'
-        +'<button class="btn sm" onclick="lotTsAddRow()" style="font-size:11.5px"><i class="ti ti-plus"></i> Thêm cảng</button>'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;gap:8px">'
+        +'<label style="display:flex;align-items:center;justify-content:flex-start;gap:7px;font-size:12.5px;font-weight:700;color:#e07000;cursor:pointer;margin:0"><input type="checkbox" id="lotHasTs" '+(hasTsOn?'checked ':'')+'onchange="lotHasTsToggle(this.checked)" style="width:auto;flex:0 0 auto;margin:0"/> <i class="ti ti-transfer" style="font-size:13px"></i> Có cảng chuyển tải</label>'
+        +'<button class="btn sm" id="lotTsAddBtn" onclick="lotTsAddRow()" style="font-size:11.5px;'+(hasTsOn?'':'display:none')+'"><i class="ti ti-plus"></i> Thêm cảng</button>'
       +'</div>'
-      +hdRow
-      +'<div id="lotTransshipList">'+rowsHtml+emptyMsg+'</div>'
+      +'<div id="lotTsBody" style="'+(hasTsOn?'':'display:none')+'">'
+        +hdRow
+        +'<div id="lotTransshipList">'+rowsHtml+'</div>'
+      +'</div>'
+      +'<div id="lotTsDirect" style="font-size:12px;color:var(--text-tertiary);padding:2px 0;'+(hasTsOn?'display:none':'')+'">Direct — POD là cảng giao cuối, không chuyển tải.</div>'
     +'</div>';
   }
   if(c.type==='cnee'){
@@ -9910,36 +9923,67 @@ function onLotPortChange(portKey){
     const etaEl=g('f_eta');
     if(etaEl&&!etaEl.value)etaEl.value=eta;
   }
-  // A 2.52: POD thuộc Leg 2 của tàu → tự điền cảng chuyển tải (hub) vào lô nếu chưa có
-  if(portKey==='pod'){
-    const via=opt.getAttribute('data-via')||'';
-    if(via&&typeof lotTsAddRow==='function'){
-      const list=g('lotTransshipList');
-      if(list){
-        let rows=list.querySelectorAll('[data-ts-lot-row]');
-        const has=Array.prototype.some.call(rows,function(rw){const ps=rw.querySelector('[data-ts-lot-k="port"]');return ps&&ps.value===via;});
-        if(!has){
-          let target=Array.prototype.find.call(rows,function(rw){const ps=rw.querySelector('[data-ts-lot-k="port"]');return ps&&!ps.value;});
-          if(!target){ lotTsAddRow(); rows=list.querySelectorAll('[data-ts-lot-row]'); target=rows[rows.length-1]; }
-          const ps=target&&target.querySelector('[data-ts-lot-k="port"]');
-          if(ps){
-            if(!Array.prototype.some.call(ps.options,function(o){return o.value===via||o.text===via;})){ const o=document.createElement('option'); o.textContent=via; ps.appendChild(o); }
-            ps.value=via;
-            const setIf=function(k,v){const el=target.querySelector('[data-ts-lot-k="'+k+'"]'); if(el&&v!==''&&v!=null&&!el.value)el.value=v;};
-            setIf('country',opt.getAttribute('data-via-country')||''); setIf('tt',opt.getAttribute('data-via-tt')||''); setIf('eta',opt.getAttribute('data-via-eta')||'');
-          }
-        }
-      }
-    }
-  }
+  // A 2.60: POD thuộc Leg 2 của tàu → tự tick "Có cảng chuyển tải" + điền cảng chuyển tải đúng của POD đó; POD trực tiếp → direct
+  if(portKey==='pod')_lotSyncTsWithPod();
 }
 window.onLotPortChange=onLotPortChange;
 
+// A 2.60: bật/tắt phần cảng chuyển tải của LÔ (tick "Có cảng chuyển tải")
+function _lotTsSetOn(on){
+  const cb=g('lotHasTs'); if(cb)cb.checked=!!on;
+  const body=g('lotTsBody'), add=g('lotTsAddBtn'), dir=g('lotTsDirect');
+  if(body)body.style.display=on?'':'none';
+  if(add)add.style.display=on?'':'none';
+  if(dir)dir.style.display=on?'none':'';
+}
+function lotHasTsToggle(on){
+  const list=g('lotTransshipList');
+  if(!on){
+    const n=list?list.querySelectorAll('[data-ts-lot-row]').length:0;
+    if(n&&!confirm('Bỏ tick "Có cảng chuyển tải" sẽ xóa '+n+' cảng chuyển tải của lô này (lô giao thẳng tại POD). Tiếp tục?')){ _lotTsSetOn(true); return; }
+    if(list)list.innerHTML='';
+    _lotTsSetOn(false);
+    return;
+  }
+  _lotTsSetOn(true);
+  if(list&&!list.querySelectorAll('[data-ts-lot-row]').length){
+    // Tick tay: nếu POD đang chọn thuộc Leg 2 của tàu → điền sẵn cảng chuyển tải của POD đó, ngược lại thêm 1 dòng trống
+    if(!_lotApplyViaForPod(true))lotTsAddRow();
+  }
+}
+// Điền cảng chuyển tải (via) của POD đang chọn vào danh sách dòng của lô. Trả về true nếu POD có via.
+function _lotApplyViaForPod(fromTick){
+  const sel=g('f_pod'); const list=g('lotTransshipList'); if(!sel||!list)return false;
+  const opt=sel.options[sel.selectedIndex]; const via=opt?(opt.getAttribute('data-via')||''):'';
+  if(!via)return false;
+  list.innerHTML='';
+  lotTsAddRow();
+  const row=list.querySelector('[data-ts-lot-row]'); if(!row)return false;
+  const ps=row.querySelector('[data-ts-lot-k="port"]');
+  if(ps){
+    if(!Array.prototype.some.call(ps.options,function(o){return o.value===via||o.text===via;})){ const o=document.createElement('option'); o.textContent=via; ps.appendChild(o); }
+    ps.value=via;
+  }
+  const setV=function(k,v){const el=row.querySelector('[data-ts-lot-k="'+k+'"]'); if(el&&v!==''&&v!=null)el.value=v;};
+  setV('country',opt.getAttribute('data-via-country')||''); setV('tt',opt.getAttribute('data-via-tt')||''); setV('eta',opt.getAttribute('data-via-eta')||'');
+  _lotTsSetOn(true);
+  return true;
+}
+// Đổi POD/tàu: nếu POD thuộc Leg 2 → tự tick + điền cảng chuyển tải; nếu danh sách POD đang giới hạn theo tàu mà POD là cảng trực tiếp → bỏ tick (direct).
+function _lotSyncTsWithPod(){
+  const sel=g('f_pod'); if(!sel||!g('lotHasTs'))return;
+  if(_lotApplyViaForPod(false))return;
+  if((window._lotVesselPodPorts||[]).length){
+    const list=g('lotTransshipList'); if(list)list.innerHTML='';
+    _lotTsSetOn(false);
+  }
+}
+Object.assign(window,{_lotTsSetOn,lotHasTsToggle,_lotApplyViaForPod,_lotSyncTsWithPod});
+
 function lotTsAddRow(){
   const list=g('lotTransshipList'); if(!list)return;
+  _lotTsSetOn(true);
   const existing=list.querySelectorAll('[data-ts-lot-row]').length;
-  // Clear "tàu direct" text if present
-  list.querySelectorAll('div:not([data-ts-lot-row])').forEach(function(d){if(d.textContent.includes('direct'))d.remove();});
   const div=document.createElement('div');
   div.setAttribute('data-ts-lot-row','');
   const portOpts=_buildLotTsPortOpts('','');
@@ -9989,12 +10033,7 @@ function lotTsDelRow(idx){
   const list=g('lotTransshipList'); if(!list)return;
   const rows=list.querySelectorAll('[data-ts-lot-row]');
   if(rows[idx])rows[idx].remove();
-  if(!list.querySelectorAll('[data-ts-lot-row]').length){
-    const p=document.createElement('div');
-    p.textContent='Tàu direct (không chuyển tải)';
-    p.style.cssText='font-size:12px;color:var(--text-tertiary);padding:4px 0';
-    list.appendChild(p);
-  }
+  if(!list.querySelectorAll('[data-ts-lot-row]').length)_lotTsSetOn(false);   // xóa hết cảng → coi như direct (bỏ tick)
 }
 window.lotTsDelRow=lotTsDelRow;
 
@@ -10236,7 +10275,8 @@ async function saveLot(){
   }
   // Transshipment ports
   const tsForm=readTransshipsFromForm();
-  if(tsForm.length)rec.transships=tsForm;
+  if(g('lotHasTs')){ rec.transships=g('lotHasTs').checked?tsForm:[]; }   // A 2.60: có tick form → theo form (bỏ tick = xóa cảng chuyển tải của lô)
+  else if(tsForm.length)rec.transships=tsForm;
   else if(rec.transships===undefined)rec.transships=[];
   rec.updatedAt=Date.now(); rec.updatedBy=currentUser.email;
   if(!lotIdx){ rec.createdAt=Date.now(); rec.createdBy=currentUser.email; if(!rec.jobNo) rec.jobNo=getNextJobNo(rec.loaiHang||'XK - Xuất khẩu'); }
@@ -46163,29 +46203,8 @@ function _vesselLegCountry(el){
 window._vesselLegCountry=_vesselLegCountry;
 function _vesselAddLeg1(){ _vesselSyncLegs(); _vesselCaptureBasics(); _vesselDraft.leg1.push(_vesselLegBlank()); renderVesselEditor(); }
 function _vesselDelLeg1(i){ _vesselSyncLegs(); _vesselCaptureBasics(); _vesselDraft.leg1.splice(i,1); if(!_vesselDraft.leg1.length)_vesselDraft.leg1=[_vesselLegBlank()]; renderVesselEditor(); }
-// A 2.59: tàu direct (không chuyển tải) → chỉ Leg 1 (POD = cảng ở Leg 1). Tick "Có cảng chuyển tải" mới hiện Leg 2.
-function _vesselHasTs(d){
-  if(d&&typeof d.hasTs==='boolean')return d.hasTs;
-  return !!(d&&(((d.leg1||[]).some(function(r){return (r.legs2||[]).length>0;}))||((d.legacyTs||[]).length>0)));
-}
-function _vesselToggleTs(on){
-  _vesselSyncLegs(); _vesselCaptureBasics();
-  const d=_vesselDraft;
-  if(!on){
-    const n=(d.leg1||[]).reduce(function(s,r){return s+(r.legs2||[]).filter(function(x){return (x.pod||'').trim();}).length;},0);
-    if((n||(d.legacyTs||[]).length)&&!confirm('Bỏ tick "Có cảng chuyển tải" sẽ XÓA toàn bộ Leg 2'+(n?' ('+n+' cảng đến)':'')+' của tàu này.\nCác cảng ở Leg 1 sẽ trở thành POD trực tiếp (tàu direct).\n\nTiếp tục?')){
-      renderVesselEditor(); return;
-    }
-    (d.leg1||[]).forEach(function(r){r.legs2=[];});
-    d.legacyTs=[];
-  }
-  d.hasTs=!!on;
-  renderVesselEditor();
-}
-window._vesselHasTs=_vesselHasTs; window._vesselToggleTs=_vesselToggleTs;
 function _vesselAddLeg2(i){
   _vesselSyncLegs(); _vesselCaptureBasics();
-  if(!_vesselHasTs(_vesselDraft)){ toast('Tick "Có cảng chuyển tải" trước khi thêm Leg 2','error'); return; }
   const row=_vesselDraft.leg1[i]; if(!row)return;
   if(!(row.pod||'').trim()){ toast('Chọn cảng của Leg 1 trước (cảng này sẽ là cảng chuyển tải)','error'); return; }
   row.legs2.push(_vesselLeg2Blank()); renderVesselEditor();
@@ -46207,7 +46226,6 @@ function _vesselLegsHtml(d){
   const hdr='<div style="display:flex;gap:6px;margin-bottom:4px;font-size:10px;color:var(--text-tertiary);text-transform:uppercase"><div style="width:120px;flex-shrink:0">Quốc gia</div><div style="flex:1">Cảng</div><div style="width:62px;flex-shrink:0;text-align:center" title="Transit time (ngày)">T/T</div><div style="width:132px;flex-shrink:0">ETA</div><div style="width:74px;flex-shrink:0"></div><div style="width:26px;flex-shrink:0"></div></div>';
   const rows=(d.leg1||[]).map(function(row,i){
     const has2=(row.legs2||[]).length>0;
-    const hasTsOn=_vesselHasTs(d);
     let h='<div class="vl1" data-i="'+i+'" style="margin-bottom:10px">'
       +'<div class="vl1h" style="display:flex;gap:6px;align-items:center">'
         +'<select data-f="country" onchange="_vesselLegCountry(this)" style="width:120px;flex-shrink:0;'+inS+'">'+cOpts(row.country)+'</select>'
@@ -46215,8 +46233,7 @@ function _vesselLegsHtml(d){
         +'<input type="number" data-f="tt" value="'+_bkE(row.tt)+'" min="0" placeholder="T/T" title="Transit time Leg 1 (ngày)" oninput="_vesselLegTt(this)" style="width:62px;flex-shrink:0;text-align:center;'+inS+'"/>'
         +'<input type="date" data-f="eta" value="'+_bkE(row.eta)+'" onchange="_vesselSyncLegs()" style="width:132px;flex-shrink:0;'+inS+'"/>'
         +(has2?'<span title="Cảng này là cảng chuyển tải (có Leg 2)" style="width:74px;flex-shrink:0;text-align:center;font-size:10px;font-weight:700;color:#C2410C;background:#FFEDD5;border-radius:6px;padding:4px 0">Chuyển tải</span>'
-              :(hasTsOn?'<button class="btn sm" type="button" onclick="_vesselAddLeg2('+i+')" title="Thêm Leg 2: giao tiếp về cảng khác — cảng này sẽ thành cảng chuyển tải" style="width:74px;flex-shrink:0;padding:4px 0;justify-content:center;font-size:11px;color:#C2410C;border-color:#FDBA74"><i class="ti ti-plus"></i> Leg 2</button>'
-                :'<span style="width:74px;flex-shrink:0"></span>'))
+              :'<button class="btn sm" type="button" onclick="_vesselAddLeg2('+i+')" title="Thêm Leg 2: giao tiếp về cảng khác — cảng này sẽ thành cảng chuyển tải" style="width:74px;flex-shrink:0;padding:4px 0;justify-content:center;font-size:11px;color:#C2410C;border-color:#FDBA74"><i class="ti ti-plus"></i> Leg 2</button>')
         +'<button class="rac red" type="button" onclick="_vesselDelLeg1('+i+')" title="Xóa cảng" style="width:26px;flex-shrink:0'+((d.leg1||[]).length<=1?';visibility:hidden':'')+'"><i class="ti ti-x"></i></button>'
       +'</div>';
     if(has2){
@@ -46257,10 +46274,7 @@ function _vesselLegsHtml(d){
       +'<label style="font-size:12px;font-weight:700;color:var(--text-secondary)"><i class="ti ti-route" style="font-size:13px;color:var(--blue)"></i> Leg 1 — POL → POD <span style="font-weight:400;color:var(--text-tertiary)">(có thể nhiều POD)</span></label>'
       +'<button class="btn sm" type="button" onclick="_vesselAddLeg1()"><i class="ti ti-plus"></i> Thêm POD</button>'
     +'</div>'
-    +'<label style="display:flex;align-items:center;justify-content:flex-start;gap:7px;font-size:12.5px;font-weight:600;color:#C2410C;cursor:pointer;margin:2px 0 4px;width:fit-content"><input type="checkbox" id="vesHasTs" style="width:auto;flex:0 0 auto;margin:0" '+(_vesselHasTs(d)?'checked ':'')+'onchange="_vesselToggleTs(this.checked)"/> <i class="ti ti-transfer" style="font-size:13px"></i> Có cảng chuyển tải</label>'
-    +'<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">'+(_vesselHasTs(d)
-      ?'Bấm <b>+ Leg 2</b> ở POD tương ứng — POD đó sẽ thành <b>cảng chuyển tải</b>, Tổng T/T = T/T leg 1 + T/T leg 2.'
-      :'Tàu <b>direct</b> (không chuyển tải): POD chính là cảng ở Leg 1. Tick “Có cảng chuyển tải” nếu hàng phải chuyển tải rồi mới về cảng đến cuối.')+'</div>'
+    +'<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">Muốn giao về cảng khác: bấm <b>+ Leg 2</b> ở POD tương ứng — POD đó sẽ thành <b>cảng chuyển tải</b>, Tổng T/T = T/T leg 1 + T/T leg 2.</div>'
     +hdr+'<div id="vesLegList">'+rows+'</div>'+legacy
   +'</div>';
 }
@@ -46779,9 +46793,11 @@ function onVesselPick(){
     if(podList.length>1)toast('Tàu có nhiều POD — đã giới hạn danh sách chọn theo đúng tàu này','success');
   }
   // v4.53: Cập nhật danh sách cảng chuyển tải theo tàu vừa chọn
+  // A 2.60: KHÔNG còn tự điền mọi cảng chuyển tải của tàu vào lô (lỗi: lô POD Nansha vẫn hiện cảng chuyển tải Jingtang của POD khác).
+  // Chỉ lưu danh sách để làm lựa chọn; cảng chuyển tải của lô được điền theo POD đang chọn.
   const newTsPorts=(v.transships||[]).filter(function(p){return p.port;});
   window._lotVesselTsPorts=newTsPorts;
-  _refreshTransshipList(newTsPorts);
+  _lotSyncTsWithPod();
 }
 window.onVesselPick=onVesselPick;
 
