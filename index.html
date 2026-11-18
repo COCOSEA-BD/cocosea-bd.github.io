@@ -1571,7 +1571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.66';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.67';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -6213,7 +6213,6 @@ bodyHtml=(_fxIsNewLot(r)?_fxInvBoxHtml(r):('<div style="display:flex;align-items
             +'<th style="'+thS+'">Invoice</th>'
             +'<th style="'+thS+'">Party</th>'
           +'</tr></thead><tbody>'+rows+'</tbody></table></div>'
-          +_vatInvBoxHtml(r)
           +'<div style="margin-bottom:.75rem">'
             +'<div style="font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem">Debit Note theo Party</div>'
             +buildDnPartyRows(r,svcs)
@@ -7014,7 +7013,7 @@ async function saveInvoiceSettings(){
     if(btn){btn.disabled=false; btn.title='';}
   });
   // A 2.66: hóa đơn VAT của lô (số + ngày; nhiều dòng)
-  const _vatInv=_vatInvCollect();
+  const _vatInv=_vatInvCollect(null,r);
   if(_vatInv&&_vatInv.error){toast(_vatInv.error,'error');return;}
   setLoading(true,'Đang lưu...');
   try{
@@ -7026,7 +7025,7 @@ async function saveInvoiceSettings(){
     const arr=cache[_ivTt]||[];const ci=arr.findIndex(x=>x._id===_ivId);
     const _vatChanged=_vatInv&&JSON.stringify(_vatInv)!==JSON.stringify(((arr[ci]||r).vatInvoices)||[]);
     if(ci>=0){arr[ci].svcs=svcs; if(dnGenerated)arr[ci].dnByParty=dnByParty; if(_vatInv)arr[ci].vatInvoices=_vatInv;}
-    if(_vatChanged)logLotEvent(_ivId,_ivTt,'invoice','Cập nhật hóa đơn VAT',_vatInv.map(function(x){return x.no+(x.date?' ('+_vatDmy(x.date)+')':'');}).join(', ')||'(xóa hết)');
+    if(_vatChanged)logLotEvent(_ivId,_ivTt,'invoice','Cập nhật hóa đơn VAT',_vatInvSummary(_vatInv)||'(xóa hết)');
     toast(dnGenerated?('Đã lưu — tự sinh '+dnGenerated+' số DN mới'):'Đã lưu');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
@@ -18237,7 +18236,7 @@ function openPayStatusPopup(ctx){
   const bankLabel=isAP?'Tài khoản ngân hàng trừ tiền':'Tài khoản ngân hàng nhận tiền';
   const paid=ctx.status==='paid';
   g('payStatusOv').innerHTML=`
-  <div class="modal" style="max-width:400px">
+  <div class="modal" style="max-width:${ctx.type==='ar_party_inv'?'460':'400'}px">
     <div class="mhdr">
       <div><div class="mtitle"><i class="ti ti-credit-card" style="font-size:15px;margin-right:6px"></i>Trạng thái thanh toán</div>
       ${ctx.label?'<div class="msub">'+ctx.label+'</div>':''}</div>
@@ -18263,6 +18262,7 @@ function openPayStatusPopup(ctx){
         <label class="lbl">${bankLabel}</label>
         <select id="psBank">${_bankAccountOpts(ctx.bank||'')}</select>
       </div>
+      ${ctx.type==='ar_party_inv'?_vatPopupInvHtml(ctx):''}
     </div>
     <div class="mftr">
       <button class="btn" onclick="closeOv('payStatusOv')">Hủy</button>
@@ -18381,6 +18381,17 @@ async function savePayStatusDetail(){
   // khiến PDF/SOA (dựa vào số tiền) tính sai ra "Chưa TT" dù trạng thái đã là "Đã TT"
   const amount=(amountRaw!==''&&amountRaw!=null)?(parseFloat(amountRaw)||0):(status==='paid'?(ctx.suggestAmount||0):0);
 
+  // A 2.67: hóa đơn VAT nhập kèm trong popup (chỉ phần "Có hóa đơn")
+  let _viList=null;
+  if(ctx.type==='ar_party_inv'){
+    const _w=g('psInvWrap');
+    if(_w){
+      const _rr=cache[_psTt0]&&cache[_psTt0].find(function(x){return x._id===_psId0;})||{};
+      const _c=_vatInvCollect(_w,_rr);
+      if(_c&&_c.error){toast(_c.error,'error');return;}
+      _viList=_c;
+    }
+  }
   setLoading(true,'Đang lưu...');
   try{
     if(ctx.type==='ap_svc'){
@@ -18579,9 +18590,11 @@ async function savePayStatusDetail(){
         lotRef:{lotId:_psId0,tt:_psTt0,bookingNo:r.bookingNo||r.jobNo||''}
       });
       dnPm[ctx.party][section]={status:status,date:date,bank:bank,amount:amount,cashTxId:newCashTxId};
-      await fsSet(colName(_psTt0),_psId0,{dnPayments:dnPm});
+      const _viChanged=_viList&&JSON.stringify(_vatNormInv({svcs:r.svcs,vatInvoices:_viList}).map(function(x){return [x.no,x.date,x.party];}))!==JSON.stringify(_vatNormInv(r).map(function(x){return [x.no,x.date,x.party];}));
+      await fsSet(colName(_psTt0),_psId0,Object.assign({dnPayments:dnPm},_viList?{vatInvoices:_viList}:{}));
       const ci=cache[_psTt0].findIndex(function(x){return x._id===_psId0;});
-      if(ci>=0){cache[_psTt0][ci].dnPayments=dnPm;}
+      if(ci>=0){cache[_psTt0][ci].dnPayments=dnPm; if(_viList)cache[_psTt0][ci].vatInvoices=_viList;}
+      if(_viChanged)logLotEvent(_psId0,_psTt0,'invoice','Cập nhật hóa đơn VAT ('+ctx.party+')',_vatInvSummary(_viList.filter(function(x){return x.party===ctx.party;}))||'(xóa hết)');
       // Đồng bộ dnPayStatus (legacy) để báo cáo công nợ đọc được
       // QUAN TRỌNG: chỉ coi là 'paid' khi CẢ 2 phần (nếu tồn tại) đều CÓ status RÕ RÀNG = 'paid'.
       // Trước đây: !p.inv.status (chưa từng thao tác) bị coi là "OK" một cách vô tình → khiến
@@ -20629,7 +20642,7 @@ function _vrCompute(from,to){
       out.push({lotId:r._id,tt:tt,job:job,etd:r.etd,shipper:shipper,party:party,
         dnNo:(r.dnByParty||{})[party]||r.dnNo||'',base:Math.round(P.base),base0:Math.round(base0),
         base8:Math.round(base8),base10:Math.round(base10),baseO:Math.round(baseO),
-        vat:vat,total:Math.round(P.base)+vat,paid:status==='paid',n:P.n});
+        vat:vat,total:Math.round(P.base)+vat,paid:status==='paid',n:P.n,invTxt:_vatInvLabel(_vatPartyInvoices(r,party))});
     });
 
     // ── ĐẦU VÀO: dịch vụ NCC có VAT ──
@@ -20651,7 +20664,7 @@ function _vrCompute(from,to){
       const base=Math.round(baseC*k), vat=Math.round(vatC*k);
       inn.push({lotId:r._id,tt:tt,job:job,etd:r.etd,shipper:shipper,supplier:supplier||'(Chưa chọn NCC)',
         name:sv.customName||(def&&def.name)||key,src:'svc',key:key,base:base,vat:vat,total:base+vat,
-        rate:base?Math.round(vat/base*1000)/10:0,paid:sv.apPaidStatus==='paid',paidDate:sv.apPaidDate||''});
+        rate:base?Math.round(vat/base*1000)/10:0,paid:sv.apPaidStatus==='paid',paidDate:sv.apPaidDate||'',remark:String(sv.apRemark||'').trim()});
     });
     // chi phí nhập tay (Costing) có VAT
     (((r.costing||{}).items)||[]).forEach(function(it){
@@ -20663,7 +20676,7 @@ function _vrCompute(from,to){
       const base=Math.round(baseC*k), vat=Math.round(vatC*k);
       inn.push({lotId:r._id,tt:tt,job:job,etd:r.etd,shipper:shipper,supplier:supplier||'(Chưa chọn NCC)',
         name:it.name||'Chi phí nhập tay',src:'cost',base:base,vat:vat,total:base+vat,
-        rate:base?Math.round(vat/base*1000)/10:0,paid:it.apPaidStatus==='paid',paidDate:it.apPaidDate||''});
+        rate:base?Math.round(vat/base*1000)/10:0,paid:it.apPaidStatus==='paid',paidDate:it.apPaidDate||'',remark:String(it.remark||'').trim()});
     });
   });
   // ── A 2.35: Thu khác / Chi khác nhập tay trong Sổ quỹ có VAT ──
@@ -20934,21 +20947,22 @@ function _vrViewOut(D){
     +(groups.length?'<tfoot><tr><td>Tổng cộng</td><td class="r">'+T.outLots+'</td><td class="r">'+_vrN(T.outBase)+'</td><td class="r vat">'+_vrN(T.outVat)+'</td><td class="r">'+_vrN(T.outBase+T.outVat)+'</td><td class="r">'+_vrN(T.outPaid)+'</td><td class="r">'+_vrN(T.outUnpaid)+'</td></tr></tfoot>':'')
     +'</table></div></div>';
 
-  const rows=D.out.filter(function(x){return (!S.party||x.party===S.party)&&_vrMatch(x,S.q,['party','job','dnNo','shipper']);})
+  const rows=D.out.filter(function(x){return (!S.party||x.party===S.party)&&_vrMatch(x,S.q,['party','job','dnNo','shipper','invTxt']);})
     .sort(function(a,b){return (b.etd||'').localeCompare(a.etd||'')||(a.job||'').localeCompare(b.job||'');});
   const sub={base:0,base0:0,base8:0,base10:0,baseO:0,vat:0,total:0};
   rows.forEach(function(x){Object.keys(sub).forEach(function(k){sub[k]+=x[k]||0;});});
   const dRows=rows.map(function(x){
     return '<tr class="vr-click" onclick="'+(x.cash?'editCashTx(\''+x.txId+'\')':'_vrOpenLot(\''+x.lotId+'\',\''+x.tt+'\')')+'" title="'+(x.cash?'Mở giao dịch Sổ quỹ':'Mở lô hàng')+'">'
       +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(x.etd)+'</td><td>'+_vrE(x.party)+'</td><td>'+_vrE(x.dnNo||'—')+(x.cash?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
+      +'<td class="vr-inv" title="'+_vrE(x.invTxt||'')+'">'+(x.invTxt?_vrE(x.invTxt):'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td class="r">'+(x.base0?_vrN(x.base0):'—')+'</td><td class="r">'+(x.base8?_vrN(x.base8):'—')+'</td><td class="r">'+(x.base10?_vrN(x.base10):'—')+'</td>'
       +'<td class="r vat">'+_vrN(x.vat)+'</td><td class="r">'+_vrN(x.total)+'</td><td>'+_vrStatus(x.paid,'Đã thu','Chưa thu')+'</td></tr>';
   }).join('');
   const det='<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-list-details"></i>Chi tiết Debit Note có hóa đơn ('+rows.length+')</span></div>'+_vrToolbar('out')
     +'<div class="vr-scroll"><table class="vr-tbl"><thead><tr>'
-    +_vrTH('Job / Booking')+_vrTH('ETD')+_vrTH('Party')+_vrTH('Số DN')+_vrTH('DT 0%','right')+_vrTH('DT 8%','right')+_vrTH('DT 10%','right')+_vrTH('VAT','right')+_vrTH('Tổng gồm VAT','right')+_vrTH('Thanh toán')
-    +'</tr></thead><tbody>'+(dRows||'<tr><td colspan="10" class="empty">Không có dòng phù hợp</td></tr>')+'</tbody>'
-    +(rows.length?'<tfoot><tr><td colspan="4">Tổng ('+rows.length+' dòng)</td><td class="r">'+_vrN(sub.base0)+'</td><td class="r">'+_vrN(sub.base8)+'</td><td class="r">'+_vrN(sub.base10)+'</td><td class="r vat">'+_vrN(sub.vat)+'</td><td class="r">'+_vrN(sub.total)+'</td><td></td></tr></tfoot>':'')
+    +_vrTH('Job / Booking')+_vrTH('ETD')+_vrTH('Party')+_vrTH('Số DN')+_vrTH('Số HĐ VAT (ngày)')+_vrTH('DT 0%','right')+_vrTH('DT 8%','right')+_vrTH('DT 10%','right')+_vrTH('VAT','right')+_vrTH('Tổng gồm VAT','right')+_vrTH('Thanh toán')
+    +'</tr></thead><tbody>'+(dRows||'<tr><td colspan="11" class="empty">Không có dòng phù hợp</td></tr>')+'</tbody>'
+    +(rows.length?'<tfoot><tr><td colspan="5">Tổng ('+rows.length+' dòng)</td><td class="r">'+_vrN(sub.base0)+'</td><td class="r">'+_vrN(sub.base8)+'</td><td class="r">'+_vrN(sub.base10)+'</td><td class="r vat">'+_vrN(sub.vat)+'</td><td class="r">'+_vrN(sub.total)+'</td><td></td></tr></tfoot>':'')
     +'</table></div>'
     +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">DT = doanh thu chưa VAT quy VND theo ROE của lô. “DT 0%” gồm cước biển và dịch vụ không chịu VAT. Mức thuế khác 0/8/10% (nếu có) chỉ tính vào cột VAT.</div></div>';
   return sumTbl+det;
@@ -21003,11 +21017,11 @@ function _vrExport(){
     ['Chi phí NCC có VAT (chưa VAT)',T.inBase],['',''],
     ['Đầu ra đã thu (gồm VAT)',T.outPaid],['Đầu ra chưa thu (gồm VAT)',T.outUnpaid],['Đầu vào đã trả NCC (gồm VAT)',T.inPaid],['Đầu vào chưa trả NCC (gồm VAT)',T.inUnpaid]
   ]);
-  const s2=[['Job / Booking','ETD','Shipper','Party','Số DN','DT 0%','DT 8%','DT 10%','DT mức khác','Tổng DT chưa VAT','VAT','Tổng gồm VAT','Thanh toán']];
+  const s2=[['Job / Booking','ETD','Shipper','Party','Số DN','Số HĐ VAT (ngày HĐ)','DT 0%','DT 8%','DT 10%','DT mức khác','Tổng DT chưa VAT','VAT','Tổng gồm VAT','Thanh toán']];
   D.out.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
-    s2.push([x.job,x.etd,x.shipper,x.party,(x.cash?'Sổ quỹ — ':'')+(x.dnNo||''),x.base0,x.base8,x.base10,x.baseO,x.base,x.vat,x.total,x.paid?'Đã thu':'Chưa thu']);
+    s2.push([x.job,x.etd,x.shipper,x.party,(x.cash?'Sổ quỹ — ':'')+(x.dnNo||''),x.invTxt||'',x.base0,x.base8,x.base10,x.baseO,x.base,x.vat,x.total,x.paid?'Đã thu':'Chưa thu']);
   });
-  s2.push(['TỔNG','','','','',T.outBase0,T.outBase8,T.outBase10,T.outBaseO,T.outBase,T.outVat,T.outBase+T.outVat,'']);
+  s2.push(['TỔNG','','','','','',T.outBase0,T.outBase8,T.outBase10,T.outBaseO,T.outBase,T.outVat,T.outBase+T.outVat,'']);
   const s3=[['Job / Booking','ETD','Shipper','Nhà cung cấp','Khoản chi phí','Nguồn','Chưa VAT','Thuế suất %','VAT','Tổng gồm VAT','Thanh toán NCC','Ngày thanh toán']];
   D.inn.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
     s3.push([x.job,x.etd,x.shipper,x.supplier,x.name,x.src==='cost'?'Nhập tay':(x.src==='cash'?'Sổ quỹ':'Dịch vụ'),x.base,x.rate,x.vat,x.total,x.paid?'Đã trả':'Chưa trả',x.paidDate||'']);
@@ -21446,7 +21460,7 @@ function _vsSuppBuild(D){
         job:x.cash?'Sổ quỹ':(x.job||''),etd:x.etd||'',shipper:x.cash?'':((x.shipper||'').trim()),
         hbl:r.mblNo||'',tenHang:r.tenHang||'',cont:x.cash?'':((r.vol?String(r.vol):'')+(r.typeCont?'×'+r.typeCont:'')),
         names:[],rateSet:{},n:0,nPaid:0,base:0,vat:0,total:0,paid:0,unpaid:0,paidDate:'',
-        hasOcf:false,vatMissing:false,noCost:false,invs:x.cash?[]:_vatLotInvoices(r),carrier:_vatIsCarrier(sup)};
+        hasOcf:false,vatMissing:false,noCost:false,remarks:[],remMiss:false,carrier:_vatIsCarrier(sup)};
       rows.push(L);
     }
     return L;
@@ -21459,7 +21473,10 @@ function _vsSuppBuild(D){
     L.names.push(x.name);
     if(x.rate)L.rateSet[x.rate]=1;
     if(x.paid){L.paid+=x.total||0;L.nPaid++;if(x.paidDate&&x.paidDate>L.paidDate)L.paidDate=x.paidDate;} else L.unpaid+=x.total||0;
-    if(x.key&&(_svcKeyBase(x.key)==='ocf'||_svcKeyBase(x.key)==='freight'))L.hasOcf=true;
+    const _ocfLn=!!(x.key&&(_svcKeyBase(x.key)==='ocf'||_svcKeyBase(x.key)==='freight'));
+    if(_ocfLn)L.hasOcf=true;
+    if(x.remark)L.remarks.push(x.remark);
+    if(!x.cash&&!x.remark&&(L.carrier||_ocfLn))L.remMiss=true;
   });
   // A 2.66: dòng BẮT BUỘC có VAT (OCF / NCC carrier) nhưng chưa có số VAT → vẫn liệt kê, báo đỏ
   const rg=D.range||{};
@@ -21474,6 +21491,7 @@ function _vsSuppBuild(D){
       if(ln.paid){L.paid+=ln.base;L.nPaid++;} else L.unpaid+=ln.base;
       L.names.push(ln.name+(ln.base?'':' (chưa nhập chi phí)'));
       L.vatMissing=true; if(!ln.base)L.noCost=true; if(ln.isOcf)L.hasOcf=true;
+      if(ln.remark)L.remarks.push(ln.remark); else L.remMiss=true;
     });
   });});
   rows.forEach(function(L){
@@ -21483,11 +21501,11 @@ function _vsSuppBuild(D){
     L.stTxt=L.st==='paid'?'Đã trả':(L.st==='unpaid'?'Chưa trả':'Một phần ('+L.nPaid+'/'+L.n+')');
     if(L.st==='unpaid')L.paidDate='';
     L.req=!L.cash&&(L.carrier||L.hasOcf);
-    L.invMissing=L.req&&L.invs.length===0;
-    L.invTxt=L.req?_vatInvLabel(L.invs):'';
+    L.invMissing=L.req&&L.remMiss;
+    L.invTxt=_vsUniq(L.remarks).join('; ');
     L.warn=[];
     if(L.vatMissing)L.warn.push(L.noCost?'Chưa nhập chi phí / VAT — yêu cầu nhập':'Thiếu VAT — yêu cầu nhập');
-    if(L.invMissing)L.warn.push('Chưa có số HĐ VAT — nhập ở tab Invoice');
+    if(L.invMissing)L.warn.push('Chưa có số HĐ NCC — nhập ở Remark tab Service');
     L.bad=L.warn.length>0;
   });
   rows.sort(function(a,b){return a.supplier.localeCompare(b.supplier)||(a.etd||'').localeCompare(b.etd||'')||(a.job||'').localeCompare(b.job||'');});
@@ -21581,7 +21599,7 @@ function _vrViewSupp(D){
       +'<td>'+_vrE(L.etd)+'</td><td>'+_vrE(L.shipper||'—')+'</td><td>'+_vrE(L.supplier)+'</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.item)+'">'+_vrE(L.item)+'</td>'
       +'<td>'+_vrE(L.rates)+'</td>'+numCells(L)
       +'<td>'+_vsStChip(L.st,L.stTxt+(L.paidDate&&L.st==='paid'?' '+L.paidDate.slice(5).split('-').reverse().join('/'):''))+'</td>'
-      +'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.invTxt)+'">'+(L.req?(L.invTxt?_vrE(L.invTxt):'<span class="vs-red">—</span>'):'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
+      +'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.invTxt)+'">'+(L.invTxt?_vrE(L.invTxt)+(L.invMissing?' <span class="vs-red">(thiếu)</span>':''):(L.req?'<span class="vs-red">—</span>':'<span style="color:var(--text-tertiary)">—</span>'))+'</td>'
       +'<td class="vs-red">'+_vrE(L.warn.join(' · '))+'</td></tr>';
   };
   const subHtml=function(label,t,cls){return '<tr class="'+cls+'"><td colspan="9">'+label+'</td>'+numCells(t)+'<td></td><td></td><td></td></tr>';};
@@ -21593,7 +21611,7 @@ function _vrViewSupp(D){
   });
   const filt=(B.sup?('NCC '+B.sup):'tất cả NCC')+(B.q?(' · tìm “'+B.q+'”'):'');
   const tfoot=B.rows.length?'<tfoot><tr><td colspan="9">TỔNG CỘNG — '+_vrE(filt)+' ('+B.rows.length+' dòng · '+T.lots+' lô)</td>'+numCells(T)+'<td></td><td></td><td></td></tr></tfoot>':'';
-  const note='Mỗi dòng = 1 lô × 1 NCC (gộp các khoản chi phí của NCC đó trong lô); cột “Khoản chi phí” liệt kê tên các khoản. <b class="vs-red">Dòng đỏ</b> = lô bắt buộc có hóa đơn VAT (có OCF hoặc NCC thuộc list Carrier) nhưng <b>chưa có số HĐ VAT</b> (nhập ở tab Invoice của lô) hoặc <b>chưa có số VAT / chưa nhập chi phí</b> (nhập ở tab Dịch vụ) — các dòng thiếu VAT vẫn được liệt kê, cộng vào tổng với VAT = 0. Thuế suất tính ngược từ số VAT đã nhập; ngoại tệ quy VND theo ROE của lô. '
+  const note='Mỗi dòng = 1 lô × 1 NCC (gộp các khoản chi phí của NCC đó trong lô); cột “Khoản chi phí” liệt kê tên các khoản. <b class="vs-red">Dòng đỏ</b> = lô bắt buộc có hóa đơn VAT (có OCF hoặc NCC thuộc list Carrier) nhưng <b>chưa có số HĐ NCC</b> (cột “Số HĐ VAT (ngày)” = nội dung ô <b>Remark</b> của dòng dịch vụ ở tab Service — nhập số HĐ + ngày vào Remark) hoặc <b>chưa có số VAT / chưa nhập chi phí</b> (nhập ở tab Dịch vụ) — các dòng thiếu VAT vẫn được liệt kê, cộng vào tổng với VAT = 0. Thuế suất tính ngược từ số VAT đã nhập; ngoại tệ quy VND theo ROE của lô. '
     +'Gồm cả Chi khác trong Sổ quỹ có VAT gắn NCC (không gắn lô, đánh dấu “Sổ quỹ”) để tổng khớp tab “Đầu vào”. Dòng không chọn NCC gom vào “(Chưa chọn NCC)”.';
   return '<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-building-warehouse"></i>VAT theo nhà cung cấp — từng lô, tách riêng VAT</span><span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">'+_vrE(fd(rg.from))+' → '+_vrE(fd(rg.to))+' · '+T.lots+' lô · theo ETD</span></div>'
     +_vsTimeBarHtml()+toolbar+kpis
@@ -21709,7 +21727,7 @@ async function _vsSuppExport(){
         stt++; zebra++;
         const bg=zebra%2===1?'FFFFFFFF':'FFF7F8FA';
         const rr=ws.getRow(rIdx); rr.height=18;
-        const vals=[stt,L.job,L.hbl,L.tenHang,L.cont,fd(L.etd),L.shipper,L.supplier,L.item,L.rates,L.base,L.vat,L.total,L.stTxt,L.paidDate&&L.st!=='unpaid'?fd(L.paidDate):'',L.req?(L.invTxt||'— chưa có —'):'',L.warn.join(' · ')];
+        const vals=[stt,L.job,L.hbl,L.tenHang,L.cont,fd(L.etd),L.shipper,L.supplier,L.item,L.rates,L.base,L.vat,L.total,L.stTxt,L.paidDate&&L.st!=='unpaid'?fd(L.paidDate):'',L.invTxt||(L.req?'— chưa có —':''),L.warn.join(' · ')];
         vals.forEach(function(v,j){
           const c=rr.getCell(j+1); c.value=v; c.font={size:9.5,color:{argb:C.textDark}}; c.border=thinB(); c.fill=fill(bg);
           c.alignment={vertical:'middle',horizontal:(j===0)?'center':(j>=10&&j<=12)?'right':(j===4||j===5||j===9||j===13||j===14)?'center':'left',wrapText:(j===3||j===7||j===8||j===15||j===16)};
@@ -21778,9 +21796,6 @@ function _vatIsCarrier(name){
   const p=cache.partners&&cache.partners[name];
   return !!(p&&typeof _partnerHasType==='function'&&_partnerHasType(p,'carrier'));
 }
-function _vatLotInvoices(r){
-  return (Array.isArray(r&&r.vatInvoices)?r.vatInvoices:[]).filter(function(x){return x&&String(x.no||'').trim();});
-}
 function _vatDmy(d){return d?String(d).split('-').reverse().join('/'):'';}
 function _vatInvLabel(list){
   return (list||[]).map(function(x){return String(x.no).trim()+(x.date?' ('+_vatDmy(x.date)+')':'');}).join(', ');
@@ -21802,7 +21817,7 @@ function _vatReqLines(r){
     const k=((sv.svcCur||sv.cur||'VND')==='VND')?1:roe;
     const def=(typeof SVCS!=='undefined'&&SVCS.find)?SVCS.find(function(s){return s.key===key;}):null;
     out.push({key:key,name:sv.customName||(def&&def.name)||key,supplier:supplier||'(Chưa chọn NCC)',isOcf:isOcf,isCar:isCar,
-      base:Math.round(baseC*k),vat:Math.round(vatC*k),hasVat:(cost>0&&vatC>0),paid:sv.apPaidStatus==='paid'});
+      base:Math.round(baseC*k),vat:Math.round(vatC*k),hasVat:(cost>0&&vatC>0),paid:sv.apPaidStatus==='paid',remark:String(sv.apRemark||'').trim()});
   });
   (((r.costing||{}).items)||[]).forEach(function(it){
     const supplier=(it.partnerRef||'').trim();
@@ -21811,7 +21826,7 @@ function _vatReqLines(r){
     const baseC=(parseFloat(it.price||it.amt)||0)*(parseFloat(it.qty)||1);
     const k=((it.cur||'VND')==='VND')?1:roe;
     out.push({key:'cost',name:it.name||'Chi phí nhập tay',supplier:supplier,isOcf:false,isCar:true,
-      base:Math.round(baseC*k),vat:Math.round(vatC*k),hasVat:vatC>0,paid:it.apPaidStatus==='paid'});
+      base:Math.round(baseC*k),vat:Math.round(vatC*k),hasVat:vatC>0,paid:it.apPaidStatus==='paid',remark:String(it.remark||'').trim()});
   });
   return out;
 }
@@ -21822,65 +21837,89 @@ function _vatReqReason(r){
   return t.join(', ');
 }
 
-// ── Hộp "Hóa đơn VAT" trong tab Invoice
+// ── A 2.67: hóa đơn VAT theo PARTY — chỉ hiện ở party có dịch vụ "Có hóa đơn" (cạnh số tiền Debit Note)
+function _vatFirstYesParty(r){
+  const svcs=(r&&r.svcs)||{}, ks=Object.keys(svcs);
+  for(let i=0;i<ks.length;i++){const sv=svcs[ks[i]]; if(sv&&sv.on&&(sv.invoice||'Yes')==='Yes')return (sv.party||'').trim()||'(Không party)';}
+  return '';
+}
+// Chuẩn hóa r.vatInvoices → [{id,no,date,party}] (hóa đơn cũ chưa có party → gán cho party "Có HĐ" đầu tiên)
+function _vatNormInv(r){
+  const fb=_vatFirstYesParty(r);
+  return (Array.isArray(r&&r.vatInvoices)?r.vatInvoices:[]).filter(function(x){return x&&(String(x.no||'').trim()||x.date);})
+    .map(function(x){return {id:x.id||'',no:String(x.no||'').trim(),date:x.date||'',party:(x.party||'').trim()||fb};});
+}
+function _vatPartyInvoices(r,party){return _vatNormInv(r).filter(function(x){return x.party===party&&x.no;});}
+
 function _vatInvRowHtml(it){
   it=it||{};
   return '<div class="vi-row" data-id="'+_vrE(it.id||'')+'">'
-    +'<input type="text" class="vi-no" placeholder="Số hóa đơn VAT" value="'+_vrE(it.no||'')+'" oninput="_vatInvRefresh()" style="flex:1;min-width:150px;font-size:12.5px"/>'
-    +'<input type="date" class="vi-date" value="'+_vrE(it.date||'')+'" style="width:150px;font-size:12.5px" title="Ngày hóa đơn"/>'
-    +'<button type="button" class="btn sm" title="Xóa dòng hóa đơn" onclick="_vatInvDel(this)" style="color:#DC2626;border-color:#DC262644"><i class="ti ti-trash"></i></button>'
+    +'<input type="text" class="vi-no" placeholder="Số hóa đơn" value="'+_vrE(it.no||'')+'" oninput="_vatInvRefresh(this)"/>'
+    +'<input type="date" class="vi-date" value="'+_vrE(it.date||'')+'" title="Ngày hóa đơn"/>'
+    +'<button type="button" class="vi-del" title="Xóa dòng hóa đơn" onclick="_vatInvDel(this)"><i class="ti ti-trash"></i></button>'
     +'</div>';
 }
-function _vatInvBoxHtml(r){
-  const list=(Array.isArray(r.vatInvoices)&&r.vatInvoices.length)?r.vatInvoices:[{}];
-  const reason=_vatReqReason(r);
-  const need=!!reason&&!_vatLotInvoices(r).length;
-  return '<div class="vi-box'+(need?' vi-bad':'')+'" id="vatInvBox" data-req="'+(reason?'1':'0')+'" data-reason="'+_vrE(reason)+'">'
-    +'<div class="vi-hd"><span><i class="ti ti-receipt-2"></i> Hóa đơn VAT (Cocosea xuất cho shipper)</span>'
-    +'<button type="button" class="btn sm pri" onclick="_vatInvAdd()" title="Thêm hóa đơn"><i class="ti ti-plus"></i></button></div>'
-    +'<div class="vi-warn" id="vatInvWarn" style="display:'+(need?'flex':'none')+'">'+(need?'<i class="ti ti-alert-triangle"></i><span>Chưa có số hóa đơn VAT — yêu cầu nhập ('+_vrE(reason)+')</span>':'')+'</div>'
-    +'<div class="vi-list">'+list.map(_vatInvRowHtml).join('')+'</div>'
-    +'<div class="vi-hint">Lô có OCF hoặc dịch vụ NCC thuộc list Carrier bắt buộc có hóa đơn VAT. Lô có nhiều hóa đơn: bấm + để thêm dòng. Bấm <b>Lưu</b> ở cuối tab để ghi.</div>'
+// req = lý do bắt buộc có hóa đơn ('' nếu không bắt buộc) → thiếu thì báo đỏ (không chặn)
+function _vatInvBoxHtml(r,party,req){
+  const list=_vatNormInv(r).filter(function(x){return x.party===party;});
+  const need=!!req&&!list.some(function(x){return x.no;});
+  return '<div class="vi-box'+(need?' vi-bad':'')+'" data-party="'+_vrE(party)+'" data-req="'+(req?'1':'0')+'" data-reason="'+_vrE(req||'')+'">'
+    +'<div class="vi-hd"><span><i class="ti ti-receipt-2"></i> Hóa đơn VAT</span>'
+    +'<button type="button" class="vi-add" onclick="_vatInvAdd(this)" title="Thêm hóa đơn"><i class="ti ti-plus"></i></button></div>'
+    +'<div class="vi-warn"'+(need?'':' style="display:none"')+'>'+(need?'<i class="ti ti-alert-triangle"></i><span>Chưa có số HĐ — yêu cầu nhập ('+_vrE(req)+')</span>':'')+'</div>'
+    +'<div class="vi-list">'+(list.length?list:[{}]).map(_vatInvRowHtml).join('')+'</div>'
     +'</div>';
 }
-function _vatBox(){const dc=(typeof _getDetailContainer==='function')?_getDetailContainer():null;return (dc&&dc.querySelector('#vatInvBox'))||document.getElementById('vatInvBox');}
-function _vatInvRefresh(){
-  const box=_vatBox(); if(!box)return;
-  const w=box.querySelector('#vatInvWarn'); if(!w)return;
+function _vatInvRefresh(el){
+  const box=el&&el.closest?el.closest('.vi-box'):null; if(!box)return;
+  const w=box.querySelector('.vi-warn'); if(!w)return;
   const any=Array.prototype.some.call(box.querySelectorAll('.vi-no'),function(i){return (i.value||'').trim();});
   const need=box.dataset.req==='1'&&!any;
   w.style.display=need?'flex':'none';
-  w.innerHTML=need?'<i class="ti ti-alert-triangle"></i><span>Chưa có số hóa đơn VAT — yêu cầu nhập ('+_vrE(box.dataset.reason||'')+')</span>':'';
+  w.innerHTML=need?'<i class="ti ti-alert-triangle"></i><span>Chưa có số HĐ — yêu cầu nhập ('+_vrE(box.dataset.reason||'')+')</span>':'';
   box.classList.toggle('vi-bad',need);
 }
-function _vatInvAdd(){
-  const box=_vatBox(); if(!box)return;
+function _vatInvAdd(btn){
+  const box=btn&&btn.closest?btn.closest('.vi-box'):null; if(!box)return;
   const list=box.querySelector('.vi-list');
   list.insertAdjacentHTML('beforeend',_vatInvRowHtml({}));
   const ins=list.querySelectorAll('.vi-no'); if(ins.length)ins[ins.length-1].focus();
-  _vatInvRefresh();
+  _vatInvRefresh(box.querySelector('.vi-no'));
 }
 function _vatInvDel(btn){
-  const box=_vatBox(); if(!box)return;
+  const box=btn&&btn.closest?btn.closest('.vi-box'):null; if(!box)return;
   const row=btn.closest('.vi-row'); if(row)row.remove();
   const list=box.querySelector('.vi-list');
   if(!list.querySelector('.vi-row'))list.insertAdjacentHTML('beforeend',_vatInvRowHtml({}));
-  _vatInvRefresh();
+  _vatInvRefresh(box.querySelector('.vi-no'));
 }
-// Đọc các dòng hóa đơn trên màn hình → mảng; trả null nếu hộp không có; {error} nếu có ngày mà thiếu số
-function _vatInvCollect(){
-  const box=_vatBox(); if(!box)return null;
-  const out=[]; let bad=false;
-  box.querySelectorAll('.vi-row').forEach(function(row){
-    const no=(row.querySelector('.vi-no').value||'').trim(), dt=(row.querySelector('.vi-date').value||'').trim();
-    if(!no&&!dt)return;
-    if(!no){bad=true;return;}
-    out.push({id:row.dataset.id||('v'+Date.now().toString(36)+out.length),no:no,date:dt});
+// Đọc các hộp HĐ trong scope → danh sách HĐ của CẢ LÔ (giữ HĐ của party không có hộp); null nếu scope không có hộp; {error} nếu có ngày mà thiếu số
+function _vatInvCollect(scope,r){
+  const root=scope||((typeof _getDetailContainer==='function')?_getDetailContainer():null)||document;
+  const boxes=root.querySelectorAll('.vi-box[data-party]'); if(!boxes.length)return null;
+  r=r||((typeof detailTt!=='undefined'&&cache[detailTt])?cache[detailTt].find(function(x){return x._id===detailId;}):null)||{};
+  const out=[], seen={}; let bad=false;
+  boxes.forEach(function(box){
+    const party=box.dataset.party||''; seen[party]=1;
+    box.querySelectorAll('.vi-row').forEach(function(row){
+      const no=(row.querySelector('.vi-no').value||'').trim(), dt=(row.querySelector('.vi-date').value||'').trim();
+      if(!no&&!dt)return;
+      if(!no){bad=true;return;}
+      out.push({id:row.dataset.id||('v'+Date.now().toString(36)+out.length),no:no,date:dt,party:party});
+    });
   });
+  _vatNormInv(r).forEach(function(x){if(!seen[x.party]&&x.no)out.push({id:x.id||('v'+Date.now().toString(36)+out.length),no:x.no,date:x.date,party:x.party});});
   return bad?{error:'Có dòng hóa đơn VAT đã nhập ngày nhưng chưa có số hóa đơn'}:out;
 }
+function _vatInvSummary(list){return (list||[]).map(function(x){return x.no+(x.date?' ('+_vatDmy(x.date)+')':'');}).join(', ');}
+// Khối HĐ trong popup trạng thái thanh toán (nhập lúc này hoặc nhập sau ở tab Invoice)
+function _vatPopupInvHtml(ctx){
+  const r=(typeof detailTt!=='undefined'&&cache[detailTt]?cache[detailTt].find(function(x){return x._id===detailId;}):null)||{};
+  return '<div class="fi full" id="psInvWrap"><label class="lbl">Hóa đơn VAT <span style="font-weight:500;color:var(--text-tertiary)">— nhập lúc này hoặc nhập sau ở tab Invoice</span></label>'
+    +_vatInvBoxHtml(r,ctx.party||'','')+'</div>';
+}
 
-Object.assign(window,{renderTcVat,_vrSet,_vrPick,_vrQuery,_vrOpenLot,_vrExport,_vrCompute,_vsExport,_vsPick,_vsQuery,_vsBuild,_vsMerge,_vsFiltered,_vsQuick,_vsDateChanged,_vsApplyRange,_vsSuppPick,_vsSuppQuery,_vsSuppRowClick,_vsSuppExport,_vsSuppFiltered,_vsSuppMiss,_vatInvAdd,_vatInvDel,_vatInvRefresh,_vatInvCollect,_vatReqLines});
+Object.assign(window,{renderTcVat,_vrSet,_vrPick,_vrQuery,_vrOpenLot,_vrExport,_vrCompute,_vsExport,_vsPick,_vsQuery,_vsBuild,_vsMerge,_vsFiltered,_vsQuick,_vsDateChanged,_vsApplyRange,_vsSuppPick,_vsSuppQuery,_vsSuppRowClick,_vsSuppExport,_vsSuppFiltered,_vsSuppMiss,_vatInvAdd,_vatInvDel,_vatInvRefresh,_vatInvCollect,_vatReqLines,_vatPopupInvHtml,_vatPartyInvoices,_vatNormInv});
 
 
 function renderTcBaoCao(){
@@ -26072,13 +26111,21 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .vs-kpi{border:1px solid var(--border-light);border-radius:10px;padding:9px 12px;background:var(--bg-primary)}
 .vs-kpi span{display:block;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:3px}
 .vs-kpi b{font-size:15px;font-variant-numeric:tabular-nums;color:var(--text-primary)}
-.vi-box{border:1px solid var(--border-light);border-radius:8px;padding:.7rem .85rem;margin-bottom:1rem;background:var(--bg-primary)}
+.vi-split{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;align-items:start}
+.vi-left{min-width:0}
+.vi-box{border:1px solid var(--border-light);border-radius:7px;padding:.4rem .55rem;background:var(--bg-secondary);min-width:0}
 .vi-box.vi-bad{border-color:#DC2626;background:rgba(220,38,38,.05)}
-.vi-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:12px;font-weight:700;color:var(--text-primary)}
-.vi-hd i{color:var(--blue);margin-right:4px}
-.vi-warn{display:flex;gap:6px;align-items:center;color:#DC2626;font-weight:700;font-size:12px;margin-bottom:8px}
-.vi-row{display:flex;gap:8px;align-items:center;margin-bottom:6px}
-.vi-hint{font-size:10.5px;color:var(--text-tertiary);margin-top:4px;line-height:1.5}
+.vi-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#1a4b8c}
+.vi-hd i{margin-right:2px}
+.vi-add{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--blue);border-radius:6px;background:var(--blue);color:#fff;cursor:pointer;font-size:13px;padding:0}
+.vi-warn{display:flex;gap:5px;align-items:center;color:#DC2626;font-weight:700;font-size:11px;margin-bottom:4px;line-height:1.3}
+.vi-row{display:flex;gap:5px;align-items:center;margin-bottom:4px}
+.vi-row input{min-width:0;font-size:12px;padding:3px 6px;box-sizing:border-box}
+.vi-row .vi-no{flex:1 1 110px}
+.vi-row .vi-date{flex:0 0 122px;width:122px}
+.vi-del{width:22px;height:22px;flex:0 0 22px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #DC262644;border-radius:6px;background:transparent;color:#DC2626;cursor:pointer;font-size:12px;padding:0}
+.vi-del:hover{background:rgba(220,38,38,.08)}
+.vr-tbl td.vr-inv{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px}
 .vs-red{color:#DC2626;font-weight:700}
 .vs-miss{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:0 0 auto;font-size:12px;color:var(--text-secondary);cursor:pointer;padding:5px 10px;border:1px solid var(--border-light);border-radius:20px}
 .vs-miss.bad{border-color:#DC262666;color:#DC2626;background:rgba(220,38,38,.06)}
@@ -34120,7 +34167,7 @@ function buildDnPartyRows(r,svcs){
     const invType=(sv.invoice||'Yes');
     if(invType==='Waived')return;
     const party=(sv.party||'').trim()||'(Không party)';
-    if(!parties[party])parties[party]={yes:{amt:0,vat8:0,vat10:0,cnt:0},no:{amt:0,cnt:0}};
+    if(!parties[party])parties[party]={yes:{amt:0,vat8:0,vat10:0,cnt:0,req:[]},no:{amt:0,cnt:0}};
     const price=parseFloat(sv.price)||0;
     const qty=parseFloat(sv.qty||sv.svcQty)||1;
     const cur=sv.cur||'VND';
@@ -34130,6 +34177,8 @@ function buildDnPartyRows(r,svcs){
     if(invType==='Yes'){
       parties[party].yes.amt+=amt;
       parties[party].yes.cnt++;
+      { const _kb=_svcKeyBase(k), _sp=(sv.svcSupplier||'').trim();
+        if(_kb==='ocf'||_kb==='freight')parties[party].yes.req.push('OCF'); else if(_sp&&_vatIsCarrier(_sp))parties[party].yes.req.push('NCC carrier '+_sp); }
       if(vatRate===8)parties[party].yes.vat8+=amt;
       else if(vatRate===10)parties[party].yes.vat10+=amt;
     } else {
@@ -34161,7 +34210,7 @@ function buildDnPartyRows(r,svcs){
     const invPm=pmData.inv||{status:legacyPayMap[p]||'unpaid',date:legacyDateMap[p]||'',bank:legacyBankMap[p]||'',amount:0};
     const noInvPm=pmData.noInv||{status:'unpaid',date:'',bank:'',amount:0};
 
-    const rowStyle='display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:12px';
+    const rowStyle='display:flex;justify-content:space-between;align-items:baseline;padding:1px 0;font-size:11.5px';
     const labelStyle='color:var(--text-secondary);font-size:11.5px';
     const amtStyle='font-weight:600;color:var(--text-primary)';
     const vatStyle='font-weight:600;color:#e07000';
@@ -34172,8 +34221,9 @@ function buildDnPartyRows(r,svcs){
       const invCtx={type:'ar_party_inv',party:p,status:invPm.status||'unpaid',date:invPm.date||'',bank:invPm.bank||'',amount:invPm.amount||0,label:p+' — Có hóa đơn',suggestAmount:totalYesWithVat};
       const invPaid=invPm.amount||0;
       const invRemain=totalYesWithVat-invPaid;
-      invoiceSection+='<div style="padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
-        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+      invoiceSection+='<div class="vi-split" style="padding:6px 10px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:6px;margin-bottom:4px">'
+        +'<div class="vi-left">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">'
           +'<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a4b8c">🧾 Có hóa đơn ('+info.yes.cnt+' dịch vụ)</span>'
           +_apPayBadge(invPm.status||'unpaid',invPm.date||'',invCtx)
         +'</div>'
@@ -34182,6 +34232,8 @@ function buildDnPartyRows(r,svcs){
         +'<div style="'+rowStyle+';border-top:1px dashed var(--border-light);margin-top:3px;padding-top:4px"><span style="font-size:12px;font-weight:600">Tổng có VAT (Debit Note)</span><span style="'+totStyle+'">'+totalYesWithVat.toLocaleString()+' đ</span></div>'
         +(invPaid?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">Đã thanh toán</span><span style="font-weight:700;color:var(--green)">'+Math.round(invPaid).toLocaleString()+' đ</span></div>':'')
         +(invPaid&&invRemain!==0?'<div style="'+rowStyle+'"><span style="'+labelStyle+'">'+(invRemain>0?'Còn lại (chưa TT)':'Thừa')+'</span><span style="font-weight:700;color:'+(invRemain>0?'var(--red)':'#e07000')+';">'+(invRemain>0?invRemain.toLocaleString():(-invRemain).toLocaleString())+' đ</span></div>':'')
+      +'</div>'
+      +_vatInvBoxHtml(r,p,_vsUniq(info.yes.req).join(', '))
       +'</div>';
     }
     if(info.no.cnt>0){
@@ -34200,13 +34252,13 @@ function buildDnPartyRows(r,svcs){
     }
 
     return '<div style="background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;overflow:hidden">'
-      +'<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f0f5ff;border-bottom:1px solid var(--border-light)">'
+      +'<div style="display:flex;align-items:center;gap:10px;padding:5px 10px;background:#f0f5ff;border-bottom:1px solid var(--border-light)">'
         +'<div style="font-size:13px;font-weight:700;color:#1a4b8c;flex:1">'+p+'</div>'
         +'<div style="font-size:10.5px;font-weight:700;color:var(--green)">Grand: '+grandTotal.toLocaleString()+' đ</div>'
       +'</div>'
-      +'<div style="padding:8px 12px">'
+      +'<div style="padding:6px 10px">'
         +invoiceSection
-        +'<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-top:4px">'
           +'<input type="text" id="dnParty_'+i+'" data-party="'+p+'" value="'+dnNo+'" placeholder="Số DN" oninput="_dnPartyInputChange(this,'+i+')" style="font-size:12px;font-weight:700;color:#1a4b8c;flex:1;border:1px solid var(--border-light);border-radius:6px;padding:5px 8px"/>'
           +'<button class="btn red" id="btnXuatDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập Số DN trước khi xuất"')+' onclick="openDnScopePicker(this.dataset.party)" style="font-size:12px;white-space:nowrap"><i class="ti ti-file-invoice"></i> Tạo DN</button>'
           +'<button class="btn blu" id="btnEmailDn_'+i+'" data-party="'+safeP+'"'+(dnNo?'':' disabled title="Nhập Số DN trước khi gửi"')+' onclick="_dnDirectSendEmail(this.dataset.party)" style="font-size:12px;white-space:nowrap"><i class="ti ti-mail"></i> Send Email DN</button>'
