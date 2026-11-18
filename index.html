@@ -1571,7 +1571,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.63';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.64';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -21133,8 +21133,40 @@ function _vsStChip(st,txt){
   return '<span class="vr-chip '+(st==='paid'?'ok':(st==='part'?'gray':'warn'))+'">'+_vrE(txt)+'</span>';
 }
 
+// A 2.64: bộ lọc thời gian ngay trong tab (dùng chung kỳ với thanh kỳ ở đầu trang → KPI/Excel cùng kỳ)
+function _vsYmd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function _vsQuickRange(k){
+  const n=new Date(), y=n.getFullYear(), m=n.getMonth(), q=Math.floor(m/3);
+  let a,b;
+  if(k==='thisMonth'){a=new Date(y,m,1);b=new Date(y,m+1,0);}
+  else if(k==='lastMonth'){a=new Date(y,m-1,1);b=new Date(y,m,0);}
+  else if(k==='thisQ'){a=new Date(y,q*3,1);b=new Date(y,q*3+3,0);}
+  else if(k==='lastQ'){a=new Date(y,(q-1)*3,1);b=new Date(y,q*3,0);}
+  else {a=new Date(y,0,1);b=new Date(y,11,31);}
+  return {from:_vsYmd(a),to:_vsYmd(b)};
+}
+function _vsApplyRange(from,to){
+  if(!from||!to){toast('Chọn đủ ngày bắt đầu và kết thúc','error');return;}
+  if(from>to){toast('Ngày bắt đầu phải trước ngày kết thúc','error');return;}
+  const p=window._tcRptPeriod; p.mode='custom'; p.customFrom=from; p.customTo=to; p.year=parseInt(from.slice(0,4))||p.year;
+  renderTcBody();
+}
+function _vsQuick(k){const r=_vsQuickRange(k);_vsApplyRange(r.from,r.to);}
+function _vsDateChanged(){_vsApplyRange(g('vsFrom')&&g('vsFrom').value,g('vsTo')&&g('vsTo').value);}
+
 function _vrViewShip(D){
   const B=_vsFiltered(D), T=B.tot;
+  const rg=_tcPeriodRange();
+  const quick=[['thisMonth','Tháng này'],['lastMonth','Tháng trước'],['thisQ','Quý này'],['lastQ','Quý trước'],['thisYear','Năm nay']].map(function(c){
+    const r=_vsQuickRange(c[0]), on=(r.from===rg.from&&r.to===rg.to);
+    return '<button class="vs-chip'+(on?' on':'')+'" onclick="_vsQuick(\''+c[0]+'\')">'+c[1]+'</button>';
+  }).join('');
+  const timeBar='<div class="vr-toolbar vs-time">'
+    +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600"><i class="ti ti-calendar-event"></i> Thời gian (ETD):</label>'
+    +quick
+    +'<label style="font-size:12px;color:var(--text-secondary)">Từ</label><input type="date" id="vsFrom" value="'+rg.from+'" style="width:140px;font-size:12px" onchange="_vsDateChanged()"/>'
+    +'<label style="font-size:12px;color:var(--text-secondary)">đến</label><input type="date" id="vsTo" value="'+rg.to+'" style="width:140px;font-size:12px" onchange="_vsDateChanged()"/>'
+    +'</div>';
   const opts='<option value="">Tất cả shipper ('+B.all.length+' lô)</option>'+B.shippers.map(function(s){
     return '<option value="'+_vrE(s.name)+'"'+(s.name===B.ship?' selected':'')+'>'+_vrE(s.name)+' ('+s.n+')</option>';
   }).join('')+((B.ship&&!B.shippers.some(function(s){return s.name===B.ship;}))?'<option value="'+_vrE(B.ship)+'" selected>'+_vrE(B.ship)+' (0)</option>':'');
@@ -21187,8 +21219,8 @@ function _vrViewShip(D){
     +'Đầu ra = dịch vụ “Có hóa đơn: Yes” trong Debit Note (gộp mọi party của lô); đầu vào = chi phí NCC có VAT (tab Dịch vụ + chi phí nhập tay), ngoại tệ quy VND theo ROE của lô. '
     +'Doanh thu theo thuế suất: 0% / không chịu thuế <b>'+_vrN(T.base0)+'</b> · 8% <b>'+_vrN(T.base8)+'</b> · 10% <b>'+_vrN(T.base10)+'</b>'+(T.baseO?' · mức khác <b>'+_vrN(T.baseO)+'</b>':'')+'. '
     +'Khoản Sổ quỹ nhập tay không gắn lô không có shipper nên không nằm trong báo cáo này.';
-  return '<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-truck-delivery"></i>VAT theo Shipper — đầu ra, đầu vào và chênh lệch từng lô</span><span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">'+T.lots+' lô · theo ETD</span></div>'
-    +toolbar+kpis
+  return '<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-truck-delivery"></i>VAT theo Shipper — đầu ra, đầu vào và chênh lệch từng lô</span><span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">'+_vrE(fd(rg.from))+' → '+_vrE(fd(rg.to))+' · '+T.lots+' lô · theo ETD</span></div>'
+    +timeBar+toolbar+kpis
     +'<div class="vr-scroll" style="max-height:600px"><table class="vr-tbl"><thead>'+thead+'</thead><tbody>'+(body||'<tr><td colspan="'+NC+'" class="empty">Không có lô phù hợp trong kỳ / bộ lọc</td></tr>')+'</tbody>'+tfoot+'</table></div>'
     +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">'+note+'</div></div>';
 }
@@ -21378,7 +21410,7 @@ async function _vsExport(){
   setLoading(false);
 }
 
-Object.assign(window,{renderTcVat,_vrSet,_vrPick,_vrQuery,_vrOpenLot,_vrExport,_vrCompute,_vsExport,_vsPick,_vsQuery,_vsBuild,_vsMerge,_vsFiltered});
+Object.assign(window,{renderTcVat,_vrSet,_vrPick,_vrQuery,_vrOpenLot,_vrExport,_vrCompute,_vsExport,_vsPick,_vsQuery,_vsBuild,_vsMerge,_vsFiltered,_vsQuick,_vsDateChanged,_vsApplyRange});
 
 
 function renderTcBaoCao(){
@@ -25570,6 +25602,10 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .vs-kpi{border:1px solid var(--border-light);border-radius:10px;padding:9px 12px;background:var(--bg-primary)}
 .vs-kpi span{display:block;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:3px}
 .vs-kpi b{font-size:15px;font-variant-numeric:tabular-nums;color:var(--text-primary)}
+.vs-time{padding:8px 10px;border:1px solid var(--border-light);border-radius:10px;background:var(--bg-secondary)}
+.vs-chip{padding:5px 12px;border:1px solid var(--border-light);border-radius:20px;background:var(--bg-primary);color:var(--text-secondary);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+.vs-chip:hover{background:var(--bg-tertiary,var(--bg-secondary))}
+.vs-chip.on{background:var(--blue);border-color:var(--blue);color:#fff}
 .vr-tbl td.vin{font-weight:700;color:#0F9D8A}
 .vr-tbl tr.vs-band td{background:var(--blue-bg);color:var(--blue-text);font-weight:800;font-size:12px}
 .vr-tbl tr.vs-sub td{background:var(--bg-secondary);font-weight:800}
