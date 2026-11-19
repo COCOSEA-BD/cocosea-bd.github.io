@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.77';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.78';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2810,6 +2810,12 @@ function startListeners(){
       if(typeof _holOnData==='function')_holOnData();
     },function(){ cache.holidays=cache.holidays||[]; });
     listeners.push(uHol);
+    // A 2.78: đơn nghỉ phép (Admin/Kế toán đọc tất cả; user khác chỉ đọc đơn của chính mình) + quỹ phép năm
+    try{
+      const _lvQ=_lvCanSeeAll()?db.collection('leaves'):db.collection('leaves').where('email','==',_lvMyEmail());
+      listeners.push(_lvQ.onSnapshot(snap=>{ cache.leaves=snap.docs.map(d=>({_id:d.id,...d.data()})); if(typeof _lvOnData==='function')_lvOnData(); },function(){ cache.leaves=cache.leaves||[]; }));
+      listeners.push(db.collection('_config').doc('leaveSettings').onSnapshot(sn=>{ cache.leaveSettings=sn.exists?sn.data():{}; if(typeof _lvOnData==='function')_lvOnData(); },function(){}));
+    }catch(_lvE){ console.warn('leaves listener',_lvE); }
     // A 2.43: Bảng tỷ giá USD/VND (Vietcombank bán ra) theo ngày — áp dụng cho lô ETD từ 11/11/2026
     const uFx = db.collection('fxRates').onSnapshot(snap => {
       cache.fxRates = snap.docs.map(d=>({_id:d.id,...d.data()}));
@@ -14944,6 +14950,7 @@ function renderTcPayroll(){
   const tabs=[
     {k:'list',icon:'ti-list-details',label:'Danh sách lương'},
     {k:'scale',icon:'ti-stairs-up',label:'Thang lương'},
+    {k:'leave',icon:'ti-beach',label:'On Leave Report'},
     {k:'report',icon:'ti-chart-bar',label:'Báo cáo'}
   ];
   const tabNav=tabs.map(function(t){
@@ -15040,6 +15047,8 @@ window._prLoadTabContent=async function(tab){
     _prRenderTable();
   } else if(tab==='scale'){
     await _pscLoadScaleTab();
+  } else if(tab==='leave'){
+    window._lvRenderTab(); // A 2.78
   } else if(tab==='report'){
     await _prRenderReport();
   }
@@ -24256,8 +24265,870 @@ function renderCrmCneeTab(p){
 // Editable permission matrix state (in-memory, admin can save to Firestore)
 let editingPerms = false;
 
-// ═══ Hồ sơ của tôi — dành cho user KHÔNG phải admin (tự đổi tên + ảnh đại diện, không đổi được vai trò) ═══
-function renderMyProfileOnly(pg){
+/* ═══════════════════════════════════════════════════════════════════════════
+   A 2.78 — ON LEAVE REPORT (Finance › Payroll › tab "On Leave Report") + HỒ SƠ CỦA TÔI mở rộng
+   • Collection `leaves` (docId tự sinh): {id,uid,email,name,role,type,from,to,half,days,reason,status,year,createdAt,createdBy,
+       reviewedBy,reviewedAt,reviewNote,cancelledAt}. status: pending | approved | rejected | cancelled.
+   • Quỹ phép: `_config/leaveSettings` {annualDefault:12, byEmail:{email:ngày}} — chỉ Admin sửa. Chỉ "Phép năm" trừ quỹ.
+   • Số ngày = ngày làm việc T2–T6, trừ ngày lễ/nghỉ ĐÃ được Admin duyệt (`_prIsOffDay`); nửa ngày (0,5) khi từ = đến.
+   • Admin duyệt / từ chối. Nhân viên tự gửi + tự hủy đơn Chờ duyệt (ở Hồ sơ của tôi). Admin thêm đơn hộ (duyệt luôn).
+   • CSS của tab nằm trong namespace #on-leave-report (modal: .olr-ov), của Hồ sơ: #my-profile.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const _LV_TYPES=[
+  {k:'annual',l:'Phép năm',c:'#0E9F8E',deduct:true},
+  {k:'sick',l:'Nghỉ ốm',c:'#3B82F6'},
+  {k:'unpaid',l:'Nghỉ không lương',c:'#F59E0B'},
+  {k:'other',l:'Nghỉ việc riêng/khác',c:'#8B5CF6'}
+];
+const _LV_ST={pending:{l:'Chờ duyệt',cls:'pend'},approved:{l:'Đã duyệt',cls:'ok'},rejected:{l:'Từ chối',cls:'rej'},cancelled:{l:'Đã hủy',cls:'can'}};
+const _LV_ANNUAL_DEFAULT=12;
+const _LV_MONTHS=['Tháng 1','Tháng 2','Tháng 3','Tháng 4','Tháng 5','Tháng 6','Tháng 7','Tháng 8','Tháng 9','Tháng 10','Tháng 11','Tháng 12'];
+window._lvState=window._lvState||(function(){const n=new Date();return {tab:'overview',y:n.getFullYear(),m:n.getMonth()+1,emp:'',dept:'',type:'',status:'',q:'',page:1};})();
+
+function _lvEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _lvTypeOf(k){return _LV_TYPES.find(function(t){return t.k===k;})||_LV_TYPES[3];}
+function _lvList(){return Array.isArray(cache.leaves)?cache.leaves:[];}
+function _lvIsAdmin(){return !!(currentProfile&&currentProfile.role==='admin');}
+function _lvCanSeeAll(){return !!(currentProfile&&(currentProfile.role==='admin'||currentProfile.role==='accountant'));}
+function _lvMyEmail(){return String((currentUser&&currentUser.email)||(currentProfile&&currentProfile.email)||'').toLowerCase();}
+function _lvToday(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function _lvAddDays(ds,n){const d=new Date(ds+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
+function _lvDmy(ds){return ds?String(ds).split('-').reverse().join('/'):'—';}
+function _lvMonthStart(y,m){return y+'-'+String(m).padStart(2,'0')+'-01';}
+function _lvMonthEnd(y,m){const d=new Date(Date.UTC(y,m,0));return d.toISOString().slice(0,10);}
+function _lvNum(n){n=Math.round((parseFloat(n)||0)*10)/10;return (n%1===0)?String(n):String(n).replace('.',',');}
+// Số ngày nghỉ: chỉ đếm ngày làm việc (T2–T6, trừ ngày lễ/nghỉ đã duyệt); nửa ngày khi từ = đến
+function _lvCalcDays(a,b,half){
+  if(!a||!b||b<a)return 0;
+  let n=0,d=a,guard=0;
+  while(d<=b&&guard++<400){ if(!_prIsOffDay(d))n++; d=_lvAddDays(d,1); }
+  if(half&&a===b&&n===1)return 0.5;
+  return n;
+}
+function _lvEmployees(){
+  return (cache.users||[]).filter(function(u){return u&&u.email&&u.active!==false;}).map(function(u){
+    return {email:String(u.email).toLowerCase(),name:_capName(u.name||u.username)||u.email,role:u.role||'viewer',uid:u.uid||u._docId||''};
+  }).sort(function(a,b){return a.name.localeCompare(b.name,'vi');});
+}
+function _lvUserOf(email){
+  const e=String(email||'').toLowerCase();
+  return _lvEmployees().find(function(x){return x.email===e;})||null;
+}
+function _lvDeptLabel(role){return (ROLES[role]&&ROLES[role].label)||role||'—';}
+function _lvShortName(n){const p=String(n||'').trim().split(/\s+/);return p.length>2?p.slice(-2).join(' '):p.join(' ');}
+function _lvAvatar(name,sz){
+  const s=String(name||'?').trim().split(/\s+/);const ini=((s[0]||'')[0]||'?')+(s.length>1?(s[s.length-1][0]||''):'');
+  let h=0;for(let i=0;i<String(name).length;i++)h=(h*31+String(name).charCodeAt(i))%360;
+  return '<span class="olr-av" style="width:'+(sz||30)+'px;height:'+(sz||30)+'px;background:hsl('+h+',45%,38%)">'+_lvEsc(ini.toUpperCase())+'</span>';
+}
+function _lvSettings(){const s=cache.leaveSettings||{};return {annualDefault:(s.annualDefault!=null&&!isNaN(parseFloat(s.annualDefault)))?parseFloat(s.annualDefault):_LV_ANNUAL_DEFAULT,byEmail:s.byEmail||{}};}
+function _lvEntitlement(email){const S=_lvSettings();const v=S.byEmail[String(email||'').toLowerCase()];return (v!=null&&v!==''&&!isNaN(parseFloat(v)))?parseFloat(v):S.annualDefault;}
+// Số dư phép năm của 1 người trong 1 năm (tính theo năm của ngày bắt đầu)
+function _lvBalance(email,year){
+  const e=String(email||'').toLowerCase(), ent=_lvEntitlement(e);
+  let used=0,pending=0;
+  _lvList().forEach(function(x){
+    if(!x||String(x.email||'').toLowerCase()!==e||x.type!=='annual'||String(x.from||'').slice(0,4)!==String(year))return;
+    if(x.status==='approved')used+=parseFloat(x.days)||0; else if(x.status==='pending')pending+=parseFloat(x.days)||0;
+  });
+  return {ent:ent,used:used,pending:pending,remain:ent-used-pending};
+}
+// Ngày làm việc của 1 đơn rơi trong [a,b] (dùng tính tổng ngày nghỉ trong tháng)
+function _lvDaysWithin(x,a,b){
+  const f=x.from>a?x.from:a, t=x.to<b?x.to:b;
+  if(t<f)return 0;
+  return _lvCalcDays(f,t,x.half&&x.from===x.to);
+}
+function _lvOverlaps(x,a,b){return x&&x.from&&x.to&&x.from<=b&&x.to>=a;}
+
+/* ───────────── CSS (namespace #on-leave-report + .olr-ov) ───────────── */
+const _LV_CSS=`
+#on-leave-report{--olr-navy:#0F3B6E;--olr-navy2:#1B5AA0;--olr-teal:#0E9F8E;--olr-card:var(--bg-primary);--olr-bg:var(--bg-secondary);--olr-bd:var(--border-light);--olr-tx:var(--text-primary);--olr-tx2:var(--text-secondary);display:flex;flex-direction:column;gap:12px;padding:12px;color:var(--olr-tx)}
+#on-leave-report *{box-sizing:border-box}
+#on-leave-report .olr-hero{position:relative;overflow:hidden;border-radius:14px;padding:16px 22px;display:flex;align-items:center;gap:16px;background:linear-gradient(110deg,#0B2A52 0%,#0F3B6E 45%,#157A93 100%);color:#fff;min-height:84px}
+#on-leave-report .olr-hero-ic{width:54px;height:54px;border-radius:14px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0}
+#on-leave-report .olr-hero h2{margin:0;font-size:22px;font-weight:800;letter-spacing:.2px;color:#fff;font-family:var(--font-disp)}
+#on-leave-report .olr-hero p{margin:3px 0 0;font-size:12.5px;color:rgba(255,255,255,.82)}
+#on-leave-report .olr-hero-art{position:absolute;right:0;top:0;bottom:0;width:46%;opacity:.95;pointer-events:none}
+#on-leave-report .olr-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+#on-leave-report .olr-card{background:var(--olr-card);border:1px solid var(--olr-bd);border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:12px;box-shadow:0 1px 3px rgba(15,59,110,.06);transition:transform .15s,box-shadow .15s}
+#on-leave-report .olr-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(15,59,110,.12)}
+#on-leave-report .olr-card-ic{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+#on-leave-report .olr-card-lb{font-size:11px;font-weight:700;color:var(--olr-tx2);text-transform:uppercase;letter-spacing:.35px;line-height:1.25}
+#on-leave-report .olr-card-v{font-size:26px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums;font-family:var(--font-disp)}
+#on-leave-report .olr-card-sub{font-size:10.5px;color:var(--olr-tx2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#on-leave-report .olr-card-sub.up{color:#16A34A}#on-leave-report .olr-card-sub.dn{color:#DC2626}
+#on-leave-report .olr-tabs{display:flex;gap:4px;border-bottom:1px solid var(--olr-bd)}
+#on-leave-report .olr-tab{border:none;background:transparent;padding:9px 18px;font-size:12.5px;font-weight:600;color:var(--olr-tx2);cursor:pointer;border-radius:9px 9px 0 0;font-family:inherit;transition:background .15s,color .15s}
+#on-leave-report .olr-tab:hover{background:rgba(14,159,142,.08);color:var(--olr-navy)}
+#on-leave-report .olr-tab.on{background:var(--olr-navy);color:#fff}
+#on-leave-report .olr-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+#on-leave-report .olr-filters select,#on-leave-report .olr-filters input{height:34px;border:1px solid var(--olr-bd);border-radius:9px;background:var(--olr-card);color:var(--olr-tx);padding:0 10px;font-size:12px;font-family:inherit;width:auto;margin:0}
+#on-leave-report .olr-filters input.olr-q{min-width:200px}
+#on-leave-report .olr-btn{height:34px;border-radius:9px;border:1px solid var(--olr-bd);background:var(--olr-card);color:var(--olr-navy);padding:0 14px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit;transition:filter .15s,transform .1s}
+#on-leave-report .olr-btn:hover{filter:brightness(.96)}#on-leave-report .olr-btn:active{transform:scale(.98)}
+#on-leave-report .olr-btn.pri{background:var(--olr-navy);border-color:var(--olr-navy);color:#fff}
+#on-leave-report .olr-btn.teal{background:var(--olr-teal);border-color:var(--olr-teal);color:#fff}
+#on-leave-report .olr-grid2{display:grid;grid-template-columns:minmax(330px,.9fr) minmax(0,1.5fr);gap:12px;align-items:start}
+#on-leave-report .olr-col{display:flex;flex-direction:column;gap:12px;min-width:0}
+#on-leave-report .olr-panel{background:var(--olr-card);border:1px solid var(--olr-bd);border-radius:12px;box-shadow:0 1px 3px rgba(15,59,110,.05);min-width:0}
+#on-leave-report .olr-ph{display:flex;align-items:center;gap:8px;padding:11px 14px;font-size:14px;font-weight:800;color:var(--olr-navy);font-family:var(--font-disp)}
+#on-leave-report .olr-ph i{font-size:18px;color:var(--olr-navy2)}
+#on-leave-report .olr-ph .olr-link{margin-left:auto;font-size:11.5px;font-weight:700;color:var(--olr-navy2);cursor:pointer;background:none;border:none;font-family:inherit}
+#on-leave-report .olr-ph .olr-link:hover{text-decoration:underline}
+#on-leave-report .olr-nav{margin-left:auto;display:flex;align-items:center;gap:4px;border:1px solid var(--olr-bd);border-radius:9px;padding:2px}
+#on-leave-report .olr-nav b{font-size:12px;min-width:116px;text-align:center;color:var(--olr-tx)}
+#on-leave-report .olr-nav button{border:none;background:transparent;width:28px;height:28px;border-radius:7px;cursor:pointer;color:var(--olr-navy);font-size:15px}
+#on-leave-report .olr-nav button:hover{background:rgba(14,159,142,.12)}
+#on-leave-report .olr-cal{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;padding:0 8px 8px}
+#on-leave-report .olr-cal th{font-size:11px;font-weight:700;color:var(--olr-tx2);padding:6px 2px;text-align:center;background:var(--olr-bg);border:none}
+#on-leave-report .olr-cal td{height:74px;vertical-align:top;border:1px solid var(--olr-bd);border-width:0 1px 1px 0;padding:3px 4px;font-size:11px;cursor:pointer;transition:background .12s;overflow:hidden;background:var(--olr-card)}
+#on-leave-report .olr-cal td:hover{background:rgba(14,159,142,.08)}
+#on-leave-report .olr-cal td.off{background:var(--olr-bg)}
+#on-leave-report .olr-cal td.out{opacity:.38}
+#on-leave-report .olr-cal td.today{background:rgba(27,90,160,.12);box-shadow:inset 0 0 0 1.5px var(--olr-navy2)}
+#on-leave-report .olr-cal .dn{font-weight:700;color:var(--olr-tx);font-size:11.5px;display:flex;justify-content:space-between;gap:2px}
+#on-leave-report .olr-cal .hol{font-size:8.5px;color:#DC2626;font-weight:700;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#on-leave-report .olr-chip{display:block;margin-top:2px;padding:1px 5px;border-radius:6px;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}
+#on-leave-report .olr-chip.pend{background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.35) 0 4px,transparent 4px 8px)}
+#on-leave-report .olr-more{font-size:9.5px;color:var(--olr-tx2);font-weight:700;margin-top:1px}
+#on-leave-report .olr-legend{display:flex;flex-wrap:wrap;gap:10px;padding:0 14px 10px;font-size:10.5px;color:var(--olr-tx2)}
+#on-leave-report .olr-legend span{display:inline-flex;align-items:center;gap:5px}
+#on-leave-report .olr-legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+#on-leave-report .olr-tw{overflow-x:auto}
+#on-leave-report table.olr-t{width:100%;border-collapse:collapse;font-size:12px}
+#on-leave-report .olr-t th{background:linear-gradient(180deg,#14487F,#0F3B6E);color:#fff;font-size:10.5px;font-weight:700;padding:9px 10px;text-align:left;white-space:nowrap;text-transform:uppercase;letter-spacing:.3px}
+#on-leave-report .olr-t th.c,#on-leave-report .olr-t td.c{text-align:center}
+#on-leave-report .olr-t td{padding:8px 10px;border-bottom:1px solid var(--olr-bd);vertical-align:middle;color:var(--olr-tx)}
+#on-leave-report .olr-t tbody tr{transition:background .12s}
+#on-leave-report .olr-t tbody tr:hover td{background:rgba(14,159,142,.07)}
+#on-leave-report .olr-emp{display:flex;align-items:center;gap:9px}
+#on-leave-report .olr-emp b{display:block;font-size:12px}#on-leave-report .olr-emp small{color:var(--olr-tx2);font-size:10.5px}
+#on-leave-report .olr-av{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-size:11px;font-weight:800;flex-shrink:0}
+#on-leave-report .olr-bdg{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+#on-leave-report .olr-bdg.ok{background:#DCFCE7;color:#15803D}#on-leave-report .olr-bdg.pend{background:#FEF3C7;color:#B45309}
+#on-leave-report .olr-bdg.rej{background:#FEE2E2;color:#B91C1C}#on-leave-report .olr-bdg.can{background:#E5E7EB;color:#4B5563}
+#on-leave-report .olr-act{display:flex;gap:4px;justify-content:center}
+#on-leave-report .olr-act button{width:28px;height:28px;border-radius:8px;border:1px solid var(--olr-bd);background:var(--olr-card);cursor:pointer;font-size:14px;color:var(--olr-navy);transition:background .12s}
+#on-leave-report .olr-act button:hover{background:rgba(14,159,142,.14)}
+#on-leave-report .olr-act button.ok{color:#15803D}#on-leave-report .olr-act button.no{color:#B91C1C}
+#on-leave-report .olr-empty{padding:26px 10px;text-align:center;color:var(--olr-tx2);font-size:12.5px}
+#on-leave-report .olr-pg{display:flex;align-items:center;gap:6px;padding:10px 14px;justify-content:flex-end;font-size:12px;color:var(--olr-tx2)}
+#on-leave-report .olr-pg button{min-width:30px;height:28px;border-radius:7px;border:1px solid var(--olr-bd);background:var(--olr-card);cursor:pointer;font-size:12px;color:var(--olr-tx)}
+#on-leave-report .olr-pg button.on{background:var(--olr-navy);color:#fff;border-color:var(--olr-navy)}
+#on-leave-report .olr-pg button:disabled{opacity:.4;cursor:default}
+#on-leave-report .olr-bar{height:8px;border-radius:6px;background:var(--olr-bg);overflow:hidden;display:flex;min-width:90px;border:1px solid var(--olr-bd)}
+#on-leave-report .olr-bar i{display:block;height:100%;transition:width .4s}
+#on-leave-report .olr-bal{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(150px,.8fr);gap:8px;align-items:center;padding:0 10px 12px}
+#on-leave-report .olr-donut{display:flex;flex-direction:column;align-items:center;gap:6px}
+#on-leave-report .olr-dl{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--olr-tx2)}
+#on-leave-report .olr-dl span{display:flex;align-items:center;gap:6px}#on-leave-report .olr-dl i{width:9px;height:9px;border-radius:50%;display:inline-block}
+#on-leave-report .olr-ent{width:64px;height:28px;border:1px solid var(--olr-bd);border-radius:7px;text-align:center;background:var(--olr-card);color:var(--olr-tx);font-size:12px;padding:0 4px}
+#on-leave-report .olr-rep{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:12px}
+#on-leave-report .olr-rank{padding:4px 14px 14px;display:flex;flex-direction:column;gap:8px}
+#on-leave-report .olr-rank div.rw{display:grid;grid-template-columns:130px 1fr 44px;gap:8px;align-items:center;font-size:12px}
+#on-leave-report .olr-note{font-size:11px;color:var(--olr-tx2);padding:0 14px 12px}
+@media(max-width:1280px){#on-leave-report .olr-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:1000px){#on-leave-report .olr-grid2,#on-leave-report .olr-rep{grid-template-columns:1fr}#on-leave-report .olr-hero-art{display:none}}
+@media(max-width:620px){#on-leave-report .olr-cards{grid-template-columns:repeat(2,minmax(0,1fr))}#on-leave-report .olr-bal{grid-template-columns:1fr}}
+/* Modal */
+.olr-ov .olr-modal{background:var(--bg-primary);color:var(--text-primary);border-radius:14px;box-shadow:0 12px 44px rgba(0,0,0,.3);width:min(480px,94vw);margin:6vh auto 0;overflow:hidden}
+.olr-ov .olr-mh{background:linear-gradient(110deg,#0B2A52,#0F3B6E 60%,#157A93);color:#fff;padding:13px 18px;display:flex;align-items:center;gap:10px;font-weight:800;font-size:14px}
+.olr-ov .olr-mh button{margin-left:auto;border:none;background:rgba(255,255,255,.18);color:#fff;width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px}
+.olr-ov .olr-mb{padding:16px 18px;display:flex;flex-direction:column;gap:11px;font-size:12.5px}
+.olr-ov .olr-mb label{font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:3px}
+.olr-ov .olr-mb select,.olr-ov .olr-mb input[type=date],.olr-ov .olr-mb input[type=text],.olr-ov .olr-mb textarea{width:100%;border:1px solid var(--border-light);border-radius:9px;padding:8px 10px;font-size:12.5px;font-family:inherit;background:var(--bg-primary);color:var(--text-primary)}
+.olr-ov .olr-mb .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.olr-ov .olr-mf{display:flex;justify-content:flex-end;gap:8px;padding:0 18px 16px}
+.olr-ov .olr-mf button{height:34px;padding:0 16px;border-radius:9px;border:1px solid var(--border-light);background:var(--bg-primary);color:var(--text-primary);font-weight:700;font-size:12px;cursor:pointer;font-family:inherit}
+.olr-ov .olr-mf button.pri{background:#0F3B6E;border-color:#0F3B6E;color:#fff}.olr-ov .olr-mf button.red{background:#DC2626;border-color:#DC2626;color:#fff}
+.olr-ov .olr-prev{background:var(--bg-secondary);border:1px dashed var(--border-light);border-radius:9px;padding:9px 11px;font-size:12px;line-height:1.5}
+.olr-ov .olr-kv{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;font-size:12.5px}.olr-ov .olr-kv span{color:var(--text-secondary)}
+`;
+function _lvEnsureCss(){
+  if(document.getElementById('olr-style'))return;
+  const s=document.createElement('style');s.id='olr-style';s.textContent=_LV_CSS;document.head.appendChild(s);
+}
+
+/* ───────────── Bộ lọc dùng chung ───────────── */
+function _lvMatch(x){
+  const S=window._lvState;
+  if(!x||!x.from||!x.to)return false;
+  if(S.emp&&String(x.email||'').toLowerCase()!==S.emp)return false;
+  if(S.dept){const u=_lvUserOf(x.email);if(((u&&u.role)||x.role)!==S.dept)return false;}
+  if(S.type&&x.type!==S.type)return false;
+  if(S.status&&x.status!==S.status)return false;
+  if(S.q){
+    const q=S.q.toLowerCase();
+    if([x.name,x.email,x.reason,_lvTypeOf(x.type).l,(_LV_ST[x.status]||{}).l].join(' ').toLowerCase().indexOf(q)<0)return false;
+  }
+  return true;
+}
+function _lvPeriod(){const S=window._lvState;return S.m?[_lvMonthStart(S.y,S.m),_lvMonthEnd(S.y,S.m)]:[S.y+'-01-01',S.y+'-12-31'];}
+function _lvFiltered(){
+  const p=_lvPeriod();
+  return _lvList().filter(function(x){return _lvMatch(x)&&_lvOverlaps(x,p[0],p[1]);}).sort(function(a,b){return (b.from||'').localeCompare(a.from||'')||(b.createdAt||0)-(a.createdAt||0);});
+}
+function _lvEmpsFiltered(){
+  const S=window._lvState;
+  return _lvEmployees().filter(function(e){return (!S.emp||e.email===S.emp)&&(!S.dept||e.role===S.dept);});
+}
+
+/* ───────────── Khung tab ───────────── */
+window._lvRenderTab=function(){
+  const el=g('prTabContent'); if(!el)return;
+  el.innerHTML='<div id="on-leave-report"></div>';
+  _lvDraw();
+};
+function _lvOnData(){ const _ae=document.activeElement; if(_ae&&_ae.classList&&_ae.classList.contains('olr-ent'))return; if(g('on-leave-report'))_lvDraw(); if(g('my-profile')&&typeof _mpRefresh==='function')_mpRefresh(); }
+window._lvOnData=_lvOnData;
+function _lvDraw(){
+  const root=g('on-leave-report'); if(!root)return;
+  _lvEnsureCss();
+  const S=window._lvState;
+  const ae=document.activeElement, keepQ=!!(ae&&ae.id==='olr-q'), qpos=keepQ?ae.selectionStart:0;
+  let body='';
+  if(S.tab==='requests')body=_lvRequestsHTML(); else if(S.tab==='balance')body=_lvBalanceHTML(); else if(S.tab==='report')body=_lvReportHTML(); else body=_lvOverviewHTML();
+  root.innerHTML=_lvHeroHTML()+_lvCardsHTML()+_lvTabsHTML()+_lvFiltersHTML()+body;
+  if(keepQ){const q=g('olr-q'); if(q){q.focus();try{q.setSelectionRange(qpos,qpos);}catch(e){}}}
+}
+window._lvDraw=_lvDraw;
+function _lvHeroHTML(){
+  const ship='<svg class="olr-hero-art" viewBox="0 0 420 100" preserveAspectRatio="xMaxYMid slice" aria-hidden="true">'
+    +'<defs><linearGradient id="olrSea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1B7FA8" stop-opacity="0"/><stop offset="1" stop-color="#0B2A52" stop-opacity=".75"/></linearGradient></defs>'
+    +'<rect x="0" y="62" width="420" height="38" fill="url(#olrSea)"/>'
+    +'<path d="M0 74 Q30 68 60 74 T120 74 T180 74 T240 74 T300 74 T360 74 T420 74 V100 H0Z" fill="#0B2A52" opacity=".45"/>'
+    +'<g transform="translate(150,20)">'
+    +'<path d="M0 44 H236 L222 62 H18Z" fill="#0A1E3C"/><rect x="0" y="40" width="236" height="5" fill="#C99A3C"/>'
+    +'<g>'+[0,1,2,3,4,5,6,7,8,9].map(function(i){return '<rect x="'+(8+i*20)+'" y="28" width="18" height="12" fill="'+['#E5484D','#F59E0B','#14B8A6','#3B82F6','#F97316'][i%5]+'"/>';}).join('')
+    +[0,1,2,3,4,5,6,7].map(function(i){return '<rect x="'+(18+i*20)+'" y="16" width="18" height="12" fill="'+['#3B82F6','#14B8A6','#E5484D','#F59E0B','#8B5CF6'][i%5]+'"/>';}).join('')
+    +[1,2,3,4,5,6].map(function(i){return '<rect x="'+(28+i*20)+'" y="4" width="18" height="12" fill="'+['#F59E0B','#E5484D','#3B82F6','#14B8A6'][i%4]+'"/>';}).join('')+'</g>'
+    +'<rect x="206" y="6" width="22" height="34" fill="#F1F5F9"/><rect x="209" y="10" width="16" height="5" fill="#0F3B6E"/></g></svg>';
+  return '<div class="olr-hero"><div class="olr-hero-ic"><i class="ti ti-calendar-event"></i></div>'
+    +'<div><h2>On Leave Report</h2><p>Quản lý đơn nghỉ phép và theo dõi tình trạng nghỉ của nhân viên</p></div>'+ship+'</div>';
+}
+function _lvCardsHTML(){
+  const S=window._lvState, emps=_lvEmployees(), today=_lvToday(), all=_lvList();
+  const onToday={}; all.forEach(function(x){ if(x.status==='approved'&&x.from<=today&&x.to>=today&&!_prIsOffDay(today))onToday[String(x.email||'').toLowerCase()]=x.name; });
+  const onN=Object.keys(onToday).length, onNames=Object.keys(onToday).map(function(k){return _lvShortName(onToday[k]);}).slice(0,3).join(', ');
+  const pend=all.filter(function(x){return x.status==='pending'&&String(x.from||'').slice(0,4)===String(S.y);}).length;
+  const per=_lvPeriod();
+  let days=0; all.forEach(function(x){ if(x.status==='approved'&&_lvOverlaps(x,per[0],per[1]))days+=_lvDaysWithin(x,per[0],per[1]); });
+  let delta='';
+  if(S.m){
+    const pm=S.m===1?12:S.m-1, py=S.m===1?S.y-1:S.y, a=_lvMonthStart(py,pm), b=_lvMonthEnd(py,pm);
+    let pd=0; all.forEach(function(x){ if(x.status==='approved'&&_lvOverlaps(x,a,b))pd+=_lvDaysWithin(x,a,b); });
+    if(pd>0){const pc=Math.round((days-pd)/pd*100);delta='<div class="olr-card-sub '+(pc>0?'up':(pc<0?'dn':''))+'">'+(pc>0?'↑ +':(pc<0?'↓ ':''))+pc+'% so với tháng trước</div>';}
+    else delta='<div class="olr-card-sub">Tháng trước: không có</div>';
+  } else delta='<div class="olr-card-sub">Cả năm '+S.y+'</div>';
+  let avg=0; emps.forEach(function(e){avg+=_lvBalance(e.email,S.y).remain;}); avg=emps.length?avg/emps.length:0;
+  const card=function(ic,bg,col,lb,v,sub){return '<div class="olr-card"><div class="olr-card-ic" style="background:'+bg+';color:'+col+'"><i class="ti '+ic+'"></i></div><div style="min-width:0"><div class="olr-card-lb">'+lb+'</div><div class="olr-card-v" style="color:'+col+'">'+v+'</div>'+sub+'</div></div>';};
+  return '<div class="olr-cards">'
+    +card('ti-users','#E0ECFA','#1B5AA0','Tổng nhân viên',emps.length,'<div class="olr-card-sub">Tài khoản đang hoạt động</div>')
+    +card('ti-beach','#DDF5F1','#0E9F8E','Đang nghỉ hôm nay',onN,'<div class="olr-card-sub" title="'+_lvEsc(onNames)+'">'+(onNames?_lvEsc(onNames):'Không ai nghỉ')+'</div>')
+    +card('ti-clock-hour-4','#FEF3C7','#D97706','Chờ duyệt',pend,'<div class="olr-card-sub">Đơn cần Admin xử lý ('+S.y+')</div>')
+    +card('ti-calendar-stats','#E0ECFA','#0F3B6E','Tổng ngày nghỉ ('+(S.m?'tháng '+S.m:'năm')+')',_lvNum(days),delta)
+    +card('ti-star','#FDF1D6','#C99A3C','Phép năm còn lại (TB)',_lvNum(avg),'<div class="olr-card-sub">Ngày / nhân viên, năm '+S.y+'</div>')
+    +'</div>';
+}
+function _lvTabsHTML(){
+  const S=window._lvState;
+  const t=[['overview','Tổng quan'],['requests','Đơn nghỉ phép'],['balance','Số dư phép'],['report','Báo cáo']];
+  return '<div class="olr-tabs">'+t.map(function(x){return '<button class="olr-tab'+(S.tab===x[0]?' on':'')+'" onclick="_lvSet(\'tab\',\''+x[0]+'\')">'+x[1]+'</button>';}).join('')+'</div>';
+}
+function _lvFiltersHTML(){
+  const S=window._lvState, curY=new Date().getFullYear();
+  const mo='<option value="0"'+(!S.m?' selected':'')+'>Cả năm</option>'+_LV_MONTHS.map(function(n,i){return '<option value="'+(i+1)+'"'+(S.m===i+1?' selected':'')+'>'+n+'</option>';}).join('');
+  let yo='';for(let y=curY-3;y<=curY+1;y++)yo+='<option value="'+y+'"'+(S.y===y?' selected':'')+'>'+y+'</option>';
+  const emps=_lvEmployees();
+  const eo='<option value="">Tất cả nhân viên</option>'+emps.map(function(e){return '<option value="'+_lvEsc(e.email)+'"'+(S.emp===e.email?' selected':'')+'>'+_lvEsc(e.name)+'</option>';}).join('');
+  const roles=[];emps.forEach(function(e){if(roles.indexOf(e.role)<0)roles.push(e.role);});
+  const dpo='<option value="">Tất cả phòng ban</option>'+roles.map(function(r){return '<option value="'+r+'"'+(S.dept===r?' selected':'')+'>'+_lvEsc(_lvDeptLabel(r))+'</option>';}).join('');
+  const to='<option value="">Tất cả loại nghỉ</option>'+_LV_TYPES.map(function(t){return '<option value="'+t.k+'"'+(S.type===t.k?' selected':'')+'>'+t.l+'</option>';}).join('');
+  const so='<option value="">Tất cả trạng thái</option>'+Object.keys(_LV_ST).map(function(k){return '<option value="'+k+'"'+(S.status===k?' selected':'')+'>'+_LV_ST[k].l+'</option>';}).join('');
+  const sel=function(k,o){return '<select onchange="_lvSet(\''+k+'\',this.value)">'+o+'</select>';};
+  return '<div class="olr-filters">'+sel('m',mo)+sel('y',yo)+sel('emp',eo)+sel('dept',dpo)+sel('type',to)+sel('status',so)
+    +'<input class="olr-q" id="olr-q" type="text" placeholder="Tìm nhân viên, lý do..." value="'+_lvEsc(S.q)+'" oninput="_lvSetQ(this.value)"/>'
+    +'<span style="flex:1"></span>'
+    +'<button class="olr-btn" onclick="_lvExport()"><i class="ti ti-download"></i> Xuất Excel</button>'
+    +'<button class="olr-btn pri" onclick="_lvOpenAdd()"><i class="ti ti-plus"></i> Thêm đơn nghỉ</button></div>';
+}
+window._lvSet=function(k,v){
+  const S=window._lvState;
+  if(k==='m'||k==='y')v=parseInt(v)||0;
+  S[k]=v; S.page=1;
+  _lvDraw();
+};
+let _lvQT=null;
+window._lvSetQ=function(v){window._lvState.q=v;window._lvState.page=1;clearTimeout(_lvQT);_lvQT=setTimeout(_lvDraw,220);};
+window._lvNav=function(d){
+  const S=window._lvState; if(!S.m)S.m=new Date().getMonth()+1;
+  S.m+=d; if(S.m<1){S.m=12;S.y--;} if(S.m>12){S.m=1;S.y++;}
+  S.page=1; _lvDraw();
+};
+
+/* ───────────── Dòng bảng + huy hiệu ───────────── */
+const _LV_PD={'':{l:'Chưa quyết định',c:'#6B7280'},yes:{l:'Có trừ lương',c:'#B91C1C'},no:{l:'Không trừ lương',c:'#15803D'}};
+function _lvStatusBadge(st){const s=_LV_ST[st]||_LV_ST.pending;return '<span class="olr-bdg '+s.cls+'"><i class="ti '+(st==='approved'?'ti-circle-check':st==='rejected'?'ti-circle-x':st==='cancelled'?'ti-ban':'ti-clock')+'"></i> '+s.l+'</span>';}
+function _lvTypeDot(k){const t=_lvTypeOf(k);return '<span style="display:inline-flex;align-items:center;gap:6px"><i style="width:9px;height:9px;border-radius:3px;background:'+t.c+';display:inline-block"></i>'+_lvEsc(t.l)+'</span>';}
+function _lvOverQuota(x){
+  if(!x||x.type!=='annual'||(x.status!=='approved'&&x.status!=='pending'))return false;
+  return _lvBalance(x.email,String(x.from||'').slice(0,4)).remain<0;
+}
+function _lvPdCell(x){
+  if(x.status!=='approved')return '<span style="color:var(--olr-tx2)">—</span>';
+  const v=x.payDeduct||'';
+  if(_lvCanSeeAll()){
+    return '<select onchange="_lvSetPayDeduct(\''+x._id+'\',this.value)" style="height:28px;border:1px solid var(--olr-bd);border-radius:7px;background:var(--olr-card);color:'+_LV_PD[v].c+';font-size:11.5px;font-weight:700;padding:0 6px;font-family:inherit">'
+      +Object.keys(_LV_PD).map(function(k){return '<option value="'+k+'"'+(v===k?' selected':'')+'>'+_LV_PD[k].l+'</option>';}).join('')+'</select>';
+  }
+  return '<span style="font-weight:700;font-size:11.5px;color:'+_LV_PD[v].c+'">'+_LV_PD[v].l+'</span>';
+}
+function _lvActions(x){
+  let h='<button title="Xem chi tiết" onclick="_lvOpenDetail(\''+x._id+'\')"><i class="ti ti-eye"></i></button>';
+  const mine=String(x.email||'').toLowerCase()===_lvMyEmail();
+  if(_lvIsAdmin()&&x.status==='pending')h+='<button class="ok" title="Duyệt" onclick="_lvApprove(\''+x._id+'\')"><i class="ti ti-check"></i></button><button class="no" title="Từ chối" onclick="_lvOpenReject(\''+x._id+'\')"><i class="ti ti-x"></i></button>';
+  if((mine&&x.status==='pending')||(_lvIsAdmin()&&x.status==='approved'))h+='<button title="Hủy đơn" onclick="_lvCancel(\''+x._id+'\')"><i class="ti ti-ban"></i></button>';
+  if(_lvIsAdmin())h+='<button class="no" title="Xóa đơn" onclick="_lvDelete(\''+x._id+'\')"><i class="ti ti-trash"></i></button>';
+  return '<div class="olr-act">'+h+'</div>';
+}
+function _lvRowHTML(x,full){
+  const u=_lvUserOf(x.email), name=x.name||(u&&u.name)||x.email, role=(u&&u.role)||x.role;
+  const emp='<div class="olr-emp">'+_lvAvatar(name,30)+'<div><b>'+_lvEsc(name)+'</b><small>'+_lvEsc(_lvDeptLabel(role))+'</small></div></div>';
+  const days=_lvNum(x.days)+(x.half?' <small title="Nửa ngày">('+(x.half==='am'?'sáng':'chiều')+')</small>':'')+(_lvOverQuota(x)?' <i class="ti ti-alert-triangle" style="color:#D97706" title="Vượt quỹ phép năm"></i>':'');
+  let h='<tr><td>'+emp+'</td>';
+  if(full)h+='<td>'+_lvEsc(_lvDeptLabel(role))+'</td>';
+  h+='<td>'+_lvTypeDot(x.type)+'</td><td>'+_lvDmy(x.from)+'</td><td>'+_lvDmy(x.to)+'</td><td class="c"><b>'+days+'</b></td>'
+    +'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_lvEsc(x.reason)+'">'+_lvEsc(x.reason||'—')+'</td>'
+    +'<td>'+_lvStatusBadge(x.status)+'</td>';
+  if(full)h+='<td>'+_lvPdCell(x)+'</td><td>'+_lvActions(x)+'</td>';
+  return h+'</tr>';
+}
+
+/* ───────────── Tab: Tổng quan ───────────── */
+function _lvOverviewHTML(){
+  const S=window._lvState; if(!S.m){S.m=new Date().getMonth()+1;}
+  const rows=_lvFiltered().slice(0,7);
+  const tb=rows.length?('<div class="olr-tw"><table class="olr-t"><thead><tr><th>Nhân viên</th><th>Loại nghỉ</th><th>Từ ngày</th><th>Đến ngày</th><th class="c">Ngày</th><th>Lý do</th><th>Trạng thái</th></tr></thead><tbody>'+rows.map(function(x){return _lvRowHTML(x,false);}).join('')+'</tbody></table></div>'):'<div class="olr-empty">Không có đơn nghỉ nào trong kỳ đã chọn</div>';
+  return '<div class="olr-grid2">'
+    +'<section class="olr-panel"><div class="olr-ph"><i class="ti ti-calendar-month"></i> Lịch nghỉ phép'
+      +'<span class="olr-nav"><button onclick="_lvNav(-1)" title="Tháng trước"><i class="ti ti-chevron-left"></i></button><b>'+_LV_MONTHS[S.m-1]+' / '+S.y+'</b><button onclick="_lvNav(1)" title="Tháng sau"><i class="ti ti-chevron-right"></i></button></span></div>'
+      +_lvCalendarHTML()+'</section>'
+    +'<div class="olr-col">'
+      +'<section class="olr-panel"><div class="olr-ph"><i class="ti ti-list-details"></i> Danh sách nghỉ phép'+(S.m?' — '+_LV_MONTHS[S.m-1]+' / '+S.y:' — năm '+S.y)+'<button class="olr-link" onclick="_lvSet(\'tab\',\'requests\')">Xem tất cả →</button></div>'+tb+'</section>'
+      +'<section class="olr-panel"><div class="olr-ph"><i class="ti ti-scale"></i> Tổng hợp số dư phép năm '+S.y+'<button class="olr-link" onclick="_lvSet(\'tab\',\'balance\')">Xem chi tiết →</button></div>'+_lvBalanceSummaryHTML()+'</section>'
+    +'</div></div>';
+}
+function _lvCalendarHTML(){
+  const S=window._lvState, y=S.y, m=S.m, today=_lvToday(), hol=_holApproved();
+  const first=new Date(Date.UTC(y,m-1,1)), offset=(first.getUTCDay()+6)%7, dim=new Date(Date.UTC(y,m,0)).getUTCDate();
+  const a=_lvMonthStart(y,m), b=_lvMonthEnd(y,m), byDay={};
+  _lvList().forEach(function(x){
+    if(!_lvOverlaps(x,a,b)||(x.status!=='approved'&&x.status!=='pending'))return;
+    if(!_lvMatch(Object.assign({},x,{status:S.status?x.status:(S.status||x.status)})))return;
+    let d=x.from>a?x.from:a, guard=0; const e=x.to<b?x.to:b;
+    while(d<=e&&guard++<40){ if(!_prIsOffDay(d))(byDay[d]=byDay[d]||[]).push(x); d=_lvAddDays(d,1); }
+  });
+  let h='<table class="olr-cal"><thead><tr>'+['T2','T3','T4','T5','T6','T7','CN'].map(function(d){return '<th>'+d+'</th>';}).join('')+'</tr></thead><tbody>';
+  const cells=Math.ceil((offset+dim)/7)*7;
+  for(let i=0;i<cells;i++){
+    if(i%7===0)h+='<tr>';
+    const dn=i-offset+1;
+    if(dn<1||dn>dim){h+='<td class="out off"></td>';}
+    else{
+      const ds=y+'-'+String(m).padStart(2,'0')+'-'+String(dn).padStart(2,'0'), L=byDay[ds]||[], isOff=_prIsOffDay(ds);
+      h+='<td class="'+(isOff?'off ':'')+(ds===today?'today':'')+'" onclick="_lvOpenDay(\''+ds+'\')">'
+        +'<div class="dn"><span>'+dn+'</span>'+(hol[ds]?'<span class="hol" title="'+_lvEsc(hol[ds])+'">'+_lvEsc(hol[ds])+'</span>':'')+'</div>'
+        +L.slice(0,2).map(function(x){return '<span class="olr-chip'+(x.status==='pending'?' pend':'')+'" style="background-color:'+_lvTypeOf(x.type).c+'" title="'+_lvEsc((x.name||'')+' — '+_lvTypeOf(x.type).l+(x.status==='pending'?' (chờ duyệt)':''))+'">'+_lvEsc(_lvShortName(x.name))+'</span>';}).join('')
+        +(L.length>2?'<div class="olr-more">+'+(L.length-2)+' người</div>':'')+'</td>';
+    }
+    if(i%7===6)h+='</tr>';
+  }
+  h+='</tbody></table>';
+  h+='<div class="olr-legend">'+_LV_TYPES.map(function(t){return '<span><i style="background:'+t.c+'"></i>'+t.l+'</span>';}).join('')+'<span><i style="background:repeating-linear-gradient(135deg,#9CA3AF 0 3px,#E5E7EB 3px 6px)"></i>Chờ duyệt</span></div>';
+  return h;
+}
+
+/* ───────────── Số dư phép ───────────── */
+function _lvDonut(parts,center,sub){
+  const R=44,C=2*Math.PI*R; let off=0, tot=parts.reduce(function(s,p){return s+p.v;},0)||1;
+  const arcs=parts.map(function(p){const len=C*p.v/tot;const el='<circle cx="60" cy="60" r="'+R+'" fill="none" stroke="'+p.c+'" stroke-width="14" stroke-dasharray="'+len+' '+(C-len)+'" stroke-dashoffset="'+(-off)+'" transform="rotate(-90 60 60)"/>';off+=len;return el;}).join('');
+  return '<svg width="124" height="124" viewBox="0 0 120 120"><circle cx="60" cy="60" r="'+R+'" fill="none" stroke="var(--olr-bd)" stroke-width="14"/>'+arcs
+    +'<text x="60" y="58" text-anchor="middle" font-size="20" font-weight="800" fill="var(--olr-tx)">'+center+'</text><text x="60" y="73" text-anchor="middle" font-size="9" fill="var(--olr-tx2)">'+sub+'</text></svg>';
+}
+function _lvBalanceSummaryHTML(){
+  const S=window._lvState, emps=_lvEmpsFiltered(), bal=emps.map(function(e){return {e:e,b:_lvBalance(e.email,S.y)};});
+  const n=bal.length||1, avgU=bal.reduce(function(s,x){return s+x.b.used;},0)/n, avgP=bal.reduce(function(s,x){return s+x.b.pending;},0)/n, avgR=bal.reduce(function(s,x){return s+Math.max(0,x.b.remain);},0)/n;
+  const top=bal.slice().sort(function(a,b){return (b.b.used+b.b.pending)-(a.b.used+a.b.pending);}).slice(0,5);
+  const tb=top.length?('<div class="olr-tw"><table class="olr-t"><thead><tr><th>Nhân viên</th><th class="c">Quỹ phép</th><th class="c">Đã nghỉ</th><th class="c">Chờ duyệt</th><th class="c">Còn lại</th></tr></thead><tbody>'
+    +top.map(function(x){return '<tr><td><div class="olr-emp">'+_lvAvatar(x.e.name,26)+'<b>'+_lvEsc(x.e.name)+'</b></div></td><td class="c">'+_lvNum(x.b.ent)+'</td><td class="c">'+_lvNum(x.b.used)+'</td><td class="c">'+_lvNum(x.b.pending)+'</td><td class="c"><b style="color:'+(x.b.remain<0?'#DC2626':'inherit')+'">'+_lvNum(x.b.remain)+'</b></td></tr>';}).join('')+'</tbody></table></div>'):'<div class="olr-empty">Chưa có nhân viên</div>';
+  return '<div class="olr-bal">'+tb+'<div class="olr-donut">'+_lvDonut([{v:avgU,c:'#1B5AA0'},{v:avgP,c:'#F59E0B'},{v:avgR,c:'#2DD4BF'}],_lvNum(avgR),'ngày còn lại TB')
+    +'<div class="olr-dl"><span><i style="background:#1B5AA0"></i>Đã nghỉ '+_lvNum(avgU)+'</span><span><i style="background:#F59E0B"></i>Chờ duyệt '+_lvNum(avgP)+'</span><span><i style="background:#2DD4BF"></i>Còn lại '+_lvNum(avgR)+'</span></div></div></div>';
+}
+function _lvBalanceHTML(){
+  const S=window._lvState, emps=_lvEmpsFiltered(), canEdit=_lvIsAdmin(), st=_lvSettings();
+  const rows=emps.map(function(e){
+    const b=_lvBalance(e.email,S.y), pct=b.ent>0?Math.min(100,(b.used/b.ent)*100):0, pp=b.ent>0?Math.min(100-pct,(b.pending/b.ent)*100):0;
+    const my=_lvList().filter(function(x){return String(x.email||'').toLowerCase()===e.email&&x.status==='approved'&&String(x.from||'').slice(0,4)===String(S.y);});
+    const dedY=my.filter(function(x){return x.payDeduct==='yes';}).reduce(function(s,x){return s+(parseFloat(x.days)||0);},0);
+    const und=my.filter(function(x){return !x.payDeduct;}).reduce(function(s,x){return s+(parseFloat(x.days)||0);},0);
+    return '<tr><td><div class="olr-emp">'+_lvAvatar(e.name,30)+'<div><b>'+_lvEsc(e.name)+'</b><small>'+_lvEsc(_lvDeptLabel(e.role))+'</small></div></div></td>'
+      +'<td class="c">'+(canEdit?'<input class="olr-ent" type="number" step="0.5" min="0" data-email="'+_lvEsc(e.email)+'" value="'+b.ent+'"/>':_lvNum(b.ent))+'</td>'
+      +'<td class="c">'+_lvNum(b.used)+'</td><td class="c">'+_lvNum(b.pending)+'</td>'
+      +'<td class="c"><b style="color:'+(b.remain<0?'#DC2626':'inherit')+'">'+_lvNum(b.remain)+'</b></td>'
+      +'<td><div class="olr-bar" title="Đã nghỉ '+_lvNum(b.used)+' · chờ duyệt '+_lvNum(b.pending)+' / '+_lvNum(b.ent)+'"><i style="width:'+pct+'%;background:'+(b.remain<0?'#DC2626':'#1B5AA0')+'"></i><i style="width:'+pp+'%;background:#F59E0B"></i></div></td>'
+      +'<td class="c">'+_lvNum(dedY)+'</td><td class="c">'+(und>0?'<b style="color:#D97706">'+_lvNum(und)+'</b>':'0')+'</td></tr>';
+  }).join('');
+  return '<section class="olr-panel"><div class="olr-ph"><i class="ti ti-scale"></i> Số dư phép năm '+S.y
+    +(canEdit?'<span style="margin-left:auto;display:flex;gap:8px;align-items:center;font-size:12px;font-weight:600;color:var(--olr-tx2)">Mặc định <input class="olr-ent" id="olr-entdef" type="number" step="0.5" min="0" value="'+st.annualDefault+'"/> ngày/năm <button class="olr-btn teal" onclick="_lvSaveEnt()"><i class="ti ti-device-floppy"></i> Lưu quỹ phép</button></span>':'')+'</div>'
+    +'<div class="olr-tw"><table class="olr-t"><thead><tr><th>Nhân viên</th><th class="c">Quỹ phép năm</th><th class="c">Đã nghỉ</th><th class="c">Chờ duyệt</th><th class="c">Còn lại</th><th style="min-width:130px">Tỷ lệ đã dùng</th><th class="c">Ngày trừ lương</th><th class="c">Chưa quyết định trừ lương</th></tr></thead><tbody>'
+    +(rows||'<tr><td colspan="8" class="olr-empty">Chưa có nhân viên</td></tr>')+'</tbody></table></div>'
+    +'<div class="olr-note">Chỉ loại nghỉ <b>Phép năm</b> trừ vào quỹ phép. Nghỉ vượt quỹ (còn lại âm) <b>không tự động trừ lương</b> — Admin/Kế toán quyết định “Có trừ / Không trừ lương” cho từng đơn đã duyệt ở tab Đơn nghỉ phép.</div></section>';
+}
+
+/* ───────────── Tab: Đơn nghỉ phép ───────────── */
+function _lvRequestsHTML(){
+  const S=window._lvState, all=_lvFiltered(), PER=10, pages=Math.max(1,Math.ceil(all.length/PER));
+  if(S.page>pages)S.page=pages;
+  const rows=all.slice((S.page-1)*PER,S.page*PER);
+  let pg='';
+  if(pages>1){
+    pg='<div class="olr-pg"><span>'+all.length+' đơn</span><button '+(S.page<=1?'disabled':'')+' onclick="_lvPage('+(S.page-1)+')">‹</button>';
+    for(let p=1;p<=pages;p++){ if(p===1||p===pages||Math.abs(p-S.page)<=1)pg+='<button class="'+(p===S.page?'on':'')+'" onclick="_lvPage('+p+')">'+p+'</button>'; else if(Math.abs(p-S.page)===2)pg+='<span>…</span>'; }
+    pg+='<button '+(S.page>=pages?'disabled':'')+' onclick="_lvPage('+(S.page+1)+')">›</button></div>';
+  } else pg='<div class="olr-pg"><span>'+all.length+' đơn</span></div>';
+  return '<section class="olr-panel"><div class="olr-ph"><i class="ti ti-file-text"></i> Danh sách đơn nghỉ phép'+(S.m?' — '+_LV_MONTHS[S.m-1]+' / '+S.y:' — năm '+S.y)+'</div>'
+    +(rows.length?'<div class="olr-tw"><table class="olr-t"><thead><tr><th>Nhân viên</th><th>Phòng ban</th><th>Loại nghỉ</th><th>Từ ngày</th><th>Đến ngày</th><th class="c">Ngày</th><th>Lý do</th><th>Trạng thái</th><th>Trừ lương</th><th class="c">Thao tác</th></tr></thead><tbody>'+rows.map(function(x){return _lvRowHTML(x,true);}).join('')+'</tbody></table></div>':'<div class="olr-empty">Không có đơn nghỉ phép nào phù hợp bộ lọc</div>')
+    +pg+'<div class="olr-note">Việc có trừ ngày nghỉ vào lương hay không do <b>Admin/Kế toán</b> quyết định cho từng đơn đã duyệt — kể cả khi đã vượt quỹ phép năm vẫn có thể chọn “Không trừ lương”. App không tự động trừ.</div></section>';
+}
+window._lvPage=function(p){window._lvState.page=p;_lvDraw();};
+
+/* ───────────── Tab: Báo cáo ───────────── */
+function _lvReportHTML(){
+  const S=window._lvState, y=S.y, all=_lvList().filter(function(x){return x.status==='approved'&&_lvMatch(Object.assign({},x,{status:S.status||x.status}));});
+  const months=[];for(let m=1;m<=12;m++){const a=_lvMonthStart(y,m),b=_lvMonthEnd(y,m);const o={m:m,t:{}};_LV_TYPES.forEach(function(t){o.t[t.k]=0;});all.forEach(function(x){if(_lvOverlaps(x,a,b))o.t[x.type]=(o.t[x.type]||0)+_lvDaysWithin(x,a,b);});months.push(o);}
+  const tot=months.map(function(o){return _LV_TYPES.reduce(function(s,t){return s+(o.t[t.k]||0);},0);});
+  const max=Math.max(5,Math.ceil(Math.max.apply(null,tot)/5)*5);
+  const W=560,H=210,L=34,B=26,T=10,cw=(W-L-8)/12;
+  let svg='<svg viewBox="0 0 '+W+' '+H+'" width="100%" style="max-width:640px">';
+  for(let i=0;i<=5;i++){const v=max*i/5,yy=H-B-(H-B-T)*i/5;svg+='<line x1="'+L+'" x2="'+(W-8)+'" y1="'+yy+'" y2="'+yy+'" stroke="var(--olr-bd)"/><text x="'+(L-5)+'" y="'+(yy+3)+'" text-anchor="end" font-size="9" fill="var(--olr-tx2)">'+_lvNum(v)+'</text>';}
+  months.forEach(function(o,i){
+    let acc=0;const x0=L+i*cw+cw*.18,bw=cw*.64;
+    _LV_TYPES.forEach(function(t){const v=o.t[t.k]||0;if(!v)return;const hh=(H-B-T)*v/max,yy=H-B-(H-B-T)*acc/max-hh;svg+='<rect x="'+x0+'" y="'+yy+'" width="'+bw+'" height="'+hh+'" fill="'+t.c+'" rx="2"><title>'+_LV_MONTHS[i]+' — '+t.l+': '+_lvNum(v)+' ngày</title></rect>';acc+=v;});
+    svg+='<text x="'+(x0+bw/2)+'" y="'+(H-9)+'" text-anchor="middle" font-size="9.5" fill="var(--olr-tx2)">T'+(i+1)+'</text>';
+    if(tot[i])svg+='<text x="'+(x0+bw/2)+'" y="'+(H-B-(H-B-T)*tot[i]/max-3)+'" text-anchor="middle" font-size="9" font-weight="700" fill="var(--olr-tx)">'+_lvNum(tot[i])+'</text>';
+  });
+  svg+='</svg>';
+  const byEmp={};all.forEach(function(x){if(String(x.from||'').slice(0,4)!==String(y)&&String(x.to||'').slice(0,4)!==String(y))return;const k=String(x.email||'').toLowerCase();byEmp[k]=byEmp[k]||{name:x.name||k,d:0,ded:0};const dd=_lvDaysWithin(x,y+'-01-01',y+'-12-31');byEmp[k].d+=dd;if(x.payDeduct==='yes')byEmp[k].ded+=dd;});
+  const rank=Object.keys(byEmp).map(function(k){return byEmp[k];}).sort(function(a,b){return b.d-a.d;}).slice(0,8), rmax=Math.max(1,rank.length?rank[0].d:1);
+  const byType=_LV_TYPES.map(function(t){return {t:t,v:months.reduce(function(s,o){return s+(o.t[t.k]||0);},0)};});
+  return '<div class="olr-rep"><section class="olr-panel"><div class="olr-ph"><i class="ti ti-chart-bar"></i> Số ngày nghỉ theo tháng — '+y+'</div><div style="padding:0 14px 6px">'+svg+'</div>'
+    +'<div class="olr-legend">'+_LV_TYPES.map(function(t){return '<span><i style="background:'+t.c+'"></i>'+t.l+'</span>';}).join('')+'</div></section>'
+    +'<div class="olr-col"><section class="olr-panel"><div class="olr-ph"><i class="ti ti-chart-donut"></i> Theo loại nghỉ</div><div class="olr-bal" style="grid-template-columns:auto 1fr">'+_lvDonut(byType.map(function(x){return {v:x.v,c:x.t.c};}),_lvNum(byType.reduce(function(s,x){return s+x.v;},0)),'ngày đã duyệt')
+    +'<div class="olr-dl">'+byType.map(function(x){return '<span><i style="background:'+x.t.c+'"></i>'+x.t.l+': <b style="color:var(--olr-tx)">'+_lvNum(x.v)+'</b></span>';}).join('')+'</div></div></section>'
+    +'<section class="olr-panel"><div class="olr-ph"><i class="ti ti-trophy"></i> Nhân viên nghỉ nhiều nhất</div><div class="olr-rank">'
+    +(rank.length?rank.map(function(r){return '<div class="rw"><span title="'+_lvEsc(r.name)+'" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_lvEsc(r.name)+'</span><div class="olr-bar"><i style="width:'+(r.d/rmax*100)+'%;background:#0E9F8E"></i></div><b>'+_lvNum(r.d)+'</b></div>';}).join(''):'<div class="olr-empty">Chưa có dữ liệu</div>')
+    +'</div><div class="olr-note">Chỉ tính đơn đã duyệt. Số ngày trừ lương được Admin/Kế toán chọn riêng từng đơn.</div></section></div></div>';
+}
+
+/* ───────────── Modal dùng chung ───────────── */
+function _lvModal(title,icon,body,foot,wide){
+  let ov=g('olrOv'); if(!ov){ov=document.createElement('div');ov.id='olrOv';ov.className='ov olr-ov';ov.style.zIndex='260';document.body.appendChild(ov);}
+  ov.innerHTML='<div class="olr-modal"'+(wide?' style="width:min(560px,94vw)"':'')+'><div class="olr-mh"><i class="ti '+icon+'"></i><span>'+title+'</span><button onclick="_lvCloseModal()" title="Đóng"><i class="ti ti-x"></i></button></div><div class="olr-mb">'+body+'</div><div class="olr-mf">'+(foot||'')+'</div></div>';
+  openOv('olrOv');
+}
+function _lvCloseModal(){closeOv('olrOv');}
+window._lvCloseModal=_lvCloseModal;
+
+/* ───────────── Biểu mẫu gửi đơn (dùng ở tab + Hồ sơ của tôi) ───────────── */
+function _lvFormHTML(p,o){
+  o=o||{};
+  const today=_lvToday();
+  const emp=o.pickEmp?('<div><label>Nhân viên</label><select id="'+p+'emp" onchange="_lvFormPreview(\''+p+'\')">'+_lvEmployees().map(function(e){return '<option value="'+_lvEsc(e.email)+'"'+(e.email===(o.email||_lvMyEmail())?' selected':'')+'>'+_lvEsc(e.name)+' — '+_lvEsc(_lvDeptLabel(e.role))+'</option>';}).join('')+'</select></div>'):'';
+  return emp
+    +'<div><label>Loại nghỉ</label><select id="'+p+'type" onchange="_lvFormPreview(\''+p+'\')">'+_LV_TYPES.map(function(t){return '<option value="'+t.k+'">'+t.l+'</option>';}).join('')+'</select></div>'
+    +'<div class="row2"><div><label>Từ ngày</label><input type="date" id="'+p+'from" value="'+today+'" onchange="_lvFormFromChanged(\''+p+'\')"/></div><div><label>Đến ngày</label><input type="date" id="'+p+'to" value="'+today+'" onchange="_lvFormPreview(\''+p+'\')"/></div></div>'
+    +'<div id="'+p+'halfrow" style="display:flex;align-items:center;gap:10px"><label style="margin:0;display:flex;align-items:center;gap:6px;text-transform:none;font-size:12px"><input type="checkbox" id="'+p+'half" onchange="_lvFormPreview(\''+p+'\')"/> Nghỉ nửa ngày</label>'
+    +'<select id="'+p+'halfpart" style="width:auto" onchange="_lvFormPreview(\''+p+'\')"><option value="am">Buổi sáng</option><option value="pm">Buổi chiều</option></select></div>'
+    +'<div><label>Lý do</label><textarea id="'+p+'reason" rows="2" placeholder="VD: Việc gia đình, khám bệnh..."></textarea></div>'
+    +'<div class="olr-prev" id="'+p+'prev"></div>';
+}
+function _lvFormFromChanged(p){
+  const f=g(p+'from'), t=g(p+'to'); if(f&&t&&(!t.value||t.value<f.value))t.value=f.value;
+  _lvFormPreview(p);
+}
+function _lvFormRead(p){
+  const v=function(id){const e=g(p+id);return e?e.value:'';};
+  const emp=g(p+'emp')?v('emp'):_lvMyEmail();
+  const from=v('from'), to=v('to'), half=!!(g(p+'half')&&g(p+'half').checked&&from&&from===to);
+  return {email:emp,type:v('type'),from:from,to:to,half:half?v('halfpart'):'',reason:v('reason').trim()};
+}
+function _lvFormPreview(p){
+  const pv=g(p+'prev'); if(!pv)return;
+  const o=_lvFormRead(p);
+  const same=o.from&&o.from===o.to, hr=g(p+'halfrow'); if(hr)hr.style.display=same?'flex':'none';
+  if(!same&&g(p+'half'))g(p+'half').checked=false;
+  if(!o.from||!o.to||o.to<o.from){pv.innerHTML='<span style="color:#DC2626">Chọn khoảng ngày hợp lệ (Đến ngày không được trước Từ ngày).</span>';return;}
+  const o2=_lvFormRead(p), d=_lvCalcDays(o.from,o.to,!!o2.half);
+  let h='Số ngày nghỉ tính được: <b>'+_lvNum(d)+' ngày làm việc</b> <span style="color:var(--text-secondary)">(không tính T7, CN và ngày lễ đã duyệt)</span>';
+  if(d===0)h='<span style="color:#DC2626">Khoảng ngày này toàn là ngày nghỉ/lễ — không có ngày làm việc để xin nghỉ.</span>';
+  else if(o.type==='annual'){const b=_lvBalance(o.email,o.from.slice(0,4));const after=b.remain-d;h+='<br>Phép năm '+o.from.slice(0,4)+': còn <b>'+_lvNum(b.remain)+'</b> ngày → sau đơn này còn <b style="color:'+(after<0?'#DC2626':'#15803D')+'">'+_lvNum(after)+'</b>'+(after<0?' (vượt quỹ phép — việc có trừ lương do Admin/Kế toán quyết định)':'');}
+  else h+='<br><span style="color:var(--text-secondary)">Loại nghỉ này không trừ vào quỹ phép năm.</span>';
+  pv.innerHTML=h;
+}
+window._lvFormFromChanged=_lvFormFromChanged;window._lvFormPreview=_lvFormPreview;window._lvFormRead=_lvFormRead;
+
+/* ───────────── Tạo đơn ───────────── */
+async function _lvCreate(o,autoApprove){
+  const u=_lvUserOf(o.email)||{email:o.email,name:o.email,role:'viewer',uid:''};
+  if(!o.from||!o.to||o.to<o.from){toast('Chọn khoảng ngày hợp lệ','error');return false;}
+  if(!_LV_TYPES.some(function(t){return t.k===o.type;})){toast('Chọn loại nghỉ','error');return false;}
+  const days=_lvCalcDays(o.from,o.to,!!o.half);
+  if(!days){toast('Khoảng ngày này không có ngày làm việc (toàn T7, CN hoặc ngày lễ)','error');return false;}
+  const clash=_lvList().find(function(x){return String(x.email||'').toLowerCase()===o.email&&(x.status==='pending'||x.status==='approved')&&x.from<=o.to&&x.to>=o.from&&!(x.half&&o.half&&x.from===x.to&&o.from===o.to&&x.half!==o.half);});
+  if(clash){toast('Đã có đơn nghỉ '+_lvDmy(clash.from)+' → '+_lvDmy(clash.to)+' ('+(_LV_ST[clash.status]||{}).l+') trùng khoảng ngày này','error');return false;}
+  if(o.type==='annual'){const b=_lvBalance(o.email,o.from.slice(0,4));if(b.remain-days<0&&!confirm('Đơn này vượt quỹ phép năm (còn '+_lvNum(b.remain)+' ngày, xin '+_lvNum(days)+' ngày).\n\nVẫn tạo đơn? (Việc có trừ lương hay không do Admin/Kế toán quyết định.)'))return false;}
+  const id=db.collection('leaves').doc().id, now=Date.now(), me=_lvMyEmail();
+  const rec={id:id,uid:u.uid||'',email:o.email,name:u.name||o.email,role:u.role||'viewer',type:o.type,from:o.from,to:o.to,half:o.half||'',days:days,reason:o.reason||'',
+    status:autoApprove?'approved':'pending',year:parseInt(o.from.slice(0,4)),createdAt:now,createdBy:me,updatedAt:now,payDeduct:''};
+  if(autoApprove){rec.reviewedBy=me;rec.reviewedAt=now;}
+  setLoading(true,'Đang gửi đơn...');
+  try{
+    await db.collection('leaves').doc(id).set(rec);
+    toast(autoApprove?'Đã tạo và duyệt đơn nghỉ':'Đã gửi đơn nghỉ — chờ Admin duyệt');
+    setLoading(false);return true;
+  }catch(e){setLoading(false);toast('Không gửi được đơn: '+(e&&e.message||e),'error');return false;}
+}
+window._lvOpenAdd=function(){
+  const admin=_lvIsAdmin();
+  _lvModal('Thêm đơn nghỉ phép','ti-calendar-plus',_lvFormHTML('olrf_',{pickEmp:admin,email:_lvMyEmail()})
+    +(admin?'<label style="text-transform:none;font-size:12px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="olrf_auto" checked/> Duyệt luôn (Admin tạo hộ nhân viên)</label>':'<div style="font-size:11.5px;color:var(--text-secondary)">Đơn sẽ ở trạng thái Chờ duyệt cho tới khi Admin xử lý.</div>'),
+    '<button onclick="_lvCloseModal()">Hủy</button><button class="pri" onclick="_lvSubmitAdd()"><i class="ti ti-send"></i> Lưu đơn</button>');
+  _lvFormPreview('olrf_');
+};
+window._lvSubmitAdd=async function(){
+  const o=_lvFormRead('olrf_'), admin=_lvIsAdmin();
+  if(!admin)o.email=_lvMyEmail();
+  const auto=admin&&!!(g('olrf_auto')&&g('olrf_auto').checked);
+  if(await _lvCreate(o,auto))_lvCloseModal();
+};
+
+/* ───────────── Duyệt / từ chối / hủy / xóa / trừ lương ───────────── */
+function _lvById(id){return _lvList().find(function(x){return x._id===id||x.id===id;});}
+async function _lvUpd(id,patch,okMsg){
+  setLoading(true,'Đang cập nhật...');
+  try{await db.collection('leaves').doc(id).update(Object.assign({updatedAt:Date.now()},patch));toast(okMsg);}
+  catch(e){toast('Lỗi: '+(e&&e.message||e),'error');}
+  setLoading(false);
+}
+window._lvApprove=function(id){
+  const x=_lvById(id); if(!x||!_lvIsAdmin())return;
+  if(_lvOverQuota(x)&&!confirm('Đơn của '+x.name+' làm vượt quỹ phép năm. Vẫn duyệt?\n(Việc trừ lương sẽ chọn riêng sau khi duyệt.)'))return;
+  _lvUpd(id,{status:'approved',reviewedBy:_lvMyEmail(),reviewedAt:Date.now()},'Đã duyệt đơn nghỉ của '+x.name);
+};
+window._lvOpenReject=function(id){
+  const x=_lvById(id); if(!x)return;
+  _lvModal('Từ chối đơn nghỉ','ti-circle-x','<div>Từ chối đơn của <b>'+_lvEsc(x.name)+'</b> ('+_lvDmy(x.from)+' → '+_lvDmy(x.to)+')?</div><div><label>Lý do từ chối (nhân viên sẽ thấy)</label><textarea id="olr_rejnote" rows="3"></textarea></div>',
+    '<button onclick="_lvCloseModal()">Đóng</button><button class="red" onclick="_lvDoReject(\''+id+'\')">Từ chối đơn</button>');
+};
+window._lvDoReject=async function(id){
+  const note=(g('olr_rejnote')?g('olr_rejnote').value:'').trim();
+  await _lvUpd(id,{status:'rejected',reviewedBy:_lvMyEmail(),reviewedAt:Date.now(),reviewNote:note},'Đã từ chối đơn');
+  _lvCloseModal();
+};
+window._lvCancel=function(id){
+  const x=_lvById(id); if(!x)return;
+  if(!confirm('Hủy đơn nghỉ '+_lvDmy(x.from)+' → '+_lvDmy(x.to)+' của '+x.name+'?'))return;
+  _lvUpd(id,{status:'cancelled',cancelledAt:Date.now(),cancelledBy:_lvMyEmail()},'Đã hủy đơn nghỉ');
+};
+window._lvDelete=async function(id){
+  const x=_lvById(id); if(!x||!_lvIsAdmin())return;
+  if(!confirm('XÓA HẲN đơn nghỉ của '+x.name+' ('+_lvDmy(x.from)+' → '+_lvDmy(x.to)+')?\nKhông thể hoàn tác. (Nếu chỉ muốn vô hiệu đơn, hãy dùng "Hủy đơn".)'))return;
+  setLoading(true,'Đang xóa...');
+  try{await db.collection('leaves').doc(id).delete();toast('Đã xóa đơn nghỉ');}catch(e){toast('Lỗi: '+(e&&e.message||e),'error');}
+  setLoading(false);
+};
+window._lvSetPayDeduct=function(id,val){
+  if(!_lvCanSeeAll())return;
+  const x=_lvById(id); if(!x)return;
+  _lvUpd(id,{payDeduct:val,payDeductBy:_lvMyEmail(),payDeductAt:Date.now()},'Đã ghi quyết định: '+_LV_PD[val].l+' — '+x.name);
+};
+window._lvSaveEnt=async function(){
+  if(!_lvIsAdmin())return;
+  const def=parseFloat((g('olr-entdef')||{}).value);
+  if(isNaN(def)||def<0){toast('Quỹ phép mặc định không hợp lệ','error');return;}
+  const byEmail={};
+  document.querySelectorAll('#on-leave-report .olr-ent[data-email]').forEach(function(el){
+    const v=parseFloat(el.value); if(!isNaN(v)&&v>=0&&v!==def)byEmail[el.getAttribute('data-email')]=v;
+  });
+  setLoading(true,'Đang lưu quỹ phép...');
+  try{
+    await db.collection('_config').doc('leaveSettings').set({annualDefault:def,byEmail:byEmail,updatedAt:Date.now(),updatedBy:_lvMyEmail()});
+    cache.leaveSettings={annualDefault:def,byEmail:byEmail};
+    toast('Đã lưu quỹ phép năm'); _lvDraw();
+  }catch(e){toast('Lỗi: '+(e&&e.message||e),'error');}
+  setLoading(false);
+};
+
+/* ───────────── Chi tiết đơn / chi tiết ngày ───────────── */
+window._lvOpenDetail=function(id){
+  const x=_lvById(id); if(!x)return;
+  const u=_lvUserOf(x.email), role=(u&&u.role)||x.role;
+  const kv=function(k,v){return '<span>'+k+'</span><div>'+v+'</div>';};
+  const ts=function(t){return t?new Date(t).toLocaleString('vi-VN'):'—';};
+  let h='<div class="olr-kv">'+kv('Nhân viên','<b>'+_lvEsc(x.name)+'</b> — '+_lvEsc(_lvDeptLabel(role)))+kv('Email',_lvEsc(x.email))+kv('Loại nghỉ',_lvTypeDot(x.type))
+    +kv('Thời gian',_lvDmy(x.from)+' → '+_lvDmy(x.to)+(x.half?' ('+(x.half==='am'?'nửa ngày sáng':'nửa ngày chiều')+')':''))+kv('Số ngày','<b>'+_lvNum(x.days)+'</b> ngày làm việc'+(_lvOverQuota(x)?' <span style="color:#D97706">· vượt quỹ phép năm</span>':''))
+    +kv('Lý do',_lvEsc(x.reason||'—'))+kv('Trạng thái',_lvStatusBadge(x.status))+kv('Gửi lúc',ts(x.createdAt)+' · '+_lvEsc(_lvUserName(x.createdBy)));
+  if(x.reviewedAt)h+=kv(x.status==='rejected'?'Từ chối bởi':'Duyệt bởi',_lvEsc(_lvUserName(x.reviewedBy))+' · '+ts(x.reviewedAt));
+  if(x.reviewNote)h+=kv('Ghi chú duyệt',_lvEsc(x.reviewNote));
+  if(x.status==='approved'){
+    h+=kv('Trừ lương','<b style="color:'+_LV_PD[x.payDeduct||''].c+'">'+_LV_PD[x.payDeduct||''].l+'</b>'+(x.payDeductBy?' <span style="color:var(--text-secondary)">('+_lvEsc(_lvUserName(x.payDeductBy))+', '+ts(x.payDeductAt)+')</span>':''));
+  }
+  h+='</div><div style="font-size:11px;color:var(--text-secondary)">Việc có trừ ngày nghỉ vào lương do Admin/Kế toán quyết định, kể cả khi vượt quỹ phép.</div>';
+  _lvModal('Chi tiết đơn nghỉ','ti-file-text',h,'<button onclick="_lvCloseModal()">Đóng</button>',true);
+};
+function _lvUserName(email){const u=_lvUserOf(email);return u?u.name:(email||'—');}
+window._lvOpenDay=function(ds){
+  const hol=_holApproved()[ds];
+  const L=_lvList().filter(function(x){return (x.status==='approved'||x.status==='pending')&&x.from<=ds&&x.to>=ds&&!_prIsOffDay(ds);});
+  const body=(hol?'<div style="color:#DC2626;font-weight:700">Ngày lễ/nghỉ: '+_lvEsc(hol)+'</div>':'')
+    +(L.length?L.map(function(x){return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-light)">'+_lvAvatar(x.name,30)+'<div style="flex:1;min-width:0"><b>'+_lvEsc(x.name)+'</b><div style="font-size:11px;color:var(--text-secondary)">'+_lvEsc(_lvTypeOf(x.type).l)+' · '+_lvDmy(x.from)+' → '+_lvDmy(x.to)+(x.reason?' · '+_lvEsc(x.reason):'')+'</div></div>'+_lvStatusBadge(x.status)+'</div>';}).join(''):'<div style="color:var(--text-secondary)">'+(_prIsOffDay(ds)&&!hol?'Cuối tuần — không tính ngày làm việc':'Không có ai nghỉ ngày này')+'</div>');
+  _lvModal('Nghỉ phép ngày '+_lvDmy(ds),'ti-calendar-event',body,'<button onclick="_lvCloseModal()">Đóng</button>');
+};
+
+/* ───────────── Xuất Excel ───────────── */
+window._lvExport=function(){
+  const XLSX=window.XLSX; if(!XLSX){toast('Thư viện Excel chưa sẵn sàng, thử lại sau vài giây','error');return;}
+  const S=window._lvState, rows=_lvFiltered();
+  const a1=[['STT','Nhân viên','Email','Phòng ban','Loại nghỉ','Từ ngày','Đến ngày','Số ngày','Nửa ngày','Lý do','Trạng thái','Người duyệt','Quyết định trừ lương','Ghi chú duyệt']];
+  rows.forEach(function(x,i){const u=_lvUserOf(x.email);a1.push([i+1,x.name||'',x.email||'',_lvDeptLabel((u&&u.role)||x.role),_lvTypeOf(x.type).l,_lvDmy(x.from),_lvDmy(x.to),parseFloat(x.days)||0,x.half?(x.half==='am'?'Sáng':'Chiều'):'',x.reason||'',(_LV_ST[x.status]||{}).l||x.status,x.reviewedBy?_lvUserName(x.reviewedBy):'',x.status==='approved'?_LV_PD[x.payDeduct||''].l:'',x.reviewNote||'']);});
+  const a2=[['Nhân viên','Email','Phòng ban','Quỹ phép năm '+S.y,'Đã nghỉ','Chờ duyệt','Còn lại','Ngày nghỉ trừ lương (Admin/KT quyết định)','Ngày đã duyệt chưa quyết định trừ lương']];
+  _lvEmpsFiltered().forEach(function(e){const b=_lvBalance(e.email,S.y);const my=_lvList().filter(function(x){return String(x.email||'').toLowerCase()===e.email&&x.status==='approved'&&String(x.from||'').slice(0,4)===String(S.y);});
+    a2.push([e.name,e.email,_lvDeptLabel(e.role),b.ent,b.used,b.pending,b.remain,my.filter(function(x){return x.payDeduct==='yes';}).reduce(function(s,x){return s+(parseFloat(x.days)||0);},0),my.filter(function(x){return !x.payDeduct;}).reduce(function(s,x){return s+(parseFloat(x.days)||0);},0)]);});
+  const wb=XLSX.utils.book_new();
+  const w1=XLSX.utils.aoa_to_sheet(a1), w2=XLSX.utils.aoa_to_sheet(a2);
+  w1['!cols']=[{wch:5},{wch:22},{wch:28},{wch:13},{wch:20},{wch:11},{wch:11},{wch:9},{wch:9},{wch:30},{wch:12},{wch:20},{wch:20},{wch:24}];
+  w2['!cols']=[{wch:22},{wch:28},{wch:13},{wch:14},{wch:10},{wch:10},{wch:10},{wch:22},{wch:22}];
+  XLSX.utils.book_append_sheet(wb,w1,'Don nghi phep'); XLSX.utils.book_append_sheet(wb,w2,'So du phep');
+  XLSX.writeFile(wb,'OnLeave_'+(S.m?S.y+'-'+String(S.m).padStart(2,'0'):S.y)+'.xlsx');
+  toast('Đã xuất Excel ('+rows.length+' đơn)');
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HỒ SƠ CỦA TÔI (mở rộng A 2.78): email Cty · bảng lương & phụ cấp trách nhiệm CỦA CHÍNH MÌNH (chỉ xem) ·
+   xem trước thưởng/phạt chứng từ của chính mình · gửi/hủy đơn nghỉ phép.
+   Mức thưởng/phạt chỉ Admin chỉnh được (ở Finance › Payroll) — ở đây chỉ hiển thị.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const _MP_CSS=`
+#my-profile{max-width:1180px;margin:1.2rem auto;padding:0 12px;color:var(--text-primary)}
+#my-profile *{box-sizing:border-box}
+#my-profile .mp-grid{display:grid;grid-template-columns:330px minmax(0,1fr);gap:14px;align-items:start}
+#my-profile .mp-card{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:14px;padding:18px;box-shadow:var(--shadow-sm)}
+#my-profile .mp-card h3{margin:0 0 12px;font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px;font-family:var(--font-disp)}
+#my-profile .mp-tabs{display:flex;gap:6px;margin-bottom:12px}
+#my-profile .mp-tab{border:1px solid var(--border-light);background:var(--bg-primary);color:var(--text-secondary);padding:9px 16px;border-radius:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;display:inline-flex;gap:6px;align-items:center;transition:background .15s}
+#my-profile .mp-tab:hover{background:var(--hover-bg)}
+#my-profile .mp-tab.on{background:#0F3B6E;color:#fff;border-color:#0F3B6E}
+#my-profile .mp-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+#my-profile .mp-kpi{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:11px;padding:10px 12px;border-top:3px solid var(--c,#0F3B6E)}
+#my-profile .mp-kpi b{display:block;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px}
+#my-profile .mp-kpi span{font-size:18px;font-weight:800;color:var(--c,#0F3B6E);font-variant-numeric:tabular-nums}
+#my-profile table.mp-t{width:100%;border-collapse:collapse;font-size:12.5px}
+#my-profile .mp-t th{background:linear-gradient(180deg,#14487F,#0F3B6E);color:#fff;font-size:10.5px;padding:8px 10px;text-align:left;text-transform:uppercase;letter-spacing:.3px}
+#my-profile .mp-t td{padding:7px 10px;border-bottom:1px solid var(--border-light)}
+#my-profile .mp-t td.r,#my-profile .mp-t th.r{text-align:right;font-variant-numeric:tabular-nums}
+#my-profile .mp-t tr.tot td{font-weight:800;background:var(--bg-secondary)}
+#my-profile .mp-sec{margin-top:14px}
+#my-profile .mp-sec h4{margin:0 0 8px;font-size:13px;font-weight:800;color:#0F3B6E;display:flex;align-items:center;gap:6px}
+#my-profile .mp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+#my-profile .mp-bar select,#my-profile .mp-bar input[type=date]{height:34px;border:1px solid var(--border-light);border-radius:9px;padding:0 10px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;width:auto}
+#my-profile .mp-btn{height:34px;border-radius:9px;border:1px solid var(--border-light);background:var(--bg-primary);color:#0F3B6E;padding:0 14px;font-weight:700;font-size:12px;cursor:pointer;display:inline-flex;gap:6px;align-items:center;font-family:inherit}
+#my-profile .mp-btn.pri{background:#0F3B6E;color:#fff;border-color:#0F3B6E}
+#my-profile .mp-note{font-size:11.5px;color:var(--text-secondary);background:var(--bg-secondary);border-radius:9px;padding:8px 11px;line-height:1.5}
+#my-profile .mp-form{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+#my-profile .mp-form .full{grid-column:1/-1}
+#my-profile .mp-form label{font-size:10.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:3px}
+#my-profile .mp-form select,#my-profile .mp-form input[type=date],#my-profile .mp-form textarea{width:100%;border:1px solid var(--border-light);border-radius:9px;padding:8px 10px;font-size:12.5px;font-family:inherit;background:var(--bg-primary);color:var(--text-primary)}
+#my-profile .mp-prev{background:var(--bg-secondary);border:1px dashed var(--border-light);border-radius:9px;padding:9px 11px;font-size:12px;line-height:1.5}
+#my-profile .mp-bdg{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
+#my-profile .mp-bdg.ok{background:#DCFCE7;color:#15803D}#my-profile .mp-bdg.pend{background:#FEF3C7;color:#B45309}#my-profile .mp-bdg.rej{background:#FEE2E2;color:#B91C1C}#my-profile .mp-bdg.can{background:#E5E7EB;color:#4B5563}
+@media(max-width:900px){#my-profile .mp-grid{grid-template-columns:1fr}#my-profile .mp-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}#my-profile .mp-form{grid-template-columns:1fr}}
+`;
+function _mpEnsureCss(){ if(document.getElementById('mp-style'))return; const s=document.createElement('style');s.id='mp-style';s.textContent=_MP_CSS;document.head.appendChild(s); }
+window._mpState=window._mpState||(function(){const n=new Date();return {tab:'pay',y:n.getFullYear(),m:n.getMonth()+1,asOf:'',ly:n.getFullYear()};})();
+function _mpVnd(n){n=Math.round(parseFloat(n)||0);return n.toLocaleString('en-US')+' đ';}
+function _mpMyUid(){const p=currentProfile||{};return p.uid||p._docId||(currentUser&&currentUser.uid)||'';}
+function _mpIsMine(r){
+  const em=_lvMyEmail(), uid=_mpMyUid();
+  if(r&&r.uid&&uid&&r.uid===uid)return true;
+  return !!em&&(_prEmpEmail(r)===em||String(r&&r.email||'').toLowerCase()===em);
+}
+
+function _mpRender(pg){
+  if(!pg)return;
+  _mpEnsureCss();
+  const u=currentProfile||{}, r=ROLES[u.role||'viewer'];
+  window._userEditAvatarFile=null; window._userEditAvatarCleared=false;
+  const coMail=u.companyEmail?_lvEsc(u.companyEmail):'<span style="color:var(--text-tertiary)">Chưa thiết lập (mặc định info@cocoseavn.com)</span>';
+  pg.innerHTML=`<div id="my-profile"><div class="mp-grid">
+    <aside class="mp-card">
+      <h3><i class="ti ti-user-circle" style="font-size:20px;color:var(--green)"></i> Hồ sơ của tôi</h3>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:1rem">
+        <div id="myProfAvPreview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--bg-secondary);border:1px solid var(--border-light);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:var(--text-secondary)">
+          ${u.avatarUrl?'<img src="'+u.avatarUrl+'" style="width:100%;height:100%;object-fit:cover"/>':(u.avatar||'??')}
+        </div>
+        <div>
+          <input type="file" id="myProfAvFile" accept="image/*" style="display:none" onchange="_myProfileAvatarPreview(this)"/>
+          <button type="button" class="btn sm" onclick="g('myProfAvFile').click()"><i class="ti ti-upload"></i> Đổi ảnh đại diện</button>
+          ${u.avatarUrl?'<button type="button" class="btn sm red" onclick="_myProfileAvatarClear()" style="margin-left:4px"><i class="ti ti-trash"></i></button>':''}
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:4px">JPG/PNG, tối đa 2MB</div>
+        </div>
+      </div>
+      <div class="fi full" style="margin-bottom:.7rem"><label class="lbl">Email đăng nhập</label><input type="email" value="${_lvEsc(u.email||'')}" readonly/></div>
+      <div class="fi full" style="margin-bottom:.7rem"><label class="lbl">Email Cty</label><div style="font-size:13px;font-weight:600;padding:7px 0">${coMail}</div><div style="font-size:10.5px;color:var(--text-tertiary)">Địa chỉ người gửi (From) trong file .eml — do Admin thiết lập.</div></div>
+      <div class="fi full" style="margin-bottom:.7rem"><label class="lbl">Họ và tên</label><input type="text" id="myProfName" value="${_lvEsc(u.name||'')}"/></div>
+      <div class="fi full" style="margin-bottom:1rem"><label class="lbl">Vai trò</label><div><span class="${r.cls}">${r.label}</span> <span style="font-size:11px;color:var(--text-tertiary)">— liên hệ Admin để thay đổi</span></div></div>
+      <button class="btn pri" onclick="saveMyProfile()"><i class="ti ti-device-floppy"></i> Lưu thay đổi</button>
+    </aside>
+    <main class="mp-main">
+      <div class="mp-tabs">
+        <button class="mp-tab" id="mpTabPay" onclick="_mpSetTab('pay')"><i class="ti ti-cash"></i> Bảng lương &amp; phụ cấp trách nhiệm</button>
+        <button class="mp-tab" id="mpTabLeave" onclick="_mpSetTab('leave')"><i class="ti ti-beach"></i> On Leave — nghỉ phép</button>
+      </div>
+      <div id="mpBody"></div>
+    </main></div></div>`;
+  _mpDrawTab();
+}
+window._mpRender=_mpRender;
+window._mpOpenModal=function(){
+  let ov=g('mpOv'); if(!ov){ov=document.createElement('div');ov.id='mpOv';ov.className='ov';ov.style.zIndex='250';ov.style.padding='1rem';document.body.appendChild(ov);}
+  ov.innerHTML='<div style="background:var(--bg-secondary);border-radius:14px;max-width:1220px;margin:0 auto;padding:6px 0 14px;position:relative"><button onclick="closeOv(\'mpOv\')" style="position:absolute;right:12px;top:10px;z-index:2;width:32px;height:32px;border-radius:8px;border:1px solid var(--border-light);background:var(--bg-primary);cursor:pointer;color:var(--text-primary)"><i class="ti ti-x"></i></button><div id="mpOvHost"></div></div>';
+  openOv('mpOv'); _mpRender(g('mpOvHost'));
+};
+window._mpSetTab=function(t){window._mpState.tab=t;_mpDrawTab();};
+function _mpDrawTab(){
+  const S=window._mpState, body=g('mpBody'); if(!body)return;
+  ['Pay','Leave'].forEach(function(k){const b=g('mpTab'+k);if(b)b.classList.toggle('on',S.tab===k.toLowerCase());});
+  if(S.tab==='leave'){body.innerHTML=_mpLeaveShell();_mpLeaveLists();_lvFormPreview('mpf_');}
+  else{body.innerHTML=_mpPayShell();_mpPayLoad();}
+}
+function _mpRefresh(){ if(window._mpState.tab==='leave')_mpLeaveLists(); }
+window._mpRefresh=_mpRefresh;
+
+/* ───────────── Tab Lương & phụ cấp ───────────── */
+function _mpPayShell(){
+  const S=window._mpState, curY=new Date().getFullYear();
+  const mo=_LV_MONTHS.map(function(n,i){return '<option value="'+(i+1)+'"'+(S.m===i+1?' selected':'')+'>'+n+'</option>';}).join('');
+  let yo='';for(let y=curY-2;y<=curY+1;y++)yo+='<option value="'+y+'"'+(S.y===y?' selected':'')+'>'+y+'</option>';
+  return '<div class="mp-card"><div class="mp-bar"><b style="font-size:13px">Kỳ lương:</b><select onchange="_mpPayPick(\'m\',this.value)">'+mo+'</select><select onchange="_mpPayPick(\'y\',this.value)">'+yo+'</select>'
+    +'<span style="flex:1"></span><span class="mp-note" style="padding:5px 10px"><i class="ti ti-lock"></i> Chỉ hiển thị dữ liệu của riêng bạn</span></div><div id="mpPayBox"><div class="mp-note">Đang tải bảng lương...</div></div></div>';
+}
+window._mpPayPick=function(k,v){window._mpState[k]=parseInt(v);window._mpState.asOf='';_mpPayLoad();};
+// Tính phiếu lương của 1 dòng bằng đúng hàm của Payroll (_prSlipData) trên bản sao dữ liệu, rồi khôi phục trạng thái toàn cục
+function _mpSlip(y,m,data,idx){
+  const bak={s:window._prState,r:window._prRows,rt:window._prRate,pn:window._prPenRate,l:window._prLots};
+  try{
+    window._prState=Object.assign({},bak.s||{},{year:y,month:m});
+    window._prRows=JSON.parse(JSON.stringify(data.rows||[]));
+    window._prRate=(data.docBonusRate!=null)?data.docBonusRate:_PR_DOC_BONUS_DEFAULT;
+    window._prPenRate=(data.docPenaltyRate!=null)?data.docPenaltyRate:_prPenDefaultFor(y,m);
+    const D=_prSlipData(idx);
+    return D;
+  }finally{window._prState=bak.s;window._prRows=bak.r;window._prRate=bak.rt;window._prPenRate=bak.pn;window._prLots=bak.l;}
+}
+async function _mpPayLoad(){
+  const S=window._mpState, box=g('mpPayBox'); if(!box)return;
+  const y=S.y, m=S.m;
+  let data;
+  try{const snap=await db.collection('payroll').doc(_prDocId(y,m)).get();data=snap.exists?snap.data():{rows:[]};}
+  catch(e){box.innerHTML='<div class="mp-note" style="color:#B91C1C">Không tải được bảng lương: '+_lvEsc(e&&e.message||e)+'</div>';return;}
+  if(!g('mpPayBox'))return;
+  const idx=(data.rows||[]).findIndex(_mpIsMine);
+  if(idx<0){box.innerHTML='<div class="mp-note">Chưa có bảng lương '+_LV_MONTHS[m-1]+'/'+y+' dành cho tài khoản của bạn (kế toán chưa lập hoặc chưa có tên bạn trong bảng).</div>';window._mpCtx=null;return;}
+  let D; try{D=_mpSlip(y,m,data,idx);}catch(e){box.innerHTML='<div class="mp-note" style="color:#B91C1C">Không tính được bảng lương: '+_lvEsc(e&&e.message||e)+'</div>';return;}
+  if(!D){box.innerHTML='<div class="mp-note">Không đọc được dòng lương của bạn.</div>';return;}
+  const row=(data.rows||[])[idx]||{};
+  window._mpCtx={y:y,m:m,rate:D.rate,pen:D.penRate,extra:D.extra,email:_lvMyEmail()};
+  const kpi=function(l,v,c){return '<div class="mp-kpi" style="--c:'+c+'"><b>'+l+'</b><span>'+v+'</span></div>';};
+  const tr=function(l,v,cls){return '<tr'+(cls?' class="'+cls+'"':'')+'><td>'+l+'</td><td class="r">'+v+'</td></tr>';};
+  let h='<div class="mp-kpis">'+kpi('Thực nhận',_mpVnd(D.nhan),'#0E9F8E')+kpi('Tổng thu nhập',_mpVnd(D.tong),'#0F3B6E')+kpi('Khấu trừ',_mpVnd(D.tru),'#DC2626')+kpi('Ngày công',_lvNum(D.days)+' / '+_lvNum(D.std),'#C99A3C')+'</div>';
+  h+='<table class="mp-t"><thead><tr><th>Khoản mục</th><th class="r">Số tiền</th></tr></thead><tbody>'
+    +tr('Lương cơ bản',_mpVnd(D.base))+tr('Lương theo ngày công'+(D.manual?' (nhập tay)':''),_mpVnd(D.real))
+    +tr('Phụ cấp ăn trưa',_mpVnd(D.at))+tr('Phụ cấp điện thoại',_mpVnd(D.dt))+tr('Phụ cấp trách nhiệm (TN)',_mpVnd(D.tn))+tr('Tổng thu nhập',_mpVnd(D.tong),'tot')
+    +tr('BHXH',D.hasBH?_mpVnd(D.bhxh):'—')+tr('BHYT',D.hasBH?_mpVnd(D.bhyt):'—')+tr('Tổng khấu trừ',_mpVnd(D.tru),'tot')+tr('Thực nhận',_mpVnd(D.nhan),'tot')+'</tbody></table>';
+  // Phụ cấp trách nhiệm
+  const lotRow=function(l,late){return '<tr><td>'+_lvEsc(l.label)+'</td><td>'+_lvDmy(l.etd)+'</td><td>'+_lvDmy(l.limit)+'</td><td>'+_lvDmy(l.doneDate)+'</td><td><span class="mp-bdg '+(late?'rej':'ok')+'">'+(late?'Trễ hạn':'Đạt')+'</span></td></tr>';};
+  h+='<div class="mp-sec"><h4><i class="ti ti-award"></i> Bảng phụ cấp trách nhiệm — '+_LV_MONTHS[m-1]+'/'+y+'</h4><table class="mp-t"><thead><tr><th>Khoản</th><th class="r">Số lượng</th><th class="r">Mức</th><th class="r">Thành tiền</th></tr></thead><tbody>'
+    +'<tr><td>Thưởng tiến độ chứng từ (lô đạt)</td><td class="r">'+D.docCount+' lô</td><td class="r">'+_mpVnd(D.rate)+'</td><td class="r">'+_mpVnd(D.docAmount)+'</td></tr>'
+    +D.items.map(function(it){return '<tr><td>'+_lvEsc(it.label)+'</td><td class="r">—</td><td class="r">—</td><td class="r">'+_mpVnd(it.amount)+'</td></tr>';}).join('')
+    +'<tr><td>Phạt lô hoàn thành chứng từ trễ hạn</td><td class="r">'+D.penCount+' lô</td><td class="r">'+_mpVnd(D.penRate)+'</td><td class="r" style="color:#B91C1C">− '+_mpVnd(D.penApplied!=null?D.penApplied:D.penNominal)+'</td></tr>'
+    +'<tr class="tot"><td colspan="3">Phụ cấp trách nhiệm được hưởng (TN)</td><td class="r">'+_mpVnd(D.tn)+'</td></tr></tbody></table>'
+    +'<div class="mp-note" style="margin-top:8px"><i class="ti ti-info-circle"></i> Mức thưởng/phạt do <b>Admin</b> quy định — bạn chỉ xem được, không chỉnh được. '+_lvEsc(_psRuleText())+'</div></div>';
+  if(D.docOk.length||D.docLate.length){
+    h+='<div class="mp-sec"><h4><i class="ti ti-list-check"></i> Lô chứng từ đã hoàn thành do bạn tick</h4><div style="overflow-x:auto"><table class="mp-t"><thead><tr><th>Booking/Job</th><th>ETD</th><th>Hạn hoàn thành</th><th>Đã hoàn thành</th><th>Kết quả</th></tr></thead><tbody>'
+      +D.docOk.map(function(l){return lotRow(l,false);}).join('')+D.docLate.map(function(l){return lotRow(l,true);}).join('')+'</tbody></table></div></div>';
+  }
+  // Xem trước thưởng phạt
+  const mEnd=_lvMonthEnd(y,m), today=_lvToday();
+  if(!S.asOf)S.asOf=(today>=_lvMonthStart(y,m)&&today<=mEnd)?today:mEnd;
+  h+='<div class="mp-sec"><h4><i class="ti ti-eye-check"></i> Xem trước thưởng / phạt chứng từ của tôi</h4><div class="mp-bar"><label style="font-size:12px;font-weight:600">Tính đến ngày</label><input type="date" id="mpAsOf" value="'+S.asOf+'"/><button class="mp-btn pri" onclick="_mpPreview()"><i class="ti ti-eye"></i> Xem trước</button></div><div id="mpPrev"></div></div>';
+  box.innerHTML=h;
+  _mpPreview();
+}
+function _mpPreview(){
+  const c=window._mpCtx, out=g('mpPrev'); if(!c||!out)return;
+  const asOf=(g('mpAsOf')&&g('mpAsOf').value)||_lvToday(); window._mpState.asOf=asOf;
+  const lots=_prDocLotsForMonth(c.y,c.m).filter(function(l){return l.doneBy===c.email&&l.doneDate&&l.doneDate<=asOf;});
+  const ok=lots.filter(function(l){return l.doneDate<=l.limit;}), late=lots.filter(function(l){return l.doneDate>l.limit;});
+  const bonus=ok.length*c.rate, pen=late.length*c.pen, pre=bonus+c.extra, applied=Math.max(0,Math.min(pen,pre)), tn=pre-applied;
+  const kpi=function(l,v,col){return '<div class="mp-kpi" style="--c:'+col+'"><b>'+l+'</b><span>'+v+'</span></div>';};
+  out.innerHTML='<div class="mp-kpis">'+kpi('Lô đạt',ok.length+' lô','#15803D')+kpi('Lô trễ hạn',late.length+' lô','#DC2626')+kpi('Thưởng − phạt',_mpVnd(bonus)+' − '+_mpVnd(applied),'#0F3B6E')+kpi('TN dự kiến',_mpVnd(tn),'#0E9F8E')+'</div>'
+    +'<div class="mp-note">Tính đến '+_lvDmy(asOf)+' theo các lô bạn đã tick hoàn thành chứng từ. Đây là số xem trước, số chính thức theo bảng lương do Kế toán/Admin chốt.</div>';
+}
+window._mpPreview=_mpPreview;
+
+/* ───────────── Tab Nghỉ phép ───────────── */
+function _mpLeaveShell(){
+  const S=window._mpState, curY=new Date().getFullYear();
+  let yo='';for(let y=curY-2;y<=curY+1;y++)yo+='<option value="'+y+'"'+(S.ly===y?' selected':'')+'>'+y+'</option>';
+  return '<div class="mp-card"><h3><i class="ti ti-calendar-plus" style="color:#0E9F8E"></i> Gửi đơn nghỉ phép</h3>'
+    +'<div class="mp-form" id="mpFormBox">'+_mpFormFields()+'</div>'
+    +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="mp-btn pri" onclick="_mpSubmitLeave()"><i class="ti ti-send"></i> Gửi đơn nghỉ</button>'
+    +'<span class="mp-note" style="flex:1;min-width:240px">Đơn gửi sẽ ở trạng thái <b>Chờ duyệt</b> cho tới khi Admin duyệt. Việc có trừ ngày nghỉ vào lương hay không do <b>Admin/Kế toán</b> quyết định, kể cả khi vượt quỹ phép.</span></div></div>'
+    +'<div class="mp-card" style="margin-top:12px"><div class="mp-bar"><h3 style="margin:0;flex:1"><i class="ti ti-scale" style="color:#0F3B6E"></i> Phép năm &amp; đơn của tôi</h3><select onchange="window._mpState.ly=parseInt(this.value);_mpLeaveLists()">'+yo+'</select></div><div id="mpLvLists"></div></div>';
+}
+function _mpFormFields(){
+  // dùng lại biểu mẫu chung (prefix mpf_) nhưng bố cục 2 cột của Hồ sơ
+  const today=_lvToday();
+  return '<div><label>Loại nghỉ</label><select id="mpf_type" onchange="_lvFormPreview(\'mpf_\')">'+_LV_TYPES.map(function(t){return '<option value="'+t.k+'">'+t.l+'</option>';}).join('')+'</select></div>'
+    +'<div id="mpf_halfrow" style="display:flex;align-items:flex-end;gap:10px"><label style="margin:0;display:flex;align-items:center;gap:6px;text-transform:none;font-size:12px"><input type="checkbox" id="mpf_half" onchange="_lvFormPreview(\'mpf_\')"/> Nghỉ nửa ngày</label><select id="mpf_halfpart" style="width:auto" onchange="_lvFormPreview(\'mpf_\')"><option value="am">Buổi sáng</option><option value="pm">Buổi chiều</option></select></div>'
+    +'<div><label>Từ ngày</label><input type="date" id="mpf_from" value="'+today+'" onchange="_lvFormFromChanged(\'mpf_\')"/></div>'
+    +'<div><label>Đến ngày</label><input type="date" id="mpf_to" value="'+today+'" onchange="_lvFormPreview(\'mpf_\')"/></div>'
+    +'<div class="full"><label>Lý do</label><textarea id="mpf_reason" rows="2" placeholder="VD: Việc gia đình, khám bệnh..."></textarea></div>'
+    +'<div class="full mp-prev" id="mpf_prev"></div>';
+}
+function _mpLeaveLists(){
+  const box=g('mpLvLists'); if(!box)return;
+  const S=window._mpState, me=_lvMyEmail(), b=_lvBalance(me,S.ly);
+  const pct=b.ent>0?Math.min(100,b.used/b.ent*100):0, pp=b.ent>0?Math.min(100-pct,b.pending/b.ent*100):0;
+  const kpi=function(l,v,c){return '<div class="mp-kpi" style="--c:'+c+'"><b>'+l+'</b><span>'+v+'</span></div>';};
+  const mine=_lvList().filter(function(x){return String(x.email||'').toLowerCase()===me&&(String(x.from||'').slice(0,4)===String(S.ly)||String(x.to||'').slice(0,4)===String(S.ly));}).sort(function(a,c){return (c.from||'').localeCompare(a.from||'');});
+  const pd=function(x){if(x.status!=='approved')return '—';const v=x.payDeduct||'';return '<span style="font-weight:700;color:'+_LV_PD[v].c+'">'+_LV_PD[v].l+'</span>';};
+  box.innerHTML='<div class="mp-kpis">'+kpi('Quỹ phép năm',_lvNum(b.ent)+' ngày','#0F3B6E')+kpi('Đã nghỉ',_lvNum(b.used),'#1B5AA0')+kpi('Chờ duyệt',_lvNum(b.pending),'#D97706')+kpi('Còn lại',_lvNum(b.remain),b.remain<0?'#DC2626':'#0E9F8E')+'</div>'
+    +'<div style="height:9px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border-light);overflow:hidden;display:flex;margin-bottom:12px"><i style="width:'+pct+'%;background:'+(b.remain<0?'#DC2626':'#1B5AA0')+'"></i><i style="width:'+pp+'%;background:#F59E0B"></i></div>'
+    +(mine.length?'<div style="overflow-x:auto"><table class="mp-t"><thead><tr><th>Loại nghỉ</th><th>Từ ngày</th><th>Đến ngày</th><th class="r">Ngày</th><th>Lý do</th><th>Trạng thái</th><th>Trừ lương</th><th></th></tr></thead><tbody>'
+      +mine.map(function(x){const st=_LV_ST[x.status]||_LV_ST.pending;return '<tr><td>'+_lvTypeDot(x.type)+'</td><td>'+_lvDmy(x.from)+'</td><td>'+_lvDmy(x.to)+'</td><td class="r"><b>'+_lvNum(x.days)+'</b></td><td>'+_lvEsc(x.reason||'—')+(x.reviewNote?'<div style="font-size:11px;color:#B91C1C">Admin: '+_lvEsc(x.reviewNote)+'</div>':'')+'</td><td><span class="mp-bdg '+st.cls+'">'+st.l+'</span></td><td>'+pd(x)+'</td><td>'+(x.status==='pending'?'<button class="mp-btn" onclick="_lvCancel(\''+x._id+'\')" title="Hủy đơn"><i class="ti ti-ban"></i> Hủy</button>':'')+'</td></tr>';}).join('')+'</tbody></table></div>'
+      :'<div class="mp-note">Bạn chưa có đơn nghỉ nào trong năm '+S.ly+'.</div>');
+}
+window._mpSubmitLeave=async function(){
+  const o=_lvFormRead('mpf_'); o.email=_lvMyEmail();
+  const ok=await _lvCreate(o,_lvIsAdmin());
+  if(ok){const r=g('mpf_reason');if(r)r.value='';_mpLeaveLists();}
+};
+function renderMyProfileOnly(pg){ _mpRender(pg); }
+
+// ═══ (bản cũ, giữ lại để tham chiếu — A 2.78 dùng _mpRender) Hồ sơ của tôi ═══
+function _renderMyProfileOnlyLegacy(pg){
   if(!pg)return;
   const u=currentProfile||{};
   window._userEditAvatarFile=null;
@@ -24429,7 +25300,7 @@ function renderUsers(){
   pg.innerHTML=
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">'
       +'<div><div style="font-weight:600;font-size:14px">Quản lý người dùng</div><div style="font-size:11px;color:var(--text-secondary);margin-top:2px">'+cache.users.length+' tài khoản</div></div>'
-      +'<div style="display:flex;gap:6px"><button class="btn sm" onclick="renderUsers()" title="Tải lại dữ liệu mới nhất"><i class="ti ti-refresh"></i> Refresh</button><button class="btn pri" onclick="openUserEdit(null)"><i class="ti ti-plus"></i> Thêm người dùng</button></div>'
+      +'<div style="display:flex;gap:6px"><button class="btn sm" onclick="_mpOpenModal()" title="Xem lương, phụ cấp và gửi đơn nghỉ phép của chính bạn"><i class="ti ti-user-circle"></i> Hồ sơ của tôi</button><button class="btn sm" onclick="renderUsers()" title="Tải lại dữ liệu mới nhất"><i class="ti ti-refresh"></i> Refresh</button><button class="btn pri" onclick="openUserEdit(null)"><i class="ti ti-plus"></i> Thêm người dùng</button></div>'
     +'</div>'
 
     // User table
