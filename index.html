@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.81';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.82';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -16220,6 +16220,7 @@ function editCashTx(txId){
       <div class="fi"><label class="lbl">Số tiền (chưa VAT)</label><input type="number" id="etx_amount" value="${_vp.net||0}" step="any" oninput="_vatTotalRecalc('etx_amount','etx_vat','etx_tot','etx_cur')"/></div>
       <div class="fi"><label class="lbl">Tiền tệ</label><select id="etx_cur" onchange="_vatTotalRecalc('etx_amount','etx_vat','etx_tot','etx_cur')"><option value="VND"${t.currency==='VND'?' selected':''}>VND</option><option value="USD"${t.currency==='USD'?' selected':''}>USD</option></select></div>
       ${_vatBoxHtml('etx_amount','etx_vat','etx_tot','etx_cur',_vp.vat||'',t.type==='thu'?'var(--green)':'var(--red)')}
+      ${_vatCashInvHtml('etx_invNo','etx_invDate',t.invoiceNo||'',t.invoiceDate||'')}
       <div class="fi full"><label class="lbl">Danh mục</label><select id="etx_cat"><option value="">— Chọn —</option>${cats.map(function(c){return '<option'+(c===t.category?' selected':'')+'>'+c+'</option>';}).join('')}</select></div>
       <div class="fi full"><label class="lbl">Đối tác</label><input type="text" id="etx_partner" value="${(t.partnerRef||'').replace(/"/g,'&quot;')}" list="etx_partnerList"/><datalist id="etx_partnerList">${Object.values(cache.partners).map(function(p){return '<option value="'+(p.shortname||'').replace(/"/g,'&quot;')+'">';}).join('')}</datalist></div>
       <div class="fi full"><label class="lbl">Diễn giải</label><textarea id="etx_desc" rows="2" style="font-size:12px;resize:vertical">${(t.description||'').replace(/</g,'&lt;')}</textarea></div>
@@ -16245,6 +16246,7 @@ async function _saveCashTxEdit(txId){
     date:g('etx_date')?.value||'',
     account:g('etx_acc')?.value||'',
     amount:amount, netAmount:net, vatAmount:vat,
+    invoiceNo:(g('etx_invNo')?.value||'').trim(), invoiceDate:(g('etx_invDate')?.value||''),
     currency:curE,
     category:g('etx_cat')?.value||'',
     partnerRef:(g('etx_partner')?.value||'').trim()||null,
@@ -16337,6 +16339,22 @@ function _vatBoxHtml(netId,vatId,totId,curId,vat,color){
     +'<div id="'+totId+'" style="padding:8px 10px;border:1px dashed var(--border-light);border-radius:8px;font-weight:700;font-size:14px;min-height:20px;color:'+(color||'var(--text-primary)')+'">—</div></div>';
 }
 window._vatTotalRecalc=_vatTotalRecalc; window._vatQuick=_vatQuick;
+// ── A 2.82: Số hóa đơn / Ngày hóa đơn của Phiếu Thu · Phiếu Chi (cashTransactions.invoiceNo / invoiceDate) ──
+function _vatCashInvHtml(noId,dateId,no,date){
+  return '<div class="fi"><label class="lbl">Remark — Số hóa đơn</label><input type="text" id="'+noId+'" value="'+_vrE(no||'')+'" placeholder="VD: 0001234 hoặc AB/26E-0001234" autocomplete="off"/></div>'
+    +'<div class="fi"><label class="lbl">Ngày hóa đơn</label><input type="date" id="'+dateId+'" value="'+_vrE(date||'')+'"/></div>';
+}
+function _vatInvTxt(no,date){
+  no=String(no||'').trim(); date=String(date||'').trim();
+  if(!no&&!date)return '';
+  return no?(no+(date?' ('+_vatDmy(date)+')':'')):_vatDmy(date);
+}
+function _vrMinDate(list){
+  let m='';
+  (list||[]).forEach(function(x){const d=x&&x.date; if(d&&(!m||d<m))m=d;});
+  return m;
+}
+function _vrContTxt(r){return (r&&r.vol?String(r.vol):'')+(r&&r.typeCont?'×'+r.typeCont:'');}
 
 function openTcVoucher(type){
   if(type==='chi'){ openTcChiVoucher(); return; } // Phiếu Chi dùng giao diện mới (2 phần, nhiều dòng)
@@ -16364,7 +16382,8 @@ function renderTcVoucher(){
       <div class="fi"><label class="lbl">Số tiền (chưa VAT)</label><input type="number" id="tv_amount" min="0" step="any" placeholder="0" oninput="_vatTotalRecalc('tv_amount','tv_vat','tv_tot','tv_cur')"/></div>
       <div class="fi"><label class="lbl">Đơn vị tiền tệ</label><select id="tv_cur" onchange="_vatTotalRecalc('tv_amount','tv_vat','tv_tot','tv_cur')"><option value="VND">VND</option><option value="USD">USD</option></select></div>
       ${_vatBoxHtml('tv_amount','tv_vat','tv_tot','tv_cur','',isThu?'var(--green)':'var(--red)')}
-      <div class="fi full" style="font-size:11px;color:var(--text-tertiary);margin-top:-6px">Tổng cộng là số tiền thực ${isThu?'thu vào':'chi ra'} quỹ. VAT Report chỉ cộng các khoản không gắn lô hàng / công nợ (khoản gắn lô được tính theo dữ liệu của lô).</div>
+      ${_vatCashInvHtml('tv_invNo','tv_invDate','','')}
+      <div class="fi full" style="font-size:11px;color:var(--text-tertiary);margin-top:-6px">Tổng cộng là số tiền thực ${isThu?'thu vào':'chi ra'} quỹ. Khoản có VAT + không gắn lô hàng / công nợ sẽ được liệt kê vào VAT Report (kèm Số HĐ / Ngày HĐ); khoản gắn lô được tính theo dữ liệu của lô.</div>
       <div class="fi full"><label class="lbl">Danh mục</label><select id="tv_cat"><option value="">— Chọn danh mục —</option>${cats.map(function(c){return '<option value="'+c.replace(/"/g,'&quot;')+'">'+c+'</option>';}).join('')}</select></div>
       <div class="fi full">
         <label class="lbl">Lô hàng liên quan (tùy chọn — gõ số booking, bill hoặc job ID)</label>
@@ -16441,6 +16460,7 @@ async function saveTcVoucher(){
   const rec={
     type:tcVoucherType, date:g('tv_date').value||new Date().toISOString().slice(0,10),
     amount, netAmount:net, vatAmount:vat, currency:g('tv_cur').value||'VND', account:g('tv_acc').value||'cash',
+    invoiceNo:(g('tv_invNo')?.value||'').trim(), invoiceDate:(g('tv_invDate')?.value||''),
     category:cat, description:g('tv_desc').value||'',
     lotRef:tcVoucherLot||null,
     partnerRef:partner||null,
@@ -16452,7 +16472,7 @@ async function saveTcVoucher(){
     await db.collection('cashTransactions').add(rec);
     // Phiếu Chi: tự động thêm vào chi phí (costing) của lô hàng liên quan, nếu có gắn lô
     if(tcVoucherType==='chi'&&tcVoucherLot&&tcVoucherLot.lotId){
-      await _tcSyncChiToCosting(tcVoucherLot,net,rec.currency,cat,rec.description,partner,'',vat);
+      await _tcSyncChiToCosting(tcVoucherLot,net,rec.currency,cat,rec.description,partner,'',vat,rec.invoiceNo,rec.invoiceDate);
     }
     toast('Đã lưu '+(tcVoucherType==='thu'?'Phiếu Thu':'Phiếu Chi'));
     closeOv('tcVoucherOv');
@@ -16462,7 +16482,7 @@ async function saveTcVoucher(){
 window.saveTcVoucher=saveTcVoucher;
 
 // Tự động thêm 1 dòng chi phí vào tab Costing của lô hàng tương ứng khi tạo Phiếu Chi có gắn lô
-async function _tcSyncChiToCosting(lotRef,amount,currency,category,description,partner,remark,vat){
+async function _tcSyncChiToCosting(lotRef,amount,currency,category,description,partner,remark,vat,invNo,invDate){
   try{
     const tt=lotRef.tt;
     const colN=colName(tt);
@@ -16474,7 +16494,8 @@ async function _tcSyncChiToCosting(lotRef,amount,currency,category,description,p
       name:(description||category)+(partner?(' — '+partner):''),
       price:amount, qty:1, amt:amount, unit:'Cont', cur:currency||'VND', vatAmt:(parseFloat(vat)||0),
       remark:remark||description||'',
-      partnerRef:partner||null, fromCashTx:true, category:category||''
+      partnerRef:partner||null, fromCashTx:true, category:category||'',
+      invNo:String(invNo||'').trim(), invDate:invDate||''
     });
     await db.collection(colN).doc(lotRef.lotId).set({
       costing:{items,updatedAt:Date.now(),updatedBy:currentUser?.email||''},
@@ -16492,7 +16513,7 @@ let tcChiLotRows=[];      // các dòng chi phí của Phần 1
 let tcChiOthRows=[];      // các dòng chi phí của Phần 2 (Chi phí khác)
 
 function _tcChiBlankRow(){
-  return {partner:'',category:'',date:new Date().toISOString().slice(0,10),account:'cash',amount:'',vat:'',currency:'VND',remark:''};
+  return {partner:'',category:'',date:new Date().toISOString().slice(0,10),account:'cash',amount:'',vat:'',currency:'VND',remark:'',invNo:'',invDate:''};
 }
 function _gv(id,fallback){ const e=g(id); return e?e.value:fallback; }
 function _tcChiRowCapture(prefix,rows){
@@ -16505,7 +16526,9 @@ function _tcChiRowCapture(prefix,rows){
       amount:_gv(prefix+'_amt_'+i, r.amount||''),
       vat:_gv(prefix+'_vat_'+i, r.vat||''),
       currency:_gv(prefix+'_cur_'+i, r.currency||'VND'),
-      remark:_gv(prefix+'_remark_'+i, r.remark||'')
+      remark:_gv(prefix+'_remark_'+i, r.remark||''),
+      invNo:_gv(prefix+'_invno_'+i, r.invNo||''),
+      invDate:_gv(prefix+'_invdt_'+i, r.invDate||'')
     };
   });
 }
@@ -16537,6 +16560,8 @@ function _tcChiRowHtml(prefix,i,row,removeFn){
       +'<div style="display:flex;gap:3px;margin-top:3px;justify-content:flex-end"><button type="button" class="btn sm" onclick="_vatQuick('+_rq+',8)" style="padding:1px 6px;font-size:10px">8%</button><button type="button" class="btn sm" onclick="_vatQuick('+_rq+',10)" style="padding:1px 6px;font-size:10px">10%</button></div></td>'
     +'<td id="'+prefix+'_tot_'+i+'" style="padding:5px;text-align:right;font-weight:700;font-size:11.5px;color:var(--red)">'+_tot0+'</td>'
     +'<td style="padding:5px"><select id="'+prefix+'_cur_'+i+'" onchange="'+_ra+'" style="font-size:11.5px;width:68px"><option'+(row.currency==='VND'?' selected':'')+'>VND</option><option'+(row.currency==='USD'?' selected':'')+'>USD</option></select></td>'
+    +'<td style="padding:5px"><input type="text" id="'+prefix+'_invno_'+i+'" value="'+(row.invNo||'').replace(/"/g,'&quot;')+'" placeholder="Số hóa đơn" style="display:block;font-size:11.5px;width:100%;box-sizing:border-box"/>'
+      +'<input type="date" id="'+prefix+'_invdt_'+i+'" value="'+(row.invDate||'')+'" title="Ngày hóa đơn" style="display:block;font-size:11.5px;width:100%;box-sizing:border-box;margin-top:3px"/></td>'
     +'<td style="padding:5px"><input type="text" id="'+prefix+'_remark_'+i+'" value="'+(row.remark||'').replace(/"/g,'&quot;')+'" placeholder="Remark" style="font-size:11.5px;width:100%;box-sizing:border-box"/></td>'
     +'<td style="padding:5px;text-align:center"><button class="rac red" onclick="'+removeFn+'('+i+')" title="Xóa dòng"><i class="ti ti-trash"></i></button></td>'
   +'</tr>';
@@ -16544,7 +16569,7 @@ function _tcChiRowHtml(prefix,i,row,removeFn){
 function _tcChiTableHtml(prefix,rows,removeFn,addFn){
   return '<div style="border:1px solid var(--border-light);border-radius:8px;overflow:hidden;margin-top:.5rem">'
     +'<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
-    +'<colgroup><col style="width:13%"/><col style="width:14%"/><col style="width:10%"/><col style="width:11%"/><col style="width:10%"/><col style="width:10%"/><col style="width:10%"/><col style="width:7%"/><col/><col style="width:32px"/></colgroup>'
+    +'<colgroup><col style="width:11%"/><col style="width:12%"/><col style="width:9%"/><col style="width:9%"/><col style="width:9%"/><col style="width:9%"/><col style="width:9%"/><col style="width:6%"/><col style="width:12%"/><col/><col style="width:32px"/></colgroup>'
     +'<thead><tr style="background:var(--bg-secondary)">'
       +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Đối tác</th>'
       +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Tên chi phí</th>'
@@ -16554,6 +16579,7 @@ function _tcChiTableHtml(prefix,rows,removeFn,addFn){
       +'<th style="padding:6px 5px;font-size:10px;text-align:right;color:var(--text-secondary)">VAT</th>'
       +'<th style="padding:6px 5px;font-size:10px;text-align:right;color:var(--text-secondary)">Tổng cộng</th>'
       +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Tiền tệ</th>'
+      +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Số HĐ / Ngày HĐ</th>'
       +'<th style="padding:6px 5px;font-size:10px;text-align:left;color:var(--text-secondary)">Remark</th>'
       +'<th></th>'
     +'</tr></thead>'
@@ -16564,7 +16590,7 @@ function _tcChiTableHtml(prefix,rows,removeFn,addFn){
 
 function renderTcChiVoucher(){
   g('tcVoucherOv').innerHTML=`
-  <div class="modal" style="max-width:1120px;max-height:92vh;overflow-y:auto">
+  <div class="modal" style="max-width:1280px;max-height:92vh;overflow-y:auto">
     <div class="mhdr">
       <div><div class="mtitle" style="color:var(--red)"><i class="ti ti-minus" style="font-size:15px;margin-right:6px"></i>Phiếu Chi</div>
       <div class="msub">Ghi nhận chi phí — có thể nhập nhiều dòng cho lô hàng và/hoặc chi phí khác cùng lúc</div></div>
@@ -16645,16 +16671,18 @@ async function saveTcChiVoucher(){
       const amount=_vatRound(net+vat,row.currency||'VND'); // TỔNG = số tiền + VAT
       const rec={type:'chi',date:row.date||new Date().toISOString().slice(0,10),amount,netAmount:net,vatAmount:vat,currency:row.currency||'VND',
         account:row.account||'cash',category:row.category,description:row.remark||'',
+        invoiceNo:String(row.invNo||'').trim(),invoiceDate:row.invDate||'',
         lotRef:tcChiLot,partnerRef:row.partner||null,debtRef:null,
         createdAt:Date.now(),createdBy:currentUser?.email||''};
       await db.collection('cashTransactions').add(rec);
-      await _tcSyncChiToCosting(tcChiLot,net,rec.currency,rec.category,rec.description,row.partner,row.remark,vat);
+      await _tcSyncChiToCosting(tcChiLot,net,rec.currency,rec.category,rec.description,row.partner,row.remark,vat,rec.invoiceNo,rec.invoiceDate);
     }
     for(const row of othRows){
       const net=parseFloat(row.amount), vat=Math.max(0,_vatNum(row.vat));
       const amount=_vatRound(net+vat,row.currency||'VND'); // TỔNG = số tiền + VAT
       const rec={type:'chi',date:row.date||new Date().toISOString().slice(0,10),amount,netAmount:net,vatAmount:vat,currency:row.currency||'VND',
         account:row.account||'cash',category:row.category,description:row.remark||'',
+        invoiceNo:String(row.invNo||'').trim(),invoiceDate:row.invDate||'',
         lotRef:null,partnerRef:row.partner||null,debtRef:null,
         createdAt:Date.now(),createdBy:currentUser?.email||''};
       await db.collection('cashTransactions').add(rec);
@@ -20898,7 +20926,8 @@ function _vrCompute(from,to){
       out.push({lotId:r._id,tt:tt,job:job,etd:r.etd,shipper:shipper,party:party,
         dnNo:(r.dnByParty||{})[party]||r.dnNo||'',base:Math.round(P.base),base0:Math.round(base0),
         base8:Math.round(base8),base10:Math.round(base10),baseO:Math.round(baseO),
-        vat:vat,total:Math.round(P.base)+vat,paid:status==='paid',n:P.n,invTxt:_vatInvLabel(_vatPartyInvoices(r,party))});
+        vat:vat,total:Math.round(P.base)+vat,paid:status==='paid',n:P.n,invTxt:_vatInvLabel(_vatPartyInvoices(r,party)),invDate:_vrMinDate(_vatPartyInvoices(r,party)),
+        mbl:r.mblNo||'',cont:_vrContTxt(r)});
     });
 
     // ── ĐẦU VÀO: dịch vụ NCC có VAT ──
@@ -20932,7 +20961,8 @@ function _vrCompute(from,to){
       const base=Math.round(baseC*k), vat=Math.round(vatC*k);
       inn.push({lotId:r._id,tt:tt,job:job,etd:r.etd,shipper:shipper,supplier:supplier||'(Chưa chọn NCC)',
         name:it.name||'Chi phí nhập tay',src:'cost',base:base,vat:vat,total:base+vat,
-        rate:base?Math.round(vat/base*1000)/10:0,paid:it.apPaidStatus==='paid',paidDate:it.apPaidDate||'',remark:String(it.remark||'').trim()});
+        rate:base?Math.round(vat/base*1000)/10:0,paid:it.apPaidStatus==='paid',paidDate:it.apPaidDate||'',remark:String(it.remark||'').trim(),
+        invTxt:_vatInvTxt(it.invNo,it.invDate),invDate:it.invDate||''});
     });
   });
   // ── A 2.35: Thu khác / Chi khác nhập tay trong Sổ quỹ có VAT ──
@@ -20952,12 +20982,12 @@ function _vrCompute(from,to){
       const rt=base?Math.round(vat/base*100):0;
       out.push({lotId:'',tt:'',cash:true,txId:t._id,job:'Sổ quỹ',etd:d,shipper:'',party:party||'(Thu khác)',
         dnNo:name,base:base,base0:0,base8:rt===8?base:0,base10:rt===10?base:0,baseO:(rt!==8&&rt!==10)?base:0,
-        vat:vat,total:base+vat,paid:true,n:1});
+        vat:vat,total:base+vat,paid:true,n:1,invTxt:_vatInvTxt(t.invoiceNo,t.invoiceDate),invDate:t.invoiceDate||'',mbl:'',cont:''});
       info.cashOut++;
     } else if(t.type==='chi'){
       inn.push({lotId:'',tt:'',cash:true,txId:t._id,job:'Sổ quỹ',etd:d,shipper:'',supplier:party||'(Chi khác — chưa chọn đối tác)',
         name:name+(t.description?' — '+t.description:''),src:'cash',base:base,vat:vat,total:base+vat,
-        rate:base?Math.round(vat/base*1000)/10:0,paid:true,paidDate:d});
+        rate:base?Math.round(vat/base*1000)/10:0,paid:true,paidDate:d,invTxt:_vatInvTxt(t.invoiceNo,t.invoiceDate),invDate:t.invoiceDate||''});
       info.cashIn++;
     }
   });
@@ -20990,6 +21020,43 @@ function _vrGroup(rows,keyFn){
 }
 
 function _vrSet(k,v){window._vrState[k]=v;renderTcBody();}
+// ── A 2.82: bộ lọc thời gian riêng cho tab Đầu ra / Đầu vào (nằm trong kỳ báo cáo đã chọn) ──
+// by = 'etd' (ETD lô / ngày giao dịch Sổ quỹ) | 'inv' (ngày hóa đơn)
+window._vrState.flt=window._vrState.flt||{out:{from:'',to:'',by:'etd'},'in':{from:'',to:'',by:'etd'}};
+function _vrFlt(kind){const F=window._vrState.flt;return F[kind]||(F[kind]={from:'',to:'',by:'etd'});}
+function _vrFltSet(kind,k,v){_vrFlt(kind)[k]=v||'';renderTcBody();}
+function _vrFltClear(kind){const b=_vrFlt(kind).by; window._vrState.flt[kind]={from:'',to:'',by:b};renderTcBody();}
+function _vrFltActive(kind){const F=_vrFlt(kind);return !!(F.from||F.to);}
+function _vrFltApply(rows,kind){
+  const F=_vrFlt(kind); if(!F.from&&!F.to)return rows;
+  return rows.filter(function(x){
+    const d=(F.by==='inv')?(x.invDate||''):(x.etd||'');
+    if(!d)return false;
+    return (!F.from||d>=F.from)&&(!F.to||d<=F.to);
+  });
+}
+function _vrFltText(kind){
+  const F=_vrFlt(kind); if(!F.from&&!F.to)return '';
+  return (F.by==='inv'?'Ngày hóa đơn ':'ETD / ngày giao dịch ')+(F.from||'…')+' → '+(F.to||'…');
+}
+function _vrFltNotes(){
+  const n=[];
+  if(_vrFltActive('out'))n.push(['Lọc Đầu ra ('+'chỉ ảnh hưởng sheet Đầu ra)',_vrFltText('out')]);
+  if(_vrFltActive('in'))n.push(['Lọc Đầu vào (chỉ ảnh hưởng sheet Đầu vào)',_vrFltText('in')]);
+  return n;
+}
+function _vrOutTot(rows){
+  const sum=function(f){return rows.reduce(function(a,x){return a+(f(x)||0);},0);};
+  return {outBase:sum(function(x){return x.base;}),outVat:sum(function(x){return x.vat;}),
+    outBase0:sum(function(x){return x.base0;}),outBase8:sum(function(x){return x.base8;}),outBase10:sum(function(x){return x.base10;}),outBaseO:sum(function(x){return x.baseO;}),
+    outPaid:sum(function(x){return x.paid?x.total:0;}),outUnpaid:sum(function(x){return x.paid?0:x.total;}),
+    outLots:Object.keys(rows.reduce(function(a,x){if(x.lotId)a[x.lotId]=1;return a;},{})).length};
+}
+function _vrInTot(rows){
+  const sum=function(f){return rows.reduce(function(a,x){return a+(f(x)||0);},0);};
+  return {inBase:sum(function(x){return x.base;}),inVat:sum(function(x){return x.vat;}),
+    inPaid:sum(function(x){return x.paid?x.total:0;}),inUnpaid:sum(function(x){return x.paid?0:x.total;})};
+}
 function _vrPick(kind,v){
   const S=window._vrState;
   if(kind==='party'){S.party=(S.party===v)?'':v;S.view='out';}
@@ -21179,17 +21246,29 @@ function _vrMatch(x,q,fields){
 }
 
 function _vrToolbar(label){
-  const S=window._vrState;
+  const S=window._vrState, F=_vrFlt(label);
   const filt=(label==='out'?S.party:S.supp);
+  const rg=_tcPeriodRange();
+  const lbS='font-size:11.5px;color:var(--text-secondary);white-space:nowrap;width:auto;margin:0;text-transform:none;font-weight:500';
+  const k="'"+label+"'";
+  const dI=function(id,key,val){return '<input type="date" id="'+id+'" value="'+_vrE(val)+'" min="'+rg.from+'" max="'+rg.to+'" onchange="_vrFltSet('+k+',\''+key+'\',this.value)" style="width:138px;flex:0 0 138px;font-size:12px"/>';};
   return '<div class="vr-toolbar">'
-    +'<div class="search-wrap" style="max-width:340px;flex:1"><i class="ti ti-search"></i><input type="text" id="vrQ" value="'+_vrE(S.q)+'" placeholder="'+(label==='out'?'Tìm party, Job, số Debit Note…':'Tìm NCC, Job, tên chi phí…')+'" oninput="_vrQuery(this)"/></div>'
+    +'<div class="search-wrap" style="max-width:340px;flex:1"><i class="ti ti-search"></i><input type="text" id="vrQ" value="'+_vrE(S.q)+'" placeholder="'+(label==='out'?'Tìm party, Job, MBL, số Debit Note, số HĐ…':'Tìm NCC, Job, tên chi phí, số HĐ…')+'" oninput="_vrQuery(this)"/></div>'
     +(filt?'<span class="vr-filter-chip">'+_vrE(filt)+'<button title="Bỏ lọc" data-k="'+_vrE(filt)+'" onclick="_vrPick(\''+(label==='out'?'party':'supp')+'\',this.dataset.k)"><i class="ti ti-x"></i></button></span>':'')
-    +'</div>';
+    +'<div class="vr-dr" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">'
+      +'<i class="ti ti-calendar-event" style="color:var(--text-tertiary)"></i>'
+      +'<select id="vrFltBy_'+label+'" onchange="_vrFltSet('+k+',\'by\',this.value)" style="width:auto;flex:0 0 auto;font-size:12px"><option value="etd"'+(F.by!=='inv'?' selected':'')+'>'+(label==='out'?'Theo ETD':'Theo ETD / ngày chi')+'</option><option value="inv"'+(F.by==='inv'?' selected':'')+'>Theo ngày hóa đơn</option></select>'
+      +'<label for="vrFltFrom_'+label+'" style="'+lbS+'">Từ</label>'+dI('vrFltFrom_'+label,'from',F.from)
+      +'<label for="vrFltTo_'+label+'" style="'+lbS+'">đến</label>'+dI('vrFltTo_'+label,'to',F.to)
+      +(_vrFltActive(label)?'<button type="button" class="btn sm" onclick="_vrFltClear('+k+')" title="Bỏ lọc thời gian"><i class="ti ti-x"></i> Bỏ lọc ngày</button>':'')
+    +'</div>'
+    +'</div>'
+    +((_vrFltActive(label)&&F.by==='inv')?'<div style="font-size:10.5px;color:var(--text-tertiary);margin:-4px 0 8px">Lọc theo ngày hóa đơn: dòng chưa có ngày hóa đơn sẽ không hiển thị.</div>':'');
 }
 
 function _vrViewOut(D){
-  const S=window._vrState, T=D.tot;
-  const groups=_vrGroup(D.out,function(x){return x.party;});
+  const S=window._vrState, OUT=_vrFltApply(D.out,'out'), T=_vrOutTot(OUT);
+  const groups=_vrGroup(OUT,function(x){return x.party;});
   const gRows=groups.map(function(G){
     const on=S.party===G.key;
     return '<tr class="vr-click'+(on?' on':'')+'" data-k="'+_vrE(G.key)+'" onclick="_vrPick(\'party\',this.dataset.k)">'
@@ -21203,30 +21282,30 @@ function _vrViewOut(D){
     +(groups.length?'<tfoot><tr><td>Tổng cộng</td><td class="r">'+T.outLots+'</td><td class="r">'+_vrN(T.outBase)+'</td><td class="r vat">'+_vrN(T.outVat)+'</td><td class="r">'+_vrN(T.outBase+T.outVat)+'</td><td class="r">'+_vrN(T.outPaid)+'</td><td class="r">'+_vrN(T.outUnpaid)+'</td></tr></tfoot>':'')
     +'</table></div></div>';
 
-  const rows=_etdSortArr(D.out.filter(function(x){return (!S.party||x.party===S.party)&&_vrMatch(x,S.q,['party','job','dnNo','shipper','invTxt']);})
+  const rows=_etdSortArr(OUT.filter(function(x){return (!S.party||x.party===S.party)&&_vrMatch(x,S.q,['party','job','dnNo','shipper','invTxt','mbl','cont']);})
     .sort(function(a,b){return (a.job||'').localeCompare(b.job||'');}),'vat_out',function(x){return x.etd;},'desc');
   const sub={base:0,base0:0,base8:0,base10:0,baseO:0,vat:0,total:0};
   rows.forEach(function(x){Object.keys(sub).forEach(function(k){sub[k]+=x[k]||0;});});
   const dRows=rows.map(function(x){
     return '<tr class="vr-click" onclick="'+(x.cash?'editCashTx(\''+x.txId+'\')':'_vrOpenLot(\''+x.lotId+'\',\''+x.tt+'\')')+'" title="'+(x.cash?'Mở giao dịch Sổ quỹ':'Mở lô hàng')+'">'
-      +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(x.etd)+'</td><td>'+_vrE(x.party)+'</td><td>'+_vrE(x.dnNo||'—')+(x.cash?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
+      +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(x.mbl||'—')+'</td><td style="white-space:nowrap">'+_vrE(x.cont||'—')+'</td><td>'+_vrE(x.etd)+'</td><td>'+_vrE(x.party)+'</td><td>'+_vrE(x.dnNo||'—')+(x.cash?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
       +'<td class="vr-inv" title="'+_vrE(x.invTxt||'')+'">'+(x.invTxt?_vrE(x.invTxt):'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td class="r">'+(x.base0?_vrN(x.base0):'—')+'</td><td class="r">'+(x.base8?_vrN(x.base8):'—')+'</td><td class="r">'+(x.base10?_vrN(x.base10):'—')+'</td>'
       +'<td class="r vat">'+_vrN(x.vat)+'</td><td class="r">'+_vrN(x.total)+'</td><td>'+_vrStatus(x.paid,'Đã thu','Chưa thu')+'</td></tr>';
   }).join('');
   const det='<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-list-details"></i>Chi tiết Debit Note có hóa đơn ('+rows.length+')</span></div>'+_vrToolbar('out')
     +'<div class="vr-scroll"><table class="vr-tbl"><thead><tr>'
-    +_vrTH('Job / Booking')+_etdTh('vat_out',renderTcBody,{def:'desc'})+_vrTH('Party')+_vrTH('Số DN')+_vrTH('Số HĐ VAT (ngày)')+_vrTH('DT 0%','right')+_vrTH('DT 8%','right')+_vrTH('DT 10%','right')+_vrTH('VAT','right')+_vrTH('Tổng gồm VAT','right')+_vrTH('Thanh toán')
-    +'</tr></thead><tbody>'+(dRows||'<tr><td colspan="11" class="empty">Không có dòng phù hợp</td></tr>')+'</tbody>'
-    +(rows.length?'<tfoot><tr><td colspan="5">Tổng ('+rows.length+' dòng)</td><td class="r">'+_vrN(sub.base0)+'</td><td class="r">'+_vrN(sub.base8)+'</td><td class="r">'+_vrN(sub.base10)+'</td><td class="r vat">'+_vrN(sub.vat)+'</td><td class="r">'+_vrN(sub.total)+'</td><td></td></tr></tfoot>':'')
+    +_vrTH('Job / Booking')+_vrTH('MBL')+_vrTH('Cont / Vol')+_etdTh('vat_out',renderTcBody,{def:'desc'})+_vrTH('Party')+_vrTH('Số DN')+_vrTH('Số HĐ VAT (ngày)')+_vrTH('DT 0%','right')+_vrTH('DT 8%','right')+_vrTH('DT 10%','right')+_vrTH('VAT','right')+_vrTH('Tổng gồm VAT','right')+_vrTH('Thanh toán')
+    +'</tr></thead><tbody>'+(dRows||'<tr><td colspan="13" class="empty">Không có dòng phù hợp</td></tr>')+'</tbody>'
+    +(rows.length?'<tfoot><tr><td colspan="7">Tổng ('+rows.length+' dòng)</td><td class="r">'+_vrN(sub.base0)+'</td><td class="r">'+_vrN(sub.base8)+'</td><td class="r">'+_vrN(sub.base10)+'</td><td class="r vat">'+_vrN(sub.vat)+'</td><td class="r">'+_vrN(sub.total)+'</td><td></td></tr></tfoot>':'')
     +'</table></div>'
     +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">DT = doanh thu chưa VAT quy VND theo ROE của lô. “DT 0%” chỉ gồm cước biển (OCF) — dịch vụ không VAT không đưa vào báo cáo. Mức thuế khác 0/8/10% (nếu có) chỉ tính vào cột VAT.</div></div>';
   return sumTbl+det;
 }
 
 function _vrViewIn(D){
-  const S=window._vrState, T=D.tot;
-  const groups=_vrGroup(D.inn,function(x){return x.supplier;});
+  const S=window._vrState, INN=_vrFltApply(D.inn,'in'), T=_vrInTot(INN);
+  const groups=_vrGroup(INN,function(x){return x.supplier;});
   const gRows=groups.map(function(G){
     const on=S.supp===G.key;
     return '<tr class="vr-click'+(on?' on':'')+'" data-k="'+_vrE(G.key)+'" onclick="_vrPick(\'supp\',this.dataset.k)">'
@@ -21237,26 +21316,27 @@ function _vrViewIn(D){
     +'<div class="vr-scroll" style="max-height:300px"><table class="vr-tbl"><thead><tr>'
     +_vrTH('Nhà cung cấp')+_vrTH('Số dòng','right')+_vrTH('Chi phí (chưa VAT)','right')+_vrTH('VAT đầu vào','right')+_vrTH('Tổng gồm VAT','right')+_vrTH('Đã trả','right')+_vrTH('Chưa trả','right')
     +'</tr></thead><tbody>'+(gRows||'<tr><td colspan="7" class="empty">Không có chi phí NCC có VAT trong kỳ</td></tr>')+'</tbody>'
-    +(groups.length?'<tfoot><tr><td>Tổng cộng</td><td class="r">'+D.inn.length+'</td><td class="r">'+_vrN(T.inBase)+'</td><td class="r vat">'+_vrN(T.inVat)+'</td><td class="r">'+_vrN(T.inBase+T.inVat)+'</td><td class="r">'+_vrN(T.inPaid)+'</td><td class="r">'+_vrN(T.inUnpaid)+'</td></tr></tfoot>':'')
+    +(groups.length?'<tfoot><tr><td>Tổng cộng</td><td class="r">'+INN.length+'</td><td class="r">'+_vrN(T.inBase)+'</td><td class="r vat">'+_vrN(T.inVat)+'</td><td class="r">'+_vrN(T.inBase+T.inVat)+'</td><td class="r">'+_vrN(T.inPaid)+'</td><td class="r">'+_vrN(T.inUnpaid)+'</td></tr></tfoot>':'')
     +'</table></div></div>';
 
-  const rows=_etdSortArr(D.inn.filter(function(x){return (!S.supp||x.supplier===S.supp)&&_vrMatch(x,S.q,['supplier','job','name','shipper']);})
+  const rows=_etdSortArr(INN.filter(function(x){return (!S.supp||x.supplier===S.supp)&&_vrMatch(x,S.q,['supplier','job','name','shipper','invTxt']);})
     .sort(function(a,b){return (a.supplier||'').localeCompare(b.supplier||'');}),'vat_in',function(x){return x.etd;},'desc');
   const sub={base:0,vat:0,total:0};
   rows.forEach(function(x){Object.keys(sub).forEach(function(k){sub[k]+=x[k]||0;});});
   const dRows=rows.map(function(x){
     return '<tr class="vr-click" onclick="'+(x.cash?'editCashTx(\''+x.txId+'\')':'_vrOpenLot(\''+x.lotId+'\',\''+x.tt+'\')')+'" title="'+(x.cash?'Mở giao dịch Sổ quỹ':'Mở lô hàng')+'">'
       +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(x.etd)+'</td><td>'+_vrE(x.supplier)+'</td><td>'+_vrE(x.name)+(x.src==='cost'?' <span class="vr-chip gray">nhập tay</span>':'')+(x.src==='cash'?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
+      +'<td class="vr-inv" title="'+_vrE(x.invTxt||'')+'">'+(x.invTxt?_vrE(x.invTxt):'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td class="r">'+_vrN(x.base)+'</td><td class="r">'+(x.rate?x.rate+'%':'—')+'</td><td class="r vat">'+_vrN(x.vat)+'</td><td class="r">'+_vrN(x.total)+'</td>'
       +'<td>'+_vrStatus(x.paid,'Đã trả'+(x.paidDate?' '+_vrE(x.paidDate.slice(5).split('-').reverse().join('/')):''),'Chưa trả')+'</td></tr>';
   }).join('');
   const det='<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-list-details"></i>Chi tiết chi phí NCC có VAT ('+rows.length+')</span></div>'+_vrToolbar('in')
     +'<div class="vr-scroll"><table class="vr-tbl"><thead><tr>'
-    +_vrTH('Job / Booking')+_etdTh('vat_in',renderTcBody,{def:'desc'})+_vrTH('Nhà cung cấp')+_vrTH('Khoản chi phí')+_vrTH('Chưa VAT','right')+_vrTH('Thuế suất','right')+_vrTH('VAT','right')+_vrTH('Tổng gồm VAT','right')+_vrTH('Thanh toán NCC')
-    +'</tr></thead><tbody>'+(dRows||'<tr><td colspan="9" class="empty">Không có dòng phù hợp</td></tr>')+'</tbody>'
-    +(rows.length?'<tfoot><tr><td colspan="4">Tổng ('+rows.length+' dòng)</td><td class="r">'+_vrN(sub.base)+'</td><td></td><td class="r vat">'+_vrN(sub.vat)+'</td><td class="r">'+_vrN(sub.total)+'</td><td></td></tr></tfoot>':'')
+    +_vrTH('Job / Booking')+_etdTh('vat_in',renderTcBody,{def:'desc'})+_vrTH('Nhà cung cấp')+_vrTH('Khoản chi phí')+_vrTH('Số HĐ (ngày)')+_vrTH('Chưa VAT','right')+_vrTH('Thuế suất','right')+_vrTH('VAT','right')+_vrTH('Tổng gồm VAT','right')+_vrTH('Thanh toán NCC')
+    +'</tr></thead><tbody>'+(dRows||'<tr><td colspan="10" class="empty">Không có dòng phù hợp</td></tr>')+'</tbody>'
+    +(rows.length?'<tfoot><tr><td colspan="5">Tổng ('+rows.length+' dòng)</td><td class="r">'+_vrN(sub.base)+'</td><td></td><td class="r vat">'+_vrN(sub.vat)+'</td><td class="r">'+_vrN(sub.total)+'</td><td></td></tr></tfoot>':'')
     +'</table></div>'
-    +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">Thuế suất = VAT / chi phí chưa VAT (tính ngược từ số tiền VAT đã nhập). Ngoại tệ quy VND theo ROE của lô.</div></div>';
+    +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">Thuế suất = VAT / chi phí chưa VAT (tính ngược từ số tiền VAT đã nhập). Ngoại tệ quy VND theo ROE của lô. Số HĐ (ngày) lấy từ Phiếu Chi / Costing nhập tay / Sổ quỹ.</div></div>';
   return sumTbl+det;
 }
 
@@ -21267,24 +21347,25 @@ function _vrExport(){
   if(_vw==='sum'||!_vw){_vsAllExport();return;}
   const XLSX=window.XLSX; if(!XLSX){toast('Đang tải thư viện Excel','error');return;}
   const rg=_tcPeriodRange(), D=_vrCompute(rg.from,rg.to), T=D.tot;
+  const FO=_vrFltApply(D.out,'out'), FI=_vrFltApply(D.inn,'in'), TO=_vrOutTot(FO), TI=_vrInTot(FI);
   const head=[['BÁO CÁO VAT — '+_tcPeriodLabel(),''],['Kỳ (theo ETD)',rg.from+' → '+rg.to],['Đơn vị','VND'],['','']];
-  const s1=head.concat([
+  const s1=head.concat(_vrFltNotes()).concat([
     ['VAT đầu ra',T.outVat],['VAT đầu vào',T.inVat],[T.net>=0?'VAT phải nộp (ước tính)':'VAT được khấu trừ (ước tính)',Math.abs(T.net)],['',''],
     ['Doanh thu xuất HĐ (chưa VAT)',T.outBase],['  - Mức 0% / không chịu thuế',T.outBase0],['  - Mức 8%',T.outBase8],['  - Mức 10%',T.outBase10],['  - Mức khác',T.outBaseO],
     ['Chi phí NCC có VAT (chưa VAT)',T.inBase],['',''],
     ['Đầu ra đã thu (gồm VAT)',T.outPaid],['Đầu ra chưa thu (gồm VAT)',T.outUnpaid],['Đầu vào đã trả NCC (gồm VAT)',T.inPaid],['Đầu vào chưa trả NCC (gồm VAT)',T.inUnpaid]
   ]);
-  const s2=[['Job / Booking','ETD','Shipper','Party','Số DN','Số HĐ VAT (ngày HĐ)','DT 0%','DT 8%','DT 10%','DT mức khác','Tổng DT chưa VAT','VAT','Tổng gồm VAT','Thanh toán']];
-  D.out.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
-    s2.push([x.job,x.etd,x.shipper,x.party,(x.cash?'Sổ quỹ — ':'')+(x.dnNo||''),x.invTxt||'',x.base0,x.base8,x.base10,x.baseO,x.base,x.vat,x.total,x.paid?'Đã thu':'Chưa thu']);
+  const s2=[['Job / Booking','MBL','Cont / Vol','ETD','Shipper','Party','Số DN','Số HĐ VAT (ngày HĐ)','DT 0%','DT 8%','DT 10%','DT mức khác','Tổng DT chưa VAT','VAT','Tổng gồm VAT','Thanh toán']];
+  FO.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
+    s2.push([x.job,x.mbl||'',x.cont||'',x.etd,x.shipper,x.party,(x.cash?'Sổ quỹ — ':'')+(x.dnNo||''),x.invTxt||'',x.base0,x.base8,x.base10,x.baseO,x.base,x.vat,x.total,x.paid?'Đã thu':'Chưa thu']);
   });
-  s2.push(['TỔNG','','','','','',T.outBase0,T.outBase8,T.outBase10,T.outBaseO,T.outBase,T.outVat,T.outBase+T.outVat,'']);
-  const s3=[['Job / Booking','ETD','Shipper','Nhà cung cấp','Khoản chi phí','Nguồn','Chưa VAT','Thuế suất %','VAT','Tổng gồm VAT','Thanh toán NCC','Ngày thanh toán']];
-  D.inn.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
-    s3.push([x.job,x.etd,x.shipper,x.supplier,x.name,x.src==='cost'?'Nhập tay':(x.src==='cash'?'Sổ quỹ':'Dịch vụ'),x.base,x.rate,x.vat,x.total,x.paid?'Đã trả':'Chưa trả',x.paidDate||'']);
+  s2.push(['TỔNG','','','','','','','',TO.outBase0,TO.outBase8,TO.outBase10,TO.outBaseO,TO.outBase,TO.outVat,TO.outBase+TO.outVat,'']);
+  const s3=[['Job / Booking','ETD','Shipper','Nhà cung cấp','Khoản chi phí','Nguồn','Số HĐ (ngày HĐ)','Chưa VAT','Thuế suất %','VAT','Tổng gồm VAT','Thanh toán NCC','Ngày thanh toán']];
+  FI.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
+    s3.push([x.job,x.etd,x.shipper,x.supplier,x.name,x.src==='cost'?'Nhập tay':(x.src==='cash'?'Sổ quỹ':'Dịch vụ'),x.invTxt||'',x.base,x.rate,x.vat,x.total,x.paid?'Đã trả':'Chưa trả',x.paidDate||'']);
   });
-  s3.push(['TỔNG','','','','','',T.inBase,'',T.inVat,T.inBase+T.inVat,'','']);
-  const gO=_vrGroup(D.out,function(x){return x.party;}), gI=_vrGroup(D.inn,function(x){return x.supplier;});
+  s3.push(['TỔNG','','','','','','',TI.inBase,'',TI.inVat,TI.inBase+TI.inVat,'','']);
+  const gO=_vrGroup(FO,function(x){return x.party;}), gI=_vrGroup(FI,function(x){return x.supplier;});
   const s4=[['Khách hàng / Party','Số lô','Doanh thu chưa VAT','VAT đầu ra','Tổng gồm VAT','Đã thu','Chưa thu']].concat(gO.map(function(G){return [G.key,G.lots,G.base,G.vat,G.total,G.paid,G.unpaid];}));
   const s5=[['Nhà cung cấp','Số dòng','Chi phí chưa VAT','VAT đầu vào','Tổng gồm VAT','Đã trả','Chưa trả']].concat(gI.map(function(G){return [G.key,G.n,G.base,G.vat,G.total,G.paid,G.unpaid];}));
   const wb=XLSX.utils.book_new();
@@ -36137,7 +36218,8 @@ async function saveCosting(){
       apPaidStatus:gC('cstatus_'+i)?.value||it.apPaidStatus||'unpaid',
       apPaidDate:gC('cpaiddate_'+i)?.value||it.apPaidDate||'',
       apPaidBank:gC('cpaidbank_'+i)?.value||it.apPaidBank||'',
-      fromCashTx:it.fromCashTx||false
+      fromCashTx:it.fromCashTx||false,
+      invNo:it.invNo||'', invDate:it.invDate||''
     };
   }).filter(function(it){return it.name||it.price;});
   const note=gC('costingNote')?.value||'';
