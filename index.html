@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.73';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.74';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -20612,7 +20612,7 @@ function _qtComputeAll(from,to){
 // ═══════════════════════════════════════════════════════════════════════════
 //  VAT REPORT (A 2.33) — Finance → VAT Report
 //  CHỈ ĐỌC dữ liệu có sẵn (không ghi gì vào lô / công nợ):
-//   • ĐẦU RA  = dịch vụ của lô có "Có hóa đơn" = Yes (svcs[k].invoice, mặc định Yes) — chính là phần
+//   • ĐẦU RA  = dịch vụ của lô có "Có hóa đơn" = Yes (svcs[k].invoice, mặc định Yes) VÀ có VAT > 0 (A 2.74; riêng OCF/cước biển luôn tính) — chính là phần
 //               Debit Note xuất cho shipper/party; VAT theo svcs[k].vat (0/8/10%), ROE của lô; công thức VAT
 //               cộng gộp theo party giống Debit Note (làm tròn 1 lần/party). Trạng thái thu = dnPayments[party].inv.
 //   • ĐẦU VÀO = chi phí NCC có VAT: svcs[k].cost*svcQty + svcVatAmt (hoặc svcVat %) và chi phí nhập tay
@@ -20655,6 +20655,10 @@ function _vrCompute(from,to){
       if(!amt)return;
       if((sv.cur||'VND')!=='VND')amt=Math.round(amt*roe);
       const rate=parseFloat(String(sv.vat||'0%').replace('%',''))||0;
+      // A 2.74: CHỈ dòng dịch vụ có VAT (thuế suất > 0) mới tính là có hóa đơn và đưa vào VAT Report;
+      // dịch vụ không VAT / không hóa đơn bị loại. Ngoại lệ: OCF - Cước vận tải biển (ocf/freight) LUÔN có VAT (kể cả 0%).
+      const _bk=_svcKeyBase(key);
+      if(!(rate>0)&&_bk!=='ocf'&&_bk!=='freight'){info.svcSkipNoVat=(info.svcSkipNoVat||0)+1;return;}
       const party=(sv.party||'').trim()||'(Không party)';
       const P=parties[party]||(parties[party]={base:0,byRate:{},n:0});
       P.base+=amt; P.byRate[rate]=(P.byRate[rate]||0)+amt; P.n++;
@@ -20871,7 +20875,7 @@ function renderTcVat(){
     +'</div>';
 
   const head='<div style="font-size:15px;font-weight:800;color:var(--text-primary);margin:1.1rem 0 .25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-receipt-tax" style="color:var(--blue)"></i> VAT Report — '+_vrE(_tcPeriodLabel())+' <span style="font-size:11.5px;font-weight:500;color:var(--text-tertiary)">('+from+' → '+to+')</span></div>'
-    +'<div style="font-size:11.5px;color:var(--text-tertiary);margin-bottom:.9rem;line-height:1.5">Kỳ tính theo <b>ETD của lô</b>. Đầu ra = dịch vụ “Có hóa đơn: Yes” trong Debit Note xuất cho shipper/party; đầu vào = chi phí NCC có VAT (tab Dịch vụ + chi phí nhập tay). Số liệu quản trị từ app, cần đối chiếu với hóa đơn/tờ khai thuế thực tế.</div>';
+    +'<div style="font-size:11.5px;color:var(--text-tertiary);margin-bottom:.9rem;line-height:1.5">Kỳ tính theo <b>ETD của lô</b>. Đầu ra = dịch vụ “Có hóa đơn: Yes” <b>và có VAT</b> trong Debit Note xuất cho shipper/party (dịch vụ không VAT, không hóa đơn không đưa vào; riêng OCF – Cước vận tải biển luôn tính, kể cả VAT 0%); đầu vào = chi phí NCC có VAT (tab Dịch vụ + chi phí nhập tay). Số liệu quản trị từ app, cần đối chiếu với hóa đơn/tờ khai thuế thực tế.</div>';
 
   // KPI
   const netLabel=T.net>=0?'VAT phải nộp (ước tính)':'VAT được khấu trừ (ước tính)';
@@ -20997,7 +21001,7 @@ function _vrViewOut(D){
     +'</tr></thead><tbody>'+(dRows||'<tr><td colspan="11" class="empty">Không có dòng phù hợp</td></tr>')+'</tbody>'
     +(rows.length?'<tfoot><tr><td colspan="5">Tổng ('+rows.length+' dòng)</td><td class="r">'+_vrN(sub.base0)+'</td><td class="r">'+_vrN(sub.base8)+'</td><td class="r">'+_vrN(sub.base10)+'</td><td class="r vat">'+_vrN(sub.vat)+'</td><td class="r">'+_vrN(sub.total)+'</td><td></td></tr></tfoot>':'')
     +'</table></div>'
-    +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">DT = doanh thu chưa VAT quy VND theo ROE của lô. “DT 0%” gồm cước biển và dịch vụ không chịu VAT. Mức thuế khác 0/8/10% (nếu có) chỉ tính vào cột VAT.</div></div>';
+    +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">DT = doanh thu chưa VAT quy VND theo ROE của lô. “DT 0%” chỉ gồm cước biển (OCF) — dịch vụ không VAT không đưa vào báo cáo. Mức thuế khác 0/8/10% (nếu có) chỉ tính vào cột VAT.</div></div>';
   return sumTbl+det;
 }
 
@@ -21284,7 +21288,7 @@ function _vrViewShip(D){
   const filt=(B.ship?('shipper '+B.ship):'tất cả shipper')+(B.q?(' · tìm “'+B.q+'”'):'');
   const tfoot=B.rows.length?'<tfoot><tr><td colspan="8">TỔNG CỘNG — '+_vrE(filt)+' ('+T.lots+' lô)</td>'+numCells(T)+'<td></td><td></td></tr></tfoot>':'';
   const note='Chênh lệch = VAT đầu ra − VAT đầu vào của lô: <b style="color:#DC2626">dương</b> = VAT phải nộp, <b style="color:#16A34A">âm</b> = được khấu trừ (ước tính). '
-    +'Đầu ra = dịch vụ “Có hóa đơn: Yes” trong Debit Note (gộp mọi party của lô); đầu vào = chi phí NCC có VAT (tab Dịch vụ + chi phí nhập tay), ngoại tệ quy VND theo ROE của lô. '
+    +'Đầu ra = dịch vụ “Có hóa đơn: Yes” và có VAT trong Debit Note (gộp mọi party của lô; riêng OCF luôn tính); đầu vào = chi phí NCC có VAT (tab Dịch vụ + chi phí nhập tay), ngoại tệ quy VND theo ROE của lô. '
     +'Doanh thu theo thuế suất: 0% / không chịu thuế <b>'+_vrN(T.base0)+'</b> · 8% <b>'+_vrN(T.base8)+'</b> · 10% <b>'+_vrN(T.base10)+'</b>'+(T.baseO?' · mức khác <b>'+_vrN(T.baseO)+'</b>':'')+'. '
     +'Khoản Sổ quỹ nhập tay không gắn lô không có shipper nên không nằm trong báo cáo này.';
   return '<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-truck-delivery"></i>VAT theo Shipper — đầu ra, đầu vào và chênh lệch từng lô</span><span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">'+_vrE(fd(rg.from))+' → '+_vrE(fd(rg.to))+' · '+T.lots+' lô · theo ETD</span></div>'
