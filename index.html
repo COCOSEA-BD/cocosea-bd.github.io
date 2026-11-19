@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.79';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.80';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -19794,6 +19794,118 @@ function _tcSparkline(values,color){
 
 // Vẽ biểu đồ kết hợp Đường (Thu/Chi) + Cột (Lợi nhuận) theo chuỗi ngày — SVG thuần, không
 // cần thư viện ngoài (khớp phong cách đã dùng ở các nơi khác trong app).
+/* ═══ A 2.80 — Biểu đồ Doanh thu - Chi phí - Lợi nhuận THEO SHIPPER (Finance › Financial Report) ═══
+   Cùng cơ sở số liệu với bảng Costing bên dưới biểu đồ chính: lô (Xuất + Nhập) có ETD trong mốc thời gian đã chọn,
+   Doanh thu = _tcLotRevenueVND, Chi phí = _tcLotCostVND, Lợi nhuận = Doanh thu − Chi phí. Shipper = r.shipper || r.supplier. */
+window._tcShpMetric=window._tcShpMetric||'rev';
+function _tcShpGroups(from,to){
+  const all=[].concat((cache.xuat||[]).map(function(r){return Object.assign({},r,{loai:'Xuất'});}),(cache.nhap||[]).map(function(r){return Object.assign({},r,{loai:'Nhập'});}));
+  const lots=all.filter(function(r){return r.etd&&r.etd>=from&&r.etd<=to;});
+  const map={};
+  lots.forEach(function(r){
+    const nm=String(r.shipper||r.supplier||'').trim()||'(Không rõ shipper)';
+    const m=map[nm]||(map[nm]={name:nm,lots:[],rev:0,cost:0,profit:0});
+    const rev=_tcLotRevenueVND(r), cost=_tcLotCostVND(r);
+    m.lots.push(r); m.rev+=rev; m.cost+=cost; m.profit+=rev-cost;
+  });
+  return Object.keys(map).map(function(k){return map[k];});
+}
+function _tcShpPick(groups,metric,topN){
+  const sorted=groups.slice().sort(function(a,b){return (b[metric]-a[metric])||(b.rev-a.rev);});
+  const top=sorted.slice(0,topN), rest=sorted.slice(topN);
+  // luôn hiện shipper đang lỗ (tối đa 5 shipper lỗ nặng nhất), phần còn lại gộp "Khác"
+  const loss=rest.filter(function(x){return x.profit<0;}).sort(function(a,b){return a.profit-b.profit;}).slice(0,5);
+  const shown=top.concat(loss);
+  const other=rest.filter(function(x){return loss.indexOf(x)<0;});
+  let ot=null;
+  if(other.length){
+    ot={name:'Khác ('+other.length+' shipper)',lots:[],rev:0,cost:0,profit:0,other:true};
+    other.forEach(function(x){ ot.lots=ot.lots.concat(x.lots); ot.rev+=x.rev; ot.cost+=x.cost; ot.profit+=x.profit; });
+  }
+  return {shown:shown,other:ot};
+}
+function _tcShipperChart(from,to){
+  const groups=_tcShpGroups(from,to), metric=window._tcShpMetric||'rev';
+  const fmt=function(n){return Math.round(n||0).toLocaleString('vi-VN');};
+  const mLbl={rev:'Doanh thu',cost:'Chi phí',profit:'Lợi nhuận'};
+  const hd=function(sub){return '<div class="tcbc-card-hd"><span><i class="ti ti-users"></i> Biểu đồ Doanh thu - Chi phí - Lợi nhuận theo Shipper'+(sub||'')+'</span></div>';};
+  if(!groups.length)return '<div class="tcbc-card" style="margin-bottom:16px">'+hd('')+'<div style="text-align:center;padding:2.5rem;color:var(--text-tertiary);font-size:12px">Không có lô hàng (ETD) trong mốc thời gian đã chọn</div></div>';
+  const pk=_tcShpPick(groups,metric,10);
+  const rows=pk.shown.concat(pk.other?[pk.other]:[]);
+  window._tcShpData={rows:rows,from:from,to:to};
+  const totRev=groups.reduce(function(s,x){return s+x.rev;},0), totCost=groups.reduce(function(s,x){return s+x.cost;},0), totLots=groups.reduce(function(s,x){return s+x.lots.length;},0);
+  const totProfit=totRev-totCost, base=metric==='cost'?totCost:metric==='profit'?totProfit:totRev;
+  // ── SVG cột nhóm ──
+  const n=rows.length, W=Math.max(900,n*84+60), H=300, padL=54, padR=12, padT=22, padB=74;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  let maxV=0,minV=0; rows.forEach(function(x){ maxV=Math.max(maxV,x.rev,x.cost,x.profit); minV=Math.min(minV,x.rev,x.cost,x.profit); });
+  if(maxV===0&&minV===0)maxV=1;
+  // thang chia "đẹp" (bước 1/2/5 × 10^k) để các vạch trục Y là số tròn, luôn có mốc 0
+  const rawStep=((maxV-minV)||1)/4, mag=Math.pow(10,Math.floor(Math.log10(rawStep))), nrm=rawStep/mag;
+  const step=(nrm<=1?1:nrm<=2?2:nrm<=5?5:10)*mag;
+  const tMin=Math.floor(minV/step)*step, tMax=Math.ceil(maxV/step)*step; minV=tMin; maxV=tMax;
+  const ticks=[]; for(let v=tMin;v<=tMax+step/2;v+=step)ticks.push(v);
+  const yFor=function(v){return padT+plotH-((v-minV)/(maxV-minV))*plotH;};
+  const zeroY=yFor(0), gw=plotW/n, bw=Math.min(18,gw/4.2);
+  const short=function(v){const a=Math.abs(v);if(a>=1e9)return (v/1e9).toFixed(1)+'B';if(a>=1e6)return (v/1e6).toFixed(a>=1e8?0:1)+'M';if(a>=1e3)return Math.round(v/1e3)+'K';return String(Math.round(v));};
+  const css='style="stroke:var(--border-light)"', tx='style="fill:var(--text-secondary)"';
+  let svg='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;min-width:'+Math.min(W,640)+'px;height:auto" role="img" aria-label="Doanh thu, chi phí, lợi nhuận theo shipper">';
+  ticks.forEach(function(v){ const y=yFor(v);
+    svg+='<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+y.toFixed(1)+'" '+css+' stroke-width="1"/><text x="'+(padL-6)+'" y="'+(y+3).toFixed(1)+'" font-size="9.5" text-anchor="end" '+tx+'>'+short(v)+'</text>'; });
+  svg+='<line x1="'+padL+'" y1="'+zeroY.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+zeroY.toFixed(1)+'" style="stroke:var(--text-tertiary)" stroke-width="1.2"/>';
+  const series=[['rev','#16A34A'],['cost','#EF4444'],['profit','#0F4C81']];
+  rows.forEach(function(x,i){
+    const cx=padL+gw*i+gw/2;
+    svg+='<g style="cursor:pointer" onclick="_tcShpOpen('+i+',\'profit\')"><title>'+_tcShpEsc(x.name)+' — '+x.lots.length+' lô\nDoanh thu: '+fmt(x.rev)+'\nChi phí: '+fmt(x.cost)+'\nLợi nhuận: '+fmt(x.profit)+'</title>'
+      +'<rect x="'+(cx-gw/2).toFixed(1)+'" y="'+padT+'" width="'+gw.toFixed(1)+'" height="'+(plotH+padB-8)+'" fill="transparent"/>';
+    series.forEach(function(s,k){
+      const v=x[s[0]], bx=cx+(k-1)*(bw+3)-bw/2, y=v>=0?yFor(v):zeroY, h=Math.max(Math.abs(yFor(v)-zeroY),v?1:0);
+      svg+='<rect x="'+bx.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+h.toFixed(1)+'" rx="2" fill="'+s[1]+'" opacity="'+(s[0]===metric?'1':'.55')+'"/>';
+      if(s[0]===metric){ const ly=v>=0?y-4:y+h+10; svg+='<text x="'+(bx+bw/2).toFixed(1)+'" y="'+ly.toFixed(1)+'" font-size="9" font-weight="700" text-anchor="middle" '+tx+'>'+short(v)+'</text>'; }
+    });
+    const nm=x.name.length>13?x.name.slice(0,12)+'…':x.name;
+    svg+='<text transform="translate('+cx.toFixed(1)+','+(H-padB+14)+') rotate(-28)" font-size="10" text-anchor="end" '+tx+'>'+_tcShpEsc(nm)+'</text></g>';
+  });
+  svg+='</svg>';
+  const btn=function(k){const a=metric===k; return '<button type="button" onclick="window._tcShpMetric=\''+k+'\';renderTcBody()" style="padding:5px 12px;border:none;background:'+(a?'var(--blue)':'transparent')+';color:'+(a?'#fff':'var(--text-secondary)')+';cursor:pointer;font-size:11.5px;font-weight:'+(a?'700':'500')+';font-family:inherit">'+mLbl[k]+'</button>';};
+  const legend=series.map(function(s){return '<span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:'+s[1]+';display:inline-block;border-radius:2px"></span>'+mLbl[s[0]]+'</span>';}).join('');
+  // ── bảng số liệu ──
+  const thS='padding:6px 10px;font-size:11px;font-weight:700;color:var(--text-secondary);white-space:nowrap;border-bottom:2px solid var(--border-light);background:var(--bg-secondary)';
+  const tdS='padding:6px 10px;font-size:12px;border-bottom:1px dashed var(--border-light);white-space:nowrap';
+  const lk='cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px';
+  const trs=rows.map(function(x,i){
+    const pc=x.profit>=0?'#16A34A':'#EF4444', mg=x.rev>0?(Math.round(x.profit/x.rev*1000)/10)+'%':'—';
+    const share=base>0?Math.round(x[metric]/base*1000)/10:0;
+    const cell=function(t,v,col,extra){return '<td style="'+tdS+';text-align:right;font-weight:700;color:'+col+';'+lk+'" onclick="_tcShpOpen('+i+',\''+t+'\')" title="Bấm xem từng lô">'+(extra||'')+fmt(v)+'</td>';};
+    return '<tr><td style="'+tdS+';color:var(--text-tertiary);width:34px">'+(x.other?'':(i+1))+'</td>'
+      +'<td style="'+tdS+';font-weight:700;white-space:normal;max-width:260px">'+_tcShpEsc(x.name)+'</td>'
+      +'<td style="'+tdS+';text-align:right">'+x.lots.length+'</td>'
+      +cell('rev',x.rev,'#16A34A')+cell('cost',x.cost,'#EF4444')+cell('profit',x.profit,pc,x.profit>0?'+':'')
+      +'<td style="'+tdS+';text-align:right;color:'+pc+'">'+mg+'</td>'
+      +'<td style="'+tdS+';min-width:120px"><span style="display:inline-block;width:'+Math.min(100,Math.max(0,share))+'px;max-width:70px;height:6px;border-radius:3px;background:'+({rev:'#16A34A',cost:'#EF4444',profit:'#0F4C81'}[metric])+';vertical-align:middle;margin-right:6px"></span>'+share+'%</td></tr>';
+  }).join('');
+  const tp=totProfit>=0?'#16A34A':'#EF4444', tf='padding:7px 10px;font-size:12.5px;font-weight:800;border-top:2px solid var(--border-light)';
+  const foot='<tr style="background:var(--bg-secondary)"><td style="'+tf+'"></td><td style="'+tf+'">TỔNG ('+groups.length+' shipper)</td><td style="'+tf+';text-align:right">'+totLots+'</td><td style="'+tf+';text-align:right;color:#16A34A">'+fmt(totRev)+'</td><td style="'+tf+';text-align:right;color:#EF4444">'+fmt(totCost)+'</td><td style="'+tf+';text-align:right;color:'+tp+'">'+(totProfit>0?'+':'')+fmt(totProfit)+'</td><td style="'+tf+';text-align:right;color:'+tp+'">'+(totRev>0?(Math.round(totProfit/totRev*1000)/10)+'%':'—')+'</td><td style="'+tf+'"></td></tr>';
+  return '<div class="tcbc-card" style="margin-bottom:16px">'
+    +'<div class="tcbc-card-hd" style="flex-wrap:wrap;gap:10px"><span><i class="ti ti-users"></i> Biểu đồ Doanh thu - Chi phí - Lợi nhuận theo Shipper</span>'
+      +'<span style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:11px;font-weight:600">'+legend
+      +'<span style="display:inline-flex;align-items:center;gap:6px;margin-left:6px"><span style="color:var(--text-secondary);font-weight:600">Xếp hạng theo:</span><span style="display:inline-flex;border:1px solid var(--border-light);border-radius:8px;overflow:hidden">'+btn('rev')+btn('cost')+btn('profit')+'</span></span></span></div>'
+    +'<div style="font-size:11px;color:var(--text-tertiary);margin:-2px 0 6px">'+_tcPeriodLabel()+' · lô theo ETD · hiện top 10 shipper theo '+mLbl[metric].toLowerCase()+(pk.shown.length>10?' + shipper đang lỗ':'')+(pk.other?', còn lại gộp "Khác"':'')+' · bấm vào cột / số để xem từng lô</div>'
+    +'<div style="overflow-x:auto">'+svg+'</div>'
+    +'<div class="table-wrap" style="margin-top:8px"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="'+thS+'"></th><th style="'+thS+';text-align:left">Shipper</th><th style="'+thS+';text-align:right">Số lô</th><th style="'+thS+';text-align:right">Doanh thu (VND)</th><th style="'+thS+';text-align:right">Chi phí (VND)</th><th style="'+thS+';text-align:right">Lợi nhuận (VND)</th><th style="'+thS+';text-align:right">Tỷ suất LN</th><th style="'+thS+'">Tỷ trọng '+mLbl[metric].toLowerCase()+'</th></tr></thead><tbody>'+trs+'</tbody><tfoot>'+foot+'</tfoot></table></div>'
+  +'</div>';
+}
+function _tcShpEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// bấm cột / số → mở lại popup chi tiết lô sẵn có (_tcShowFinPopup) cho shipper đó
+window._tcShpOpen=function(i,type){
+  const D=window._tcShpData; if(!D||!D.rows[i])return;
+  const x=D.rows[i];
+  window._tcFinBuckets=window._tcFinBuckets||[];
+  const b={from:D.from,to:D.to,shortLabel:x.name,label:x.name,lots:x.lots,chiKhacTx:[]};
+  const idx=window._tcFinBuckets.length; window._tcFinBuckets.push(b);
+  _tcShowFinPopup(idx,type);
+};
+
 function _tcComboChart(series){
   const W=900,H=260,padL=44,padR=10,padT=14,padB=28;
   const plotW=W-padL-padR, plotH=H-padT-padB;
@@ -22374,6 +22486,9 @@ function renderTcBaoCao(){
     </div>
   </div>
 
+  <!-- ═══ A 2.80: Biểu đồ Doanh thu - Chi phí - Lợi nhuận THEO SHIPPER trong mốc thời gian đã chọn ═══ -->
+  ${(function(){try{return _tcShipperChart(from,to);}catch(e){console.warn('[shipper chart]',e);return '';}})()}
+
   <!-- ═══ 3 CARD CHI TIẾT: Quỹ đầu/cuối kỳ | Thu/Chi theo tài khoản | Thu/Chi theo danh mục chi phí ═══ -->
   <div class="tcbc-detail-row">
     <div class="tcbc-card">
@@ -22630,6 +22745,15 @@ function _tcExportBaoCao(){
   });
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ws1),'Bao cao tai chinh');
+  // A 2.80: Doanh thu - Chi phí - Lợi nhuận theo Shipper (lô theo ETD trong kỳ, cùng cách tính với bảng Costing)
+  try{
+    const gs=_tcShpGroups(from,to).sort(function(a,b){return b.rev-a.rev;});
+    const wsS=[['DOANH THU - CHI PHÍ - LỢI NHUẬN THEO SHIPPER','','','','',''],[_tcPeriodLabel(),from+' → '+to,'','','',''],['','','','','',''],['Shipper','Số lô','Doanh thu (VND)','Chi phí (VND)','Lợi nhuận (VND)','Tỷ suất LN (%)']];
+    let tr=0,tc=0,tl=0;
+    gs.forEach(function(x){ tr+=x.rev; tc+=x.cost; tl+=x.lots.length; wsS.push([x.name,x.lots.length,Math.round(x.rev),Math.round(x.cost),Math.round(x.profit),x.rev>0?Math.round(x.profit/x.rev*1000)/10:0]); });
+    wsS.push(['TỔNG',tl,Math.round(tr),Math.round(tc),Math.round(tr-tc),tr>0?Math.round((tr-tc)/tr*1000)/10:0]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(wsS),'Theo Shipper');
+  }catch(e){ console.warn('[export shipper]',e); }
   const p=window._tcRptPeriod;
   const fname='BaoCaoTaiChinh_'+(p.mode==='month'?('T'+p.month):p.mode==='quarter'?('Q'+p.quarter):'Nam')+'_'+p.year+'.xlsx';
   XLSX.writeFile(wb,fname);
