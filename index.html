@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.76';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.77';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -5278,7 +5278,8 @@ window._tabDirty=false;
 // Các tab có thể có dữ liệu chưa lưu
 const _DIRTY_TABS_LIST=['cont','svc','costing','price','trucking','scy','docmaker','invoice'];
 // Map tab → tên hàm lưu tương ứng
-const _DIRTY_SAVE_MAP={cont:'saveContSealAll',svc:'saveSvc',costing:'saveCosting',price:'saveSvc',trucking:'saveTruckings',scy:'saveScyItems',docmaker:'dmSaveData'};
+// A 2.77: svc → saveDetailSvc, price → saveDetailFillPrice (trước đây trỏ nhầm sang saveSvc/modal cũ), thêm invoice → saveInvoiceSettings
+const _DIRTY_SAVE_MAP={cont:'saveContSealAll',svc:'saveDetailSvc',costing:'saveCosting',price:'saveDetailFillPrice',invoice:'saveInvoiceSettings',trucking:'saveTruckings',scy:'saveScyItems',docmaker:'dmSaveData'};
 
 // Lắng nghe input/change trong detailPanel → mark dirty
 (function(){
@@ -5353,6 +5354,38 @@ function _checkTabDirtyThenRun(fn){
   }
 }
 window._checkTabDirtyThenRun=_checkTabDirtyThenRun;
+
+// A 2.77: đóng panel chi tiết lô (đúng 3 đường như nút X cũ: Costing inline / chế độ tab Xuất / panel trượt)
+function _dpCloseNow(lotId){
+  if(window._crInlineTarget){window._crCloseInlineLot();return;}
+  if(document.body.classList.contains('xuat-lotmode')){xuatCloseTab(lotId);return;}
+  closeTab(_activeTabKey);
+}
+// Nút X: nếu trang đang có thay đổi chưa lưu thì hỏi (Lưu / Không lưu) thay vì đóng mất dữ liệu
+function dpCloseDetail(lotId){
+  _checkTabDirtyThenRun(function(){ _dpCloseNow(lotId); });
+}
+// Nút "Lưu & Đóng": chạy đúng hàm lưu của tab đang mở; CHỈ đóng khi lưu thành công
+// (các hàm lưu chỉ xóa cờ _tabDirty khi ghi Firestore thành công; lỗi/thiếu bắt buộc → cờ còn → KHÔNG đóng)
+async function saveAndCloseDetail(lotId){
+  const btn=document.getElementById('dpSaveClose');
+  if(btn&&btn.disabled)return;
+  const fnName=_DIRTY_SAVE_MAP[detailTab];
+  if(!fnName||typeof window[fnName]!=='function'){window._tabDirty=false;_dpCloseNow(lotId);return;}
+  if(btn){btn.disabled=true;btn.style.opacity='.6';}
+  window._tabDirty=true; // giả định chưa lưu; hàm lưu thành công sẽ đặt lại false
+  try{ await window[fnName](); }
+  catch(e){ console.error('[Lưu & Đóng]',e); toast('Lỗi khi lưu: '+((e&&e.message)||e),'error'); }
+  const b2=document.getElementById('dpSaveClose');
+  if(window._tabDirty){
+    if(b2){b2.disabled=false;b2.style.opacity='';}
+    toast('Chưa lưu được nên chưa đóng trang — kiểm tra thông báo lỗi rồi thử lại','error');
+    return;
+  }
+  _dpCloseNow(lotId);
+}
+window.dpCloseDetail=dpCloseDetail;
+window.saveAndCloseDetail=saveAndCloseDetail;
 
 function switchDetailTab(tab){
   _checkTabDirtyThenRun(function(){_switchDetailTabNow(tab);});
@@ -6374,7 +6407,10 @@ bodyHtml=(_fxIsNewLot(r)?_fxInvBoxHtml(r):('<div style="display:flex;align-items
       <div style="font-size:15px;font-weight:600">${_lotAllBookingsStr(r)||'—'} ${statusBadge} ${r.jobNo?`<span style="font-size:10px;padding:2px 8px;border-radius:20px;background:var(--bg-secondary);color:var(--blue);font-weight:700;border:1px solid var(--border-light)">${r.jobNo}</span>`:''}</div>
       <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${r.shipper||r.supplier||''} ${r.pol&&r.pod?'| '+r.pol+' → '+r.pod:''}</div>
     </div>
-    <button class="rac" onclick="${window._crInlineTarget?'_crCloseInlineLot()':"document.body.classList.contains('xuat-lotmode')?xuatCloseTab('"+r._id+"',event):closeTab(_activeTabKey)"}" style="font-size:18px;flex-shrink:0;padding:6px;border-radius:6px;border:1px solid var(--border-light)" title="Đóng"><i class="ti ti-x"></i></button>
+    <div class="dp-hdr-actions">
+      ${(_DIRTY_SAVE_MAP[detailTab]&&!isBookingReq)?`<button class="btn pri dp-saveclose" id="dpSaveClose" onclick="saveAndCloseDetail('${r._id}')" title="Lưu toàn bộ trang này rồi tự đóng"><i class="ti ti-device-floppy"></i> Lưu &amp; Đóng</button>`:''}
+      <button class="rac" onclick="dpCloseDetail('${r._id}')" style="font-size:18px;flex-shrink:0;padding:6px;border-radius:6px;border:1px solid var(--border-light)" title="Đóng"><i class="ti ti-x"></i></button>
+    </div>
   </div>
   <div class="dtabs">${tabsHtml}</div>
   <div class="detail-body">${bodyHtml}</div>`;
@@ -7027,6 +7063,7 @@ async function saveInvoiceSettings(){
     const _vatChanged=_vatInv&&JSON.stringify(_vatInv)!==JSON.stringify(((arr[ci]||r).vatInvoices)||[]);
     if(ci>=0){arr[ci].svcs=svcs; if(dnGenerated)arr[ci].dnByParty=dnByParty; if(_vatInv)arr[ci].vatInvoices=_vatInv;}
     if(_vatChanged)logLotEvent(_ivId,_ivTt,'invoice','Cập nhật hóa đơn VAT',_vatInvSummary(_vatInv)||'(xóa hết)');
+    window._tabDirty=false; // A 2.77: lưu xong → hết cảnh báo "chưa lưu"
     toast(dnGenerated?('Đã lưu — tự sinh '+dnGenerated+' số DN mới'):'Đã lưu');
   }catch(e){toast('Lỗi: '+e.message,'error');}
   setLoading(false);
@@ -8509,6 +8546,7 @@ async function saveDetailFillPrice(){
   setLoading(true,'Đang lưu giá...');
   try{
     await fsSet(colName(_fpTt),_fpId,{svcs,updatedAt:Date.now(),updatedBy:currentUser.email});
+    window._tabDirty=false; // A 2.77: lưu xong → hết cảnh báo "chưa lưu"
     toast('Đã lưu Fill giá');
     if(detailId===_fpId && detailTt===_fpTt){
       const fresh=cache[_fpTt].find(x=>x._id===_fpId)||{};
@@ -26732,6 +26770,9 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .dpanel-tab .tabclose:hover{opacity:1;background:var(--border-light)}
 .detail-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:149}
 .detail-backdrop.open{display:block}
+.dp-hdr-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.dp-saveclose{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-weight:600;height:34px;padding:0 14px}
+body.xuat-lotmode #xuat-lot-work .dp-saveclose{height:40px}
 .detail-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:1.25rem 1.25rem .75rem;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:var(--bg-primary);z-index:1}
 .dtabs{display:flex;gap:3px;padding:.5rem 1.25rem;border-bottom:1px solid var(--border-light);background:var(--bg-secondary);overflow-x:auto}
 .dtab{padding:5px 12px;border-radius:6px;border:none;background:transparent;cursor:pointer;font-size:12px;font-weight:500;color:var(--text-secondary);white-space:nowrap;display:flex;align-items:center;gap:5px;font-family:inherit;transition:all .15s}
