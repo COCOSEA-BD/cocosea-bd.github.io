@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.74';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.76';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -21520,7 +21520,7 @@ function _vsSuppBuild(D){
     if(x.remark)L.remarks.push(x.remark);
     if(!x.cash&&!x.remark&&(L.carrier||_ocfLn))L.remMiss=true;
   });
-  // A 2.66: dòng BẮT BUỘC có VAT (OCF / NCC carrier) nhưng chưa có số VAT → vẫn liệt kê, báo đỏ
+  // A 2.66/2.76: dòng BẮT BUỘC có VAT (OCF / NCC carrier) nhưng chưa có số VAT → vẫn liệt kê, báo đỏ
   const rg=D.range||{};
   ['xuat','nhap'].forEach(function(tt){(cache[tt]||[]).forEach(function(r){
     if(!r||!r.etd||(rg.from&&r.etd<rg.from)||(rg.to&&r.etd>rg.to))return;
@@ -21847,7 +21847,7 @@ function _vatInvLabel(list){
   return (list||[]).map(function(x){return String(x.no).trim()+(x.date?' ('+_vatDmy(x.date)+')':'');}).join(', ');
 }
 
-// Các dòng chi phí bắt buộc có VAT / hóa đơn của 1 lô: OCF (mọi NCC) + NCC thuộc list Carrier
+// Các dòng chi phí bắt buộc có VAT / hóa đơn của 1 lô: OCF (mọi NCC, kể cả khi VAT trống) + dịch vụ của NCC thuộc list Carrier NHƯNG chỉ khi dòng đó có VAT (A 2.76)
 function _vatReqLines(r){
   const out=[]; if(!r)return out;
   const svcs=r.svcs||{};
@@ -21860,6 +21860,8 @@ function _vatReqLines(r){
     const cost=parseFloat(sv.cost)||0, qty=parseFloat(sv.svcQty)||1, baseC=cost*qty;
     let vatC=parseFloat(sv.svcVatAmt)||0;
     if(!vatC){const vp=parseFloat(String(sv.svcVat||'0%').replace('%',''))||0; if(vp)vatC=Math.round(baseC*vp/100);}
+    // A 2.76: NCC carrier nhưng dịch vụ KHÔNG có VAT (ô VAT trống/0) → không liệt kê, không bắt buộc hóa đơn. Chỉ OCF - Cước vận tải biển luôn bắt buộc có VAT.
+    if(!isOcf&&!(cost>0&&vatC>0))return;
     const k=((sv.svcCur||sv.cur||'VND')==='VND')?1:roe;
     const def=(typeof SVCS!=='undefined'&&SVCS.find)?SVCS.find(function(s){return s.key===key;}):null;
     out.push({key:key,name:sv.customName||(def&&def.name)||key,supplier:supplier||'(Chưa chọn NCC)',isOcf:isOcf,isCar:isCar,
@@ -21869,6 +21871,7 @@ function _vatReqLines(r){
     const supplier=(it.partnerRef||'').trim();
     if(!_vatIsCarrier(supplier))return;
     const vatC=parseFloat(it.vatAmt)||0;
+    if(!(vatC>0))return; // A 2.76: chi phí nhập tay của NCC carrier không có VAT → không liệt kê
     const baseC=(parseFloat(it.price||it.amt)||0)*(parseFloat(it.qty)||1);
     const k=((it.cur||'VND')==='VND')?1:roe;
     out.push({key:'cost',name:it.name||'Chi phí nhập tay',supplier:supplier,isOcf:false,isCar:true,
@@ -24461,7 +24464,7 @@ async function deleteUser(idx){
   const u=cache.users[idx];
   if(!u){toast('Không tìm thấy user','error');return;}
   if(u.email===currentUser?.email){toast('Không thể tự xóa chính mình','error');return;}
-  if(!confirm('XÓA HOÀN TOÀN user "'+u.email+'"?\n\nHồ sơ user sẽ bị xóa khỏi hệ thống và mất quyền truy cập app ngay lập tức. Thao tác không thể hoàn tác.'))return;
+  if(!confirm('XÓA HOÀN TOÀN user "'+u.email+'"?\n\nHồ sơ user sẽ bị xóa khỏi hệ thống và mất quyền truy cập app ngay lập tức. Thao tác không thể hoàn tác.\n\n(Tài khoản đăng nhập Auth vẫn còn; nếu tạo lại cùng email, nhập đúng mật khẩu cũ của tài khoản đó để khôi phục.)'))return;
   setLoading(true,'Đang xóa user...');
   try{
     const docId=u._docId||u.uid||u.email.replace(/\./g,'_');
@@ -24760,6 +24763,11 @@ async function saveUser(){
     const dup=(cache.users||[]).find(function(x){return (x.username||'').toLowerCase()===username&&x.email!==email;});
     if(dup){toast('Tên đăng nhập "'+username+'" đã được dùng bởi '+dup.email,'error');return;}
   }
+  if(userEditIdx===null){
+    // A 2.75: email đã có trong danh sách người dùng → báo rõ, không gọi Firebase
+    const _dupU=(cache.users||[]).find(function(x){return (x.email||'').trim().toLowerCase()===email.toLowerCase();});
+    if(_dupU){toast('Email '+email+' đã có trong danh sách người dùng (vai trò '+((ROLES[_dupU.role]&&ROLES[_dupU.role].label)||_dupU.role||'?')+'). Dùng nút Sửa để thay đổi.','error');return;}
+  }
   setLoading(true,'Đang tạo người dùng...');
   try {
     let uid=null;
@@ -24773,7 +24781,36 @@ async function saveUser(){
       try{
         secApp = firebase.apps.find(function(a){return a.name==='userCreator';}) || firebase.initializeApp(firebaseConfig, 'userCreator');
         const secAuth = secApp.auth();
-        const cred = await secAuth.createUserWithEmailAndPassword(email, pass);
+        let cred;
+        try{
+          cred = await secAuth.createUserWithEmailAndPassword(email, pass);
+        }catch(createErr){
+          // A 2.75: Email đã có tài khoản đăng nhập (Auth) nhưng KHÔNG có trong danh sách người dùng
+          // (thường do user từng bị Xóa — nút Xóa chỉ xóa hồ sơ, không xóa Auth — hoặc lần tạo trước lỗi giữa chừng).
+          // Thử khôi phục: nếu mật khẩu nhập vào đúng với tài khoản đó thì dùng lại uid cũ và chỉ tạo lại hồ sơ.
+          if(createErr&&createErr.code==='auth/email-already-in-use'){
+            try{
+              cred = await secAuth.signInWithEmailAndPassword(email, pass);
+              toast('Email này đã có tài khoản đăng nhập từ trước — đã khôi phục và tạo lại hồ sơ.');
+            }catch(signErr){
+              const sc=(signErr&&signErr.code)||'';
+              setLoading(false);
+              if(sc==='auth/user-disabled'){
+                toast('Email '+email+' đã có tài khoản đăng nhập nhưng đang bị vô hiệu hóa trong Firebase Console (Authentication). Hãy bật lại hoặc xóa tài khoản đó rồi tạo lại.','error');
+              }else if(sc==='auth/too-many-requests'){
+                toast('Thử sai quá nhiều lần, vui lòng đợi vài phút rồi thử lại.','error');
+              }else if(sc==='auth/network-request-failed'){
+                toast('Lỗi mạng, thử lại sau.','error');
+              }else{
+                toast('Email '+email+' đã có tài khoản đăng nhập (Auth) từ trước nhưng chưa có trong danh sách (thường do user từng bị Xóa). Cách xử lý: nhập ĐÚNG mật khẩu hiện tại của tài khoản đó để khôi phục, hoặc xóa tài khoản này trong Firebase Console › Authentication rồi tạo lại.','error');
+              }
+              try{await secAuth.signOut();}catch(e2){}
+              return;
+            }
+          }else{
+            throw createErr;
+          }
+        }
         uid = cred.user.uid;
         await secAuth.signOut(); // detach the new user from the secondary app
       }catch(secErr){
@@ -34455,7 +34492,7 @@ function buildDnPartyRows(r,svcs){
       parties[party].yes.amt+=amt;
       parties[party].yes.cnt++;
       { const _kb=_svcKeyBase(k), _sp=(sv.svcSupplier||'').trim();
-        if(_kb==='ocf'||_kb==='freight')parties[party].yes.req.push('OCF'); else if(_sp&&_vatIsCarrier(_sp))parties[party].yes.req.push('NCC carrier '+_sp); }
+        if(_kb==='ocf'||_kb==='freight')parties[party].yes.req.push('OCF'); else if(_sp&&_vatIsCarrier(_sp)&&vatRate>0)parties[party].yes.req.push('NCC carrier '+_sp); }
       if(vatRate===8)parties[party].yes.vat8+=amt;
       else if(vatRate===10)parties[party].yes.vat10+=amt;
     } else {
