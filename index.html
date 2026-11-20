@@ -1572,7 +1572,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.87';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.88';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -21235,6 +21235,7 @@ function renderTcVat(){
     {k:'out',lbl:'Đầu ra — Debit Note có hóa đơn',ic:'ti-file-export',cnt:D.out.length},
     {k:'in',lbl:'Đầu vào — Chi phí NCC có VAT',ic:'ti-file-import',cnt:D.inn.length},
     {k:'ship',lbl:'VAT theo Shipper',ic:'ti-truck-delivery',cnt:_vsMerge(D).length},
+    {k:'shm',lbl:'VAT theo Shipment',ic:'ti-packages',cnt:_vsMerge(D).length},
     {k:'supp',lbl:'VAT theo NCC',ic:'ti-building-warehouse',cnt:_vsSuppBuild(D).length}
   ];
   const tabBar='<div class="vr-tabs">'+tabs.map(function(t){
@@ -21245,6 +21246,7 @@ function renderTcVat(){
   if(S.view==='sum')body=_vrViewSum(D,from,to);
   else if(S.view==='out')body=_vrViewOut(D);
   else if(S.view==='ship')body=_vrViewShip(D);
+  else if(S.view==='shm')body=_vrViewShm(D);
   else if(S.view==='supp')body=_vrViewSupp(D);
   else body=_vrViewIn(D);
 
@@ -21393,6 +21395,7 @@ function _vrViewIn(D){
 function _vrExport(){
   const _vw=window._vrState&&window._vrState.view;
   if(_vw==='ship'){_vsExport();return;}
+  if(_vw==='shm'){_vsShmExport();return;}
   if(_vw==='supp'){_vsSuppExport();return;}
   if(_vw==='sum'||!_vw){_vsAllExport();return;}
   const XLSX=window.XLSX; if(!XLSX){toast('Đang tải thư viện Excel','error');return;}
@@ -21828,6 +21831,272 @@ async function _vsExport(){
     a.href=url; a.download='VAT_TheoShipper_'+shTag+'_'+from+'_'+to+'.xlsx';
     a.click(); URL.revokeObjectURL(url);
     toast('Đã xuất Excel VAT theo shipper ('+T.lots+' lô)');
+  }catch(e){toast('Lỗi: '+e.message,'error');console.error(e);}
+  setLoading(false);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   A 2.88 — VAT THEO SHIPMENT: mỗi lô 1 dòng (bảng phẳng, không gom theo shipper) —
+   VAT đầu ra, VAT đầu vào, chênh lệch (ra − vào) + thông tin NCC của chi phí đầu vào (tên NCC, VAT từng NCC, Số HĐ/Remark, TT trả).
+   Lọc: Shipper, khoảng thời gian (ETD, dùng chung kỳ báo cáo), tìm kiếm; mặc định chỉ lô có VAT, tick để hiện cả lô chưa có VAT.
+   CHỈ ĐỌC: dùng D (=_vrCompute) + _vsAllBuild như tab Tổng quan / VAT theo Shipper nên số khớp 100%.
+   ═══════════════════════════════════════════════════════════════════════════ */
+window._vrState.shmShip=window._vrState.shmShip||'';
+window._vrState.shmQ=window._vrState.shmQ||'';
+window._vrState.shmAll=!!window._vrState.shmAll;
+
+function _vsShmBuild(D){
+  const rows=_vsAllBuild(D), nm={};
+  D.inn.forEach(function(x){
+    if(!x.lotId)return;
+    const k=x.tt+':'+x.lotId, sup=x.supplier||'(Chưa chọn NCC)';
+    const o=nm[k]||(nm[k]={});
+    const e=o[sup]||(o[sup]={name:sup,base:0,vat:0,n:0,nPaid:0,remarks:[]});
+    e.base+=x.base||0; e.vat+=x.vat||0; e.n++; if(x.paid)e.nPaid++; if(x.remark)e.remarks.push(x.remark);
+  });
+  rows.forEach(function(R){
+    const o=nm[R.tt+':'+R.lotId]||{};
+    R.nccs=Object.keys(o).map(function(k){
+      const e=o[k]; e.remark=_vsUniq(e.remarks).join('; ');
+      e.st=(e.nPaid===e.n)?'paid':(e.nPaid===0?'unpaid':'part');
+      return e;
+    }).sort(function(a,b){return (b.vat-a.vat)||a.name.localeCompare(b.name);});
+  });
+  return rows;
+}
+
+function _vsShmFiltered(D,forceDir){
+  const S=window._vrState, all0=_vsShmBuild(D);
+  const all=S.shmAll?all0:all0.filter(function(R){return R.hasInv;});
+  const cnt={}; all.forEach(function(L){cnt[L.shipper]=(cnt[L.shipper]||0)+1;});
+  const shippers=Object.keys(cnt).sort(function(a,b){return a.localeCompare(b);}).map(function(n){return {name:n,n:cnt[n]};});
+  const q=(S.shmQ||'').toLowerCase().trim();
+  const rows=all.filter(function(L){
+    if(S.shmShip&&L.shipper!==S.shmShip)return false;
+    if(!q)return true;
+    return [L.job,L.hbl,L.tenHang,L.shipper,L.dn,L.supp,L.cont,L.outInv,L.inInv,L.nccs.map(function(n){return n.name+' '+n.remark;}).join(' ')].join(' ').toLowerCase().indexOf(q)>=0;
+  });
+  const _d=forceDir||window._etdDir.vat_shm||'asc';
+  rows.sort(function(a,b){
+    const ea=a.etd||'', eb=b.etd||'';
+    if(ea!==eb){ if(!ea)return 1; if(!eb)return -1; return _d==='asc'?ea.localeCompare(eb):eb.localeCompare(ea); }
+    return a.shipper.localeCompare(b.shipper)||(a.job||'').localeCompare(b.job||'');
+  });
+  return {all:all,rows:rows,shippers:shippers,tot:_vsTot(rows),ship:S.shmShip||'',q:S.shmQ||'',showAll:!!S.shmAll};
+}
+
+function _vsShmPick(v){window._vrState.shmShip=v||'';renderTcBody();}
+function _vsShmAll(on){window._vrState.shmAll=!!on;renderTcBody();}
+function _vsShmQuery(el){
+  window._vrState.shmQ=el.value||'';
+  const pos=el.selectionStart;
+  renderTcBody();
+  const n=g('vsShmQ'); if(n){n.focus();try{n.setSelectionRange(pos,pos);}catch(e){}}
+}
+
+function _vrViewShm(D){
+  const B=_vsShmFiltered(D), T=B.tot, rg=_tcPeriodRange();
+  const timeBar=_vsTimeBarHtml();
+  const opts='<option value="">Tất cả shipper ('+B.all.length+' lô)</option>'+B.shippers.map(function(s){
+    return '<option value="'+_vrE(s.name)+'"'+(s.name===B.ship?' selected':'')+'>'+_vrE(s.name)+' ('+s.n+')</option>';
+  }).join('')+((B.ship&&!B.shippers.some(function(s){return s.name===B.ship;}))?'<option value="'+_vrE(B.ship)+'" selected>'+_vrE(B.ship)+' (0)</option>':'');
+  const toolbar='<div class="vr-toolbar">'
+    +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">Shipper:</label>'
+    +'<select id="vsShmShip" style="width:230px;font-size:12px" onchange="_vsShmPick(this.value)">'+opts+'</select>'
+    +'<div class="search-wrap" style="max-width:320px;flex:1"><i class="ti ti-search"></i><input type="text" id="vsShmQ" value="'+_vrE(B.q)+'" placeholder="Tìm Job, MBL, tên hàng, số DN, NCC, số HĐ…" oninput="_vsShmQuery(this)"/></div>'
+    +'<label style="font-size:12px;color:var(--text-secondary);display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap;flex:0 0 auto"><input type="checkbox" style="width:auto;flex:0 0 auto;margin:0" id="vsShmAll"'+(B.showAll?' checked':'')+' onchange="_vsShmAll(this.checked)"/> Hiện cả lô chưa có VAT</label>'
+    +'<div style="flex:1"></div>'
+    +'<button class="btn" onclick="_vsShmExport()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel VAT theo Shipment</button>'
+    +'</div>';
+  const kp=function(l,v,c){return '<div class="vs-kpi"><span>'+l+'</span><b'+(c?' style="color:'+c+'"':'')+'>'+v+'</b></div>';};
+  const nNcc=_vsUniq([].concat.apply([],B.rows.map(function(R){return R.nccs.map(function(n){return n.name;});}))).length;
+  const kpis='<div class="vs-kpis">'
+    +kp('Số lô (shipment)',String(T.lots))
+    +kp('VAT đầu ra',_vrN(T.oVat),'var(--blue)')
+    +kp('VAT đầu vào',_vrN(T.iVat),'#0F9D8A')
+    +kp('Chênh lệch (ra − vào)',_vrN(T.diff),_vsDiffColor(T.diff))
+    +kp('Doanh thu chưa VAT',_vrN(T.oBase))
+    +kp('Chi phí chưa VAT',_vrN(T.iBase))
+    +kp('Số NCC liên quan',String(nNcc))
+    +'</div>';
+  const NC=16;
+  const thead='<tr>'+_vrTH('Job / Booking')+_vrTH('MBL')+_etdTh('vat_shm',renderTcBody,{def:'asc'})+_vrTH('Shipper')+_vrTH('Cont / Vol')
+    +_vrTH('Debit No')+_vrTH('Số HĐ VAT')+_vrTH('DT chưa VAT','right')+_vrTH('VAT đầu ra','right')
+    +_vrTH('Nhà cung cấp (VAT từng NCC)')+_vrTH('Số HĐ NCC / Remark')+_vrTH('CP chưa VAT','right')+_vrTH('VAT đầu vào','right')
+    +_vrTH('Chênh lệch','right')+_vrTH('TT thu')+_vrTH('TT trả NCC')+'</tr>';
+  const nccCell=function(L){
+    if(!L.nccs.length)return '<span style="color:var(--text-tertiary)">—</span>';
+    return L.nccs.map(function(n){
+      return '<div class="shm-ncc" title="'+_vrE(n.name+' · chưa VAT '+_vrN(n.base)+' · VAT '+_vrN(n.vat)+(n.remark?' · '+n.remark:''))+'">'
+        +'<span class="shm-dot '+n.st+'"></span><span class="n">'+_vrE(n.name)+'</span><b>'+_vrN(n.vat)+'</b></div>';
+    }).join('');
+  };
+  const rowHtml=function(L){
+    return '<tr class="vr-click" onclick="_vrOpenLot(\''+L.lotId+'\',\''+L.tt+'\')" title="Mở lô hàng">'
+      +'<td><b>'+_vrE(L.job||'—')+'</b></td><td>'+_vrE(L.hbl||'—')+'</td><td>'+_vrE(L.etd)+'</td><td>'+_vrE(L.shipper)+'</td><td>'+_vrE(L.cont||'—')+'</td>'
+      +'<td>'+_vrE(L.dn||'—')+'</td><td>'+_vrE(L.outInv||'—')+'</td>'
+      +'<td class="r">'+_vrN(L.oBase)+'</td><td class="r vat">'+_vrN(L.oVat)+'</td>'
+      +'<td class="shm-nccs">'+nccCell(L)+'</td><td style="max-width:170px;white-space:normal">'+_vrE(L.inInv||'—')+'</td>'
+      +'<td class="r">'+_vrN(L.iBase)+'</td><td class="r vin">'+_vrN(L.iVat)+'</td>'
+      +'<td class="r" style="font-weight:800;color:'+_vsDiffColor(L.diff)+'">'+_vrN(L.diff)+'</td>'
+      +'<td>'+_vsStChip(L.oSt,L.oStTxt)+'</td><td>'+_vsStChip(L.iSt,L.iStTxt)+'</td></tr>';
+  };
+  let body=''; B.rows.forEach(function(L){body+=rowHtml(L);});
+  const filt=(B.ship?('shipper '+B.ship):'tất cả shipper')+(B.q?(' · tìm “'+B.q+'”'):'');
+  const tfoot=B.rows.length?'<tfoot><tr><td colspan="7">TỔNG CỘNG — '+_vrE(filt)+' ('+T.lots+' lô)</td><td class="r">'+_vrN(T.oBase)+'</td><td class="r vat">'+_vrN(T.oVat)+'</td><td></td><td></td>'
+    +'<td class="r">'+_vrN(T.iBase)+'</td><td class="r vin">'+_vrN(T.iVat)+'</td><td class="r" style="font-weight:800;color:'+_vsDiffColor(T.diff)+'">'+_vrN(T.diff)+'</td><td></td><td></td></tr></tfoot>':'';
+  const note='Mỗi dòng = 1 lô (shipment). Chênh lệch = VAT đầu ra − VAT đầu vào của lô: <b style="color:#DC2626">dương</b> = VAT phải nộp, <b style="color:#16A34A">âm</b> = được khấu trừ (ước tính). '
+    +'Cột NCC liệt kê từng nhà cung cấp của chi phí đầu vào có VAT kèm số VAT; chấm <span class="shm-dot paid"></span> đã trả · <span class="shm-dot part"></span> trả một phần · <span class="shm-dot unpaid"></span> chưa trả. '
+    +'Số HĐ NCC lấy từ Remark của dịch vụ/chi phí. Khoản Sổ quỹ nhập tay không gắn lô không nằm trong báo cáo này.';
+  return '<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-packages"></i>VAT theo Shipment — đầu ra, đầu vào, chênh lệch và NCC của từng lô</span><span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">'+_vrE(fd(rg.from))+' → '+_vrE(fd(rg.to))+' · '+T.lots+' lô · theo ETD</span></div>'
+    +timeBar+toolbar+kpis
+    +'<div class="vr-scroll" style="max-height:600px"><table class="vr-tbl"><thead>'+thead+'</thead><tbody>'+(body||'<tr><td colspan="'+NC+'" class="empty">Không có lô phù hợp trong kỳ / bộ lọc</td></tr>')+'</tbody>'+tfoot+'</table></div>'
+    +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">'+note+'</div></div>';
+}
+
+async function _vsShmExport(){
+  const ExcelJS=window.ExcelJS;
+  if(!ExcelJS){toast('Đang tải thư viện Excel, thử lại sau','error');return;}
+  const rg=_tcPeriodRange(), from=rg.from, to=rg.to;
+  const B=_vsShmFiltered(_vrCompute(from,to),'asc'); // Excel luôn ETD sớm → trễ
+  if(!B.rows.length){toast('Không có dữ liệu để xuất','error');return;}
+  const T=B.tot;
+  const C={primary:'FF0F766E',secondary:'FF0F4C81',warning:'FFF59E0B',border:'FFD8DEDC',textDark:'FF1A2E2A',textGray:'FF667085'};
+  const today=fd(new Date().toISOString().slice(0,10));
+  const dateRange=fd(from)+'  –  '+fd(to);
+  const fill=function(c){return {type:'pattern',pattern:'solid',fgColor:{argb:c}};};
+  const thinB=function(color){const x={style:'thin',color:{argb:color||C.border}};return {top:x,left:x,bottom:x,right:x};};
+  const dColor=function(v){return v>0?'FFDC2626':(v<0?'FF16A34A':C.textDark);};
+  setLoading(true,'Đang tạo Excel...');
+  try{
+    let logoB64=null;
+    try{
+      const lr=await fetch(new URL('icons/icon-navy-192.png',location.href).href);
+      if(lr&&lr.ok){const u8=new Uint8Array(await lr.arrayBuffer());let bin='';for(let i=0;i<u8.length;i++)bin+=String.fromCharCode(u8[i]);logoB64=btoa(bin);}
+    }catch(e){}
+    const wb=new ExcelJS.Workbook(); wb.creator='CocoFlow ERP'; wb.created=new Date();
+    let logoId=null; if(logoB64){try{logoId=wb.addImage({base64:logoB64,extension:'png'});}catch(e){logoId=null;}}
+    const ws=wb.addWorksheet('VAT theo Shipment',{
+      pageSetup:{orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:0.3,right:0.3,top:0.4,bottom:0.4,header:0.2,footer:0.2}},
+      views:[{showGridLines:false}]});
+    ws.columns=[{width:6},{width:19},{width:17},{width:20},{width:12},{width:12},{width:17},{width:18},{width:16},{width:15},{width:14},{width:34},{width:20},{width:15},{width:14},{width:16},{width:14},{width:14}];
+    const LC=18;
+    const sp=(B.ship&&cache.partners[B.ship])||{};
+    if(logoId!==null){try{ws.addImage(logoId,{tl:{col:0.15,row:0.15},ext:{width:38,height:38}});}catch(e){}}
+    ws.getRow(1).height=24; ws.getRow(2).height=17; ws.getRow(3).height=16;
+    ws.mergeCells(1,2,1,4);
+    {const c=ws.getCell(1,2);c.value='COCOSEA CO., LTD';c.font={bold:true,size:15,color:{argb:C.secondary}};c.alignment={horizontal:'left',vertical:'middle'};}
+    ws.mergeCells(2,2,2,4);
+    {const c=ws.getCell(2,2);c.value='Keep Going – Keep Growing';c.font={bold:true,italic:true,size:9,color:{argb:C.primary}};c.alignment={horizontal:'left',vertical:'top'};}
+    ws.mergeCells(1,5,1,11);
+    {const c=ws.getCell(1,5);c.value='BÁO CÁO VAT THEO SHIPMENT';c.font={bold:true,size:18,color:{argb:C.secondary}};c.alignment={horizontal:'center',vertical:'middle'};}
+    ws.mergeCells(2,5,2,11);
+    {const c=ws.getCell(2,5);c.value=dateRange+'   (theo ETD)';c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};c.alignment={horizontal:'center',vertical:'middle'};c.fill=fill('FF103A6F');}
+    ws.mergeCells(1,12,3,LC);
+    {const c=ws.getCell(1,12);
+      c.value=B.ship?{richText:[
+        {font:{bold:true,size:10,color:{argb:C.secondary}},text:(sp.fullname||B.ship)+'\n'},
+        {font:{bold:true,size:8.5,color:{argb:C.textDark}},text:'MST:  '},{font:{size:8.5,color:{argb:C.textGray}},text:(sp.mst||'—')+'\n'},
+        {font:{bold:true,size:8.5,color:{argb:C.textDark}},text:'Địa chỉ:  '},{font:{size:8.5,color:{argb:C.textGray}},text:(sp.addr||'—')}
+      ]}:{richText:[
+        {font:{bold:true,size:10,color:{argb:C.secondary}},text:'TẤT CẢ SHIPPER\n'},
+        {font:{size:8.5,color:{argb:C.textGray}},text:B.shippers.length+' shipper · '+T.lots+' lô'+(B.q?('\nBộ lọc tìm: '+B.q):'')}
+      ]};
+      c.alignment={horizontal:'left',vertical:'top',wrapText:true};}
+    ws.getRow(4).height=8;
+    ws.getRow(5).height=14; ws.getRow(6).height=24;
+    [{label:'SỐ LÔ HÀNG',val:T.lots,fmt:'0',color:C.secondary,c1:1,c2:3},
+     {label:'VAT ĐẦU RA (VND)',val:T.oVat,fmt:'#,##0" VND"',color:C.secondary,c1:4,c2:8},
+     {label:'VAT ĐẦU VÀO (VND)',val:T.iVat,fmt:'#,##0" VND"',color:'FF0F9D8A',c1:9,c2:12},
+     {label:'CHÊNH LỆCH RA − VÀO ('+(T.diff>0?'PHẢI NỘP':(T.diff<0?'ĐƯỢC KHẤU TRỪ':'CÂN BẰNG'))+')',val:T.diff,fmt:'#,##0" VND"',color:dColor(T.diff),c1:13,c2:15},
+     {label:'NGÀY LẬP BÁO CÁO',val:today,isText:true,color:C.textDark,c1:16,c2:18}
+    ].forEach(function(cd){
+      ws.mergeCells(5,cd.c1,5,cd.c2);
+      const lc=ws.getCell(5,cd.c1); lc.value=cd.label; lc.font={bold:true,size:8.5,color:{argb:C.textGray}}; lc.alignment={horizontal:'center',vertical:'bottom'};
+      ws.mergeCells(6,cd.c1,6,cd.c2);
+      const nc=ws.getCell(6,cd.c1); nc.value=cd.val; if(!cd.isText)nc.numFmt=cd.fmt;
+      nc.font={bold:true,size:12,color:{argb:cd.color}}; nc.alignment={horizontal:'center',vertical:'top'};
+      for(let rr=5;rr<=6;rr++)for(let cc=cd.c1;cc<=cd.c2;cc++){ws.getCell(rr,cc).border=thinB();ws.getCell(rr,cc).fill=fill('FFFFFFFF');}
+    });
+    ws.getRow(7).height=8;
+    const HEAD=8;
+    ws.getRow(HEAD).height=17; ws.getRow(HEAD+1).height=15;
+    const headCell=function(r,c,t){const x=ws.getCell(r,c);x.value=t;x.font={bold:true,size:9,color:{argb:'FFFFFFFF'}};x.fill=fill(C.secondary);x.alignment={horizontal:'center',vertical:'middle',wrapText:true};x.border=thinB(C.secondary);};
+    [[1,'STT'],[2,'JOB / BOOKING'],[3,'MBL'],[4,'TÊN HÀNG'],[5,'CONT/VOL'],[6,'ETD'],[7,'SHIPPER'],[8,'DEBIT NO'],[9,'SỐ HĐ VAT'],[12,'NHÀ CUNG CẤP (VAT TỪNG NCC)'],[13,'SỐ HĐ NCC / REMARK'],[16,'CHÊNH LỆCH VAT (RA − VÀO)'],[17,'TT THU'],[18,'TT TRẢ NCC']].forEach(function(p){
+      ws.mergeCells(HEAD,p[0],HEAD+1,p[0]); headCell(HEAD,p[0],p[1]); headCell(HEAD+1,p[0],null); ws.getCell(HEAD,p[0]).value=p[1];
+    });
+    [[10,'VAT ĐẦU RA'],[14,'VAT ĐẦU VÀO']].forEach(function(g2){
+      ws.mergeCells(HEAD,g2[0],HEAD,g2[0]+1); headCell(HEAD,g2[0],g2[1]); headCell(HEAD,g2[0]+1,null); ws.getCell(HEAD,g2[0]).value=g2[1];
+      headCell(HEAD+1,g2[0],'TRƯỚC VAT'); headCell(HEAD+1,g2[0]+1,'VAT (VND)');
+    });
+    ws.views=[{state:'frozen',ySplit:HEAD+1,showGridLines:false}];
+    ws.autoFilter={from:{row:HEAD+1,column:1},to:{row:HEAD+1,column:LC}};
+    ws.pageSetup.printTitlesRow=HEAD+':'+(HEAD+1);
+    const stStyle=function(c,st){
+      c.font={bold:true,size:9,color:{argb:st==='paid'?'FF16A34A':(st==='part'?'FFB45309':(st?'FFDC2626':C.textGray))}};
+      if(st)c.fill=fill(st==='paid'?'FFF0FDF4':(st==='part'?'FFFFFBEB':'FFFEF2F2'));
+    };
+    let rIdx=HEAD+2, stt=0;
+    B.rows.forEach(function(L){
+      stt++;
+      const bg=stt%2===1?'FFFFFFFF':'FFF7F8FA';
+      const rr=ws.getRow(rIdx);
+      const nccTxt=L.nccs.map(function(n){return n.name+' — '+Math.round(n.vat).toLocaleString();}).join('\n');
+      rr.height=Math.max(18,13*Math.max(1,L.nccs.length)+5);
+      const vals=[stt,L.job,L.hbl,L.tenHang,L.cont,fd(L.etd),L.shipper,L.dn,L.outInv,L.oBase,L.oVat,nccTxt,L.inInv,L.iBase,L.iVat,L.diff,L.oStTxt,L.iStTxt];
+      vals.forEach(function(v,j){
+        const c=rr.getCell(j+1); c.value=v; c.font={size:9.5,color:{argb:C.textDark}}; c.border=thinB(); c.fill=fill(bg);
+        c.alignment={vertical:'middle',horizontal:(j===0)?'center':(j===9||j===10||j===13||j===14||j===15)?'right':(j===4||j===5||j===16||j===17)?'center':'left',wrapText:(j===3||j===8||j===11||j===12)};
+        if(j===9||j===10||j===13||j===14||j===15)c.numFmt='#,##0';
+      });
+      rr.getCell(2).font={bold:true,size:9.5,color:{argb:C.secondary}};
+      rr.getCell(11).font={size:9.5,color:{argb:C.warning}};
+      rr.getCell(15).font={size:9.5,color:{argb:C.warning}};
+      rr.getCell(16).font={bold:true,size:10,color:{argb:dColor(L.diff)}};
+      stStyle(rr.getCell(17),L.oSt); stStyle(rr.getCell(18),L.iSt);
+      rIdx++;
+    });
+    ws.getRow(rIdx).height=22;
+    ws.mergeCells(rIdx,1,rIdx,9);
+    {const lc=ws.getCell(rIdx,1); lc.value='GRAND TOTAL — '+(B.ship||'TẤT CẢ SHIPPER')+' ('+T.lots+' lô)'; lc.alignment={horizontal:'left',vertical:'middle',indent:1}; lc.font={bold:true,size:11,color:{argb:'FFFFFFFF'}}; lc.fill=fill(C.primary);}
+    [[10,T.oBase],[11,T.oVat],[14,T.iBase],[15,T.iVat],[16,T.diff]].forEach(function(nv){
+      const c=ws.getCell(rIdx,nv[0]); c.value=nv[1]; c.numFmt='#,##0'; c.font={bold:true,size:11,color:{argb:'FFFFFFFF'}}; c.alignment={horizontal:'right',vertical:'middle'}; c.fill=fill(C.primary); c.border=thinB();
+    });
+    [12,13,17,18].forEach(function(cc){const tl=ws.getCell(rIdx,cc);tl.fill=fill(C.primary);tl.border=thinB();});
+    rIdx+=2;
+    ws.mergeCells(rIdx,1,rIdx,LC);
+    {const rc=ws.getCell(rIdx,1);
+     rc.value='Chênh lệch = VAT đầu ra − VAT đầu vào của lô (dương = phải nộp, âm = được khấu trừ — ước tính). Báo cáo tạo tự động từ CocoFlow ERP, cần đối chiếu hóa đơn / tờ khai thuế.   Ngày xuất: '+today;
+     rc.font={italic:true,size:8.5,color:{argb:C.textGray}}; rc.alignment={horizontal:'left',vertical:'middle',indent:1};}
+
+    // Sheet 2: chi tiết từng NCC × lô
+    const w2=wb.addWorksheet('Chi tiết NCC',{views:[{state:'frozen',ySplit:1,showGridLines:false}]});
+    w2.columns=[{width:6},{width:19},{width:12},{width:20},{width:34},{width:30},{width:16},{width:14},{width:16}];
+    ['STT','JOB / BOOKING','ETD','SHIPPER','NHÀ CUNG CẤP','SỐ HĐ NCC / REMARK','CP CHƯA VAT','VAT (VND)','TT TRẢ NCC'].forEach(function(t,i){
+      const x=w2.getCell(1,i+1);x.value=t;x.font={bold:true,size:9,color:{argb:'FFFFFFFF'}};x.fill=fill(C.secondary);x.alignment={horizontal:'center',vertical:'middle',wrapText:true};x.border=thinB(C.secondary);
+    });
+    w2.getRow(1).height=22;
+    let r2=2, s2=0, tb=0, tv=0;
+    B.rows.forEach(function(L){ L.nccs.forEach(function(n){
+      s2++; tb+=n.base; tv+=n.vat;
+      const vals=[s2,L.job,fd(L.etd),L.shipper,n.name,n.remark,n.base,n.vat,n.st==='paid'?'Đã trả':(n.st==='part'?'Một phần ('+n.nPaid+'/'+n.n+')':'Chưa trả')];
+      vals.forEach(function(v,j){const c=w2.getCell(r2,j+1);c.value=v;c.font={size:9.5,color:{argb:C.textDark}};c.border=thinB();c.alignment={vertical:'middle',horizontal:j===0?'center':(j===6||j===7)?'right':'left',wrapText:(j===4||j===5)};if(j===6||j===7)c.numFmt='#,##0';});
+      stStyle(w2.getCell(r2,9),n.st);
+      r2++;
+    });});
+    w2.mergeCells(r2,1,r2,6);
+    {const lc=w2.getCell(r2,1);lc.value='TỔNG ('+s2+' dòng NCC)';lc.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};lc.fill=fill(C.primary);lc.alignment={horizontal:'left',vertical:'middle',indent:1};}
+    [[7,tb],[8,tv]].forEach(function(nv){const c=w2.getCell(r2,nv[0]);c.value=nv[1];c.numFmt='#,##0';c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};c.fill=fill(C.primary);c.alignment={horizontal:'right'};c.border=thinB();});
+    w2.getCell(r2,9).fill=fill(C.primary);
+
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    const shTag=(B.ship?B.ship.replace(/[^A-Za-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,24):'TatCaShipper');
+    a.href=url; a.download='VAT_TheoShipment_'+shTag+'_'+from+'_'+to+'.xlsx';
+    a.click(); URL.revokeObjectURL(url);
+    toast('Đã xuất Excel VAT theo shipment ('+T.lots+' lô)');
   }catch(e){toast('Lỗi: '+e.message,'error');console.error(e);}
   setLoading(false);
 }
@@ -27764,6 +28033,12 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .vs-miss.bad{border-color:#DC262666;color:#DC2626;background:rgba(220,38,38,.06)}
 .vr-tbl tr.vs-bad td{background:rgba(220,38,38,.07)}
 .vs-time{padding:8px 10px;border:1px solid var(--border-light);border-radius:10px;background:var(--bg-secondary)}
+.shm-nccs{min-width:200px;max-width:290px}
+.shm-ncc{display:flex;align-items:center;gap:6px;font-size:11.5px;line-height:1.55}
+.shm-ncc .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shm-ncc b{font-variant-numeric:tabular-nums;color:#0F9D8A}
+.shm-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:#DC2626}
+.shm-dot.paid{background:#16A34A}.shm-dot.part{background:#D97706}.shm-dot.unpaid{background:#DC2626}
 .vs-chip{padding:5px 12px;border:1px solid var(--border-light);border-radius:20px;background:var(--bg-primary);color:var(--text-secondary);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
 .vs-chip:hover{background:var(--bg-tertiary,var(--bg-secondary))}
 .vs-chip.on{background:var(--blue);border-color:var(--blue);color:#fff}
