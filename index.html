@@ -817,6 +817,36 @@ function _rfReport(lots){
   });
   return Object.keys(map).map(function(k){return map[k];}).sort(function(a,b){return (b.com+b.kb)-(a.com+a.kb);});
 }
+// A 2.91: chọn khoản COM/KB theo người nhận → Cập nhật TT hàng loạt (dùng lại popup Trả NCC hàng loạt)
+window._rfSel=window._rfSel||{};
+function _rfCanPay(){const r=currentProfile&&currentProfile.role;return r==='admin'||r==='accountant';}
+function _rfSelKey(it){return it.r._id+'|'+it.x.kind+'|'+it.x.idx;}
+function _rfSelInfo(n){
+  let c=0,s=0;
+  document.querySelectorAll('.rf-chk').forEach(function(el){ if(el.dataset.n===n&&el.checked){c++;s+=parseFloat(el.dataset.amt)||0;} });
+  document.querySelectorAll('.rf-selinfo').forEach(function(el){ if(el.dataset.n===n)el.innerHTML=c?('Đã chọn <b>'+c+'</b> khoản · <b>'+_rfN(s)+'</b> VND'):'Chưa chọn khoản nào — bấm “Cập nhật TT hàng loạt” để xử lý toàn bộ khoản chưa thanh toán'; });
+}
+function _rfTick(el){const n=el.dataset.n,k=el.dataset.key;const m=window._rfSel[n]||(window._rfSel[n]={}); if(el.checked)m[k]=1; else delete m[k]; _rfSelInfo(n);}
+function _rfTickAll(el){
+  const n=el.dataset.n; const m=window._rfSel[n]||(window._rfSel[n]={});
+  document.querySelectorAll('.rf-chk').forEach(function(c){ if(c.dataset.n!==n)return; c.checked=el.checked; if(el.checked)m[c.dataset.key]=1; else delete m[c.dataset.key]; });
+  _rfSelInfo(n);
+}
+function _rfBulkPay(n){
+  if(!_rfCanPay()){toast('Chỉ Admin / Kế toán được cập nhật thanh toán','error');return;}
+  const D=_rfCompute(); const G=_rfReport(D.lots).find(function(x){return x.name===n;});
+  if(!G){toast('Không tìm thấy người nhận trong bộ lọc hiện tại','error');return;}
+  const sel=window._rfSel[n]||{};
+  const picked=G.items.filter(function(it){return sel[_rfSelKey(it)];});
+  const items=(picked.length?picked:G.items.filter(function(it){return !it.x.paid;})).slice().sort(function(a,b){return String(a.r.etd||'').localeCompare(String(b.r.etd||''));});
+  if(!items.length){toast('Không có khoản COM/KB chưa thanh toán nào trong bộ lọc','error');return;}
+  const rows=items.map(function(it){
+    return {id:it.r._id,tt:'xuat',booking:it.r.bookingNo||it.r.jobNo||'',jobNo:it.r.jobNo||'',mbl:it.r.mblNo||'',vol:it.r.vol||'',typeCont:it.r.typeCont||'',pod:it.r.pod||'',
+      svcKey:'comkb:'+it.x.kind+':'+it.x.idx,amt:Math.round(it.x.vnd),cur:'VND',name:(it.x.kind==='com'?'Hoa hồng COM':'Hoa hồng KB')};
+  });
+  _cnOpenBulkPopup({mode:'ap',label:n,rows:rows,source:'refund'});
+}
+
 function _rfReportHtml(lots){
   const S=window._rfState, G=_rfReport(lots);
   if(!G.length)return '<div class="rf-empty">Chưa có dòng COM/KB nào khớp bộ lọc</div>';
@@ -824,8 +854,11 @@ function _rfReportHtml(lots){
   const rowsHtml=G.map(function(g0){
     Object.keys(g0.lots).forEach(function(id){T.lots[id]=1;}); T.com+=g0.com;T.kb+=g0.kb;T.paid+=g0.paid;T.unpaid+=g0.unpaid;
     const open=!!S.open[g0.name];
+    const _canPay=_rfCanPay()&&g0.unpaid>0;
     let html='<tr class="rf-grp" data-k="'+_rfE(g0.name)+'" onclick="_rfToggleOpen(this)">'
-      +'<td><i class="ti '+(open?'ti-chevron-down':'ti-chevron-right')+'"></i> <b>'+_rfE(g0.name)+'</b><div class="rf-sub">'+_rfE(Object.keys(g0.partners).join(', '))+'</div></td>'
+      +'<td><i class="ti '+(open?'ti-chevron-down':'ti-chevron-right')+'"></i> <b>'+_rfE(g0.name)+'</b>'
+      +(_canPay?' <button class="btn sm" data-n="'+_rfE(g0.name)+'" onclick="event.stopPropagation();_rfBulkPay(this.dataset.n)" style="margin-left:8px;color:var(--green);border-color:var(--green);padding:2px 9px;font-size:11px" title="Cập nhật thanh toán hàng loạt các khoản chưa thanh toán (hoặc các khoản đã tick)"><i class="ti ti-credit-card-pay"></i> Cập nhật TT</button>':'')
+      +'<div class="rf-sub">'+_rfE(Object.keys(g0.partners).join(', '))+'</div></td>'
       +'<td style="text-align:right">'+Object.keys(g0.lots).length+'</td>'
       +'<td style="text-align:right">'+_rfN(g0.com)+'</td>'
       +'<td style="text-align:right">'+_rfN(g0.kb)+'</td>'
@@ -835,9 +868,14 @@ function _rfReportHtml(lots){
     +'</tr>';
     if(open){
       const its=_etdSortArr(g0.items.slice(),'rf_rep',function(it){return it.r.etd;},'desc');
-      html+='<tr class="rf-det"><td colspan="7"><table class="rf-sub-tbl"><thead><tr><th>Job ID</th>'+_etdTh('rf_rep',renderTcBody,{def:'desc'})+'<th>Carrier</th><th>Shipper</th><th>Loại</th><th style="text-align:right">Thành tiền</th><th style="text-align:right">Thực chi (VND)</th><th>Thanh toán</th></tr></thead><tbody>'
+      const _selN=window._rfSel[g0.name]||{}; let _sc=0,_ss=0; its.forEach(function(it){ if(_selN[_rfSelKey(it)]){_sc++;_ss+=it.x.vnd;} });
+      const _pay=_rfCanPay();
+      html+='<tr class="rf-det"><td colspan="7">'
+        +(_pay?'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px 2px"><span class="rf-selinfo rf-sub" data-n="'+_rfE(g0.name)+'" style="font-size:11.5px;margin:0">'+(_sc?('Đã chọn <b>'+_sc+'</b> khoản · <b>'+_rfN(_ss)+'</b> VND'):'Chưa chọn khoản nào — bấm “Cập nhật TT hàng loạt” để xử lý toàn bộ khoản chưa thanh toán')+'</span>'
+          +'<button class="btn sm" data-n="'+_rfE(g0.name)+'" onclick="_rfBulkPay(this.dataset.n)" style="margin-left:auto;color:var(--green);border-color:var(--green)"><i class="ti ti-credit-card-pay"></i> Cập nhật TT hàng loạt</button></div>':'')
+        +'<table class="rf-sub-tbl"><thead><tr>'+(_pay?'<th style="width:30px"><input type="checkbox" data-n="'+_rfE(g0.name)+'" onchange="_rfTickAll(this)" title="Chọn / bỏ chọn tất cả"/></th>':'')+'<th>Job ID</th>'+_etdTh('rf_rep',renderTcBody,{def:'desc'})+'<th>Carrier</th><th>Shipper</th><th>Loại</th><th style="text-align:right">Thành tiền</th><th style="text-align:right">Thực chi (VND)</th><th>Thanh toán</th></tr></thead><tbody>'
         +its.map(function(it){const x=it.x;
-          return '<tr><td><a class="rf-job" onclick="event.stopPropagation();openDetail(\''+it.r._id+'\',\'xuat\',\'price\')">'+_rfE(it.r.jobNo||it.r.bookingNo||'')+'</a></td>'
+          return '<tr>'+(_pay?'<td onclick="event.stopPropagation()"><input type="checkbox" class="rf-chk" data-n="'+_rfE(g0.name)+'" data-key="'+_rfE(_rfSelKey(it))+'" data-amt="'+Math.round(x.vnd)+'"'+(_selN[_rfSelKey(it)]?' checked':'')+' onchange="_rfTick(this)"/></td>':'')+'<td><a class="rf-job" onclick="event.stopPropagation();openDetail(\''+it.r._id+'\',\'xuat\',\'price\')">'+_rfE(it.r.jobNo||it.r.bookingNo||'')+'</a></td>'
             +'<td>'+_rfE(_rfDate(it.r.etd))+'</td><td>'+_rfE(it.r.carrier||'')+'</td><td>'+_rfE(it.r.shipper||it.r.supplier||'')+'</td>'
             +'<td><span class="rf-chip '+(x.kind==='com'?'blue':'purple')+'">'+x.kind.toUpperCase()+'</span></td>'
             +'<td style="text-align:right">'+_rfN(x.tt)+' '+_rfE(x.cur)+'</td>'
@@ -851,7 +889,7 @@ function _rfReportHtml(lots){
   return '<div class="rf-wrap"><table class="rf-tbl"><thead><tr><th>Người nhận</th><th style="text-align:right">Số lô</th><th style="text-align:right">COM (VND)</th><th style="text-align:right">KB (VND)</th><th style="text-align:right">Tổng thực chi (VND)</th><th style="text-align:right">Đã thanh toán</th><th style="text-align:right">Chưa thanh toán</th></tr></thead><tbody>'+rowsHtml+foot+'</tbody></table></div>'
     +'<div class="rf-note">Bấm vào từng người nhận để xem chi tiết các lô. Báo cáo theo đúng bộ lọc ở trên (ETD, Carrier, Shipper, Loại, Thanh toán…).</div>';
 }
-Object.assign(window,{renderTcRefund,_rfSet,_rfReset,_rfToggleOpen,_rfSaveCutoff,_rfLoadSettings,_rfApplies,_rfStatus,_rfFilled});
+Object.assign(window,{_rfBulkPay,_rfTick,_rfTickAll,_rfCanPay,renderTcRefund,_rfSet,_rfReset,_rfToggleOpen,_rfSaveCutoff,_rfLoadSettings,_rfApplies,_rfStatus,_rfFilled});
 
 // Persist the current SVCS catalog to Firestore
 async function saveServices(){
@@ -1585,7 +1623,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.89';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.91';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -2835,6 +2873,15 @@ function startListeners(){
       if(typeof _fxOnData==='function')_fxOnData();
     },function(){ cache.fxRates=cache.fxRates||[]; });
     listeners.push(uFx);
+    // A 2.91: Payment Request (lệnh thanh toán) — chỉ người có quyền Finance
+    try{
+      if(can('manageFinance')){
+        listeners.push(db.collection('paymentRequests').onSnapshot(snap=>{
+          cache.paymentRequests=snap.docs.map(d=>({_id:d.id,...d.data()}));
+          if(typeof _pqOnData==='function')_pqOnData();
+        },function(){ cache.paymentRequests=cache.paymentRequests||[]; }));
+      }
+    }catch(_pqE0){ console.warn('paymentRequests listener',_pqE0); }
 
     // Quản lý thu chi: giao dịch sổ quỹ (realtime)
     const uCashTx = db.collection('cashTransactions').onSnapshot(snap => {
@@ -8380,6 +8427,9 @@ async function saveDetailSvc(){
     const reqPaymentEl=gS('sreqpay_'+s.key);
     const reqPayment=reqPaymentEl?reqPaymentEl.checked:(prev.reqPayment||false);
     const ocfConfirmed=prev.ocfConfirmed||false;
+    // A 2.91: ghi thời điểm + người bấm Req.Pay (tab Payment Request sắp xếp theo thứ tự tạo)
+    const reqPaymentAt=reqPayment?((!prev.reqPayment||!prev.reqPaymentAt)?Date.now():prev.reqPaymentAt):(prev.reqPaymentAt||0);
+    const reqPaymentBy=reqPayment?((!prev.reqPayment||!prev.reqPaymentBy)?((currentUser&&currentUser.email)||''):prev.reqPaymentBy):(prev.reqPaymentBy||'');
     // Nếu doc/cus tick lại Request Payment (resubmit) sau khi bị yêu cầu Need Revise → tự xóa cờ revise
     const ocfRevise=(reqPayment&&!prev.reqPayment)?false:(prev.ocfRevise||false);
     const ocfReviseNote=ocfRevise?(prev.ocfReviseNote||''):'';
@@ -8396,7 +8446,7 @@ async function saveDetailSvc(){
         customNameVal=detailTxt?(s.name+' '+detailTxt):'';
       }
     }
-    svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,svcVatAmt,apPaidStatus,apPaidDate,apPaidBank,apRemark,finish,reqPayment,ocfConfirmed,ocfRevise,ocfReviseNote,
+    svcs[s.key]={on,desc,cost,svcQty,svcUnit,svcCur,svcSupplier,svcVatAmt,apPaidStatus,apPaidDate,apPaidBank,apRemark,finish,reqPayment,reqPaymentAt,reqPaymentBy,ocfConfirmed,ocfRevise,ocfReviseNote,
       price:prev.price||0,cur:prev.cur||'USD',qty:prev.qty||'',unit:prev.unit||'Cont',
       vat:prev.vat||'0%',invoice:prev.invoice||'Yes',amount:prev.amount||0,
       party:prev.party||'',                    // giữ lại party từ tab Fill giá
@@ -13830,9 +13880,10 @@ function renderThuChi(){
     {k:'vat',label:'VAT Report',icon:'ti-receipt-tax'},
     {k:'quyettoan',label:'Quyết toán',icon:'ti-clipboard-check'},
     {k:'costing',label:'Costing Report',icon:'ti-calculator'},
+    {k:'payreq',label:'Payment Request',icon:'ti-file-invoice'},
   ];
   // A 2.85: Simple mode — Finance chỉ còn tab VAT Report
-  const _grp=window._simpleMode?[['vat']]:[['soquy','congno','refund'],['luong','danhmuc'],['baocao','vat','quyettoan','costing']];
+  const _grp=window._simpleMode?[['vat']]:[['soquy','congno','refund'],['luong','danhmuc'],['baocao','vat','quyettoan','costing','payreq']];
   if(window._simpleMode&&tcTab!=='vat')tcTab='vat';
   const _tab=function(t){const on=tcTab===t.k;return '<button type="button" class="fn-tab'+(on?' on':'')+'" onclick="switchTcTab(\''+t.k+'\')"'+(on?' aria-current="page"':'')+'><span class="fn-ic"><i class="ti '+t.icon+'"></i></span><span class="fn-lb">'+t.label+'</span>'+(t.k==='luong'&&window._lvNbHTML?_lvNbHTML():'')+'</button>';};
   const _bar=_grp.map(function(g2){return g2.map(function(k){return _tab(tabs.find(function(t){return t.k===k;}));}).join('');}).join('<span class="fn-sep"></span>');
@@ -15783,6 +15834,7 @@ function renderTcBody(){
     else if(tcTab==='vat') body.innerHTML=renderTcVat();
     else if(tcTab==='quyettoan') renderQuyetToan();
     else if(tcTab==='luong'){ body.innerHTML=renderTcPayroll(); _tcPayrollAfterRender(); }
+    else if(tcTab==='payreq') body.innerHTML=renderTcPayReq();
     else if(tcTab==='costing') renderCostingReport('tcBody');
   }catch(e){
     console.error('[renderTcBody]',e);
@@ -18283,7 +18335,7 @@ function _renderSupplierDetailTable(rows,paidStr,totStr){
         const _apRowData=JSON.stringify({
           id:l.lotId,tt:l.tt,booking:l.bookingNo||l.jobNo||'',
           mbl:l.mbl||'',vol:l.vol||'',typeCont:l.typeCont||'',pod:l.pod||'',
-          svcKey:l.svcKey,amt:l.amt,cur:l.cur
+          svcKey:l.svcKey,amt:l.amt,cur:l.cur,name:l.name||''
         }).replace(/"/g,'&quot;');
         return '<tr>'
           +'<td style="padding:6px 9px;text-align:center"><input type="checkbox" class="cn-ap-chk" data-partner="'+tcSupPartner.replace(/"/g,'&quot;')+'" data-row="'+_apRowData+'" data-amt="'+l.amt+'" data-cur="'+l.cur+'" data-paid="'+(l.paidStatus==='paid'?'1':'0')+'" onchange="_cnBulkChkChange(this);_apRecalcSelected()" style="cursor:pointer"/></td>'
@@ -19600,7 +19652,7 @@ function _tcPeriodRange(){
 }
 function _tcPeriodLabel(){
   const p=window._tcRptPeriod;
-  if(p.mode==='custom'){const r=_tcPeriodRange();return 'Từ '+r.from+' đến '+r.to;}
+  if(p.mode==='custom'){const r=_tcPeriodRange();return 'Từ '+fd(r.from)+' đến '+fd(r.to);}
   if(p.mode==='month')return 'Tháng '+p.month+'/'+p.year;
   if(p.mode==='quarter')return 'Quý '+p.quarter+'/'+p.year;
   if(p.mode==='year')return 'Năm '+p.year+(p.year===2026?' (từ T5)':'');
@@ -21278,7 +21330,7 @@ function _vrFltApply(rows,kind){
 }
 function _vrFltText(kind){
   const F=_vrFlt(kind); if(!F.from&&!F.to)return '';
-  return (F.by==='inv'?'Ngày hóa đơn ':'ETD / ngày giao dịch ')+(F.from||'…')+' → '+(F.to||'…');
+  return (F.by==='inv'?'Ngày hóa đơn ':'ETD / ngày giao dịch ')+(F.from?fd(F.from):'…')+' → '+(F.to?fd(F.to):'…');
 }
 function _vrFltNotes(){
   const n=[];
@@ -21401,7 +21453,7 @@ function renderTcVat(){
     +'<button class="btn" onclick="_vrExport()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel</button>'
     +'</div>';
 
-  const head='<div style="font-size:15px;font-weight:800;color:var(--text-primary);margin:1.1rem 0 .25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-receipt-tax" style="color:var(--blue)"></i> VAT Report — '+_vrE(_tcPeriodLabel())+' <span style="font-size:11.5px;font-weight:500;color:var(--text-tertiary)">('+from+' → '+to+')</span></div>'
+  const head='<div style="font-size:15px;font-weight:800;color:var(--text-primary);margin:1.1rem 0 .25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-receipt-tax" style="color:var(--blue)"></i> VAT Report — '+_vrE(_tcPeriodLabel())+' <span style="font-size:11.5px;font-weight:500;color:var(--text-tertiary)">('+fd(from)+' → '+fd(to)+')</span></div>'
     +'<div style="font-size:11.5px;color:var(--text-tertiary);margin-bottom:.9rem;line-height:1.5">Kỳ tính theo <b>ETD của lô</b>. Đầu ra = dịch vụ “Có hóa đơn: Yes” <b>và có VAT</b> trong Debit Note xuất cho shipper/party (dịch vụ không VAT, không hóa đơn không đưa vào; riêng OCF – Cước vận tải biển luôn tính, kể cả VAT 0%); đầu vào = chi phí NCC có VAT (tab Dịch vụ + chi phí nhập tay). Số liệu quản trị từ app, cần đối chiếu với hóa đơn/tờ khai thuế thực tế.</div>';
 
   // KPI
@@ -21531,7 +21583,7 @@ function _vrViewOut(D){
   rows.forEach(function(x){Object.keys(sub).forEach(function(k){sub[k]+=x[k]||0;});});
   const dRows=rows.map(function(x){
     return '<tr class="vr-click" onclick="'+(x.cash?'editCashTx(\''+x.txId+'\')':'_vrOpenLot(\''+x.lotId+'\',\''+x.tt+'\')')+'" title="'+(x.cash?'Mở giao dịch Sổ quỹ':'Mở lô hàng')+'">'
-      +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(x.mbl||'—')+'</td><td style="white-space:nowrap">'+_vrE(x.cont||'—')+'</td><td>'+_vrE(x.etd)+'</td><td>'+_vrE(x.party)+'</td><td>'+_vrE(x.dnNo||'—')+(x.cash?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
+      +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(x.mbl||'—')+'</td><td style="white-space:nowrap">'+_vrE(x.cont||'—')+'</td><td>'+_vrE(fd(x.etd))+'</td><td>'+_vrE(x.party)+'</td><td>'+_vrE(x.dnNo||'—')+(x.cash?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
       +'<td class="vr-inv" title="'+_vrE(x.invTxt||'')+'">'+(x.invTxt?_vrE(x.invTxt):'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td class="r">'+(x.base0?_vrN(x.base0):'—')+'</td><td class="r">'+(x.base8?_vrN(x.base8):'—')+'</td><td class="r">'+(x.base10?_vrN(x.base10):'—')+'</td>'
       +'<td class="r vat">'+_vrN(x.vat)+'</td><td class="r">'+_vrN(x.total)+'</td><td>'+_vrStatus(x.paid,'Đã thu','Chưa thu')+'</td></tr>';
@@ -21568,10 +21620,10 @@ function _vrViewIn(D){
   rows.forEach(function(x){Object.keys(sub).forEach(function(k){sub[k]+=x[k]||0;});});
   const dRows=rows.map(function(x){
     return '<tr class="vr-click" onclick="'+(x.cash?'editCashTx(\''+x.txId+'\')':'_vrOpenLot(\''+x.lotId+'\',\''+x.tt+'\')')+'" title="'+(x.cash?'Mở giao dịch Sổ quỹ':'Mở lô hàng')+'">'
-      +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(x.etd)+'</td><td>'+_vrE(x.supplier)+'</td><td>'+_vrE(x.name)+(x.src==='cost'?' <span class="vr-chip gray">nhập tay</span>':'')+(x.src==='cash'?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
+      +'<td><b>'+_vrE(x.job||'—')+'</b></td><td>'+_vrE(fd(x.etd))+'</td><td>'+_vrE(x.supplier)+'</td><td>'+_vrE(x.name)+(x.src==='cost'?' <span class="vr-chip gray">nhập tay</span>':'')+(x.src==='cash'?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td>'
       +'<td class="vr-inv" title="'+_vrE(x.invTxt||'')+'">'+(x.invTxt?_vrE(x.invTxt):'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
       +'<td class="r">'+_vrN(x.base)+'</td><td class="r">'+(x.rate?x.rate+'%':'—')+'</td><td class="r vat">'+_vrN(x.vat)+'</td><td class="r">'+_vrN(x.total)+'</td>'
-      +'<td>'+_vrStatus(x.paid,'Đã trả'+(x.paidDate?' '+_vrE(x.paidDate.slice(5).split('-').reverse().join('/')):''),'Chưa trả')+'</td></tr>';
+      +'<td>'+_vrStatus(x.paid,'Đã trả'+(x.paidDate?' '+_vrE(fd(x.paidDate)):''),'Chưa trả')+'</td></tr>';
   }).join('');
   const det='<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-list-details"></i>Chi tiết chi phí NCC có VAT ('+rows.length+')</span></div>'+_vrToolbar('in')
     +'<div class="vr-scroll"><table class="vr-tbl"><thead><tr>'
@@ -21592,7 +21644,7 @@ function _vrExport(){
   const XLSX=window.XLSX; if(!XLSX){toast('Đang tải thư viện Excel','error');return;}
   const rg=_tcPeriodRange(), D=_vrCompute(rg.from,rg.to), T=D.tot;
   const FO=_vrFltApply(D.out,'out'), FI=_vrFltApply(D.inn,'in'), TO=_vrOutTot(FO), TI=_vrInTot(FI);
-  const head=[['BÁO CÁO VAT — '+_tcPeriodLabel(),''],['Kỳ (theo ETD)',rg.from+' → '+rg.to],['Đơn vị','VND'],['','']];
+  const head=[['BÁO CÁO VAT — '+_tcPeriodLabel(),''],['Kỳ (theo ETD)',fd(rg.from)+' → '+fd(rg.to)],['Đơn vị','VND'],['','']];
   const s1=head.concat(_vrFltNotes()).concat([
     ['VAT đầu ra',T.outVat],['VAT đầu vào',T.inVat],[T.net>=0?'VAT phải nộp (ước tính)':'VAT được khấu trừ (ước tính)',Math.abs(T.net)],['',''],
     ['Doanh thu xuất HĐ (chưa VAT)',T.outBase],['  - Mức 0% / không chịu thuế',T.outBase0],['  - Mức 8%',T.outBase8],['  - Mức 10%',T.outBase10],['  - Mức khác',T.outBaseO],
@@ -21601,12 +21653,12 @@ function _vrExport(){
   ]);
   const s2=[['Job / Booking','MBL','Cont / Vol','ETD','Shipper','Party','Số DN','Số HĐ VAT (ngày HĐ)','DT 0%','DT 8%','DT 10%','DT mức khác','Tổng DT chưa VAT','VAT','Tổng gồm VAT','Thanh toán']];
   FO.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
-    s2.push([x.job,x.mbl||'',x.cont||'',x.etd,x.shipper,x.party,(x.cash?'Sổ quỹ — ':'')+(x.dnNo||''),x.invTxt||'',x.base0,x.base8,x.base10,x.baseO,x.base,x.vat,x.total,x.paid?'Đã thu':'Chưa thu']);
+    s2.push([x.job,x.mbl||'',x.cont||'',fd(x.etd),x.shipper,x.party,(x.cash?'Sổ quỹ — ':'')+(x.dnNo||''),x.invTxt||'',x.base0,x.base8,x.base10,x.baseO,x.base,x.vat,x.total,x.paid?'Đã thu':'Chưa thu']);
   });
   s2.push(['TỔNG','','','','','','','',TO.outBase0,TO.outBase8,TO.outBase10,TO.outBaseO,TO.outBase,TO.outVat,TO.outBase+TO.outVat,'']);
   const s3=[['Job / Booking','ETD','Shipper','Nhà cung cấp','Khoản chi phí','Nguồn','Số HĐ (ngày HĐ)','Chưa VAT','Thuế suất %','VAT','Tổng gồm VAT','Thanh toán NCC','Ngày thanh toán']];
   FI.slice().sort(function(a,b){return (a.etd||'').localeCompare(b.etd||'');}).forEach(function(x){
-    s3.push([x.job,x.etd,x.shipper,x.supplier,x.name,x.src==='cost'?'Nhập tay':(x.src==='cash'?'Sổ quỹ':'Dịch vụ'),x.invTxt||'',x.base,x.rate,x.vat,x.total,x.paid?'Đã trả':'Chưa trả',x.paidDate||'']);
+    s3.push([x.job,fd(x.etd),x.shipper,x.supplier,x.name,x.src==='cost'?'Nhập tay':(x.src==='cash'?'Sổ quỹ':'Dịch vụ'),x.invTxt||'',x.base,x.rate,x.vat,x.total,x.paid?'Đã trả':'Chưa trả',x.paidDate?fd(x.paidDate):'']);
   });
   s3.push(['TỔNG','','','','','','',TI.inBase,'',TI.inVat,TI.inBase+TI.inVat,'','']);
   const gO=_vrGroup(FO,function(x){return x.party;}), gI=_vrGroup(FI,function(x){return x.supplier;});
@@ -21816,7 +21868,7 @@ function _vrViewShip(D){
   const rowHtml=function(L){
     return '<tr class="vr-click" onclick="_vrOpenLot(\''+L.lotId+'\',\''+L.tt+'\')" title="Mở lô hàng">'
       +'<td><b>'+_vrE(L.job||'—')+'</b></td><td>'+_vrE(L.hbl||'—')+'</td><td>'+_vrE(L.tenHang||'—')+'</td><td>'+_vrE(L.cont||'—')+'</td>'
-      +'<td>'+_vrE(L.etd)+'</td><td>'+_vrE(L.shipper)+'</td><td>'+_vrE(L.dn||'—')+'</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.supp)+'">'+_vrE(L.supp||'—')+'</td>'
+      +'<td>'+_vrE(fd(L.etd))+'</td><td>'+_vrE(L.shipper)+'</td><td>'+_vrE(L.dn||'—')+'</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.supp)+'">'+_vrE(L.supp||'—')+'</td>'
       +numCells(L)+'<td>'+_vsStChip(L.oSt,L.oStTxt)+'</td><td>'+_vsStChip(L.iSt,L.iStTxt)+'</td></tr>';
   };
   const subHtml=function(label,t,cls){
@@ -22046,6 +22098,8 @@ function _vsShmBuild(D){
     e.base+=x.base||0; e.vat+=x.vat||0; e.n++; if(x.paid)e.nPaid++; if(x.remark)e.remarks.push(x.remark);
   });
   rows.forEach(function(R){
+    R.outList=_vsUniq(String(R.outInv||'').split(/\s*[;,]\s*/));   // A 2.90: mỗi số HĐ VAT 1 dòng
+    R.inList=_vsUniq(String(R.inInv||'').split(/\s*;\s*/));
     const o=nm[R.tt+':'+R.lotId]||{};
     R.nccs=Object.keys(o).map(function(k){
       const e=o[k]; e.remark=_vsUniq(e.remarks).join('; ');
@@ -22065,7 +22119,7 @@ function _vsShmFiltered(D,forceDir){
   const rows=all.filter(function(L){
     if(S.shmShip&&L.shipper!==S.shmShip)return false;
     if(!q)return true;
-    return [L.job,L.hbl,L.tenHang,L.shipper,L.dn,L.supp,L.cont,L.outInv,L.inInv,L.nccs.map(function(n){return n.name+' '+n.remark;}).join(' ')].join(' ').toLowerCase().indexOf(q)>=0;
+    return [L.job,L.hbl,L.tenHang,L.shipper,L.supp,L.cont,L.outInv,L.inInv,L.nccs.map(function(n){return n.name+' '+n.remark;}).join(' ')].join(' ').toLowerCase().indexOf(q)>=0;
   });
   const _d=forceDir||window._etdDir.vat_shm||'asc';
   rows.sort(function(a,b){
@@ -22094,7 +22148,7 @@ function _vrViewShm(D){
   const toolbar='<div class="vr-toolbar">'
     +'<label style="font-size:12px;color:var(--text-secondary);font-weight:600">Shipper:</label>'
     +'<select id="vsShmShip" style="width:230px;font-size:12px" onchange="_vsShmPick(this.value)">'+opts+'</select>'
-    +'<div class="search-wrap" style="max-width:320px;flex:1"><i class="ti ti-search"></i><input type="text" id="vsShmQ" value="'+_vrE(B.q)+'" placeholder="Tìm Job, MBL, tên hàng, số DN, NCC, số HĐ…" oninput="_vsShmQuery(this)"/></div>'
+    +'<div class="search-wrap" style="max-width:320px;flex:1"><i class="ti ti-search"></i><input type="text" id="vsShmQ" value="'+_vrE(B.q)+'" placeholder="Tìm Job, MBL, tên hàng, NCC, số HĐ…" oninput="_vsShmQuery(this)"/></div>'
     +'<label style="font-size:12px;color:var(--text-secondary);display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap;flex:0 0 auto"><input type="checkbox" style="width:auto;flex:0 0 auto;margin:0" id="vsShmAll"'+(B.showAll?' checked':'')+' onchange="_vsShmAll(this.checked)"/> Hiện cả lô chưa có VAT</label>'
     +'<div style="flex:1"></div>'
     +'<button class="btn" onclick="_vsShmExport()" style="color:#0F6E56;border-color:#0F6E56"><i class="ti ti-file-spreadsheet"></i> Xuất Excel VAT theo Shipment</button>'
@@ -22110,9 +22164,11 @@ function _vrViewShm(D){
     +kp('Chi phí chưa VAT',_vrN(T.iBase))
     +kp('Số NCC liên quan',String(nNcc))
     +'</div>';
-  const NC=16;
+  const NC=15;
+  const colW=[112,112,104,110,78,150,104,96,230,160,104,96,100,92,92];   // A 2.90: khóa chiều rộng cột, nội dung dài tự xuống dòng
+  const colgroup='<colgroup>'+colW.map(function(w){return '<col style="width:'+w+'px">';}).join('')+'</colgroup>';
   const thead='<tr>'+_vrTH('Job / Booking')+_vrTH('MBL')+_etdTh('vat_shm',renderTcBody,{def:'asc'})+_vrTH('Shipper')+_vrTH('Cont / Vol')
-    +_vrTH('Debit No')+_vrTH('Số HĐ VAT')+_vrTH('DT chưa VAT','right')+_vrTH('VAT đầu ra','right')
+    +_vrTH('Số HĐ VAT')+_vrTH('DT chưa VAT','right')+_vrTH('VAT đầu ra','right')
     +_vrTH('Nhà cung cấp (VAT từng NCC)')+_vrTH('Số HĐ NCC / Remark')+_vrTH('CP chưa VAT','right')+_vrTH('VAT đầu vào','right')
     +_vrTH('Chênh lệch','right')+_vrTH('TT thu')+_vrTH('TT trả NCC')+'</tr>';
   const nccCell=function(L){
@@ -22122,26 +22178,27 @@ function _vrViewShm(D){
         +'<span class="shm-dot '+n.st+'"></span><span class="n">'+_vrE(n.name)+'</span><b>'+_vrN(n.vat)+'</b></div>';
     }).join('');
   };
+  const hdLines=function(list){return (list&&list.length)?list.map(function(x){return '<div>'+_vrE(x)+'</div>';}).join(''):'—';};
   const rowHtml=function(L){
     return '<tr class="vr-click" onclick="_vrOpenLot(\''+L.lotId+'\',\''+L.tt+'\')" title="Mở lô hàng">'
-      +'<td><b>'+_vrE(L.job||'—')+'</b></td><td>'+_vrE(L.hbl||'—')+'</td><td>'+_vrE(L.etd)+'</td><td>'+_vrE(L.shipper)+'</td><td>'+_vrE(L.cont||'—')+'</td>'
-      +'<td>'+_vrE(L.dn||'—')+'</td><td>'+_vrE(L.outInv||'—')+'</td>'
+      +'<td class="shm-wrap"><b>'+_vrE(L.job||'—')+'</b></td><td class="shm-wrap">'+_vrE(L.hbl||'—')+'</td><td>'+_vrE(fd(L.etd))+'</td><td class="shm-wrap">'+_vrE(L.shipper)+'</td><td>'+_vrE(L.cont||'—')+'</td>'
+      +'<td class="shm-wrap">'+hdLines(L.outList)+'</td>'
       +'<td class="r">'+_vrN(L.oBase)+'</td><td class="r vat">'+_vrN(L.oVat)+'</td>'
-      +'<td class="shm-nccs">'+nccCell(L)+'</td><td style="max-width:170px;white-space:normal">'+_vrE(L.inInv||'—')+'</td>'
+      +'<td class="shm-nccs">'+nccCell(L)+'</td><td class="shm-wrap">'+hdLines(L.inList)+'</td>'
       +'<td class="r">'+_vrN(L.iBase)+'</td><td class="r vin">'+_vrN(L.iVat)+'</td>'
       +'<td class="r" style="font-weight:800;color:'+_vsDiffColor(L.diff)+'">'+_vrN(L.diff)+'</td>'
       +'<td>'+_vsStChip(L.oSt,L.oStTxt)+'</td><td>'+_vsStChip(L.iSt,L.iStTxt)+'</td></tr>';
   };
   let body=''; B.rows.forEach(function(L){body+=rowHtml(L);});
   const filt=(B.ship?('shipper '+B.ship):'tất cả shipper')+(B.q?(' · tìm “'+B.q+'”'):'');
-  const tfoot=B.rows.length?'<tfoot><tr><td colspan="7">TỔNG CỘNG — '+_vrE(filt)+' ('+T.lots+' lô)</td><td class="r">'+_vrN(T.oBase)+'</td><td class="r vat">'+_vrN(T.oVat)+'</td><td></td><td></td>'
+  const tfoot=B.rows.length?'<tfoot><tr><td colspan="6">TỔNG CỘNG — '+_vrE(filt)+' ('+T.lots+' lô)</td><td class="r">'+_vrN(T.oBase)+'</td><td class="r vat">'+_vrN(T.oVat)+'</td><td></td><td></td>'
     +'<td class="r">'+_vrN(T.iBase)+'</td><td class="r vin">'+_vrN(T.iVat)+'</td><td class="r" style="font-weight:800;color:'+_vsDiffColor(T.diff)+'">'+_vrN(T.diff)+'</td><td></td><td></td></tr></tfoot>':'';
   const note='Mỗi dòng = 1 lô (shipment). Chênh lệch = VAT đầu ra − VAT đầu vào của lô: <b style="color:#DC2626">dương</b> = VAT phải nộp, <b style="color:#16A34A">âm</b> = được khấu trừ (ước tính). '
     +'Cột NCC liệt kê từng nhà cung cấp của chi phí đầu vào có VAT kèm số VAT; chấm <span class="shm-dot paid"></span> đã trả · <span class="shm-dot part"></span> trả một phần · <span class="shm-dot unpaid"></span> chưa trả. '
     +'Số HĐ NCC lấy từ Remark của dịch vụ/chi phí. Khoản Sổ quỹ nhập tay không gắn lô không nằm trong báo cáo này.';
   return '<div class="tcbc-card"><div class="tcbc-card-hd"><span><i class="ti ti-packages"></i>VAT theo Shipment — đầu ra, đầu vào, chênh lệch và NCC của từng lô</span><span style="font-size:11px;font-weight:500;color:var(--text-tertiary)">'+_vrE(fd(rg.from))+' → '+_vrE(fd(rg.to))+' · '+T.lots+' lô · theo ETD</span></div>'
     +timeBar+toolbar+kpis
-    +'<div class="vr-scroll" style="max-height:600px"><table class="vr-tbl"><thead>'+thead+'</thead><tbody>'+(body||'<tr><td colspan="'+NC+'" class="empty">Không có lô phù hợp trong kỳ / bộ lọc</td></tr>')+'</tbody>'+tfoot+'</table></div>'
+    +'<div class="vr-scroll" style="max-height:600px"><table class="vr-tbl shm-tbl" style="table-layout:fixed;width:'+colW.reduce(function(a,b){return a+b;},0)+'px;min-width:100%">'+colgroup+'<thead>'+thead+'</thead><tbody>'+(body||'<tr><td colspan="'+NC+'" class="empty">Không có lô phù hợp trong kỳ / bộ lọc</td></tr>')+'</tbody>'+tfoot+'</table></div>'
     +'<div style="font-size:10.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5">'+note+'</div></div>';
 }
 
@@ -22170,8 +22227,8 @@ async function _vsShmExport(){
     const ws=wb.addWorksheet('VAT theo Shipment',{
       pageSetup:{orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:0.3,right:0.3,top:0.4,bottom:0.4,header:0.2,footer:0.2}},
       views:[{showGridLines:false}]});
-    ws.columns=[{width:6},{width:19},{width:17},{width:20},{width:12},{width:12},{width:17},{width:18},{width:16},{width:15},{width:14},{width:34},{width:20},{width:15},{width:14},{width:16},{width:14},{width:14}];
-    const LC=18;
+    ws.columns=[{width:6},{width:19},{width:17},{width:20},{width:12},{width:12},{width:17},{width:26},{width:16},{width:15},{width:34},{width:24},{width:15},{width:14},{width:16},{width:14},{width:14}];
+    const LC=17;
     const sp=(B.ship&&cache.partners[B.ship])||{};
     if(logoId!==null){try{ws.addImage(logoId,{tl:{col:0.15,row:0.15},ext:{width:38,height:38}});}catch(e){}}
     ws.getRow(1).height=24; ws.getRow(2).height=17; ws.getRow(3).height=16;
@@ -22179,12 +22236,12 @@ async function _vsShmExport(){
     {const c=ws.getCell(1,2);c.value='COCOSEA CO., LTD';c.font={bold:true,size:15,color:{argb:C.secondary}};c.alignment={horizontal:'left',vertical:'middle'};}
     ws.mergeCells(2,2,2,4);
     {const c=ws.getCell(2,2);c.value='Keep Going – Keep Growing';c.font={bold:true,italic:true,size:9,color:{argb:C.primary}};c.alignment={horizontal:'left',vertical:'top'};}
-    ws.mergeCells(1,5,1,11);
+    ws.mergeCells(1,5,1,10);
     {const c=ws.getCell(1,5);c.value='BÁO CÁO VAT THEO SHIPMENT';c.font={bold:true,size:18,color:{argb:C.secondary}};c.alignment={horizontal:'center',vertical:'middle'};}
-    ws.mergeCells(2,5,2,11);
+    ws.mergeCells(2,5,2,10);
     {const c=ws.getCell(2,5);c.value=dateRange+'   (theo ETD)';c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};c.alignment={horizontal:'center',vertical:'middle'};c.fill=fill('FF103A6F');}
-    ws.mergeCells(1,12,3,LC);
-    {const c=ws.getCell(1,12);
+    ws.mergeCells(1,11,3,LC);
+    {const c=ws.getCell(1,11);
       c.value=B.ship?{richText:[
         {font:{bold:true,size:10,color:{argb:C.secondary}},text:(sp.fullname||B.ship)+'\n'},
         {font:{bold:true,size:8.5,color:{argb:C.textDark}},text:'MST:  '},{font:{size:8.5,color:{argb:C.textGray}},text:(sp.mst||'—')+'\n'},
@@ -22197,10 +22254,10 @@ async function _vsShmExport(){
     ws.getRow(4).height=8;
     ws.getRow(5).height=14; ws.getRow(6).height=24;
     [{label:'SỐ LÔ HÀNG',val:T.lots,fmt:'0',color:C.secondary,c1:1,c2:3},
-     {label:'VAT ĐẦU RA (VND)',val:T.oVat,fmt:'#,##0" VND"',color:C.secondary,c1:4,c2:8},
-     {label:'VAT ĐẦU VÀO (VND)',val:T.iVat,fmt:'#,##0" VND"',color:'FF0F9D8A',c1:9,c2:12},
-     {label:'CHÊNH LỆCH RA − VÀO ('+(T.diff>0?'PHẢI NỘP':(T.diff<0?'ĐƯỢC KHẤU TRỪ':'CÂN BẰNG'))+')',val:T.diff,fmt:'#,##0" VND"',color:dColor(T.diff),c1:13,c2:15},
-     {label:'NGÀY LẬP BÁO CÁO',val:today,isText:true,color:C.textDark,c1:16,c2:18}
+     {label:'VAT ĐẦU RA (VND)',val:T.oVat,fmt:'#,##0" VND"',color:C.secondary,c1:4,c2:7},
+     {label:'VAT ĐẦU VÀO (VND)',val:T.iVat,fmt:'#,##0" VND"',color:'FF0F9D8A',c1:8,c2:11},
+     {label:'CHÊNH LỆCH RA − VÀO ('+(T.diff>0?'PHẢI NỘP':(T.diff<0?'ĐƯỢC KHẤU TRỪ':'CÂN BẰNG'))+')',val:T.diff,fmt:'#,##0" VND"',color:dColor(T.diff),c1:12,c2:14},
+     {label:'NGÀY LẬP BÁO CÁO',val:today,isText:true,color:C.textDark,c1:15,c2:17}
     ].forEach(function(cd){
       ws.mergeCells(5,cd.c1,5,cd.c2);
       const lc=ws.getCell(5,cd.c1); lc.value=cd.label; lc.font={bold:true,size:8.5,color:{argb:C.textGray}}; lc.alignment={horizontal:'center',vertical:'bottom'};
@@ -22213,10 +22270,10 @@ async function _vsShmExport(){
     const HEAD=8;
     ws.getRow(HEAD).height=17; ws.getRow(HEAD+1).height=15;
     const headCell=function(r,c,t){const x=ws.getCell(r,c);x.value=t;x.font={bold:true,size:9,color:{argb:'FFFFFFFF'}};x.fill=fill(C.secondary);x.alignment={horizontal:'center',vertical:'middle',wrapText:true};x.border=thinB(C.secondary);};
-    [[1,'STT'],[2,'JOB / BOOKING'],[3,'MBL'],[4,'TÊN HÀNG'],[5,'CONT/VOL'],[6,'ETD'],[7,'SHIPPER'],[8,'DEBIT NO'],[9,'SỐ HĐ VAT'],[12,'NHÀ CUNG CẤP (VAT TỪNG NCC)'],[13,'SỐ HĐ NCC / REMARK'],[16,'CHÊNH LỆCH VAT (RA − VÀO)'],[17,'TT THU'],[18,'TT TRẢ NCC']].forEach(function(p){
+    [[1,'STT'],[2,'JOB / BOOKING'],[3,'MBL'],[4,'TÊN HÀNG'],[5,'CONT/VOL'],[6,'ETD'],[7,'SHIPPER'],[8,'SỐ HĐ VAT'],[11,'NHÀ CUNG CẤP (VAT TỪNG NCC)'],[12,'SỐ HĐ NCC / REMARK'],[15,'CHÊNH LỆCH VAT (RA − VÀO)'],[16,'TT THU'],[17,'TT TRẢ NCC']].forEach(function(p){
       ws.mergeCells(HEAD,p[0],HEAD+1,p[0]); headCell(HEAD,p[0],p[1]); headCell(HEAD+1,p[0],null); ws.getCell(HEAD,p[0]).value=p[1];
     });
-    [[10,'VAT ĐẦU RA'],[14,'VAT ĐẦU VÀO']].forEach(function(g2){
+    [[9,'VAT ĐẦU RA'],[13,'VAT ĐẦU VÀO']].forEach(function(g2){
       ws.mergeCells(HEAD,g2[0],HEAD,g2[0]+1); headCell(HEAD,g2[0],g2[1]); headCell(HEAD,g2[0]+1,null); ws.getCell(HEAD,g2[0]).value=g2[1];
       headCell(HEAD+1,g2[0],'TRƯỚC VAT'); headCell(HEAD+1,g2[0]+1,'VAT (VND)');
     });
@@ -22233,27 +22290,27 @@ async function _vsShmExport(){
       const bg=stt%2===1?'FFFFFFFF':'FFF7F8FA';
       const rr=ws.getRow(rIdx);
       const nccTxt=L.nccs.map(function(n){return n.name+' — '+Math.round(n.vat).toLocaleString();}).join('\n');
-      rr.height=Math.max(18,13*Math.max(1,L.nccs.length)+5);
-      const vals=[stt,L.job,L.hbl,L.tenHang,L.cont,fd(L.etd),L.shipper,L.dn,L.outInv,L.oBase,L.oVat,nccTxt,L.inInv,L.iBase,L.iVat,L.diff,L.oStTxt,L.iStTxt];
+      rr.height=Math.max(18,13*Math.max(1,L.nccs.length,L.outList.length,L.inList.length)+5);
+      const vals=[stt,L.job,L.hbl,L.tenHang,L.cont,fd(L.etd),L.shipper,L.outList.join('\n'),L.oBase,L.oVat,nccTxt,L.inList.join('\n'),L.iBase,L.iVat,L.diff,L.oStTxt,L.iStTxt];
       vals.forEach(function(v,j){
         const c=rr.getCell(j+1); c.value=v; c.font={size:9.5,color:{argb:C.textDark}}; c.border=thinB(); c.fill=fill(bg);
-        c.alignment={vertical:'middle',horizontal:(j===0)?'center':(j===9||j===10||j===13||j===14||j===15)?'right':(j===4||j===5||j===16||j===17)?'center':'left',wrapText:(j===3||j===8||j===11||j===12)};
-        if(j===9||j===10||j===13||j===14||j===15)c.numFmt='#,##0';
+        c.alignment={vertical:'middle',horizontal:(j===0)?'center':(j===8||j===9||j===12||j===13||j===14)?'right':(j===4||j===5||j===15||j===16)?'center':'left',wrapText:(j===3||j===7||j===10||j===11)};
+        if(j===8||j===9||j===12||j===13||j===14)c.numFmt='#,##0';
       });
       rr.getCell(2).font={bold:true,size:9.5,color:{argb:C.secondary}};
-      rr.getCell(11).font={size:9.5,color:{argb:C.warning}};
-      rr.getCell(15).font={size:9.5,color:{argb:C.warning}};
-      rr.getCell(16).font={bold:true,size:10,color:{argb:dColor(L.diff)}};
-      stStyle(rr.getCell(17),L.oSt); stStyle(rr.getCell(18),L.iSt);
+      rr.getCell(10).font={size:9.5,color:{argb:C.warning}};
+      rr.getCell(14).font={size:9.5,color:{argb:C.warning}};
+      rr.getCell(15).font={bold:true,size:10,color:{argb:dColor(L.diff)}};
+      stStyle(rr.getCell(16),L.oSt); stStyle(rr.getCell(17),L.iSt);
       rIdx++;
     });
     ws.getRow(rIdx).height=22;
-    ws.mergeCells(rIdx,1,rIdx,9);
+    ws.mergeCells(rIdx,1,rIdx,8);
     {const lc=ws.getCell(rIdx,1); lc.value='GRAND TOTAL — '+(B.ship||'TẤT CẢ SHIPPER')+' ('+T.lots+' lô)'; lc.alignment={horizontal:'left',vertical:'middle',indent:1}; lc.font={bold:true,size:11,color:{argb:'FFFFFFFF'}}; lc.fill=fill(C.primary);}
-    [[10,T.oBase],[11,T.oVat],[14,T.iBase],[15,T.iVat],[16,T.diff]].forEach(function(nv){
+    [[9,T.oBase],[10,T.oVat],[13,T.iBase],[14,T.iVat],[15,T.diff]].forEach(function(nv){
       const c=ws.getCell(rIdx,nv[0]); c.value=nv[1]; c.numFmt='#,##0'; c.font={bold:true,size:11,color:{argb:'FFFFFFFF'}}; c.alignment={horizontal:'right',vertical:'middle'}; c.fill=fill(C.primary); c.border=thinB();
     });
-    [12,13,17,18].forEach(function(cc){const tl=ws.getCell(rIdx,cc);tl.fill=fill(C.primary);tl.border=thinB();});
+    [11,12,16,17].forEach(function(cc){const tl=ws.getCell(rIdx,cc);tl.fill=fill(C.primary);tl.border=thinB();});
     rIdx+=2;
     ws.mergeCells(rIdx,1,rIdx,LC);
     {const rc=ws.getCell(rIdx,1);
@@ -22453,9 +22510,9 @@ function _vrViewSupp(D){
     const i=i0++;
     return '<tr class="vr-click'+(L.bad?' vs-bad':'')+'" onclick="_vsSuppRowClick('+i+')" title=""'+(L.cash?'Mở giao dịch Sổ quỹ':'Mở lô hàng')+'">'
       +'<td><b>'+_vrE(L.job||'—')+'</b>'+(L.cash?' <span class="vr-chip gray">Sổ quỹ</span>':'')+'</td><td>'+_vrE(L.hbl||'—')+'</td><td>'+_vrE(L.tenHang||'—')+'</td><td>'+_vrE(L.cont||'—')+'</td>'
-      +'<td>'+_vrE(L.etd)+'</td><td>'+_vrE(L.shipper||'—')+'</td><td>'+_vrE(L.supplier)+'</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.item)+'">'+_vrE(L.item)+'</td>'
+      +'<td>'+_vrE(fd(L.etd))+'</td><td>'+_vrE(L.shipper||'—')+'</td><td>'+_vrE(L.supplier)+'</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.item)+'">'+_vrE(L.item)+'</td>'
       +numCells(L)
-      +'<td>'+_vsStChip(L.st,L.stTxt+(L.paidDate&&L.st==='paid'?' '+L.paidDate.slice(5).split('-').reverse().join('/'):''))+'</td>'
+      +'<td>'+_vsStChip(L.st,L.stTxt+(L.paidDate&&L.st==='paid'?' '+fd(L.paidDate):''))+'</td>'
       +'<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="'+_vrE(L.invTxt)+'">'+(L.invTxt?_vrE(L.invTxt)+(L.invMissing?' <span class="vs-red">(thiếu)</span>':''):(L.req?'<span class="vs-red">—</span>':'<span style="color:var(--text-tertiary)">—</span>'))+'</td>'
       +'<td class="vs-red">'+_vrE(L.warn.join(' · '))+'</td></tr>';
   };
@@ -22653,7 +22710,10 @@ function _vatIsCarrier(name){
   const p=cache.partners&&cache.partners[name];
   return !!(p&&typeof _partnerHasType==='function'&&_partnerHasType(p,'carrier'));
 }
-function _vatDmy(d){return d?String(d).split('-').reverse().join('/'):'';}
+function _vatDmy(d){ // A 2.90: ngày theo định dạng chung của app (23-Nov-2026); chuỗi không phải yyyy-mm-dd giữ nguyên
+  if(!d)return ''; const x=String(d).trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(x)?fd(x.slice(0,10)):x;
+}
 function _vatInvLabel(list){
   return (list||[]).map(function(x){return String(x.no).trim()+(x.date?' ('+_vatDmy(x.date)+')':'');}).join(', ');
 }
@@ -23410,7 +23470,7 @@ function _tcExportBaoCao(){
   const closingVND=openingVND+thuVND-chiVND;
 
   const ws1=[
-    ['BÁO CÁO TÀI CHÍNH',''],[_tcPeriodLabel(),from+' → '+to],['',''],
+    ['BÁO CÁO TÀI CHÍNH',''],[_tcPeriodLabel(),fd(from)+' → '+fd(to)],['',''],
     ['Quỹ đầu kỳ',openingVND],['Tổng Thu trong kỳ',thuVND],['Tổng Chi trong kỳ',chiVND],
     ['Dòng tiền thuần',thuVND-chiVND],['Quỹ cuối kỳ',closingVND],['',''],
     ['CHI TIẾT GIAO DỊCH',''],['Ngày','Loại','Danh mục','Diễn giải','Tài khoản','Số tiền','Tiền tệ']
@@ -23423,7 +23483,7 @@ function _tcExportBaoCao(){
   // A 2.80: Doanh thu - Chi phí - Lợi nhuận theo Shipper (lô theo ETD trong kỳ, cùng cách tính với bảng Costing)
   try{
     const gs=_tcShpGroups(from,to).sort(function(a,b){return b.rev-a.rev;});
-    const wsS=[['DOANH THU - CHI PHÍ - LỢI NHUẬN THEO SHIPPER','','','','',''],[_tcPeriodLabel(),from+' → '+to,'','','',''],['','','','','',''],['Shipper','Số lô','Doanh thu (VND)','Chi phí (VND)','Lợi nhuận (VND)','Tỷ suất LN (%)']];
+    const wsS=[['DOANH THU - CHI PHÍ - LỢI NHUẬN THEO SHIPPER','','','','',''],[_tcPeriodLabel(),fd(from)+' → '+fd(to),'','','',''],['','','','','',''],['Shipper','Số lô','Doanh thu (VND)','Chi phí (VND)','Lợi nhuận (VND)','Tỷ suất LN (%)']];
     let tr=0,tc=0,tl=0;
     gs.forEach(function(x){ tr+=x.rev; tc+=x.cost; tl+=x.lots.length; wsS.push([x.name,x.lots.length,Math.round(x.rev),Math.round(x.cost),Math.round(x.profit),x.rev>0?Math.round(x.profit/x.rev*1000)/10:0]); });
     wsS.push(['TỔNG',tl,Math.round(tr),Math.round(tc),Math.round(tr-tc),tr>0?Math.round((tr-tc)/tr*1000)/10:0]);
@@ -28130,6 +28190,15 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .rf-lotbox{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:8px 12px;margin-bottom:12px;border:1px solid rgba(124,58,237,.25);background:rgba(124,58,237,.06);border-radius:8px}
 .rf-nrf{display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer}
 
+/* ═══ PAYMENT REQUEST (A 2.91) ═══ */
+.pq-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px 18px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:10px;padding:.75rem 1rem;margin-bottom:.9rem}
+.pq-info .l{font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:.3px}
+.pq-info .v{font-size:12.5px;font-weight:600;color:var(--text-primary);margin-top:2px;word-break:break-word}
+.pq-pay{background:rgba(15,118,110,.06);border:1px solid rgba(15,118,110,.25);border-radius:10px;padding:.8rem 1rem;margin-bottom:.9rem}
+.pq-row{cursor:pointer} .pq-row:hover td{background:var(--bg-secondary)}
+.pq-seq{font-variant-numeric:tabular-nums;color:var(--text-tertiary);font-weight:700}
+#pqDetailOv{z-index:310}
+
 /* ═══ VAT REPORT (A 2.33) ═══ */
 .vr-main{display:grid;grid-template-columns:1.7fr 1fr;gap:14px;margin-bottom:14px}
 .vr-two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
@@ -28224,7 +28293,10 @@ body.xuat-tabmode:not(.xuat-lotmode) .ws-side{max-height:calc(100vh - 130px);ove
 .vs-miss.bad{border-color:#DC262666;color:#DC2626;background:rgba(220,38,38,.06)}
 .vr-tbl tr.vs-bad td{background:rgba(220,38,38,.07)}
 .vs-time{padding:8px 10px;border:1px solid var(--border-light);border-radius:10px;background:var(--bg-secondary)}
-.shm-nccs{min-width:200px;max-width:290px}
+.shm-tbl td{overflow:hidden}
+.shm-tbl td.shm-wrap,.shm-tbl td.shm-nccs{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+.shm-tbl td.shm-wrap>div{line-height:1.5}
+.shm-nccs{min-width:0}
 .shm-ncc{display:flex;align-items:center;gap:6px;font-size:11.5px;line-height:1.55}
 .shm-ncc .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .shm-ncc b{font-variant-numeric:tabular-nums;color:#0F9D8A}
@@ -52633,6 +52705,7 @@ function _cnOpenBulkPopup(cfg){
       +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px;overflow:hidden;text-overflow:ellipsis">'
         +'<input type="checkbox" checked id="blk_chk_'+i+'" onchange="_blkUpdateTotal()" style="margin-right:5px;cursor:pointer;vertical-align:middle"/>'
         +'<strong style="color:var(--blue);word-break:break-word">'+(r.booking||r.bookingNo||r.svcKey||'—')+'</strong>'
+        +(r.name?'<div style="font-size:10px;color:var(--text-secondary);margin-top:2px;line-height:1.25">'+_vrE(r.name)+'</div>':'')
         +sectionSelect
       +'</td>'
       +'<td style="padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:11.5px;color:var(--text-secondary);word-break:break-word">'+(r.mbl||'—')+'</td>'
@@ -52722,6 +52795,7 @@ function _cnOpenBulkPopup(cfg){
       </table>
     </div>
     <div class="mftr">
+      ${isAR?'':'<button class="btn" onclick="_pqCreateFromBulk()" style="margin-right:auto;color:#0F766E;border-color:#0F766E" title="Lưu danh sách lô, số tiền, ngày và tài khoản thành 1 lệnh thanh toán (chưa đánh dấu Đã TT) — kế toán xác nhận tại Finance › Payment Request"><i class="ti ti-file-invoice"></i> Tạo lệnh thanh toán</button>'}
       <button class="btn" onclick="closeOv('cnBulkPayOv')">Hủy</button>
       <button class="btn pri" onclick="_cnSaveBulkPay()"><i class="ti ti-check"></i> Cập nhật ${cfg.rows.length} lô</button>
     </div>
@@ -53121,37 +53195,10 @@ async function _cnSaveBulkPay(){
           saved++;
         }
       } else {
-        // AP: cập nhật svcs[svcKey].apPaidStatus
-        const colN=colName(row.tt);
-        const snap=await db.collection(colN).doc(row.id).get();
-        if(!snap.exists){failed++;continue;}
-        const rFs=snap.data();
-        const svcs=JSON.parse(JSON.stringify(rFs.svcs||{}));
-        const svcKey=row.svcKey;
-        if(svcKey&&svcs[svcKey]){
-          const txId=await _syncPayToCashBook({
-            existingTxId:svcs[svcKey].apCashTxId||null,status,txType:'chi',account:bank,amount:amount||row.amt||0,date,
-            category:'Trả nhà cung cấp — '+cfg.label,
-            description:(svcs[svcKey].customName||svcKey)+' — '+(rFs.bookingNo||rFs.jobNo||''),
-            partnerRef:cfg.label,
-            lotRef:{lotId:row.id,tt:row.tt,bookingNo:rFs.bookingNo||rFs.jobNo||''}
-          });
-          svcs[svcKey].apPaidStatus=status; svcs[svcKey].apPaidDate=date; svcs[svcKey].apPaidBank=bank;
-          if(remark)svcs[svcKey].apRemark=remark;
-          // Đồng bộ với popup thanh toán đơn lẻ (savePayStatusDetail): tự tick Finish khi chuyển
-          // sang "Đã TT" — nếu không, dịch vụ được thanh toán qua "hàng loạt" sẽ KHÔNG tự khóa lại
-          // như khi thanh toán từng dòng riêng lẻ, gây lệch hành vi giữa 2 module.
-          if(status==='paid')svcs[svcKey].finish=true;
-          if(txId)svcs[svcKey].apCashTxId=txId;
-          await db.collection(colN).doc(row.id).set({svcs,updatedAt:Date.now()},{merge:true});
-          const cr=cache[row.tt]&&cache[row.tt].find(function(x){return x._id===row.id;});
-          if(cr&&cr.svcs&&cr.svcs[svcKey]){
-            cr.svcs[svcKey].apPaidStatus=status;cr.svcs[svcKey].apPaidDate=date;cr.svcs[svcKey].apPaidBank=bank;
-            if(remark)cr.svcs[svcKey].apRemark=remark;
-            if(status==='paid')cr.svcs[svcKey].finish=true;
-          }
-          saved++;
-        }
+        // AP: cập nhật trạng thái thanh toán — dịch vụ (svcs), chi phí nhập tay (cost:) và hoa hồng COM/KB (comkb:)
+        // A 2.91: dùng chung _apPayLine với lệnh thanh toán (Payment Request) để mọi nơi ghi giống hệt nhau
+        const resL=await _apPayLine(row,{status:status,date:date,bank:bank,remark:remark,amount:amount,label:cfg.label});
+        if(resL==='ok')saved++; else if(resL==='missing')failed++;
       }
     }catch(err){console.error('bulk pay error row',row.id,err);failed++;}
   }
@@ -53160,10 +53207,518 @@ async function _cnSaveBulkPay(){
   window._cnBulkChecked={};
   toast('Đã cập nhật '+saved+' lô'+(invSynced?' · đồng bộ Hóa đơn VAT '+invSynced+' lô':'')+(failed?' ('+failed+' lỗi)':''));
   // Refresh báo cáo
-  runDebtReport();
-  if(!isAR)_tcToggleApAuto&&_tcToggleApAuto();
+  if(cfg.source==='refund'){ window._rfSel={}; try{renderTcBody();}catch(e){} }
+  else {
+    runDebtReport();
+    if(!isAR)_tcToggleApAuto&&_tcToggleApAuto();
+    try{ if(typeof tcTab!=='undefined'&&tcTab==='payreq')renderTcBody(); }catch(e){}
+  }
+  try{ if(typeof _pqSyncViews==='function')_pqSyncViews(); }catch(e){}
 }
 window._cnSaveBulkPay=_cnSaveBulkPay;
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// A 2.91 — PAYMENT REQUEST (Lệnh thanh toán) + ghi thanh toán 1 dòng dùng chung (svc / cost / COM-KB)
+// Collection `paymentRequests` (docId = mã lệnh PRyymm-0001):
+//   {no,source:'ap'|'refund',partner,status:'unpaid'|'paid'|'cancelled',date,bank,total,remark,
+//    createdAt,createdBy,paidDate,paidAt,paidBy,cancelledAt,cancelledBy,
+//    lines:[{tt,lotId,svcKey,job,booking,mbl,vol,typeCont,pod,name,amt,date,bank,remark}]}
+// Trạng thái hiển thị luôn SUY RA từ dữ liệu thật của từng dòng (apPaidStatus của dịch vụ / chi phí / COM-KB)
+// → thanh toán ở bất kỳ nơi nào (Công nợ NCC, popup hàng loạt, Refund, lô hàng) đều đồng bộ về lệnh.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+async function _apPayLine(row,o){
+  const colN=colName(row.tt);
+  const snap=await db.collection(colN).doc(row.id).get();
+  if(!snap.exists)return 'missing';
+  const rFs=snap.data(), sk=String(row.svcKey||''), bk=rFs.bookingNo||rFs.jobNo||'';
+  const cr=cache[row.tt]&&cache[row.tt].find(function(x){return x._id===row.id;});
+  const status=o.status, date=o.date||'', bank=o.bank||'', amount=o.amount||row.amt||0;
+  if(sk.indexOf('comkb:')===0){
+    const parts=sk.split(':'), kind=parts[1], idx=parseInt(parts[2],10);
+    const comKb=JSON.parse(JSON.stringify(rFs.comKb||{com:[],kb:[]}));
+    const rows=comKb[kind]||[];
+    if(!rows[idx])return 'skip';
+    const txId=await _syncPayToCashBook({
+      existingTxId:rows[idx].apCashTxId||null,status,txType:'chi',account:bank,amount,date,
+      category:'Trả nhà cung cấp — Hoa hồng '+String(kind).toUpperCase(),
+      description:(rows[idx].recipient||'Hoa hồng')+' — '+bk,
+      partnerRef:o.label||rows[idx].recipient||null,lotRef:{lotId:row.id,tt:row.tt,bookingNo:bk}
+    });
+    rows[idx].apPaidStatus=status; rows[idx].apPaidDate=date; rows[idx].apPaidBank=bank; rows[idx].apCashTxId=txId;
+    comKb[kind]=rows;
+    await db.collection(colN).doc(row.id).set({comKb:comKb,updatedAt:Date.now()},{merge:true});
+    if(cr)cr.comKb=comKb;
+    return 'ok';
+  }
+  if(sk.indexOf('cost:')===0){
+    const itemId=sk.slice(5);
+    const items=JSON.parse(JSON.stringify((rFs.costing||{}).items||[]));
+    const idx=items.findIndex(function(it,i){return it.id===itemId||('idx_'+i)===itemId;});
+    if(idx<0)return 'skip';
+    const txId=await _syncPayToCashBook({
+      existingTxId:items[idx].apCashTxId||null,status,txType:'chi',account:bank,amount,date,
+      category:'Trả nhà cung cấp — '+(o.label||''),description:(items[idx].name||'Chi phí')+' — '+bk,
+      partnerRef:o.label||items[idx].partnerRef||null,lotRef:{lotId:row.id,tt:row.tt,bookingNo:bk}
+    });
+    items[idx].apPaidStatus=status; items[idx].apPaidDate=date; items[idx].apPaidBank=bank; items[idx].apCashTxId=txId;
+    await db.collection(colN).doc(row.id).set({costing:Object.assign({},rFs.costing||{},{items:items,updatedAt:Date.now()}),updatedAt:Date.now()},{merge:true});
+    if(cr&&cr.costing)cr.costing.items=items;
+    return 'ok';
+  }
+  const svcs=JSON.parse(JSON.stringify(rFs.svcs||{}));
+  if(!sk||!svcs[sk])return 'skip';
+  const txId=await _syncPayToCashBook({
+    existingTxId:svcs[sk].apCashTxId||null,status,txType:'chi',account:bank,amount,date,
+    category:'Trả nhà cung cấp — '+(o.label||''),
+    description:(svcs[sk].customName||sk)+' — '+bk,partnerRef:o.label||null,
+    lotRef:{lotId:row.id,tt:row.tt,bookingNo:bk}
+  });
+  svcs[sk].apPaidStatus=status; svcs[sk].apPaidDate=date; svcs[sk].apPaidBank=bank;
+  if(o.remark)svcs[sk].apRemark=o.remark;
+  // Đồng bộ với popup thanh toán đơn lẻ: tự tick Finish khi chuyển sang "Đã TT"
+  if(status==='paid')svcs[sk].finish=true;
+  if(txId)svcs[sk].apCashTxId=txId;
+  await db.collection(colN).doc(row.id).set({svcs:svcs,updatedAt:Date.now()},{merge:true});
+  if(cr&&cr.svcs&&cr.svcs[sk]){
+    cr.svcs[sk].apPaidStatus=status; cr.svcs[sk].apPaidDate=date; cr.svcs[sk].apPaidBank=bank;
+    if(o.remark)cr.svcs[sk].apRemark=o.remark;
+    if(status==='paid')cr.svcs[sk].finish=true;
+  }
+  return 'ok';
+}
+window._apPayLine=_apPayLine;
+
+// ── helper chung ──
+window._pqState=window._pqState||{view:'all',type:'all',partner:'',from:'',to:'',q:'',dir:'desc'};
+function _pqE(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _pqN(n){return Math.round(n||0).toLocaleString();}
+function _pqCan(){const r=currentProfile&&currentProfile.role;return r==='admin'||r==='accountant';}
+function _pqList(){return Array.isArray(cache.paymentRequests)?cache.paymentRequests:[];}
+function _pqDate(ts){if(!ts)return '—';const d=new Date(ts);const p=function(n){return String(n).padStart(2,'0');};return fd(d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()))+' '+p(d.getHours())+':'+p(d.getMinutes());}
+function _pqDay(ts){if(!ts)return '';const d=new Date(ts);const p=function(n){return String(n).padStart(2,'0');};return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
+function _pqWho(e){return (typeof _dispUserByEmail==='function'&&e)?_dispUserByEmail(e):(e||'');}
+function _pqBankLabel(id){
+  if(!id)return '';
+  const b=window._bankAccounts||{}; const all=Array.isArray(b)?b:(b.company||[]).concat(b.personal||[]);
+  const acc=String(id).replace(/^(co|pers|bank):/,'');
+  const f=all.find(function(x){return x.account===acc;});
+  if(f)return (f.beneficiary||f.account)+(f.bank?' ('+f.bank+')':'')+' · '+f.account;
+  return id==='cash'?'Tiền mặt':acc;
+}
+function _pqSvcAmt(sv){
+  const base=(parseFloat(sv.cost)||0)*(parseFloat(sv.svcQty)||1);
+  let vat=parseFloat(sv.svcVatAmt)||0;
+  if(!vat){const vp=parseFloat(String(sv.svcVat||'0%').replace('%',''))||0; if(vp)vat=Math.round(base*vp/100);}
+  return base+vat;
+}
+// Tra dữ liệu thanh toán THẬT của 1 dòng trong lô
+function _pqLineLive(l){
+  const r=(cache[l.tt]||[]).find(function(x){return x._id===l.lotId;});
+  if(!r)return {found:false,paid:false,date:'',bank:''};
+  const sk=String(l.svcKey||''); let o=null;
+  if(sk.indexOf('comkb:')===0){const p=sk.split(':'); o=((r.comKb||{})[p[1]]||[])[parseInt(p[2],10)];}
+  else if(sk.indexOf('cost:')===0){const id=sk.slice(5); o=((r.costing&&r.costing.items)||[]).find(function(it,i){return it.id===id||('idx_'+i)===id;});}
+  else o=(r.svcs||{})[sk];
+  if(!o)return {found:false,paid:false,date:'',bank:''};
+  return {found:true,paid:o.apPaidStatus==='paid',date:o.apPaidDate||'',bank:o.apPaidBank||''};
+}
+function _pqLive(p){
+  const lines=p.lines||[]; let nPaid=0,last='',paidAmt=0,total=0; const live=[];
+  lines.forEach(function(l){
+    const L=_pqLineLive(l); live.push(L); total+=(parseFloat(l.amt)||0);
+    if(L.paid){nPaid++; paidAmt+=(parseFloat(l.amt)||0); if((L.date||'')>last)last=L.date;}
+  });
+  let st;
+  if(p.status==='cancelled')st='cancelled';
+  else if(lines.length&&nPaid===lines.length)st='paid';
+  else if(nPaid>0)st='part';
+  else st='unpaid';
+  return {st:st,n:lines.length,nPaid:nPaid,paidDate:p.paidDate||last,live:live,total:total,paidAmt:paidAmt,unpaidAmt:total-paidAmt};
+}
+function _pqStatusChip(e){
+  if(e.st==='paid')return '<span class="rf-chip ok">Đã thanh toán'+(e.paidDate?' · '+_pqE(fd(e.paidDate)):'')+'</span>';
+  if(e.st==='part')return '<span class="rf-chip warn">Một phần '+e.nPaid+'/'+e.n+'</span>';
+  if(e.st==='cancelled')return '<span class="rf-chip gray">Đã hủy</span>';
+  return '<span class="rf-chip bad">Chưa thanh toán</span>';
+}
+function _pqTypeChip(e){
+  if(e.kind==='lot')return '<span class="rf-chip blue">Req.Pay lô</span>';
+  return e.type==='refund'?'<span class="rf-chip purple">Hoa hồng COM/KB</span>':'<span class="rf-chip gray" style="background:rgba(15,118,110,.14);color:#0F766E">Hàng loạt NCC</span>';
+}
+// Danh sách thống nhất: lệnh hàng loạt đã lưu + Req.Pay của từng lô (suy ra từ tab Dịch vụ)
+function _pqEntries(){
+  const out=[];
+  _pqList().forEach(function(p){
+    const lv=_pqLive(p);
+    out.push({kind:'bulk',id:p._id,p:p,no:p.no||p._id,type:p.source==='refund'?'refund':'ap',partner:p.partner||'',
+      n:lv.n,nPaid:lv.nPaid,nLots:Object.keys((p.lines||[]).reduce(function(m,l){m[l.lotId]=1;return m;},{})).length,
+      total:lv.total,paidAmt:lv.paidAmt,unpaidAmt:lv.unpaidAmt,cur:'VND',bank:p.bank||'',
+      createdAt:p.createdAt||0,createdBy:p.createdBy||'',st:lv.st,paidDate:lv.paidDate,
+      hay:[p.no,p.partner,p.remark].concat((p.lines||[]).map(function(l){return [l.job,l.booking,l.mbl,l.name].join(' ');})).join(' ').toLowerCase()});
+  });
+  ['xuat','nhap'].forEach(function(tt){
+    (cache[tt]||[]).forEach(function(r){
+      if(!r||r.status==='Cancel'||r.status==='Xóa CB')return;
+      const svcs=r.svcs||{};
+      Object.keys(svcs).forEach(function(k){
+        const sv=svcs[k];
+        if(!sv||!sv.on||!(sv.reqPayment||sv.ocfConfirmed||sv.ocfRevise))return;
+        const paid=sv.apPaidStatus==='paid';
+        const def=(typeof SVCS!=='undefined')?SVCS.find(function(s){return s.key===k;}):null;
+        const name=sv.customName||(def?def.name:k);
+        const amt=_pqSvcAmt(sv), cur=sv.svcCur||'VND';
+        const stage=(typeof _ocfStatusInfo==='function')?_ocfStatusInfo(sv):{label:'',key:''};
+        out.push({kind:'lot',id:tt+'|'+r._id+'|'+k,tt:tt,lotId:r._id,svcKey:k,no:r.jobNo||r.bookingNo||'',type:'lot',partner:sv.svcSupplier||'',
+          name:name,stage:stage,n:1,nPaid:paid?1:0,nLots:1,total:amt,paidAmt:paid?amt:0,unpaidAmt:paid?0:amt,cur:cur,bank:sv.apPaidBank||'',
+          createdAt:sv.reqPaymentAt||r.updatedAt||0,createdBy:sv.reqPaymentBy||'',st:paid?'paid':'unpaid',paidDate:paid?(sv.apPaidDate||''):'',
+          hay:[r.jobNo,r.bookingNo,r.mblNo,sv.svcSupplier,name,r.shipper||r.supplier].join(' ').toLowerCase()});
+      });
+    });
+  });
+  out.sort(function(a,b){return (a.createdAt||0)-(b.createdAt||0)||String(a.no).localeCompare(String(b.no));});
+  out.forEach(function(e,i){e.seq=i+1;});   // STT = thứ tự tạo
+  return out;
+}
+function _pqSet(k,v){window._pqState[k]=v;renderTcBody();}
+function _pqReset(){window._pqState=Object.assign(window._pqState,{type:'all',partner:'',from:'',to:'',q:''});renderTcBody();}
+function _pqSort(){window._pqState.dir=window._pqState.dir==='desc'?'asc':'desc';renderTcBody();}
+
+function renderTcPayReq(){
+  const S=window._pqState;
+  const all=_pqEntries();
+  const partners={}; all.forEach(function(e){if(e.partner)partners[e.partner]=1;});
+  const base=all.filter(function(e){
+    if(S.type!=='all'&&e.type!==S.type)return false;
+    if(S.partner&&e.partner!==S.partner)return false;
+    const d=_pqDay(e.createdAt);
+    if(S.from&&(!d||d<S.from))return false;
+    if(S.to&&(!d||d>S.to))return false;
+    if(S.q&&e.hay.indexOf(S.q.toLowerCase())<0)return false;
+    return true;
+  });
+  const cnt={all:0,unpaid:0,paid:0,cancelled:0};
+  base.forEach(function(e){ if(e.st==='cancelled'){cnt.cancelled++;return;} cnt.all++; if(e.st==='paid')cnt.paid++; else cnt.unpaid++; });
+  let rows=base.filter(function(e){
+    if(S.view==='all')return e.st!=='cancelled';
+    if(S.view==='unpaid')return e.st==='unpaid'||e.st==='part';
+    if(S.view==='paid')return e.st==='paid';
+    if(S.view==='cancelled')return e.st==='cancelled';
+    return true;
+  });
+  rows.sort(function(a,b){return S.dir==='desc'?(b.createdAt-a.createdAt||b.seq-a.seq):(a.createdAt-b.createdAt||a.seq-b.seq);});
+  // KPI (VND) — không gồm lệnh đã hủy / ngoại tệ
+  let needN=0,needAmt=0,doneN=0,doneAmt=0,foreign=0;
+  base.forEach(function(e){
+    if(e.st==='cancelled')return;
+    if(e.cur!=='VND'){foreign++;return;}
+    if(e.st==='paid'){doneN++;doneAmt+=e.paidAmt;} else {needN++;needAmt+=e.unpaidAmt;doneAmt+=e.paidAmt;}
+  });
+  const kpi='<div class="rf-kpis">'
+    +'<div class="rf-kpi"><div class="l">Tổng số lệnh</div><div class="v">'+cnt.all+'</div></div>'
+    +'<div class="rf-kpi bad"><div class="l">Chờ thanh toán</div><div class="v">'+cnt.unpaid+'</div></div>'
+    +'<div class="rf-kpi warn"><div class="l">Cần chi (VND)</div><div class="v">'+_pqN(needAmt)+'</div></div>'
+    +'<div class="rf-kpi ok"><div class="l">Đã thanh toán</div><div class="v">'+cnt.paid+'</div></div>'
+    +'<div class="rf-kpi ok"><div class="l">Đã chi (VND)</div><div class="v">'+_pqN(doneAmt)+'</div></div>'
+    +'<div class="rf-kpi"><div class="l">Đã hủy</div><div class="v">'+cnt.cancelled+'</div></div>'
+  +'</div>';
+  const sel=function(label,key,list,cur,w){
+    return '<label class="rf-f"><span>'+label+'</span><select onchange="_pqSet(\''+key+'\',this.value)" style="min-width:'+(w||130)+'px">'
+      +list.map(function(o){return '<option value="'+_pqE(o[0])+'"'+(String(o[0])===String(cur)?' selected':'')+'>'+_pqE(o[1])+'</option>';}).join('')+'</select></label>';
+  };
+  const filters='<div class="rf-filter">'
+    +'<label class="rf-f"><span>Tạo từ ngày</span><input type="date" value="'+_pqE(S.from)+'" onchange="_pqSet(\'from\',this.value)"/></label>'
+    +'<label class="rf-f"><span>đến</span><input type="date" value="'+_pqE(S.to)+'" onchange="_pqSet(\'to\',this.value)"/></label>'
+    +sel('Loại lệnh','type',[['all','Tất cả'],['ap','Hàng loạt NCC'],['refund','Hoa hồng COM/KB'],['lot','Req.Pay của lô']],S.type,150)
+    +sel('NCC / Người nhận','partner',[['','Tất cả']].concat(Object.keys(partners).sort().map(function(k){return [k,k];})),S.partner,190)
+    +'<label class="rf-f"><span>Tìm</span><input type="text" value="'+_pqE(S.q)+'" placeholder="Mã lệnh / Job / MBL…" onchange="_pqSet(\'q\',this.value.trim())" style="width:170px"/></label>'
+    +'<button class="btn sm" onclick="_pqReset()" title="Về bộ lọc mặc định"><i class="ti ti-filter-off"></i> Đặt lại</button>'
+  +'</div>';
+  const tab=function(k,icon,label,n){return '<button class="vr-tab'+(S.view===k?' on':'')+'" onclick="_pqSet(\'view\',\''+k+'\')"><i class="ti '+icon+'"></i>'+label+'<span class="cnt">'+n+'</span></button>';};
+  const tabs='<div class="vr-tabs">'
+    +tab('all','ti-list-details','Tất cả',cnt.all)+tab('unpaid','ti-clock-hour-4','Chưa thanh toán',cnt.unpaid)
+    +tab('paid','ti-circle-check','Đã thanh toán',cnt.paid)+tab('cancelled','ti-ban','Đã hủy',cnt.cancelled)
+  +'</div>';
+  const head='<div style="font-size:15px;font-weight:800;color:var(--text-primary);margin:1.1rem 0 .25rem;display:flex;align-items:center;gap:8px"><i class="ti ti-file-invoice" style="color:#0F766E"></i> Payment Request — Lệnh thanh toán</div>'
+    +'<div style="font-size:11.5px;color:var(--text-tertiary);margin-bottom:.8rem;line-height:1.5">Gồm các lệnh tạo từ popup <b>Cập nhật TT hàng loạt</b> (Công nợ NCC, Refund) và các <b>Req.Pay</b> của từng lô. Trạng thái được cập nhật theo thanh toán thật của từng khoản, nên thanh toán ở đâu cũng đồng bộ về đây. STT = thứ tự tạo lệnh.</div>';
+  let body;
+  if(!rows.length){
+    body='<div class="rf-empty">Chưa có lệnh thanh toán nào khớp bộ lọc'+(S.view==='all'?'<br><span style="font-size:11px">Tạo lệnh tại Công nợ › Phải trả NCC (hoặc Refund › Báo cáo theo người nhận) → chọn lô → Cập nhật TT hàng loạt → Tạo lệnh thanh toán.</span>':'')+'</div>';
+  } else {
+    let totV=0;
+    const trs=rows.map(function(e){
+      if(e.cur==='VND')totV+=e.total;
+      const who=_pqWho(e.createdBy);
+      const nameCell=e.kind==='lot'
+        ?'<b>'+_pqE(e.no||'—')+'</b><div class="rf-sub">Req.Pay · '+_pqE(e.name)+(e.stage&&e.stage.label&&e.stage.label!=='—'?' · '+_pqE(e.stage.label):'')+'</div>'
+        :'<b>'+_pqE(e.no)+'</b>';
+      return '<tr class="pq-row" data-k="'+e.kind+'" data-id="'+_pqE(e.id)+'" onclick="_pqOpenEntry(this)" title="Bấm để xem chi tiết">'
+        +'<td class="pq-seq">'+e.seq+'</td>'
+        +'<td>'+nameCell+'</td>'
+        +'<td>'+_pqTypeChip(e)+'</td>'
+        +'<td>'+_pqE(e.partner||'—')+'</td>'
+        +'<td style="text-align:right">'+(e.kind==='lot'?1:e.nLots)+(e.kind==='bulk'&&e.n!==e.nLots?' <span class="rf-sub" style="display:inline">('+e.n+' khoản)</span>':'')+'</td>'
+        +'<td style="text-align:right;font-weight:800;color:var(--red);font-variant-numeric:tabular-nums">'+_pqN(e.total)+' <span style="font-weight:600;color:var(--text-tertiary);font-size:10.5px">'+_pqE(e.cur)+'</span></td>'
+        +'<td style="max-width:210px;word-break:break-word;font-size:11.5px">'+(e.bank?_pqE(_pqBankLabel(e.bank)):'<span style="color:var(--text-tertiary)">—</span>')+'</td>'
+        +'<td style="white-space:nowrap">'+_pqE(_pqDate(e.createdAt))+(who?'<div class="rf-sub">'+_pqE(who)+'</div>':'')+'</td>'
+        +'<td>'+_pqStatusChip(e)+'</td>'
+        +'<td style="white-space:nowrap">'+((_pqCan()&&e.kind==='bulk'&&(e.st==='unpaid'||e.st==='part'))?'<button class="btn sm" data-k="bulk" data-id="'+_pqE(e.id)+'" onclick="event.stopPropagation();_pqOpenEntry(this)" style="color:var(--green);border-color:var(--green)"><i class="ti ti-credit-card-pay"></i> Thanh toán</button>':'<button class="btn sm" data-k="'+e.kind+'" data-id="'+_pqE(e.id)+'" onclick="event.stopPropagation();_pqOpenEntry(this)"><i class="ti ti-eye"></i> Chi tiết</button>')+'</td>'
+      +'</tr>';
+    }).join('');
+    body='<div class="rf-wrap"><table class="rf-tbl" style="min-width:1080px"><thead><tr>'
+      +'<th style="width:44px">STT</th><th>Mã lệnh</th><th>Loại</th><th>NCC / Người nhận</th><th style="text-align:right">Số lô</th><th style="text-align:right">Tổng tiền</th><th>Tài khoản</th>'
+      +'<th onclick="_pqSort()" style="cursor:pointer" title="Đổi chiều sắp xếp theo thứ tự tạo">Ngày tạo <span style="font-size:10px">'+(S.dir==='desc'?'▼':'▲')+'</span></th><th>Trạng thái</th><th></th></tr></thead><tbody>'
+      +trs+'<tr class="rf-tot"><td colspan="5"><b>TỔNG ('+rows.length+' lệnh)</b></td><td style="text-align:right;color:var(--red)">'+_pqN(totV)+' VND</td><td colspan="4"></td></tr></tbody></table></div>'
+      +'<div class="rf-note">Bấm vào dòng để xem chi tiết: lệnh hàng loạt mở danh sách các lô; Req.Pay của lô mở thẳng trang Debit Note của lô.'+(foreign?' Có '+foreign+' lệnh ngoại tệ không tính vào KPI (VND).':'')+'</div>';
+  }
+  return head+kpi+filters+tabs+body;
+}
+
+function _pqOpenEntry(el){
+  const k=el.dataset.k, id=el.dataset.id;
+  if(k==='lot'){
+    const p=id.split('|'); const tt=p[0], lotId=p[1];
+    const r=(cache[tt]||[]).find(function(x){return x._id===lotId;});
+    if(!r){toast('Không tìm thấy lô','error');return;}
+    try{ openInvoice(lotId,tt); }catch(e){ console.error(e); toast('Không mở được trang Debit Note','error'); }
+    return;
+  }
+  window._pqOpenId=id; _pqRenderDetail();
+}
+
+function _pqRenderDetail(){
+  const p=_pqList().find(function(x){return x._id===window._pqOpenId;});
+  if(!p){ closeOv('pqDetailOv'); return; }
+  const lv=_pqLive(p), can=_pqCan();
+  const lines=p.lines||[];
+  let ov=g('pqDetailOv');
+  if(!ov){ov=document.createElement('div');ov.id='pqDetailOv';ov.className='ov';ov.style.padding='.75rem';document.body.appendChild(ov);}
+  const keep=ov.querySelector('.modal')?ov.querySelector('.modal').scrollTop:0;
+  const e={st:lv.st,paidDate:lv.paidDate,nPaid:lv.nPaid,n:lv.n};
+  const th='padding:7px 9px;font-size:10px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;border-bottom:1px solid var(--border-light);text-align:left;white-space:nowrap';
+  const td='padding:7px 9px;border-bottom:1px solid var(--border-light);font-size:12px;vertical-align:top';
+  const trs=lines.map(function(l,i){
+    const L=lv.live[i];
+    const st=!L.found?'<span class="rf-chip gray">Không tìm thấy</span>':(L.paid?'<span class="rf-chip ok">Đã TT'+(L.date?' · '+_pqE(fd(L.date)):'')+'</span>':'<span class="rf-chip bad">Chưa TT</span>');
+    const volType=(l.vol||l.typeCont)?((l.vol||'—')+(l.typeCont?'x'+l.typeCont:'')):'—';
+    return '<tr>'
+      +'<td style="'+td+';color:var(--text-tertiary);font-weight:700">'+(i+1)+'</td>'
+      +'<td style="'+td+'"><a class="rf-job" onclick="openDetail(\''+_pqE(l.lotId)+'\',\''+_pqE(l.tt)+'\')" title="Mở lô">'+_pqE(l.booking||l.job||'—')+'</a>'+(l.name?'<div class="rf-sub">'+_pqE(l.name)+'</div>':'')+'</td>'
+      +'<td style="'+td+';word-break:break-word">'+_pqE(l.mbl||'—')+'</td>'
+      +'<td style="'+td+';white-space:nowrap">'+_pqE(volType)+'</td>'
+      +'<td style="'+td+'">'+_pqE(l.pod||'—')+'</td>'
+      +'<td style="'+td+';text-align:right;font-weight:700;font-variant-numeric:tabular-nums">'+_pqN(l.amt)+'</td>'
+      +'<td style="'+td+';white-space:nowrap">'+(l.date?_pqE(fd(l.date)):'—')+'</td>'
+      +'<td style="'+td+';font-size:11px;word-break:break-word">'+(l.bank?_pqE(_pqBankLabel(l.bank)):'—')+'</td>'
+      +'<td style="'+td+';font-size:11.5px;word-break:break-word">'+_pqE(l.remark||'')+'</td>'
+      +'<td style="'+td+'">'+st+'</td>'
+    +'</tr>';
+  }).join('');
+  const typeTxt=p.source==='refund'?'Hoa hồng COM/KB (Refund)':'Thanh toán hàng loạt NCC';
+  const info=[
+    ['Loại lệnh',typeTxt],['NCC / Người nhận',p.partner||'—'],
+    ['Ngày tạo',_pqDate(p.createdAt)+(p.createdBy?' · '+_pqWho(p.createdBy):'')],
+    ['Ngày thanh toán (dự kiến)',p.date?fd(p.date):'—'],
+    ['Tài khoản thanh toán',p.bank?_pqBankLabel(p.bank):(lines.some(function(l){return l.bank;})?'Theo từng khoản':'Chưa chọn')],
+    ['Số lô / số khoản',Object.keys(lines.reduce(function(m,l){m[l.lotId]=1;return m;},{})).length+' lô · '+lines.length+' khoản'],
+    ['Tổng tiền',_pqN(lv.total)+' VND'],
+    ['Đã thanh toán',_pqN(lv.paidAmt)+' VND ('+lv.nPaid+'/'+lv.n+' khoản)']
+  ];
+  if(lv.st==='paid'||lv.st==='part')info.push(['Ngày thanh toán thực tế',lv.paidDate?fd(lv.paidDate):'—']);
+  if(p.paidBy)info.push(['Xác nhận bởi',_pqWho(p.paidBy)+(p.paidAt?' · '+_pqDate(p.paidAt):'')]);
+  if(p.status==='cancelled')info.push(['Đã hủy',_pqDate(p.cancelledAt)+(p.cancelledBy?' · '+_pqWho(p.cancelledBy):'')]);
+  if(p.remark)info.push(['Ghi chú',p.remark]);
+  const infoHtml='<div class="pq-info">'+info.map(function(x){return '<div><div class="l">'+_pqE(x[0])+'</div><div class="v">'+_pqE(x[1])+'</div></div>';}).join('')+'</div>';
+  // Khối xác nhận thanh toán
+  let payBox='';
+  const live=lv.st==='unpaid'||lv.st==='part';
+  if(can&&live&&p.status!=='cancelled'){
+    const today=new Date().toISOString().slice(0,10);
+    payBox='<div class="pq-pay"><div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-secondary);letter-spacing:.4px;margin-bottom:.55rem"><i class="ti ti-credit-card-pay"></i> Xác nhận thanh toán lệnh này</div>'
+      +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">'
+      +'<div><label class="lbl">Ngày thanh toán</label><input type="date" id="pqPayDate" value="'+_pqE(p.date||today)+'" style="font-size:12px;display:block;margin-top:3px"/></div>'
+      +'<div style="flex:1;min-width:240px"><label class="lbl">Tài khoản thanh toán'+(p.bank?'':(lines.every(function(l){return l.bank;})?' (để trống = theo từng khoản)':' *'))+'</label><select id="pqPayBank" style="font-size:12px;display:block;margin-top:3px;width:100%">'+_bankOptsHtml(p.bank||'')+'</select></div>'
+      +'<button class="btn pri" onclick="_pqPay()"><i class="ti ti-check"></i> Đã thanh toán — ghi Sổ quỹ</button>'
+      +'</div><div style="font-size:10.5px;color:var(--text-tertiary);margin-top:.5rem;line-height:1.45">Hệ thống đánh dấu Đã TT cho từng khoản trong lệnh và tạo giao dịch chi trong Sổ quỹ (giống nút “Cập nhật TT hàng loạt”). Khoản đã thanh toán trước đó được giữ nguyên.</div></div>';
+  }
+  const canUndo=can&&(lv.st==='paid'||lv.st==='part')&&p.status!=='cancelled';
+  const canCancel=can&&lv.st==='unpaid'&&p.status!=='cancelled';
+  ov.className='ov';
+  ov.innerHTML='<div class="modal" style="max-width:1180px;max-height:92vh;overflow-y:auto">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-file-invoice" style="font-size:15px;margin-right:6px;color:#0F766E"></i>Payment Request · '+_pqE(p.no||p._id)+' &nbsp;'+_pqStatusChip(e)+'</div>'
+    +'<div class="msub">'+_pqE(p.partner||'—')+' &nbsp;·&nbsp; '+lines.length+' khoản &nbsp;·&nbsp; Tổng cộng: <strong style="color:var(--red)">'+_pqN(lv.total)+' VND</strong></div></div>'
+    +'<div class="mhdr-btns"><button class="rac" title="Đóng" onclick="closeOv(\'pqDetailOv\')"><i class="ti ti-x"></i></button></div></div>'
+    +infoHtml+payBox
+    +'<div style="border:1px solid var(--border-light);border-radius:10px;overflow-x:auto;margin-bottom:1rem"><table style="width:100%;border-collapse:collapse;min-width:900px"><thead><tr style="background:var(--bg-secondary)">'
+    +'<th style="'+th+';width:34px">#</th><th style="'+th+'">Lô hàng</th><th style="'+th+'">MBL</th><th style="'+th+'">Vol/Type</th><th style="'+th+'">POD</th><th style="'+th+';text-align:right">Số tiền VND</th><th style="'+th+'">Ngày TT</th><th style="'+th+'">Tài khoản</th><th style="'+th+'">Remark</th><th style="'+th+'">Trạng thái</th>'
+    +'</tr></thead><tbody>'+trs+'<tr style="background:var(--bg-secondary)"><td colspan="5" style="'+td+';font-weight:700">TỔNG CỘNG</td><td style="'+td+';text-align:right;font-weight:800;color:var(--red)">'+_pqN(lv.total)+'</td><td colspan="4" style="'+td+'"></td></tr></tbody></table></div>'
+    +'<div class="mftr">'
+      +(canCancel?'<button class="btn" onclick="_pqCancel()" style="margin-right:auto;color:var(--red);border-color:var(--red)"><i class="ti ti-ban"></i> Hủy lệnh</button>':'')
+      +(canUndo?'<button class="btn" onclick="_pqUndoPay()" style="margin-right:auto;color:var(--amber-text,#B45309);border-color:var(--amber-text,#B45309)"><i class="ti ti-arrow-back-up"></i> Hủy thanh toán</button>':'')
+      +'<button class="btn" onclick="closeOv(\'pqDetailOv\')">Đóng</button>'
+    +'</div></div>';
+  openOv('pqDetailOv');
+  const m=ov.querySelector('.modal'); if(m&&keep)m.scrollTop=keep;
+}
+
+function _pqSyncViews(){
+  try{ if(typeof currentTab!=='undefined'&&currentTab==='thu-chi')renderTcBody(); }catch(e){}
+  try{ if(g('pqDetailOv')&&g('pqDetailOv').classList.contains('open'))_pqRenderDetail(); }catch(e){}
+}
+let _pqDataT=null;
+function _pqOnData(){
+  clearTimeout(_pqDataT);
+  _pqDataT=setTimeout(function(){
+    try{ if(typeof currentTab!=='undefined'&&currentTab==='thu-chi'&&tcTab==='payreq')renderTcBody(); }catch(e){}
+    try{ if(g('pqDetailOv')&&g('pqDetailOv').classList.contains('open'))_pqRenderDetail(); }catch(e){}
+  },200);
+}
+
+async function _pqPay(){
+  const p=_pqList().find(function(x){return x._id===window._pqOpenId;}); if(!p)return;
+  if(!_pqCan()){toast('Chỉ Admin / Kế toán được xác nhận thanh toán','error');return;}
+  const date=g('pqPayDate')?g('pqPayDate').value:''; const bank=g('pqPayBank')?g('pqPayBank').value:'';
+  if(!date){toast('Chọn ngày thanh toán','error');return;}
+  const lines=p.lines||[];
+  const lv=_pqLive(p);
+  const todo=lines.map(function(l,i){return {l:l,L:lv.live[i]};}).filter(function(x){return !x.L.paid;});
+  const noBank=todo.filter(function(x){return !(bank||x.l.bank);});
+  if(noBank.length){alert('Chưa chọn Tài khoản thanh toán cho '+noBank.length+' khoản — bắt buộc chọn để giao dịch được ghi vào Sổ quỹ.');return;}
+  const sum=todo.reduce(function(s,x){return s+(parseFloat(x.l.amt)||0);},0);
+  if(!confirm('Xác nhận ĐÃ THANH TOÁN lệnh '+p.no+'?\n\n'+todo.length+' khoản · '+_pqN(sum)+' VND · ngày '+fd(date)+'\nHệ thống sẽ đánh dấu Đã TT từng khoản và ghi giao dịch chi vào Sổ quỹ.'))return;
+  setLoading(true,'Đang thanh toán '+todo.length+' khoản...');
+  let ok=0,fail=0;
+  const newLines=lines.map(function(l){return Object.assign({},l);});
+  for(let i=0;i<lines.length;i++){
+    if(lv.live[i].paid)continue;
+    const l=lines[i], useBank=bank||l.bank;
+    try{
+      const res=await _apPayLine({id:l.lotId,tt:l.tt,svcKey:l.svcKey,amt:l.amt},{status:'paid',date:date,bank:useBank,remark:l.remark||'',amount:parseFloat(l.amt)||0,label:p.partner});
+      if(res==='ok'){ok++; newLines[i].date=date; newLines[i].bank=useBank;} else fail++;
+    }catch(err){console.error('[PR] pay line',l,err);fail++;}
+  }
+  try{
+    if(!fail){
+      const upd={status:'paid',paidDate:date,paidAt:Date.now(),paidBy:(currentUser&&currentUser.email)||'',lines:newLines,updatedAt:Date.now()};
+      if(bank)upd.bank=bank;
+      await fsSet('paymentRequests',p._id,upd);
+      Object.assign(p,upd);
+    } else {
+      await fsSet('paymentRequests',p._id,{lines:newLines,updatedAt:Date.now()}); p.lines=newLines;
+    }
+  }catch(err){console.error('[PR] save',err);toast('Đã ghi thanh toán nhưng lưu trạng thái lệnh lỗi: '+err.message,'error');}
+  setLoading(false);
+  toast(fail?('Đã thanh toán '+ok+' khoản · '+fail+' khoản lỗi — lệnh vẫn ở trạng thái chưa hoàn tất'):('Đã thanh toán lệnh '+p.no+' ('+ok+' khoản)'),fail?'error':undefined);
+  _pqSyncViews();
+}
+async function _pqUndoPay(){
+  const p=_pqList().find(function(x){return x._id===window._pqOpenId;}); if(!p)return;
+  if(!_pqCan()){toast('Chỉ Admin / Kế toán được hủy thanh toán','error');return;}
+  const lv=_pqLive(p);
+  if(!confirm('HỦY THANH TOÁN lệnh '+p.no+'?\n\n'+lv.nPaid+' khoản đã thanh toán sẽ quay về Chưa TT và các giao dịch chi tương ứng trong Sổ quỹ bị xóa.'))return;
+  setLoading(true,'Đang hủy thanh toán...');
+  let ok=0,fail=0;
+  const lines=p.lines||[];
+  for(let i=0;i<lines.length;i++){
+    if(!lv.live[i].paid)continue;
+    const l=lines[i];
+    try{
+      const res=await _apPayLine({id:l.lotId,tt:l.tt,svcKey:l.svcKey,amt:l.amt},{status:'unpaid',date:'',bank:'',amount:parseFloat(l.amt)||0,label:p.partner});
+      if(res==='ok')ok++; else fail++;
+    }catch(err){console.error('[PR] undo line',l,err);fail++;}
+  }
+  try{
+    const upd={status:'unpaid',paidDate:'',paidAt:0,paidBy:'',updatedAt:Date.now()};
+    await fsSet('paymentRequests',p._id,upd); Object.assign(p,upd);
+  }catch(err){toast('Lỗi lưu lệnh: '+err.message,'error');}
+  setLoading(false);
+  toast(fail?('Đã hủy TT '+ok+' khoản · '+fail+' khoản lỗi'):('Đã hủy thanh toán lệnh '+p.no),fail?'error':undefined);
+  _pqSyncViews();
+}
+async function _pqCancel(){
+  const p=_pqList().find(function(x){return x._id===window._pqOpenId;}); if(!p)return;
+  if(!_pqCan()){toast('Chỉ Admin / Kế toán được hủy lệnh','error');return;}
+  if(!confirm('HỦY lệnh '+p.no+'?\nCác khoản trong lệnh được giải phóng để tạo lệnh khác. Lệnh đã hủy vẫn được lưu để tra cứu.'))return;
+  try{
+    const upd={status:'cancelled',cancelledAt:Date.now(),cancelledBy:(currentUser&&currentUser.email)||'',updatedAt:Date.now()};
+    await fsSet('paymentRequests',p._id,upd); Object.assign(p,upd);
+    toast('Đã hủy lệnh '+p.no); closeOv('pqDetailOv');
+  }catch(err){toast('Lỗi: '+err.message,'error');}
+  _pqSyncViews();
+}
+
+// Lệnh được TẠO từ popup Cập nhật TT hàng loạt (Trả NCC / Refund)
+async function _pqNewId(){
+  const d=new Date(); const pre='PR'+String(d.getFullYear()).slice(-2)+String(d.getMonth()+1).padStart(2,'0')+'-';
+  let mx=0; _pqList().forEach(function(p){const s=String(p.no||p._id||''); if(s.indexOf(pre)===0){const n=parseInt(s.slice(pre.length),10)||0; if(n>mx)mx=n;}});
+  for(let k=0;k<20;k++){
+    const no=pre+String(mx+1+k).padStart(4,'0');
+    const ex=await db.collection('paymentRequests').doc(no).get();
+    if(!ex.exists)return no;
+  }
+  return pre+String(Date.now()).slice(-6);
+}
+async function _pqCreateFromBulk(){
+  const cfg=window._cnBulkCfg; if(!cfg||cfg.mode==='ar')return;
+  if(!can('manageFinance')){toast('Không có quyền','error');return;}
+  const commonDate=(g('blk_date_common')&&g('blk_date_common').value)||new Date().toISOString().slice(0,10);
+  const commonBank=(g('blk_bank_common')&&g('blk_bank_common').value)||'';
+  const commonRemark=(g('blk_remark_common')&&g('blk_remark_common').value)||'';
+  const picked=[];
+  cfg.rows.forEach(function(row,i){
+    const chk=g('blk_chk_'+i); if(chk&&!chk.checked)return;
+    const amt=parseFloat(g('blk_amt_'+i)&&g('blk_amt_'+i).value)||0;
+    picked.push({
+      tt:row.tt,lotId:row.id,svcKey:row.svcKey||'',job:row.jobNo||'',booking:row.booking||row.bookingNo||'',mbl:row.mbl||'',
+      vol:row.vol||'',typeCont:row.typeCont||'',pod:row.pod||'',name:row.name||'',amt:amt,
+      date:(g('blk_date_'+i)&&g('blk_date_'+i).value)||commonDate,
+      bank:(g('blk_bank_'+i)&&g('blk_bank_'+i).value)||commonBank,
+      remark:(g('blk_remark_'+i)&&g('blk_remark_'+i).value)||commonRemark
+    });
+  });
+  if(!picked.length){toast('Chưa chọn lô nào để tạo lệnh','error');return;}
+  if(picked.some(function(l){return !(l.amt>0);})){alert('Có khoản chưa có số tiền (> 0). Nhập số tiền hoặc bỏ tick lô đó trước khi tạo lệnh.');return;}
+  // Loại các khoản đã thanh toán / đã nằm trong lệnh khác chưa hoàn tất — tránh trùng lệnh
+  const openMap={};
+  _pqList().forEach(function(p){
+    if(p.status==='cancelled')return;
+    const lv=_pqLive(p);
+    (p.lines||[]).forEach(function(l,i){ if(!lv.live[i].paid)openMap[l.tt+'|'+l.lotId+'|'+l.svcKey]=p.no||p._id; });
+  });
+  const dup=[],paid=[],keep=[];
+  picked.forEach(function(l){
+    const k=l.tt+'|'+l.lotId+'|'+l.svcKey;
+    if(openMap[k]){dup.push(l.booking+' → '+openMap[k]);return;}
+    if(_pqLineLive(l).paid){paid.push(l.booking);return;}
+    keep.push(l);
+  });
+  if(dup.length||paid.length){
+    const msg=(dup.length?dup.length+' khoản đã nằm trong lệnh chưa thanh toán khác:\n  '+dup.slice(0,6).join('\n  ')+(dup.length>6?'\n  …':'')+'\n':'')
+      +(paid.length?paid.length+' khoản đã thanh toán rồi.\n':'');
+    if(!keep.length){alert(msg+'\nKhông còn khoản nào để tạo lệnh.');return;}
+    if(!confirm(msg+'\nBỏ qua các khoản trên và tạo lệnh với '+keep.length+' khoản còn lại?'))return;
+  }
+  const banks=Array.from(new Set(keep.map(function(l){return l.bank;})));
+  const dates=Array.from(new Set(keep.map(function(l){return l.date;})));
+  const total=keep.reduce(function(s,l){return s+l.amt;},0);
+  setLoading(true,'Đang tạo lệnh thanh toán...');
+  try{
+    const no=await _pqNewId();
+    const rec={no:no,source:cfg.source==='refund'?'refund':'ap',partner:cfg.label||'',status:'unpaid',
+      date:dates.length===1?dates[0]:commonDate,bank:banks.length===1?banks[0]:'',total:total,remark:commonRemark,lines:keep,
+      createdAt:Date.now(),createdBy:(currentUser&&currentUser.email)||'',updatedAt:Date.now()};
+    await fsSet('paymentRequests',no,rec);
+    if(!Array.isArray(cache.paymentRequests))cache.paymentRequests=[];
+    if(!cache.paymentRequests.some(function(x){return x._id===no;}))cache.paymentRequests.push(Object.assign({_id:no},rec));
+    setLoading(false);
+    closeOv('cnBulkPayOv'); window._cnBulkChecked={};
+    toast('Đã tạo lệnh '+no+' · '+keep.length+' khoản · '+_pqN(total)+' VND — xem tại Finance › Payment Request');
+    _pqSyncViews();
+  }catch(err){
+    setLoading(false); console.error('[PR] create',err);
+    toast('Lỗi tạo lệnh: '+(/permission/i.test(err.message)?'chưa cấp quyền Firestore cho collection paymentRequests (xem HUONG_DAN)':err.message),'error');
+  }
+}
+Object.assign(window,{renderTcPayReq,_pqSet,_pqReset,_pqSort,_pqOpenEntry,_pqRenderDetail,_pqPay,_pqUndoPay,_pqCancel,_pqCreateFromBulk,_pqOnData,_pqEntries,_pqLive,_pqLineLive});
 
 async function exportExcelDebt(){
   if(!can('export')){toast('Không có quyền','error');return;}
