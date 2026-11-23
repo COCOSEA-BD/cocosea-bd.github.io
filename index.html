@@ -1474,6 +1474,10 @@ function _xuatLotSummaryHTML(r,tt){
       ${row('ti-box','Vol / Type',(r.vol?r.vol+'x':'')+(r.typeCont||'—'),'#C99A3C')}
     </div>
     <div class="xls-divider"></div>
+    <div class="xls-body" style="grid-template-columns:1fr">
+      <div class="xls-row"><div class="xls-row-ic" style="background:#F59E0B"><i class="ti ti-notes"></i></div><div class="xls-row-body" style="min-width:0;flex:1"><div class="xls-row-label">Remark · Hàng hóa &amp; Ghi chú</div><div class="xls-row-value" id="xlsRemarkVal" style="white-space:pre-line;font-weight:600;font-size:12.5px;line-height:1.45;margin-top:3px;background:#FFFBE6;border:1px solid #F0D060;border-radius:8px;padding:6px 9px;color:#1a1a18;max-height:170px;overflow:auto">${r.remark?String(r.remark).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):'<span style="font-weight:500;color:#9a8a4a">— chưa có remark —</span>'}</div></div></div>
+    </div>
+    <div class="xls-divider"></div>
     <div class="xls-body">
       ${row('ti-ship','Tàu / Chuyến',(r.vessel||'—')+(r.voy?' <span style="color:var(--text-secondary);font-weight:600">V.'+r.voy+'</span>':''),'#1a4b8c')}
       ${row('ti-calendar-event','ETD',r.etd?r.etd.split('-').reverse().join('/'):'—','#1a4b8c')}
@@ -1487,6 +1491,15 @@ function _xuatLotSummaryHTML(r,tt){
 
 // Đảm bảo cấu trúc 2 cột (tóm tắt trái + vùng làm việc phải) tồn tại bên trong #xuat-lot-view.
 // Tạo 1 lần duy nhất, các lần sau chỉ cập nhật nội dung.
+// A 2.89: làm mới sidebar tóm tắt (Remark…) sau khi lưu lô — dữ liệu về qua snapshot nên gọi lại sau một nhịp
+function _xuatRefreshSummary(){
+  try{
+    const el=g('xuat-lot-summary'); if(!el||typeof detailId==='undefined'||!detailId)return;
+    const r=(cache[detailTt]||[]).find(function(x){return x._id===detailId;}); if(!r)return;
+    el.innerHTML=_xuatLotSummaryHTML(r,detailTt);
+  }catch(e){}
+}
+window._xuatRefreshSummary=_xuatRefreshSummary;
 function _xuatEnsureLotLayout(lotV){
   if(g('xuat-lot-work'))return;
   lotV.innerHTML='<div class="xls-wrap"><aside class="xls-summary" id="xuat-lot-summary"></aside><div id="xuat-lot-work" style="min-width:0"></div></div>';
@@ -1572,7 +1585,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.88';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.89';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -9516,7 +9529,7 @@ function _planEval(row){
   const res={kind:'new',lot:null,lots:[],warns:[],diffs:[]};
   const bk=_planBk(row.booking);
   const w=function(t,lvl){res.warns.push({t:t,lvl:lvl||'warn'});};
-  if(!bk){ res.kind='nobk'; w('Chưa có số booking — không thể tạo/đối chiếu (nhập booking nếu có)','err'); }
+  if(!bk){ res.kind='nobk'; w('Chưa có số booking — không đối chiếu được với lô có sẵn. Nhập booking nếu có, hoặc chọn "Tạo lô (chưa có booking)" rồi bổ sung sau','err'); }
   else {
     res.lots=_planFindLots(st.tt,row.booking);
     if(res.lots.length){
@@ -9569,14 +9582,15 @@ function _planStatusBadge(ev){
 }
 // Mặc định: chỉ tự chọn "Tạo lô mới" khi dòng sạch (Cnee + POD đã ghép, booking đủ dài, không trùng, AI không báo "không chắc")
 function _planDefaultAction(row,ev){
+  // A 2.89: thiếu Cnee/POD/AI không chắc KHÔNG còn làm dòng bị bỏ qua — vẫn tạo lô, phần thiếu được hỏi lại ở bước "Tạo lô hàng".
+  // Chỉ mặc định bỏ qua khi booking đáng ngờ (quá ngắn / trùng ở nhiều dòng) để tránh tạo lô trùng.
   if(ev.kind!=='new')return 'skip';
-  const bad=!row.cnee||!row.pod||_planBk(row.booking).length<6||row.dupBk||(row.uncertain||[]).length;
-  return bad?'skip':'create';
+  return (_planBk(row.booking).length<6||row.dupBk)?'skip':'create';
 }
 function _planActionOpts(ev,cur){
   let opts;
   if(ev.kind==='new')opts=[['create','Tạo lô mới'],['skip','Bỏ qua']];
-  else if(ev.kind==='nobk')opts=[['skip','Bỏ qua']];
+  else if(ev.kind==='nobk')opts=[['skip','Bỏ qua'],['create','Tạo lô (chưa có booking)']];
   else opts=[['skip','Không đổi']].concat(ev.lot&&!ev.lot.locked?[['update','Điền INV + ghi chú vào lô']]:[]);
   const val=opts.some(function(o){return o[0]===cur;})?cur:(ev.kind==='new'?'skip':opts[0][0]);
   return opts.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===val?' selected':'')+'>'+o[1]+'</option>';}).join('');
@@ -9680,7 +9694,7 @@ async function _planApply(){
   const toCreate=[], toUpdate=[], problems=[];
   st.rows.forEach(function(row,i){
     const ev=_planEval(row);
-    if(row.action==='create'&&ev.kind==='new'){
+    if(row.action==='create'&&(ev.kind==='new'||ev.kind==='nobk')){
       if(!row.cnee)problems.push('Dòng '+(i+1)+': chưa chọn Cnee');
       if(!row.pod)problems.push('Dòng '+(i+1)+': chưa chọn POD');
       toCreate.push({row:row,i:i});
@@ -9689,7 +9703,7 @@ async function _planApply(){
     }
   });
   if(!toCreate.length&&!toUpdate.length){toast('Chưa chọn hành động nào (Tạo lô mới / Cập nhật) — đóng nếu chỉ cần đối chiếu','error');return;}
-  if(problems.length&&!confirm('Còn mục chưa chọn:\n- '+problems.join('\n- ')+'\n\nVẫn đưa vào danh sách (điền sau)?'))return;
+  // A 2.89: mục còn thiếu không chặn nữa — sẽ hỏi "Tiếp tục điền / Tạo lô luôn" khi bấm Tạo lô hàng
   if(toUpdate.length&&!can('editLot')){toast('Không có quyền sửa lô hàng — bỏ chọn các dòng "Điền Số INV…"','error');return;}
 
   // 1) Cập nhật lô có sẵn: CHỈ điền docData.invoiceNo / pklNo (merge, không đụng trường khác) + nối ghi chú
@@ -9747,7 +9761,7 @@ async function _planApply(){
   }
   closeOv('planScanOv');
   const msg=[];
-  if(added)msg.push('Đã đưa '+added+' lô mới vào danh sách — kiểm tra rồi bấm "Tạo lô hàng"');
+  if(added)msg.push('Đã đưa '+added+' lô mới vào danh sách — kiểm tra rồi bấm "Tạo lô hàng"'+(problems.length?' (còn '+problems.length+' mục thiếu — sẽ được hỏi bổ sung)':''));
   if(upOk)msg.push('Đã cập nhật '+upOk+' lô có sẵn');
   if(msg.length)toast(msg.join(' · '));
   if(upFail.length)toast('Lỗi cập nhật: '+upFail.join(' | '),'error');
@@ -9755,13 +9769,14 @@ async function _planApply(){
 window._planApply=_planApply;
 
 // ═══ Tạo hàng loạt — điền vào form đơn (#lotOv, ẩn) rồi gọi lại saveLot() cho từng dòng ═══
-async function _bulkCreateLots(){
-  const tt=window._bulkTt||'xuat';
-  const rows=_bulkReadRows().filter(function(r){return (r.bookingNo||'').trim();});
-  if(!rows.length){toast('Cần ít nhất 1 dòng có Booking No','error');return;}
-
-  const shared={
-    loaiHang:(g('bulk_loaiHang')||{}).value||'',
+// ═══ A 2.89 — Thêm hàng loạt: thiếu thông tin → popup hỏi "Tiếp tục điền" hoặc "Tạo lô luôn" ═══
+// Nguyên nhân cũ: saveLot() chặn lô MỚI thiếu trường bắt buộc (Carrier/Vessel/Voy/ETD/ETA/POL/POD/Tên hàng/Shipper…) bằng alert rồi
+// return (không ném lỗi) → lô không được tạo mà vẫn đếm là "đã tạo". Nay: kiểm tra TRƯỚC, hỏi người dùng, và luôn tạo được lô.
+window._lotForceCreate=false;
+function _bulkReadShared(){
+  const v=function(id){return (g(id)||{}).value||'';};
+  return {
+    loaiHang:v('bulk_loaiHang'),
     cargoType:(g('bulk_cargoType')||{}).value||'',
     bookingParty:(g('bulk_bookingParty')||{}).value||'',
     shipperVal:(g('bulk_shipper')||{}).value||'',
@@ -9783,7 +9798,179 @@ async function _bulkCreateLots(){
     tenHang:(g('bulk_tenHang')||{}).value||'',
     remark:(g('bulk_remark')||{}).value||''
   };
+}
+function _bulkKeepRow(r){return !!((r.bookingNo||'').trim()||(r.cnee||'').trim()||(r.mblNo||'').trim()||(r.tenHang||'').trim()||r.plan);}
+function _bulkMissAnalyze(allRows,shared){
+  const isX=window._bulkTt==='xuat';
+  const sh=[];
+  [['shipperVal',isX?'Shipper':'Supplier','shipper'],['carrier','Carrier','carrier'],['vessel','Vessel','vessel'],['voy','Voy','voy'],['etd','ETD','etd'],['eta','ETA','eta'],['pol','POL — cảng đi','pol']].forEach(function(d){
+    if(!String(shared[d[0]]||'').trim())sh.push({k:d[2],l:d[1]});
+  });
+  const rows=[];
+  allRows.forEach(function(r,i){
+    if(!_bulkKeepRow(r))return;
+    const m=[];
+    if(!(r.bookingNo||'').trim())m.push('bookingNo');
+    if(!(r.tenHang||shared.tenHang||'').trim())m.push('tenHang');
+    if(!(r.pod||shared.pod||'').trim())m.push('pod');
+    if(m.length)rows.push({i:i,m:m});
+  });
+  return {shared:sh,rows:rows,total:sh.length+rows.reduce(function(a,x){return a+x.m.length;},0)};
+}
+const _BM_LBL={bookingNo:'Booking No',tenHang:'Tên hàng',pod:'POD'};
+function _bulkShowMissing(an,stage){
+  const el=g('bulkMissOv'); if(!el)return;
+  window._bmAn=an;
+  const all=_bulkReadRows();
+  if(stage===2){ el.innerHTML=_bmFillHtml(an,all); _bmFillVesselPick(); openOv('bulkMissOv'); return; }
+  const li=[];
+  if(an.shared.length)li.push('<li><b>Thông tin chung (áp dụng cho mọi lô):</b> '+an.shared.map(function(d){return _planEsc(d.l);}).join(', ')+'</li>');
+  an.rows.forEach(function(x){
+    const r=all[x.i]||{};
+    li.push('<li><b>Dòng '+(x.i+1)+(r.bookingNo?' ('+_planEsc(r.bookingNo)+')':'')+':</b> '+x.m.map(function(c){return _BM_LBL[c];}).join(', ')+'</li>');
+  });
+  el.innerHTML='<div class="modal" style="max-width:580px;width:100%">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-alert-triangle" style="margin-right:6px;color:#F59E0B"></i>Còn thiếu thông tin</div>'
+    +'<div class="msub">Một số thông tin bắt buộc của lô chưa được điền. Bạn muốn làm gì?</div></div>'
+    +'<button class="rac" onclick="closeOv(\'bulkMissOv\')" title="Đóng"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:12px 16px;max-height:55vh;overflow:auto"><ul style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;color:var(--text-primary)">'+li.join('')+'</ul>'
+    +'<div style="margin-top:10px;font-size:11.5px;color:var(--text-secondary);line-height:1.55"><b>Tiếp tục điền</b>: hiện bảng để bổ sung nhanh rồi tạo lô. <b>Tạo lô luôn</b>: tạo '+_planEsc(String(Math.max(0,all.filter(_bulkKeepRow).length)))+' lô ngay, phần thiếu để trống — bổ sung sau trong chi tiết lô.</div></div>'
+    +'<div class="mftr" style="display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--border-light);flex-wrap:wrap">'
+      +'<button class="btn" onclick="closeOv(\'bulkMissOv\')">Quay lại form</button>'
+      +'<button class="btn" style="color:#B45309;border-color:#B45309" onclick="_bmCreateNow()"><i class="ti ti-bolt"></i> Tạo lô luôn</button>'
+      +'<button class="btn pri" onclick="_bulkShowMissing(window._bmAn,2)"><i class="ti ti-edit"></i> Tiếp tục điền</button>'
+    +'</div></div>';
+  openOv('bulkMissOv');
+}
+function _bmCreateNow(){ closeOv('bulkMissOv'); _bulkCreateLots({force:true}); }
+function _bmField(d,shared){
+  const opts=window._bulkPartnerOpts||{pC:[],pS:[],pF:[],pAll:[]};
+  const st='width:100%;box-sizing:border-box;font-size:12.5px;padding:6px 8px;border:1px solid #F59E0B;background:#FFFBEB;border-radius:6px';
+  const sel=function(list,ph,extra){return '<select id="bm_'+d.k+'" style="'+st+'"'+(extra||'')+'><option value="">'+ph+'</option>'+list.map(function(o){return '<option>'+_planEsc(o)+'</option>';}).join('')+'</select>';};
+  let w;
+  if(d.k==='shipper')w=sel(opts.pS.length?opts.pS:opts.pAll,'— Chọn —');
+  else if(d.k==='carrier')w=sel(opts.pC,'— Chọn Carrier —',' onchange="_bmCarrierChange()"');
+  else if(d.k==='pol')w=sel(typeof PORTS!=='undefined'?PORTS:[],'— Chọn cảng đi —');
+  else if(d.k==='etd'||d.k==='eta')w='<input type="date" id="bm_'+d.k+'" style="'+st+'"/>';
+  else w='<input type="text" id="bm_'+d.k+'" style="'+st+'" placeholder="'+_planEsc(d.l)+'"/>';
+  return '<div><label style="display:block;font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:3px">'+_planEsc(d.l)+'</label>'+w+'</div>';
+}
+function _bmFillHtml(an,all){
+  const shared=_bulkReadShared();
+  const st='width:100%;box-sizing:border-box;font-size:12.5px;padding:6px 8px;border:1px solid #F59E0B;background:#FFFBEB;border-radius:6px';
+  const th='padding:7px 8px;background:var(--bg-secondary);font-size:10px;font-weight:700;color:var(--text-secondary);border-bottom:1px solid var(--border-light);text-transform:uppercase;letter-spacing:.4px;text-align:left';
+  const td='padding:6px 8px;border-bottom:1px solid var(--border-light);vertical-align:middle;font-size:12.5px';
+  let secA='';
+  if(an.shared.length){
+    const hasVes=an.shared.some(function(d){return ['vessel','voy','etd','eta','pol'].indexOf(d.k)>=0;});
+    secA='<div style="font-size:12px;font-weight:800;color:var(--text-primary);margin:0 0 8px"><i class="ti ti-file-info"></i> Thông tin chung — áp dụng cho tất cả lô trong đợt</div>'
+      +(hasVes?'<div style="margin-bottom:10px"><label style="display:block;font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:3px">Chọn nhanh tàu từ Vessel Tool (tự điền Vessel/Voy/ETD/ETA/POL/POD)</label><select id="bmVesselPick" onchange="_bmVesselPick()" style="width:100%;box-sizing:border-box;font-size:12.5px;padding:6px 8px;border-radius:6px"></select></div>':'')
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-bottom:16px">'+an.shared.map(function(d){return _bmField(d,shared);}).join('')+'</div>';
+  }
+  let secB='';
+  if(an.rows.length){
+    const cols=['bookingNo','tenHang','pod'].filter(function(c){return an.rows.some(function(x){return x.m.indexOf(c)>=0;});});
+    const names=(window._cargoNames||[]).map(function(n){return n.name||n;});
+    const mk=function(c,id,extra){
+      if(c==='tenHang'&&names.length)return '<select id="'+id+'" style="'+st+'"'+(extra||'')+'><option value="">— Chọn tên hàng —</option>'+names.map(function(n){return '<option>'+_planEsc(n)+'</option>';}).join('')+'</select>';
+      if(c==='pod')return '<select id="'+id+'" style="'+st+'"'+(extra||'')+'><option value="">— Chọn POD —</option>'+(typeof PORTS!=='undefined'?PORTS:[]).map(function(n){return '<option>'+_planEsc(n)+'</option>';}).join('')+'</select>';
+      return '<input type="text" id="'+id+'" style="'+st+'" placeholder="'+_BM_LBL[c]+'"'+(extra||'')+'/>';
+    };
+    secB='<div style="font-size:12px;font-weight:800;color:var(--text-primary);margin:0 0 8px"><i class="ti ti-list-details"></i> Thông tin riêng từng lô (chỉ hiện ô còn thiếu)</div>'
+      +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:separate;border-spacing:0;min-width:'+(200+cols.length*190)+'px"><thead><tr><th style="'+th+';width:34px">#</th><th style="'+th+'">Cnee / Booking</th>'+cols.map(function(c){return '<th style="'+th+'">'+_BM_LBL[c]+'</th>';}).join('')+'</tr>'
+      +((cols.indexOf('tenHang')>=0||cols.indexOf('pod')>=0)?'<tr><td style="'+td+';background:var(--bg-secondary)" colspan="2"><i>Điền cùng 1 giá trị cho mọi dòng còn thiếu:</i></td>'+cols.map(function(c){return '<td style="'+td+';background:var(--bg-secondary)">'+((c==='tenHang'||c==='pod')?mk(c,'bmAll_'+c,' onchange="_bmFillCol(\''+c+'\',this.value)"'):'')+'</td>';}).join('')+'</tr>':'')
+      +'</thead><tbody>'
+      +an.rows.map(function(x){
+        const r=all[x.i]||{};
+        return '<tr><td style="'+td+';text-align:center;color:var(--text-tertiary);font-weight:700">'+(x.i+1)+'</td>'
+          +'<td style="'+td+'"><b>'+_planEsc(r.bookingNo||'(chưa có booking)')+'</b>'+(r.cnee?'<div style="font-size:11px;color:var(--text-tertiary)">'+_planEsc(r.cnee)+'</div>':'')+'</td>'
+          +cols.map(function(c){
+            if(x.m.indexOf(c)>=0)return '<td style="'+td+'">'+mk(c,'bmr_'+c+'_'+x.i)+'</td>';
+            const cur=c==='tenHang'?(r.tenHang||shared.tenHang):c==='pod'?(r.pod||shared.pod):r.bookingNo;
+            return '<td style="'+td+';color:var(--text-secondary)">'+_planEsc(cur||'—')+'</td>';
+          }).join('')+'</tr>';
+      }).join('')
+      +'</tbody></table></div>';
+  }
+  return '<div class="modal" style="max-width:1000px;width:100%">'
+    +'<div class="mhdr"><div><div class="mtitle"><i class="ti ti-edit" style="margin-right:6px"></i>Bổ sung thông tin còn thiếu</div>'
+    +'<div class="msub">Điền được đến đâu hay đến đó — ô để trống vẫn tạo được lô, bổ sung sau trong chi tiết lô.</div></div>'
+    +'<button class="rac" onclick="closeOv(\'bulkMissOv\')" title="Đóng"><i class="ti ti-x"></i></button></div>'
+    +'<div class="mbody" style="padding:12px 16px;max-height:68vh;overflow:auto">'+secA+secB+'</div>'
+    +'<div class="mftr" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--border-light);flex-wrap:wrap">'
+      +'<button class="btn" onclick="_bulkShowMissing(window._bmAn,1)"><i class="ti ti-arrow-left"></i> Quay lại</button>'
+      +'<button class="btn pri" id="bmApplyBtn" onclick="_bmApply()"><i class="ti ti-check"></i> Xác nhận &amp; tạo lô hàng</button>'
+    +'</div></div>';
+}
+function _bmCarrierChange(){ _bmFillVesselPick(); }
+function _bmFillVesselPick(){
+  const pick=g('bmVesselPick'); if(!pick)return;
+  const carrier=((g('bm_carrier')||{}).value)||((g('bulk_carrier')||{}).value)||'';
+  const list=(carrier&&typeof _vesselsForCarrier==='function')?_vesselsForCarrier(carrier):[];
+  pick.innerHTML=(carrier?(list.length?'<option value="">— Chọn tàu từ Vessel tool —</option>':'<option value="">(Carrier này chưa có tàu trong Vessel tool)</option>'):'<option value="">(Chọn Carrier trước)</option>')
+    +list.map(function(v){return '<option value="'+_planEsc(v._id)+'">'+_planEsc((v.vessel||'')+(v.voy?' / '+v.voy:'')+(v.etd?' · ETD '+(typeof fmtDMY==='function'?fmtDMY(v.etd):v.etd):''))+'</option>';}).join('');
+}
+function _bmVesselPick(){
+  const pick=g('bmVesselPick'); if(!pick||!pick.value)return;
+  const v=(cache.vessels||[]).find(function(x){return x._id===pick.value;}); if(!v)return;
+  const set=function(id,val){const e=g(id); if(e&&val)e.value=val;};
+  set('bm_vessel',v.vessel); set('bm_voy',v.voy); set('bm_etd',v.etd);
+  if(v.pol&&g('bm_pol')){ const e=g('bm_pol'); if(!Array.from(e.options).some(function(o){return o.value===v.pol;})){const o=document.createElement('option');o.textContent=v.pol;e.appendChild(o);} e.value=v.pol; }
+  const pods=v.pods||[];
+  if(pods.length){
+    if(pods[0].eta)set('bm_eta',pods[0].eta);
+    if(pods[0].pod){
+      document.querySelectorAll('[id^="bmr_pod_"]').forEach(function(e){ if(!e.value){ if(!Array.from(e.options).some(function(o){return o.value===pods[0].pod;})){const o=document.createElement('option');o.textContent=pods[0].pod;e.appendChild(o);} e.value=pods[0].pod; } });
+    }
+    if(pods.length>1)toast('Tàu có nhiều POD — đã điền POD đầu cho các dòng còn trống, chỉnh lại nếu cần','success');
+  }
+}
+function _bmFillCol(c,val){
+  if(!val)return;
+  document.querySelectorAll('[id^="bmr_'+c+'_"]').forEach(function(e){
+    if(e.tagName==='SELECT'&&!Array.from(e.options).some(function(o){return o.value===val;})){const o=document.createElement('option');o.textContent=val;e.appendChild(o);}
+    e.value=val;
+  });
+}
+async function _bmApply(){
+  const an=window._bmAn; if(!an)return;
+  const ensure=function(el,v){ if(el&&el.tagName==='SELECT'&&!Array.from(el.options).some(function(o){return o.value===v;})){const o=document.createElement('option');o.textContent=v;el.appendChild(o);} };
+  an.shared.forEach(function(d){
+    const v=(((g('bm_'+d.k)||{}).value)||'').trim(); if(!v)return;
+    const el=g('bulk_'+(d.k==='shipper'?'shipper':d.k)); if(!el)return;
+    if(d.k==='pol'){
+      const c=(typeof _findCountryForPort==='function')?_findCountryForPort(v):'';
+      if(c&&g('bulk_polCountry')){g('bulk_polCountry').value=c;_bulkUpdatePorts('pol');}
+      ensure(el,v); el.value=v;
+    } else if(d.k==='carrier'){ el.value=v; _bulkPopulateVesselPicker(); }
+    else { el.value=v; if(d.k==='etd')_bulkUpdateCutoffs(); }
+  });
+  const all=_bulkReadRows();
+  an.rows.forEach(function(x){
+    const r=all[x.i]; if(!r)return;
+    x.m.forEach(function(c){ const v=(((g('bmr_'+c+'_'+x.i)||{}).value)||'').trim(); if(v)r[c]=v; });
+  });
+  window._bulkRows=all;
+  const body=g('bulkRowsBody');
+  if(body)body.innerHTML=all.map(function(r,i){return _bulkRowHtml(r,i);}).join('');
+  closeOv('bulkMissOv');
+  await _bulkCreateLots({force:true});
+}
+window._bulkShowMissing=_bulkShowMissing; window._bmCreateNow=_bmCreateNow; window._bmCarrierChange=_bmCarrierChange;
+window._bmVesselPick=_bmVesselPick; window._bmFillCol=_bmFillCol; window._bmApply=_bmApply;
+
+async function _bulkCreateLots(opts){
+  const force=!!(opts&&opts.force===true);
+  const tt=window._bulkTt||'xuat';
+  const allRows=_bulkReadRows();
+  const rows=allRows.filter(_bulkKeepRow);
+  if(!rows.length){toast('Cần ít nhất 1 dòng có thông tin (Booking No…)','error');return;}
+
+  const shared=_bulkReadShared();
   if(!shared.loaiHang){toast('Chưa chọn Type Shipment','error');return;}
+  const miss=_bulkMissAnalyze(allRows,shared);
+  if(!force&&miss.total){ _bulkShowMissing(miss,1); return; }   // A 2.89: hỏi Tiếp tục điền / Tạo lô luôn
+  const missLots=shared&&miss.shared.length?rows.length:miss.rows.length;
 
   const btn=g('bulkCreateBtn');
   if(btn){btn.disabled=true;btn.textContent='Đang tạo...';}
@@ -9815,6 +10002,7 @@ async function _bulkCreateLots(){
   };
 
   let okCount=0, failRows=[];
+  window._lotForceCreate=true;   // A 2.89: đã hỏi người dùng → bỏ qua kiểm tra bắt buộc của saveLot()
   try{
     for(let i=0;i<rows.length;i++){
       const row=rows[i];
@@ -9834,7 +10022,7 @@ async function _bulkCreateLots(){
         if(g('f_cutoffCY'))g('f_cutoffCY').value=shared.cutoffCY;
         if(g('f_cutoffSI'))g('f_cutoffSI').value=shared.cutoffSI;
         if(g('f_polCountry'))g('f_polCountry').value=shared.polCountry;
-        if(g('f_pol'))g('f_pol').value=shared.pol;
+        (function(){ const fl=g('f_pol'); if(!fl)return; if(shared.pol&&fl.tagName==='SELECT'&&!Array.from(fl.options).some(function(o){return o.value===shared.pol;})){const o=document.createElement('option');o.textContent=shared.pol;fl.appendChild(o);} fl.value=shared.pol; })(); // A 2.89: POL ngoài danh sách (vd chọn từ Vessel tool) vẫn lưu được
         if(g('f_podCountry'))g('f_podCountry').value=shared.podCountry;
         if(g('f_icd'))g('f_icd').value=shared.icd;
         if(g('f_cyLocation'))g('f_cyLocation').value=shared.cyLocation;
@@ -9884,6 +10072,7 @@ async function _bulkCreateLots(){
       }catch(eRow){ failRows.push((row.bookingNo||'(trống)')+': '+eRow.message); }
     }
   } finally {
+    window._lotForceCreate=false;
     window.getNextJobNo=origGetNextJobNo;
     cache[tt]=(cache[tt]||[]).filter(function(r){return !r._bulkPlaceholder;});
   }
@@ -9891,7 +10080,7 @@ async function _bulkCreateLots(){
   setLoading(false);
   if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-check"></i> Tạo lô hàng';}
   closeOv('bulkLotOv');
-  if(okCount)toast('Đã tạo '+okCount+'/'+rows.length+' lô hàng'+(failRows.length?' — '+failRows.length+' lô lỗi':''));
+  if(okCount)toast('Đã tạo '+okCount+'/'+rows.length+' lô hàng'+(failRows.length?' — '+failRows.length+' lô lỗi':'')+((force&&missLots)?' · '+missLots+' lô còn thiếu thông tin — bổ sung trong chi tiết lô':''));
   if(failRows.length)toast('Lỗi: '+failRows.join(' | '),'error');
   renderLotTable(tt);
 }
@@ -10258,6 +10447,7 @@ window.readBookingsFromForm=readBookingsFromForm;
 // - Validation này CHỈ áp dụng cho lô MỚI tạo, hoặc lô đang/đã từng ở trạng thái Booking request —
 //   lô cũ bình thường (chưa từng liên quan Booking request) không bị chặn khi sửa/lưu lại.
 function _lotCheckRequired(rec,existing){
+  if(window._lotForceCreate)return {ok:true,missing:[]}; // A 2.89: Thêm hàng loạt — người dùng đã chọn "Tạo lô luôn" dù thiếu thông tin
   const isBookingReq=rec.status==='Booking request';
   const wasBookingReq=existing&&existing.status==='Booking request';
   const isNewLot=!existing;
@@ -10403,6 +10593,7 @@ async function saveLot(){
     logLotEvent(docId,currentTab,isNew?'create':'update',isNew?'Tạo lô hàng mới':'Cập nhật thông tin lô hàng',detailText);
     toast(!isNew&&existing&&existing.jobNo!==rec.jobNo?'Đã lưu — Job ID mới: '+rec.jobNo:'Đã lưu lô hàng');
     closeOv('lotOv');
+    if(!isNew){ _xuatRefreshSummary(); setTimeout(_xuatRefreshSummary,700); setTimeout(_xuatRefreshSummary,2000); }
   } catch(e){ toast('Lỗi: '+e.message,'error'); }
   setLoading(false);
 }
@@ -29336,6 +29527,7 @@ body.xuat-lotmode #xuat-lot-work .cs-main button[onclick^="addBkContRow"]{
 </div>
 
 <div class="ov" id="planScanOv" style="padding:1.5rem 1rem"></div>
+<div class="ov" id="bulkMissOv" style="padding:1.5rem 1rem;z-index:100050"></div>
 <div class="ov" id="rvOv" style="padding:1rem"></div>
 
 <div class="ov" id="svcOv">
