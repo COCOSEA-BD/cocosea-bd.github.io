@@ -1623,7 +1623,7 @@ window.xuatCloseTab=xuatCloseTab;
 
 // ── App Update Checker: so sánh APP_BUILD nhúng trong file, tránh dùng etag/last-modified
 // (etag/last-modified dao động giữa các edge node CDN → báo cập nhật nhầm dù file không đổi)
-window.APP_BUILD='A 2.91';window.COCO_SHOW_OCR_BTN=true;
+window.APP_BUILD='A 2.92';window.COCO_SHOW_OCR_BTN=true;
 (function(){
   var _remoteBuild=null;
   function _parseBuild(txt){
@@ -53468,18 +53468,35 @@ function renderTcPayReq(){
       +'<th style="width:44px">STT</th><th>Mã lệnh</th><th>Loại</th><th>NCC / Người nhận</th><th style="text-align:right">Số lô</th><th style="text-align:right">Tổng tiền</th><th>Tài khoản</th>'
       +'<th onclick="_pqSort()" style="cursor:pointer" title="Đổi chiều sắp xếp theo thứ tự tạo">Ngày tạo <span style="font-size:10px">'+(S.dir==='desc'?'▼':'▲')+'</span></th><th>Trạng thái</th><th></th></tr></thead><tbody>'
       +trs+'<tr class="rf-tot"><td colspan="5"><b>TỔNG ('+rows.length+' lệnh)</b></td><td style="text-align:right;color:var(--red)">'+_pqN(totV)+' VND</td><td colspan="4"></td></tr></tbody></table></div>'
-      +'<div class="rf-note">Bấm vào dòng để xem chi tiết: lệnh hàng loạt mở danh sách các lô; Req.Pay của lô mở thẳng trang Debit Note của lô.'+(foreign?' Có '+foreign+' lệnh ngoại tệ không tính vào KPI (VND).':'')+'</div>';
+      +'<div class="rf-note">Bấm vào dòng để xem chi tiết: lệnh hàng loạt mở danh sách các lô; Req.Pay của lô mở thẳng Debit Note của nhà cung cấp (tab Dịch vụ).'+(foreign?' Có '+foreign+' lệnh ngoại tệ không tính vào KPI (VND).':'')+'</div>';
   }
   return head+kpi+filters+tabs+body;
 }
 
+// Mở Debit Note của NHÀ CUNG CẤP (file NCC gửi, tab Dịch vụ của lô) — không phải Debit Note của shipper
+function _pqOpenSupplierDn(tt,lotId,svcKey){
+  const r=(cache[tt]||[]).find(function(x){return x._id===lotId;});
+  if(!r){toast('Không tìm thấy lô','error');return;}
+  if(!svcKey||!(r.svcs||{})[svcKey]){toast('Không tìm thấy dịch vụ của lô','error');return;}
+  try{ openDetail(lotId,tt,'svc'); }catch(e){ console.error(e); toast('Không mở được lô','error'); return; }
+  let n=0;
+  const t=setInterval(function(){
+    n++;
+    const ready=(typeof detailId!=='undefined'&&detailId===lotId&&detailTt===tt);
+    if(ready||n>30){
+      clearInterval(t);
+      if(!ready){toast('Không mở được tab Dịch vụ của lô','error');return;}
+      setTimeout(function(){ try{ _openDnReview(svcKey); }catch(e){ console.error(e); toast('Không mở được Debit Note NCC','error'); } },250);
+    }
+  },100);
+}
 function _pqOpenEntry(el){
   const k=el.dataset.k, id=el.dataset.id;
   if(k==='lot'){
     const p=id.split('|'); const tt=p[0], lotId=p[1];
     const r=(cache[tt]||[]).find(function(x){return x._id===lotId;});
     if(!r){toast('Không tìm thấy lô','error');return;}
-    try{ openInvoice(lotId,tt); }catch(e){ console.error(e); toast('Không mở được trang Debit Note','error'); }
+    _pqOpenSupplierDn(tt,lotId,p.slice(2).join('|'));
     return;
   }
   window._pqOpenId=id; _pqRenderDetail();
@@ -53502,7 +53519,8 @@ function _pqRenderDetail(){
     const volType=(l.vol||l.typeCont)?((l.vol||'—')+(l.typeCont?'x'+l.typeCont:'')):'—';
     return '<tr>'
       +'<td style="'+td+';color:var(--text-tertiary);font-weight:700">'+(i+1)+'</td>'
-      +'<td style="'+td+'"><a class="rf-job" onclick="openDetail(\''+_pqE(l.lotId)+'\',\''+_pqE(l.tt)+'\')" title="Mở lô">'+_pqE(l.booking||l.job||'—')+'</a>'+(l.name?'<div class="rf-sub">'+_pqE(l.name)+'</div>':'')+'</td>'
+      +'<td style="'+td+'"><a class="rf-job" onclick="openDetail(\''+_pqE(l.lotId)+'\',\''+_pqE(l.tt)+'\')" title="Mở lô">'+_pqE(l.booking||l.job||'—')+'</a>'+(l.name?'<div class="rf-sub">'+_pqE(l.name)+'</div>':'')
+        +((l.svcKey&&String(l.svcKey).indexOf('comkb:')!==0&&String(l.svcKey).indexOf('cost:')!==0)?'<a class="rf-job" style="font-size:10.5px;font-weight:600" onclick="_pqOpenSupplierDn(\''+_pqE(l.tt)+'\',\''+_pqE(l.lotId)+'\',\''+_pqE(l.svcKey)+'\')" title="Mở Debit Note của nhà cung cấp"><i class="ti ti-file-text"></i> Debit NCC</a>':'')+'</td>'
       +'<td style="'+td+';word-break:break-word">'+_pqE(l.mbl||'—')+'</td>'
       +'<td style="'+td+';white-space:nowrap">'+_pqE(volType)+'</td>'
       +'<td style="'+td+'">'+_pqE(l.pod||'—')+'</td>'
@@ -53718,7 +53736,7 @@ async function _pqCreateFromBulk(){
     toast('Lỗi tạo lệnh: '+(/permission/i.test(err.message)?'chưa cấp quyền Firestore cho collection paymentRequests (xem HUONG_DAN)':err.message),'error');
   }
 }
-Object.assign(window,{renderTcPayReq,_pqSet,_pqReset,_pqSort,_pqOpenEntry,_pqRenderDetail,_pqPay,_pqUndoPay,_pqCancel,_pqCreateFromBulk,_pqOnData,_pqEntries,_pqLive,_pqLineLive});
+Object.assign(window,{_pqOpenSupplierDn,renderTcPayReq,_pqSet,_pqReset,_pqSort,_pqOpenEntry,_pqRenderDetail,_pqPay,_pqUndoPay,_pqCancel,_pqCreateFromBulk,_pqOnData,_pqEntries,_pqLive,_pqLineLive});
 
 async function exportExcelDebt(){
   if(!can('export')){toast('Không có quyền','error');return;}
